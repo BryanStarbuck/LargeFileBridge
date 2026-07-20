@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo Tracking Scheme (repo_storage.yaml · per-file <name>.yaml · history logs — in Local Storage)
-description: The authoritative on-disk scheme for LargeFileBridge's per-repo tracking state. LOCKED SPLIT BY DATA CATEGORY — the working repo NEVER holds LFB's compression / big-file / git-ignore tracking state; only two content artifacts (transcripts and AI descriptions) live in the working repo's committed .lfbridge/. All tracking state (repo_storage.yaml, per-file <name>.yaml sidecars, history/<device>.txt, files.yaml, decisions.yaml, manifest.yaml, compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) — machine-local, never touching git, so it can never merge-conflict. When the repo maps to a company (or Personal) storage that has a SYNC REPO configured and the per-repo toggle is ON, that same tracking state is ALSO mirrored to <syncRepo>/repos/<repoKey>/ so it travels across the user's computers — in addition to Local Storage, not instead of it. This spec defines the three things unique to it — (1) repo_storage.yaml, the single repo-wide settings-and-state file whose ONLY level-one key is repo_storage:; (2) per-file <name>.yaml sidecars carrying identity plus an append-only per-file EVENT history (first-seen, IPFS pin on/off, compress before/after with pre/post hashes and perceptual fingerprint, transcribe, and whether an action was done OUTSIDE LargeFileBridge and which computer first observed it); and (3) history/<device>.txt, one plain-text UTC-timestamped audit log PER COMPUTER. Sibling of storage_repo.mdx (the .lfbridge/ layout overview), storage_local.mdx (the Local Storage state root that hosts repos/<repoKey>/), artifact_placement_policy.mdx (the data-category placement policy), decisions.mdx (the decision ledger these logs mirror), devices.mdx (the per-computer name), special_files.mdx, compression.mdx, perceptual_fingerprint.mdx, and use_case_two_computers.mdx.
+description: The authoritative on-disk scheme for LargeFileBridge's per-repo tracking state. LOCKED SPLIT BY DATA CATEGORY — the working repo NEVER holds LFB's compression / big-file / git-ignore tracking state; only two content artifacts (transcripts and AI descriptions) live in the working repo's committed .lfbridge/. All tracking state (repo_storage.yaml, per-file <name>.yaml sidecars, history/<device>.txt, files.yaml, decisions.yaml, manifest.yaml, compression records) lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) — machine-local, never touching git, so it can never merge-conflict. When the repo maps to a company (or Personal) storage that has a SYNC REPO configured and the per-repo toggle is ON, that same tracking state is ALSO mirrored into that sync repo so it travels across the user's computers — in addition to Local Storage, not instead of it. TWO KEYS, TWO JOBS (§1.2, locked by storage_company.mdx §8.4.1): the Local-Storage directory is keyed by repoKey = shortHash of the resolved absolute path ("this repo on this computer"), while the sync-repo mirror subtree is <syncRepo>/repos/<repoUid>/ keyed by repoUid = short hash of the NORMALIZED GIT REMOTE host/owner/name ("this repo, anywhere") — because a machine-local value must never key machine-shared data; a repo with no remote cannot mirror and the product says so, and the same repo cloned at two local paths keeps two Local-Storage dirs but converges on one mirror subtree. This spec defines the three things unique to it — (1) repo_storage.yaml, the single repo-wide settings-and-state file whose ONLY level-one key is repo_storage:; (2) per-file <name>.yaml sidecars carrying identity plus an append-only per-file EVENT history (first-seen, IPFS pin on/off, compress before/after with pre/post hashes and perceptual fingerprint, transcribe, and whether an action was done OUTSIDE LargeFileBridge and which computer first observed it); and (3) history/<device>.txt, one plain-text UTC-timestamped audit log PER COMPUTER. Sibling of storage_repo.mdx (the .lfbridge/ layout overview), storage_local.mdx (the Local Storage state root that hosts repos/<repoKey>/), artifact_placement_policy.mdx (the data-category placement policy), decisions.mdx (the decision ledger these logs mirror), devices.mdx (the per-computer name), special_files.mdx, compression.mdx, perceptual_fingerprint.mdx, and use_case_two_computers.mdx.
 ---
 
 # LargeFileBridge — Repo Tracking Scheme
@@ -91,6 +91,37 @@ each machine; the sync repo is the travel vehicle. A sync pass reconciles the tw
 and history logs merge, and `decisions.yaml` / `manifest.yaml` union-merge ([decisions.mdx](./decisions.mdx),
 [git_backbone.mdx](./git_backbone.mdx)). **Default OFF** — absent a configured sync repo and the toggle,
 tracking state is Local-Storage-only.
+
+### 1.2 Two keys, two jobs — `repoKey` (this computer) vs `repoUid` (anywhere) (LOCKED)
+
+**This refines §1 and §1.1**: the Local-Storage directory and the sync-repo subtree are keyed **differently,
+on purpose**. The authority is [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked);
+this section records the two keys so nothing in this spec reads as if there were only one.
+
+| Key | Derived from | Names | Used for |
+| --- | --- | --- | --- |
+| **`repoKey`** | `shortHash(resolve(repoPath))` — the **absolute path on this computer** | *"this repo **on this computer**"* | the Local-Storage home `~/T/_large_files_bridge/repos/<repoKey>/` (§1) |
+| **`repoUid`** | `shortHash(normalized git remote)` — `host/owner/name` | *"this repo, **anywhere**"* | the travelling mirror `<syncRepo>/repos/<repoUid>/` (§1.1) |
+
+* **A machine-local value must never key machine-shared data.** The same repo is
+  `/Users/bryan/BGit/…` on the tower and `/Users/bryanstarbuck/BGit/…` on the laptop. Keying the **mirror**
+  by the path hash made the two computers write and look for **different directories inside the same sync
+  repo** — the tracking text travelled correctly and was never found. Every path in §1.1, §3, §4 and §5
+  that shows the sync repo as `<syncRepo>/repos/<repoKey>/…` means **`<repoUid>`**.
+* **Local Storage is unchanged.** `repos/<repoKey>/` stays path-keyed, including its `origin.txt` collision
+  guard. It is machine-local state and *should* be keyed by this machine's path.
+* **The remote is normalized before hashing.** Lowercase; strip scheme, credentials, any `.git` suffix and
+  trailing slash; `git@host:owner/name` and `https://host/owner/name` fold to the same `host/owner/name`.
+* **No remote → no `repoUid` → no mirror.** Such a repo keeps full Local-Storage tracking and simply does
+  not travel; the repo's settings say so rather than LFB writing into an unfindable subtree.
+* **The same repo cloned at two local paths** has **two** `repoKey`s (two Local-Storage directories — right,
+  they are two working trees) and **one** `repoUid` (one mirror subtree — right, it is one repo). Where the
+  two clones disagree in the mirror, the union-merge rules apply
+  ([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)):
+  union by path, union `pinned_by`, newer `modified_at` wins, absence is **never** a delete.
+
+Deriving the two keys — the path-keyed Local-Storage directory and the remote-keyed mirror subtree — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `repoKeyFor(root)` / `repoStateDir(root)` (path-keyed, Local Storage) and `repoUidFor(root)` / `resolveStateSyncRepo(root)` (remote-keyed, the `<syncRepo>/repos/<repoUid>/` mirror, null when the repo has no remote), the remote normalized by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `normalizeRemoteKey()`.
 
 The full data-category placement policy (Local Storage always; company sync repo also when enabled; the
 working repo never) is authoritative in [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
@@ -424,6 +455,13 @@ Every file below now lives in **Local Storage** (`~/T/_large_files_bridge/repos/
    Local Storage remains the authoritative working copy. Default **off** — tracking state is
    Local-Storage-only. The full policy is authoritative in
    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+8. **Two keys, two jobs** (§1.2): Local Storage is `repos/<repoKey>/` keyed by `shortHash(resolve(repoPath))`
+   (machine-local, unchanged); the **mirror** is `<syncRepo>/repos/<repoUid>/` keyed by a short hash of the
+   **normalized git remote** (`host/owner/name`). Two computers holding the same repo at different absolute
+   paths resolve to the **same** mirror subtree. A repo with **no remote** has no `repoUid`, does not mirror,
+   and says so. The same repo cloned twice on one machine keeps **two** Local-Storage directories and **one**
+   mirror subtree, reconciled by union-merge
+   ([storage_company.mdx §8.4.1 / §8.4.3](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)).
 
 <!--
   This spec owns the SHAPES of three tracking files (repo_storage.yaml, per-file <name>.yaml sidecars,
@@ -442,4 +480,17 @@ Every file below now lives in **Local Storage** (`~/T/_large_files_bridge/repos/
     appendFileEvent (file-sidecar.service.ts), appendHistory (history-log.service.ts), ensureRepoStorage
     (storage.service.ts). Siblings: storage_repo, storage_local, decisions, devices, special_files,
     compression, perceptual_fingerprint, use_case_two_computers.
+
+  ADDED §1.2 — TWO KEYS, TWO JOBS (locked by storage_company.mdx §8.4.1, the AUTHORITY):
+  repoKey = shortHash(resolve(repoPath)) = "this repo ON THIS COMPUTER" → keys Local Storage
+  repos/<repoKey>/ (unchanged, path-keyed on purpose, incl. origin.txt collision guard).
+  repoUid = shortHash(normalized git remote host/owner/name) = "this repo, ANYWHERE" → keys the travelling
+  mirror <syncRepo>/repos/<repoUid>/. Wherever this spec still shows the sync repo as repos/<repoKey>/, it
+  means <repoUid>. WHY: a machine-local value must never key machine-shared data — the old path hash made the
+  tower and the laptop write/look for DIFFERENT dirs in the SAME sync repo, so the text travelled and was
+  never found. No remote → no repoUid → no mirror (and the product SAYS so). Same repo cloned at two paths =
+  2 repoKeys (2 local dirs, correct) + 1 repoUid (1 mirror subtree, correct), disagreements union-merged per
+  §8.4.3 (union by path, union pinned_by, newer modified_at wins, absence is NEVER a delete). Code:
+  repoKeyFor/repoStateDir + repoUidFor/resolveStateSyncRepo (tracking-root.service.ts), normalizeRemoteKey
+  (git.service.ts). AC 8 added.
 -->

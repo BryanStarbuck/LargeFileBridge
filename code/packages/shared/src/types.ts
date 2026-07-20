@@ -168,6 +168,20 @@ export interface FileRow {
   // "Large files only" rail toggle (tables.mdx §2.9) hides exactly these rows by default; turning the
   // toggle off is what reveals them. Absent/false = a normal large-file candidate (payload or nudge).
   analysisOnly?: boolean;
+  // Does this row have BYTES on this computer? (storage_company.mdx §8.5) Absent ⇒ "local", so every existing
+  // row and every existing reader is unchanged.
+  //
+  // "remote-only" = another of the user's computers pinned this file, its identity travelled here in the
+  // manifest, and this machine does not have it. Until now every row came from the scanner's local disk walk,
+  // so a file you do not have COULD NOT BE SHOWN — which made the single most important row on a second
+  // computer invisible. Such a row is composed from the manifest (name/size/CID/peers), renders RED with
+  // "On {device} — not on this computer yet", and offers exactly ONE action: pull it down.
+  //
+  // It is a HEALTHY state, not a missing-file alarm: red means "available, not here yet", never "lost".
+  presence?: "local" | "remote-only";
+  // For a remote-only row, the peer device that has the bytes — the "{device}" in the row's copy. Null when
+  // the manifest carries no usable peer label (the UI then says "another of your computers").
+  addedByDevice?: string | null;
 }
 
 // One file a peer computer pinned that THIS computer is missing — the subject of the "pull them down"
@@ -734,9 +748,15 @@ export interface RepoSettings {
   // Where AI descriptions land (repo_settings.mdx §5) — the mirror of transcription. Default "lfbridge".
   aiDescription: { placement: PlacementChoice };
   // Whether this repo additionally mirrors its Category-B tracking state to the owner's SYNC REPO so it
-  // travels (repo_settings.mdx §2.9 / artifact_placement_policy.mdx §4). Default off; enabled only when the
-  // owner has a sync repo configured.
-  syncRepo: { enabled: boolean };
+  // travels (repo_settings.mdx §2.9.1 / storage_company.mdx §8.4.2). The mirror is ON by default and this
+  // control is an OPT-OUT.
+  //
+  // `enabled` is the EFFECTIVE value (what is actually happening), not the raw stored one — absent config
+  // means ON. `available` is false when this repo simply cannot mirror, and `reason` says why in the user's
+  // words: with no git remote there is no identity the user's other computers could agree on, and with no
+  // owning storage there is nowhere to mirror to. A toggle that silently does nothing is worse than a
+  // disabled one that explains itself.
+  syncRepo: { enabled: boolean; available: boolean; reason?: string; target?: string | null };
 }
 
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)
@@ -2075,6 +2095,51 @@ export interface OwnedReposView {
   storageId: string;
   ownedRepos: OwnedRepoRow[];
   companies: Array<{ id: string; name: string }>; // reassign targets, by friendly display name
+}
+
+// ── org → company discovery (storage_company.mdx §10) ────────────────────────
+// A company storage is 1:1 with a FORGE ORGANIZATION, and the org is already written down in every repo's
+// remote URL (`https://github.com/ACT3ai/charlie-kirk.git`). These types carry the read of that fact: one
+// row per organization found on this disk, plus whether the user actually BELONGS to it (§10.2 — they have
+// authored a commit in one of its repos here) and whether a company storage already claims it (§10.3 —
+// adopt, never duplicate).
+export interface OrganizationCandidate {
+  org: string;       // the org's DISPLAY casing, exactly as it appears in the remote ("ACT3ai")
+  slug: string;      // normalized lowercase key ("act3ai") — what dedupes and what dismissal is keyed by
+  dirSlug: string;   // the directory-safe form used for `<dirSlug>_large_files_bridge`
+  host: string;      // the forge host the org was seen on ("github.com")
+  repoCount: number;
+  repos: string[];   // absolute paths of this org's repos on this computer
+  qualifies: boolean;        // the user authored a commit in one of its repos here (§10.2)
+  personalAccount: boolean;  // the org IS the user's own forge account → Personal, never a company
+  alreadyClaimed: boolean;   // an existing company storage claims it → adopt, don't create (§10.3)
+  claimedByStorageId: string | null;
+  claimedByStorageName: string | null;
+  dismissed: boolean;        // the user waved this proposal away (remembered, §10.3)
+  proposedRoot: string;      // `<parent>/<dirSlug>_large_files_bridge` — the directory a click would create
+}
+
+// GET /api/storages/organizations — everything the proposal UI needs, including the number of orgs the
+// membership test EXCLUDED. §10.2: "say the number" — a silent filter and a bug look identical.
+export interface OrganizationDiscovery {
+  organizations: OrganizationCandidate[]; // qualifying orgs (proposals + already-claimed adoptions)
+  skipped: OrganizationCandidate[];       // clone-only orgs — kept so the user can see and add them by hand
+  skippedCount: number;
+  personalCount: number;                  // orgs that resolved to Personal (the user's own accounts)
+  totalOrgs: number;                      // every distinct org seen on this disk
+  parentDir: string;                      // where a created storage would go (the setting, or its derivation)
+  parentDirIsConfigured: boolean;         // false ⇒ derived from where existing storages live
+  identities: string[];                   // the git author emails the membership test used
+}
+
+// POST /api/storages/companies — one result row per requested org.
+export interface CompanyCreateResult {
+  org: string;
+  storageId: string;
+  name: string;
+  root: string;
+  adopted: boolean;   // true ⇒ an existing storage already claimed the org and was bound, not duplicated
+  hasRemote: boolean; // false ⇒ "no remote yet — nothing is reaching your other computers" (§11.2)
 }
 
 // ── Generic API envelope for mutations ──────────────────────────────────────

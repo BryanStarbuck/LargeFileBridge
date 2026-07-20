@@ -347,6 +347,85 @@ export function getStorageRow(id: string): StorageRow | null {
   return findRowById(id);
 }
 
+// ── binding a forge org to a company storage (storage_company.mdx §8.4.4) ─────────────────────────────
+// A repo's remote names an ORG (`ACT3ai`); the sync-repo target is a company STORAGE ROW. Nothing joined the
+// two, so an auto-derived company owner carried `companyId: null` forever and the repo could never resolve to
+// its company's SDL. The join is `company.owner_slugs` in the committed descriptor — explicit, auditable, and
+// it TRAVELS to every member, so one member's binding is everyone's.
+
+/** Normalized name for pragmatic matching: lowercased, every non-alphanumeric char stripped. */
+function normalizeSlug(s: string | null | undefined): string {
+  return (s ?? "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+/** The forge orgs a company storage explicitly claims (`company.owner_slugs` in its `storage.yaml`). */
+function ownerSlugsOf(row: StorageRow): string[] {
+  const raw = readDescriptor(row.root)?.company?.owner_slugs;
+  return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === "string") : [];
+}
+
+/** Record `slug` as claimed by this company storage, so a heuristic match becomes an explicit, travelling
+ *  fact (§8.4.4). Idempotent + best-effort: a failed write just means the heuristic runs again next time. */
+function recordOwnerSlug(row: StorageRow, slug: string): void {
+  try {
+    const desc = readDescriptor(row.root);
+    if (!desc) return; // not initialized — nothing to write into; the match still stands for this pass
+    const have = ownerSlugsOf(row);
+    if (have.some((s) => normalizeSlug(s) === normalizeSlug(slug))) return;
+    writeDescriptor(row.root, {
+      ...desc,
+      company: { ...(desc.company ?? { companyName: row.companyName ?? row.name }), owner_slugs: [...have, slug] },
+    });
+    log.info("storage", `company ${row.id} (${row.name}) now claims forge org "${slug}" (owner_slugs)`);
+  } catch (e) {
+    log.warn("storage", `recordOwnerSlug(${row.id}, ${slug}) failed: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * Resolve a repo's forge-org slug (e.g. `ACT3ai`) to the COMPANY STORAGE that owns it
+ * (storage_company.mdx §8.4.4), or null when nothing claims it.
+ *
+ * Order, per the locked rule:
+ *   1. an explicit `company.owner_slugs` entry — always wins;
+ *   2. a normalized match against the company's friendly name / row name (`ACT3 AI` ⇢ `act3ai`);
+ *   3. the ONE company storage on this computer takes an unclaimed org — with exactly one company, refusing
+ *      to guess means the product does nothing at all for the overwhelmingly common case.
+ * More than one company and no match ⇒ null (unresolved), never a guess.
+ *
+ * A win by rule 2 or 3 is written back as an explicit `owner_slugs` entry, so the heuristic runs once and the
+ * binding becomes something the user can see, edit, and share.
+ */
+export function ensureCompanyForOwner(slug: string | null): StorageRow | null {
+  const want = normalizeSlug(slug);
+  if (!want) return null;
+  const companies = discoverRows().filter((r) => r.type === "company");
+  if (companies.length === 0) return null;
+
+  // 1. explicit claim
+  const claimed = companies.find((r) => ownerSlugsOf(r).some((s) => normalizeSlug(s) === want));
+  if (claimed) return claimed;
+
+  // An org already claimed by SOME company must never be re-bound by a weaker rule below.
+  const unclaimedBySomeoneElse = (r: StorageRow) => !companies.some((c) => c.id !== r.id && ownerSlugsOf(c).some((s) => normalizeSlug(s) === want));
+
+  // 2. normalized name match
+  const byName = companies.find(
+    (r) => unclaimedBySomeoneElse(r) && [r.companyName, r.name].some((n) => n && normalizeSlug(n) === want),
+  );
+  if (byName) {
+    recordOwnerSlug(byName, slug!);
+    return byName;
+  }
+
+  // 3. a lone company storage adopts the unclaimed org
+  if (companies.length === 1 && unclaimedBySomeoneElse(companies[0]!)) {
+    recordOwnerSlug(companies[0]!, slug!);
+    return companies[0]!;
+  }
+  return null;
+}
+
 export function getStorageDetail(id: string): StorageDetail {
   const storage = findRowById(id);
   if (!storage) throw new Error(`unknown storage: ${id}`);

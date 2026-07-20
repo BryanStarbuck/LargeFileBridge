@@ -35,6 +35,9 @@ import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
+// Leaf modules only — the read path must not pull tracking-sync.service (and its storage.service edge) in.
+import { repoStateDir } from "../storage/tracking-root.service.js";
+import { mergeManifests } from "../storage/manifest-merge.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import {
   reposRoot,
@@ -252,10 +255,42 @@ export function computeRepoRow(folder: string): RepoRow {
 // fetched ONCE by the router and threaded through so each decided row can be marked pinnedHere without any
 // per-file hashing (one_repo.mdx §4.9 / knowledge/ipfs.mdx §5.1). Omitted (undefined) when IPFS is down or the
 // caller didn't fetch it → rows carry no pinnedHere and the pin icon falls back to intent-only (no red).
+/**
+ * The repo's manifest as the FILE ROWS should see it — the pin-unit manifest folded with the Local-Storage
+ * tracking manifest (storage_company.mdx §8.6).
+ *
+ * Two manifests exist for one repo: the unit manifest the pin pass maintains, and the tracking manifest that
+ * the sync-repo reconcile writes and that the `Pull down` metric is computed from. Reading only the first
+ * meant a peer's entries reached the rows solely via a pin pass on a repo whose Pin toggle was ON — so a
+ * laptop could show a non-zero Pull-down count with an empty table, the precise "a number no row explains"
+ * failure §8.6 exists to prevent.
+ *
+ * Read-path only and non-throwing: a missing or half-merged tracking manifest yields the unit manifest
+ * unchanged, so the page always renders.
+ */
+function mergeRepoManifests(folder: string, cfg: RepoUnitConfig): Manifest {
+  const unit = getRepoManifest(folder);
+  const root = cfg.repo.path;
+  if (!root) return unit;
+  try {
+    const abs = path.resolve(root.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+    const tracking = readYaml(path.join(repoStateDir(abs), "manifest.yaml"), ManifestSchema);
+    return mergeManifests(unit, tracking);
+  } catch (e) {
+    log.debug("units", `tracking manifest fold skipped for ${folder}: ${(e as Error).message}`);
+    return unit;
+  }
+}
+
 export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set<string>): RepoDetail {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
-  const manifest = getRepoManifest(folder);
+  // BOTH manifests, folded (storage_company.mdx §8.6). The unit manifest is what the pin pass maintains;
+  // the Local-Storage tracking manifest is where a peer's entries land when the sync repo is reconciled —
+  // and it is also what the `Pull down` metric is computed from. Reading only the unit manifest here made
+  // the tile and the table disagree: on a computer whose Pin toggle is off, the count could be non-zero
+  // while the list showed nothing, because nothing had ever folded the two together.
+  const manifest = mergeRepoManifests(folder, cfg);
   const files = composeFileRows(folder, cfg, status, manifest, pinset);
   const counts = countDecisions(files);
   return {
@@ -311,7 +346,7 @@ function composeFileRows(
   const storageType = repoRootAbs ? resolveStorageType(repoRootAbs) : undefined;
   // THIS device's pinned_by identity, resolved once per repo — pin truth is self-claim-only (ipfs.mdx §1.1).
   const selfLabel = computerLabel();
-  return status.candidates.map((cand) => {
+  const local: FileRow[] = status.candidates.map((cand) => {
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
     const peers = m?.pinned_by ?? [];
@@ -372,8 +407,82 @@ function composeFileRows(
       // Small analysis-only media (scan.mdx §4.1 rule 5) — the "Large files only" toggle hides these by
       // default and the decision/space counts exclude them (tables.mdx §2.9, one_repo.mdx §4.1).
       analysisOnly: cand.analysisOnly === true,
+      presence: "local" as const,
     };
   });
+  return [...local, ...remoteOnlyRows(cfg, manifest, local, repoRootAbs, selfLabel)];
+}
+
+/**
+ * The rows for files ANOTHER of the user's computers has and this one does not (storage_company.mdx §8.5).
+ *
+ * Every row above came from the scanner's disk walk, so a file that is not here could never appear — and on a
+ * second computer that is precisely the file the user needs to see. These rows are built from the reconciled
+ * manifest instead: name, size, CID and peers all come from the manifest entry, because there is nothing to
+ * `stat`.
+ *
+ * FOUR conditions, all required (§8.5): a CID, a claim by at least one device that is NOT this one, no
+ * scanned candidate, and no file on this disk. The peer-claim condition is what stops a stale self-only
+ * entry — a file this computer deleted on purpose — from resurrecting as a row that offers to pull bytes
+ * nobody has.
+ *
+ * The `addedByDevice` label goes through the travelling device registry (devices.mdx §6.9): the manifest's
+ * `pinned_by` token is a JOIN key, and the user must read a NAME. The registry is resolved ONCE per repo and
+ * only when this repo actually produced a remote-only row — never per row, because this is a hot path.
+ */
+export function remoteOnlyRows(
+  cfg: RepoUnitConfig,
+  manifest: Manifest,
+  local: FileRow[],
+  repoRootAbs: string | null,
+  selfLabel: string,
+): FileRow[] {
+  if (!repoRootAbs) return [];
+  const scanned = new Set(local.map((r) => r.path));
+  const out: FileRow[] = [];
+  for (const m of manifest.files) {
+    if (!m.cid) continue; // no CID → nothing to pull
+    if (scanned.has(m.path)) continue; // the scan already produced a row for it
+    const peers = (m.pinned_by ?? []).filter((d) => d && d !== selfLabel);
+    if (peers.length === 0) continue; // only WE ever claimed it → not a peer's file, just a stale entry
+    try {
+      if (fs.existsSync(path.join(repoRootAbs, m.path))) continue; // present here → not remote-only
+    } catch {
+      continue; // can't tell → don't invent a row
+    }
+    out.push({
+      fileId: `${repoIdFromPath(cfg.repo.path || "")}:${m.path}`,
+      path: m.path,
+      sizeBytes: m.size ?? 0,
+      cid: m.cid,
+      decision: cfg.decisions[m.path] ?? "undecided",
+      transfer: "pending",
+      peers: m.pinned_by ?? [],
+      // The bytes are demonstrably not on this node — that IS the point of the row.
+      pinnedHere: false,
+      pinnedForeign: false,
+      // Unknown, not epoch-zero: the manifest may carry no mtime, and rendering "20654d ago" is a
+      // fabricated fact (tables.mdx §4e). An empty string renders as "—" and sorts last.
+      changedAt: m.modified_at ?? "",
+      decidedBy: null,
+      decidedAt: null,
+      neverIpfs: false,
+      // Git-ignore is not a question we can answer or act on for a file that is not here, and offering to
+      // ignore a path with no bytes behind it is noise.
+      gitignore: false,
+      // Analysis on absent bytes would queue work that cannot run (§8.5), so all four task axes are "na".
+      // This is also what keeps these rows off the Transcribe / Describe / OCR tabs without a special case:
+      // those tabs filter on "could"/"done" (task_tabs.mdx §4.8).
+      compress: "na",
+      transcribe: "na",
+      describe: "na",
+      ocr: "na",
+      analysisOnly: false,
+      presence: "remote-only",
+      addedByDevice: peers[0] ?? null,
+    });
+  }
+  return out;
 }
 
 /**
@@ -515,6 +624,13 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     // media (rule 5) is not a pin decision, not a space-reclaim target, and not a git-ignore nudge — so it
     // must not inflate these tiles (tables.mdx §2.9 / one_repo.mdx §4.1).
     if (f.analysisOnly) continue;
+    // A REMOTE-ONLY row (storage_company.mdx §8.5) counts toward the decision question — "shall I bring this
+    // here and pin it?" — and nothing else. There are no local bytes to reclaim, compress, or git-ignore, so
+    // it must not inflate a space metric; its own tile is `Pull down` (router-computed from missingPinned).
+    if (f.presence === "remote-only") {
+      if (f.decision === "undecided") m.undecided++;
+      continue;
+    }
     // Foreign-pinned rows (pinnedForeign, the green state of one_repo.mdx §4.9) are excluded: the
     // Undecided tile asks "pin these?", and their bytes are already pinned on this node.
     if (f.decision === "undecided" && !f.pinnedForeign) m.undecided++;

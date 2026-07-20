@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Local Storage, Config & Pin State
-description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of pin unit stored OUTSIDE user dirs because they are computer-wide — pin/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and pin/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY pin unit). Each pin unit carries its own config.yaml (pinned on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the per-repo tracking directory repos/<repoKey>/ that is the ALWAYS-home for every repo's Category-B tracking state (repo_storage.yaml, files.yaml, sidecars, history, decisions.yaml, manifest.yaml, compression records) — never committed to a working repo, additionally mirrored to a configured company/Personal sync repo — the manifest that travels via the sync repo's git backbone while IPFS carries the bytes, the background pin process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
+description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of pin unit stored OUTSIDE user dirs because they are computer-wide — pin/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and pin/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY pin unit). Each pin unit carries its own config.yaml (pinned on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the per-repo tracking directory repos/<repoKey>/ that is the ALWAYS-home for every repo's Category-B tracking state (repo_storage.yaml, files.yaml, sidecars, history, decisions.yaml, manifest.yaml, compression records) — never committed to a working repo, additionally mirrored to a configured company/Personal sync repo — the manifest that travels via the sync repo's git backbone while IPFS carries the bytes, the background pin process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Also pins TWO facts locked by storage_company.mdx §8: a repo's CID/pin facts live in TWO files on this computer — the pin-unit manifest pin/r/<repo_name>/manifest.yaml that the One-Repo file rows read, and the Local-Storage tracking manifest repos/<repoKey>/manifest.yaml that the pull-down reader and the sync-repo mirror read — so a reconcile must land in BOTH and the pull action must read the same one the pull-down list was built from (§9.2.1); and the travelling mirror subtree is keyed by repoUid (a short hash of the normalized git remote), NOT by the path-derived repoKey, which stays machine-local on purpose. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
 ---
 
 # LargeFileBridge — Local Storage, Config & Pin State
@@ -228,9 +228,22 @@ transcripts / AI descriptions — ever lives committed in the working repo's own
   its own `repos/<repoKey>/` and the two never contend, so this state can **never merge-conflict**.
 * **Travelling copy — the additive sync-repo mirror.** Local Storage does not itself travel. When the
   owning company/Personal storage has a **sync repo** configured and the per-repo toggle is on (default
-  off), the same `repos/<repoKey>/` subtree is **additionally** mirrored to `<syncRepo>/repos/<repoKey>/`
-  so it travels across the user's computers — in addition to Local Storage, not instead of it
+  off), the same `repos/<repoKey>/` subtree is **additionally** mirrored **into the sync repo** so it
+  travels across the user's computers — in addition to Local Storage, not instead of it
   ([artifact_placement_policy.mdx §2/§5](./artifact_placement_policy.mdx)).
+* **The mirror is keyed by the REMOTE, not by this path (LOCKED).** The mirror subtree is
+  **`<syncRepo>/repos/<repoUid>/`**, where `repoUid` is a short hash of the **normalized git remote**
+  (`host/owner/name`) — **not** the `repoKey` above
+  ([storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked),
+  [artifact_placement_policy.mdx §4.1](./artifact_placement_policy.mdx)). **This supersedes any
+  `<syncRepo>/repos/<repoKey>/` wording elsewhere in this file** (§2's layout comment included).
+  `repoKey` is deliberately **machine-local** — the same repo sits at a different absolute path on each
+  computer, so a path hash would have the two machines write and look for **different** directories in the
+  same sync repo. **Two keys, two jobs:** `repoKey` = "this repo on this computer", `repoUid` = "this repo,
+  anywhere". A repo with **no git remote** has no `repoUid` and therefore does not mirror at all — its
+  tracking stays on this computer, and the product says so rather than writing somewhere unfindable.
+  Reconciling a pulled mirror back into this directory is a **per-entry merge**, never a wholesale copy
+  ([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)).
 * **Lifecycle.** Created **lazily** on the first tracking write for a repo, and written on every scan/action
   thereafter. There is no "promote/migrate" step — this is where the state always lives.
 * **Cleanup.** When the user **de-lists** a repo, its `repos/<repoKey>/` directory is removed. A repo that
@@ -703,6 +716,39 @@ map is a **reconciled projection** of the ledger's IPFS axis onto this computer
 ([decisions.mdx §7](./decisions.mdx)), not an independent store. The pin engine still reads that enum; only
 its *feed* changed.
 
+### 9.2.1 A repo's CID/pin facts live in TWO files (LOCKED)
+
+§9.2 names the Local-Storage tracking manifest as a repo's always-home. It is not the only manifest a repo
+has. **A repo's CID/pin facts are written to two files on this computer**, each read by a different half of
+the product, and **they must not disagree** — the rule locked in
+[storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree).
+
+| File | Who reads it | What it is |
+| --- | --- | --- |
+| `~/T/_large_files_bridge/pin/r/<repo_name>/manifest.yaml` | the **One-Repo file rows** (§6.3) | the **pin-unit** manifest — the per-unit cache the scan/pin pass composes rows and CID labels from. |
+| `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml` | the **pull-down reader** and the **sync-repo mirror** (§2.2b, §9.2) | the **Local-Storage tracking** manifest — the authoritative Category-B copy that travels. |
+
+* **A reconcile must land in BOTH.** Writing only the tracking manifest makes the laptop count a `Pull down`
+  it cannot render a row for; writing only the unit manifest makes it render a row it cannot pull. Either
+  way the user sees a number that does not match the list — the failure
+  [storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked)
+  exists to prevent.
+* **The pull ACTION and the pull-down LIST must read the same file.** The list is built from the
+  Local-Storage tracking manifest, so the pull must read it too. Reading the **SDL's committed** manifest
+  for a **working repo** finds nothing and fails every file in the batch — there is exactly **one** named
+  reader, and both callers use it.
+* **A working repo never has a committed in-repo manifest.** The `<root>/.lfbridge/manifest.yaml` /
+  `<root>/manifest.yaml` path belongs to **SDL storages only**
+  ([artifact_placement_policy.mdx §0.4](./artifact_placement_policy.mdx)); it is never a third home for a
+  working repo's facts.
+* **The two are not a duplication to remove.** They answer different questions — *"what does this pin unit
+  hold?"* versus *"what does the user's set of computers know about this repo?"* — and §9.5 still applies to
+  both: `pinned_by` in either file is a **cache of claims**, re-derived from the live IPFS pinset, never
+  believed.
+
+Reading the one manifest that both the pull-down list and the pull action agree on, and keeping the two manifests in step, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers(repoRoot)` and `pullMissing(repoRoot, paths, opts)` (both via `readRepoTrackingManifest`), over `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `repoTrackingManifestPath()` / `readRepoTrackingManifest()` / `writeRepoTrackingManifest()`; the pin-unit copy is read/written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `getRepoManifest(folder)` / `writeRepoManifest(folder, manifest)`.
+
 ### 9.3 Computer manifests travel via IPNS
 
 The computer unit has no Git repo to carry its manifest, so LFB publishes
@@ -1123,6 +1169,17 @@ Storage is correct when **all** of the following hold:
     configured company/Personal **sync repo** when the per-repo toggle is on (default off); the
     content-threshold three-tier model is retired, per
     [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
+17. A repo's CID/pin facts live in **two** files on this computer — the **pin-unit** manifest
+    `pin/r/<repo_name>/manifest.yaml` (which the One-Repo file rows read) and the **Local-Storage tracking**
+    manifest `repos/<repoKey>/manifest.yaml` (which the pull-down reader and the sync-repo mirror read) —
+    and a reconcile **lands in both** (§9.2.1). The **pull action reads the same manifest the pull-down list
+    was built from**; a working repo's pull never reads an SDL's committed manifest. A working repo has **no**
+    committed in-repo manifest at all.
+18. The travelling **mirror** subtree is `<syncRepo>/repos/<repoUid>/`, keyed by the **normalized git
+    remote**, while this state root's `repos/<repoKey>/` stays **path-keyed** (§2.2b) — two keys, two jobs. A
+    repo with **no remote** does not mirror; a pulled mirror is reconciled by **per-entry merge** (union by
+    path, union `pinned_by`, newer `modified_at` wins, absence is never a delete), never a wholesale copy
+    ([storage_company.mdx §8.4.1 / §8.4.3](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)).
 
 ---
 
@@ -1140,5 +1197,8 @@ worth revisiting once implementation starts:
   is a new path with the same CID. Confirm rename handling (keep pin, update path) matches intent.
 * **Collision disambiguation for `<repo_name>`.** Folder-name `-2`/`-3` suffixes (§6.1) with identity
   in `config.yaml`. If repos are more stably keyed by remote URL, revisit the folder-name scheme.
+  **Partly answered:** the **remote** is now the key for anything **shared** (`repoUid`, §2.2b), while
+  everything **machine-local** — this folder name and `repos/<repoKey>/` — stays keyed by path/name on
+  purpose. What remains open is only whether the operator-facing `pin/r/<repo_name>/` folder should follow.
 * **Retention / unpin window.** The grace period before unpinning a superseded CID (§9.4) needs a
   concrete default.

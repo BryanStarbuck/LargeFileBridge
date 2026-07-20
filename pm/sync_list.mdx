@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Sync List & Bridge Backbones
-description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should pin, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and carried in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx). Reconciles the whole model with the on-disk state in storage_local.mdx and the data-category placement policy (artifact_placement_policy.mdx): the per-repo manifest is Category B — it lives in Local Storage at ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml always and travels via the company/Personal SYNC REPO (git_backbone.mdx), NOT committed into the working repo — superseding the old committed in-repo manifest; the computer-scope list still rides Dropbox/Drive (or IPNS).
+description: The hub spec for the Sync List — the portable, human-readable YAML file (LargeFilesBridge_SyncList.yaml) that declares what LargeFileBridge should pin, and travels between a user's computers over a "bridge backbone." Defines the two scopes of list (one per COMPUTER, one per REPO), the single top-level YAML key `large_files` and its level-2 children (`settings`, `repos`, `directories`) that nest four-to-six levels deep, and the provenance/origin block that stamps who wrote each revision and when. Its centerpiece is the TRUST rule: because a backbone (Dropbox, Google Drive, or the git repo) may deliver a Sync List that was written on another computer and carried in asynchronously, THIS computer must NEVER treat an incoming list as ground truth — it reconciles the list against its own filesystem reality per-entry, verifies local claims against the local IPFS pinset, treats absences as untrusted (not deletes), and resolves conflicts by revision + content (CID/sha256). Names the three bridge backbones and links to their per-backbone specs (dropbox.mdx, google_drive.mdx, repo__list_syns.mdx). Reconciles the whole model with the on-disk state in storage_local.mdx and the data-category placement policy (artifact_placement_policy.mdx): the per-repo manifest is Category B — it lives in Local Storage at ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml always and travels via the company/Personal SYNC REPO (git_backbone.mdx), NOT committed into the working repo — superseding the old committed in-repo manifest; the computer-scope list still rides Dropbox/Drive (or IPNS). §5.7 adds the manifest's TRAVEL PATH as the §5 trust rule applied to the mirror: the sync-repo subtree is keyed by the repo's NORMALIZED GIT REMOTE (<syncRepo>/repos/<repoUid>/, per storage_company.mdx §8.4.1) rather than by a machine-local path hash, so both computers read and write the same directory, and an arriving mirror is MERGED PER ENTRY on EVERY backbone pull (union by path, union pinned_by, absence never a delete) rather than copied.
 ---
 
 # LargeFileBridge — The Sync List & Bridge Backbones
@@ -276,7 +276,14 @@ mirror. Settings still resolve per the normal inherit chain (per-repo override �
 global `config.yaml`). The per-backbone specs restate this from their side.
 
 The per-repo manifest — written to Local Storage and mirrored to the sync repo — is written in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest()` (writes `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`, mirrored to `<syncRepo>/repos/<repoKey>/manifest.yaml` via `tracking-sync.service.ts` when enabled).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest()` (writes `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`, mirrored to `<syncRepo>/repos/<repoUid>/manifest.yaml` via `tracking-sync.service.ts` when enabled).
+
+> **Superseded — the mirror's key.** Wherever this spec writes the mirror as
+> `<syncRepo>/repos/<repoKey>/…`, the mirror subtree is now keyed by the repo's **normalized git remote**
+> (`repos/<repoUid>/`), not by the path-derived `<repoKey>` — see
+> [§5.7](#57-the-sync-repo-mirror--keyed-by-remote-merged-on-every-pull-locked) and
+> [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked).
+> The **Local Storage** path `~/T/_large_files_bridge/repos/<repoKey>/` is unchanged and stays path-keyed.
 
 ### 5.5 Backbone-delivered hazards the reader must expect
 
@@ -298,6 +305,40 @@ Reconciling the same list twice yields the same result; reconciling never delete
 an explicit `state: removed` (§5.2) and, for a content fork (§5.3.2), never at all without the user.
 The output of reconciliation is written through the [storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)
 store layer (atomic, schema-validated), which is where the trusted, reconciled truth lives.
+
+### 5.7 The sync-repo mirror — keyed by remote, merged on every pull (LOCKED)
+
+The per-repo manifest's **travel path** is the company/Personal sync repo, and it is where §5's trust rule
+does its hardest work: the mirror this computer pulls down was written by **another machine**, so it is
+**claims, never ground truth**. Two rules make that concrete. Both are owned by
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked) —
+this section states how they bind the Sync List, and does not restate the rationale.
+
+* **The subtree is keyed by the repo's normalized git REMOTE — `<syncRepo>/repos/<repoUid>/`.** `repoUid`
+  is a short hash of `host/owner/name` (lowercased; scheme, credentials, `.git`, and any trailing slash
+  stripped, so `git@host:o/n` and `https://host/o/n` fold to one string). A machine-local value must never
+  key machine-shared data: the old `sha1(absolute path)` key made two computers write and look for
+  **different directories**, so a perfectly-travelled manifest was never found. A repo with **no remote**
+  has no shared identity and therefore **does not mirror** — and the product says so rather than writing
+  into a subtree nobody will read. **Local Storage stays path-keyed** at
+  `~/T/_large_files_bridge/repos/<repoKey>/`: one key names *"this repo on this computer"*, the other names
+  *"this repo, anywhere"*. Full rule: [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked).
+
+* **Reconciling an arrived mirror is a PER-ENTRY MERGE, on EVERY backbone pull.** An incoming
+  `repos/<repoUid>/manifest.yaml` is folded into Local Storage entry by entry — **union by `path`**,
+  **union `pinned_by`**, newer `modified_at` wins a CID conflict, **absence is never a delete** (§5.2), and
+  **this computer's own pin claim is re-derived from its real pinset** (§5.1), never adopted from what
+  arrived. A last-writer **copy** would erase the peer's pin claim and with it the whole *"a computer of
+  yours has these bytes"* signal. The merge runs **after every fetch + merge on the sync repo**, not on
+  demand: a reconcile that only happens when someone clicks something is a reconcile that does not happen.
+  Full rule: [storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked).
+
+Nothing here weakens §5.1–§5.6 — it **is** §5 applied to the mirror. The union is the *ingest*; the
+verification of local claims, the absence-is-not-delete default, and the revision/content conflict rules
+still decide what this computer believes afterward.
+
+Deriving the remote-keyed mirror subtree and merging a pulled mirror per entry into Local Storage are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) feeding `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`; the equivalent remote-folding helper already shipping is `normalizeRemoteKey()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
 
 ---
 
@@ -375,7 +416,17 @@ computer-scope list. IPNS and a file-backbone can both be enabled; they reconcil
    of the per-unit `config.yaml` + `manifest.yaml`; the **sync repo** carries each repo's Category-B manifest
    (Local Storage always, per [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)), Dropbox/Drive
    carry the computer list, alongside (not instead of) the IPNS transport — and **never** the working repo.
-9. Each of the three backbones has its own spec — [dropbox.mdx](./dropbox.mdx),
+9. The per-repo manifest's **mirror subtree is keyed by the repo's normalized git REMOTE** —
+   **`<syncRepo>/repos/<repoUid>/`** (`host/owner/name`, lowercased, scheme/creds/`.git`/trailing slash
+   stripped) — **never** by a machine-local absolute-path hash, so both computers read and write the same
+   directory; a repo with **no remote does not mirror and says so**; **Local Storage stays path-keyed** at
+   `~/T/_large_files_bridge/repos/<repoKey>/` (§5.7,
+   [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)).
+10. **An arriving mirror is merged per entry, on every backbone pull** — union by `path`, union
+    `pinned_by`, newer `modified_at` wins a CID conflict, absence is **never** a delete, and this
+    computer's own pin claim is re-derived from its real pinset — **never** a last-writer copy and never
+    on-demand-only (§5.7, [storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)).
+11. Each of the three backbones has its own spec — [dropbox.mdx](./dropbox.mdx),
    [google_drive.mdx](./google_drive.mdx), [repo__list_syns.mdx](./repo__list_syns.mdx) — and none
    redefines the schema or the trust rules; they reference this hub.
 
@@ -396,4 +447,19 @@ computer-scope list. IPNS and a file-backbone can both be enabled; they reconcil
   content (transcripts/AI descriptions). The COMPUTER-scope list still rides Dropbox/Drive (or IPNS).
   Per-repo manifest is authoritative for that repo's files (§5.4). manifest.service writeManifest →
   repos/<repoKey>/manifest.yaml + tracking-sync mirror to the sync repo.
+
+  ADDED §5.7 (LOCKED) — THE MIRROR'S TRAVEL PATH, i.e. §5's trust rule applied to the sync-repo copy
+  (authority = storage_company.mdx §8; do not restate its rationale here). Two bindings: (1) the mirror
+  subtree is <syncRepo>/repos/<repoUid>/ where repoUid hashes the NORMALIZED GIT REMOTE (host/owner/name,
+  lowercased, scheme/creds/.git/trailing-slash stripped, git@ and https:// folding together) — the old
+  sha1(abs path) was a MACHINE-LOCAL value keying MACHINE-SHARED data, so the two computers wrote different
+  directories and a perfectly travelled manifest was never found; no remote ⇒ no mirror AND the product says
+  so; Local Storage repos/<repoKey>/ stays PATH-keyed on purpose (two keys, two jobs). (2) Ingest is a
+  PER-ENTRY MERGE on EVERY backbone pull — union by path, union pinned_by (a copy erases the peer's claim =
+  the whole "a computer of yours has these bytes" signal), newer modified_at wins a CID conflict, absence
+  never a delete (§5.2), own pin claim re-derived from the real pinset (§5.1). A §5.4 SUPERSEDED note marks
+  the older <syncRepo>/repos/<repoKey>/ wording without deleting it. AC 9 + 10 added (old 9 → 11). Code:
+  tracking-root.service normalizeRemote/repoUidFor → resolveStateSyncRepo (the shipping remote-folding
+  helper today is git.service normalizeRemoteKey), tracking-sync.service reconcileFromSyncRepo called from
+  pin.service pinRepoFolder / syncStorageTextInner+pinStorageUnitInner via reconcileMirroredRepos, after fetch+merge.
 -->

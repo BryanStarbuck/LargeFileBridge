@@ -91,6 +91,41 @@ question: **"is this file pinned on THIS local computer's IPFS node, right now?"
   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` —
   `discoverForeignPin()` / `verifyForeignPins()`.
 
+### 1.2 A peer's pin claim survives a sync — and still never becomes local pin truth (LOCKED)
+
+§1.1 locks the **verdict**: a pin held only on another of the user's computers is `PINNED = false` here. This
+subsection locks the **direction of trust** now that peer pin claims actually travel between computers
+([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked) owns the
+merge mechanics — read it there, it is not restated).
+
+Two rules pull in opposite directions and **both** hold:
+
+* **A peer's claim must never be erased.** Reconciling an incoming manifest is a **per-entry merge**: entries
+  union by `path`, **`pinned_by` unions**, and **absence is never a delete**. A last-writer copy would wipe
+  the Tower's claim off the laptop and with it the entire *"another computer has this"* signal — the one
+  input the pull-down surfaces are built on ([warnings.mdx §10.8.12](./warnings.mdx), [to_do.mdx §5.1](./to_do.mdx)).
+  So the answer to *"does a peer hold this?"* is **additive** and only grows as manifests arrive.
+* **This computer's own claim must never be received.** The self-claim in `pinned_by` — the one that makes a
+  file read **Pinned** *here* — is **re-derived from this node's real pinset every cycle** and is **never**
+  adopted from what arrived. An incoming manifest that lists this computer's label cannot make the app
+  believe it holds bytes it does not hold. Everything else in the entry (CID, size, peers) may be received;
+  **local pin truth may only be measured.**
+
+The consequence for this page: a file whose only pin is a peer's stays **out of the pinset table entirely** —
+the table is `ipfs pin ls` on this node (§6), so a travelling claim can never add a row to it. It surfaces
+instead as a **`Pull down`** offer and, on the repo screen, as a **remote-only row**
+([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)).
+That separation is the point: **this page answers "what is kept here", not "what exists across my
+computers".**
+
+**This is also the guard against a false all-clear.** Trusting a received claim would let a second computer
+report a file as safely pinned while holding none of its bytes — the exact failure the product exists to
+prevent. A merge that *adds* peer knowledge while *refusing* peer assertions about **us** is the only shape
+that satisfies both.
+
+Re-deriving the self-claim from the real local pinset while unioning peers' claims is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (per-entry union merge; own claim re-derived), read back by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor()` (self-claim-only `pinned`).
+
 ---
 
 ## 2. Layout
@@ -480,6 +515,13 @@ of the same Tracked rows, so it stays in lock-step with the table with no second
     distinct from the **Pin type** column; **Transcribe / AI Description / OCR** derive done / could / na from
     the pin's `analysis[]` field plus resolved filename kind, path-less/untracked pins reading `na` (§5.1).
     The **File System** page shows **none**.
+12. **A peer's pin claim is additive knowledge, never local pin truth (§1.2).** Reconciling an incoming
+    manifest **unions** `pinned_by` and treats **absence as never a delete**, so a peer's claim can only
+    accumulate; but **this computer's own claim is re-derived from its real pinset every cycle** and is
+    **never** adopted from what arrived. A file pinned only on a peer therefore **never appears as a row on
+    this page** (the table is this node's `ipfs pin ls`) — it surfaces as a **`Pull down`** offer and a
+    **remote-only** row on the repo screen instead. Guard: a received claim must never produce a false
+    all-clear about bytes this computer does not hold.
 
 ---
 
@@ -550,4 +592,17 @@ page's read — so opening the IPFS page stays cheap; it reads what a prior pass
   meaning (tables §2.4 — two axes, two sources of truth); `Tracked` is a pinset reconciliation verdict, NOT
   the ledger's Pin decision facet. The ?repo= left-bar child filter stays NAVIGATION (§2.1, URL-driven,
   deep-linkable) and is deliberately NOT a rail facet — don't merge the two.
+
+  §1.2 (NEW, LOCKED) THE DIRECTION OF TRUST now that peer pin claims actually TRAVEL between the user's
+  computers (mechanics owned by storage_company.mdx §8.4.3 — link, never restate). TWO rules, opposite
+  directions, BOTH hold: (a) a peer's claim must NEVER be erased — per-entry merge, pinned_by UNIONS, absence
+  is NEVER a delete; a last-writer copy would wipe the Tower's claim off the laptop and with it the ENTIRE
+  "another computer has this" signal that every pull-down surface is built on. (b) this computer's OWN claim
+  must NEVER be received — the self-claim is re-derived from the REAL local pinset every cycle; an incoming
+  manifest listing our label cannot make us believe we hold bytes we don't. CID/size/peers may be received;
+  LOCAL PIN TRUTH MAY ONLY BE MEASURED. Consequence for this page: a peer-only pin never adds a row here (the
+  table IS this node's `ipfs pin ls`, §6) — it surfaces as a Pull down offer + a remote-only repo row (§8.5).
+  This page answers "what is kept HERE", not "what exists across my computers". The guard is against a FALSE
+  ALL-CLEAR (a second computer reporting a file safely pinned while holding none of its bytes = the exact
+  failure the product exists to prevent). AC 12 added.
 -->

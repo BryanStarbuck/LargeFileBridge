@@ -112,11 +112,17 @@ export const METRIC_CATALOG: Record<MetricId, MetricDef> = {
  * number on the tile and the length of the list in the popup can never disagree (one_repo.mdx §3.2.2).
  *
  * A row qualifies when Git is still allowed to commit it: not already git-ignored, not owned by a rule we
- * refuse to rewrite (a pattern / a non-root .gitignore — git_ignore.mdx §5.5), and not one of the small
- * analysis-only media admitted by scan rule 5 (those are never a checked-in-size problem).
+ * refuse to rewrite (a pattern / a non-root .gitignore — git_ignore.mdx §5.5), not one of the small
+ * analysis-only media admitted by scan rule 5 (those are never a checked-in-size problem), and NOT a
+ * remote-only row (storage_company.mdx §8.5) — there are no bytes on this computer for git to ignore, so
+ * offering to write a .gitignore line for a path this working tree does not contain is a no-op the user
+ * would have to understand to dismiss. The backend metric already excludes them; without this the tile and
+ * the table's own disabled toggle contradicted each other.
  */
 export function gitIgnoreCandidates(detail: RepoDetail) {
-  return detail.files.filter((f) => !f.gitignore && !f.gitignoreLocked && !f.analysisOnly);
+  return detail.files.filter(
+    (f) => !f.gitignore && !f.gitignoreLocked && !f.analysisOnly && f.presence !== "remote-only",
+  );
 }
 
 /** Resolve a metric's count from the RepoDetail the screen already holds. */

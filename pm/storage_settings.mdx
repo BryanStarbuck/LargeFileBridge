@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Storage Settings (Per-Storage)
-description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: for a `repo` storage (a working git repo) whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes — a control that exists ONLY for kind `repo`, because a personal/company/community SDL has NO .lfbridge/ at all (its ROOT is the .lfbridge area, artifact_placement_policy.mdx §0) — and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. For a company/Personal storage it also shows an OWNED REPOS list (§4c) — a TanStack table of the repos currently mapped to this storage (Personal includes the auto-defaulted no-org repos) — each row with a reassign dropdown (Personal | each company | + New company…) that re-files the repo via the same POST /api/repos/:repoId/owner as the per-repo Owner control; reassigning INTO a company with a sync repo records the travelling ownership assertion (repo_owner_propagation.mdx §2), moves NO bytes, and only changes which sync repo the repo's Category-B tracking mirrors to. It also OWNS the RESERVED-NAME validator (§4a): because an SDL's mapped-dir mirror hangs off the storage ROOT, a mapped-dir key named devices, analysis, files.yaml, storage.yaml, manifest.yaml, bookmarks.yaml, or mapped_dirs.yaml would shadow the SDL's own metadata, so add/rename rejects it and existing collisions surface as a storage warning (rule owned by artifact_placement_policy.mdx §0.3). Sibling of repo_settings.mdx (the per-repo counterpart), storages.mdx (the storage family + storage.yaml + the working-repo .lfbridge layout), artifact_placement_policy.mdx (§0 the storage-KIND rule that decides whether .lfbridge/ exists at all), repo_company_mapping.mdx (the owner mapping the list reads), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
+description: The per-storage settings page. Reached from a SINGLE storage — the gear icon on the storage detail page header, the row ⋮ kebab / right-click on a storage row in the Storages table, and the entity ⋮ "more" menu on the storage detail page — all opening this page scoped to that one storage. It controls the machine-local choices for that storage: for a `repo` storage (a working git repo) whether this computer keeps the hidden .lfbridge/ tracking directory and WHERE it goes — a control that exists ONLY for kind `repo`, because a personal/company/community SDL has NO .lfbridge/ at all (its ROOT is the .lfbridge area, artifact_placement_policy.mdx §0) — and which BACKING LOCATIONS the storage is materialized into — a dedicated Git repo (preferred when available), a Google Drive location, and a Dropbox directory — each independently ON/OFF with its own path. LFB picks good default directories that the user can change. The settings persist to a machine-local per-storage config file (pin/s/<storage_id>/config.yaml) — the local "settings file" distinct from the SHARED storage.yaml, because where the hidden dir and each mirror live differs per computer. On each pin pass, LFB reads these settings and, for every enabled backing location, CREATES the directory if missing and UPDATES it. For a company/Personal storage it also shows an OWNED REPOS list (§4c) — a TanStack table of the repos currently mapped to this storage (Personal includes the auto-defaulted no-org repos) — each row with a reassign dropdown (Personal | each company | + New company…) that re-files the repo via the same POST /api/repos/:repoId/owner as the per-repo Owner control; reassigning INTO a company with a sync repo records the travelling ownership assertion (repo_owner_propagation.mdx §2), moves NO bytes, and only changes which sync repo the repo's Category-B tracking mirrors to. The sync-repo field (§4b) AUTO-ADOPTS the storage's own SDL when its root is a git working tree — the field shows that root as the effective value with an "(auto — this storage's own repo)" hint plus an [ Override… ] affordance (an explicit pick still wins), and Clear reverts to the adopted value rather than blanking it — which is the same answer the Git backbone already gives, and which makes the per-repo mirror an OPT-OUT that defaults ON (storage_company.mdx §8.4.2, superseding the old default OFF); the Owned-repos list (§4c) resolves membership from the repo's REMOTE ORG first and path containment only as a fallback, so a repo living outside this storage's directory still belongs to it. It also OWNS the RESERVED-NAME validator (§4a): because an SDL's mapped-dir mirror hangs off the storage ROOT, a mapped-dir key named devices, analysis, files.yaml, storage.yaml, manifest.yaml, bookmarks.yaml, or mapped_dirs.yaml would shadow the SDL's own metadata, so add/rename rejects it and existing collisions surface as a storage warning (rule owned by artifact_placement_policy.mdx §0.3). Sibling of repo_settings.mdx (the per-repo counterpart), storages.mdx (the storage family + storage.yaml + the working-repo .lfbridge layout), artifact_placement_policy.mdx (§0 the storage-KIND rule that decides whether .lfbridge/ exists at all), repo_company_mapping.mdx (the owner mapping the list reads), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated).
 ---
 
 # LargeFileBridge — Storage Settings (Per-Storage)
@@ -395,15 +395,55 @@ it.
   ([repo_settings.mdx](./repo_settings.mdx), [placement_radios.mdx](./placement_radios.mdx)) is set to
   *sync repo* — its transcripts / AI descriptions, all path-mirrored under `<syncRepo>/repos/<repoKey>/`.
   This is **additive** — Local Storage stays the authoritative working copy on each machine; the mirror
-  never replaces it ([artifact_placement_policy.mdx §2](./artifact_placement_policy.mdx)). Default **OFF**,
-  per-repo. The set of owned repos and the **`ownedRepoCount`** surfaced on the Storages page both derive
-  from the same owner mapping.
+  never replaces it ([artifact_placement_policy.mdx §2](./artifact_placement_policy.mdx)). ~~Default **OFF**,
+  per-repo.~~ **SUPERSEDED** — the per-repo mirror now defaults **ON** (§4b.1,
+  [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked));
+  it is still per-repo, and the toggle is now an **opt-out**. The set of owned repos and the
+  **`ownedRepoCount`** surfaced on the Storages page both derive from the same owner mapping.
 * **Machine-local, like the rest of this page (§2).** The chosen remote + its enable state persist to the
   machine-local per-storage config (§5); the *fact that repos route here* is derived from the shared owner
   mapping plus each repo's per-repo toggle, not stored per-computer on this storage.
 
 Reading/writing the sync-repo pick (validate git working tree / URL, reject mapped-dir & big-file overlaps, clone a URL remote into the machine-local cache) and resolving the effective mirror root for an owned repo is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()` / `setStateSyncRepo()` / `clearStateSyncRepo()`, feeding `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`), whose additive mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+
+### 4b.1 Auto-adoption — the field shows the storage's own SDL as the effective value (LOCKED)
+
+The rule is owned by
+[storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)
+(and, for Personal, [storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-sync-repo)). This
+section is only how it **presents on this page**. A company or Personal storage whose root is a **git working
+tree** — the normal case, since an SDL *is* a git repo — **is** its own sync repo, adopted without the user
+configuring anything.
+
+* **The field is never empty when an SDL can be adopted.** Instead of a blank input and an implied *"set this
+  up first"*, the remote field shows the **auto-adopted SDL root** as the **effective value**, rendered as a
+  distinct **derived** state — the path in the field, with an **`(auto — this storage's own repo)`** hint
+  beneath it. It is a real, working sync repo, not a placeholder.
+* **Override is one click.** An **[ Override… ]** affordance turns the derived value into an editable pick,
+  which then accepts exactly the two remote shapes and passes exactly the validation the section above
+  defines. An **explicitly configured `sync_repo` wins** over auto-adoption whenever it is present — the
+  precedence is *configured, else adopted*, never the reverse.
+* **[ Clear ] reverts to the adopted value, it does not blank it.** Clearing an override drops the explicit
+  pick and the field falls **back** to the auto-adopted SDL, with the derived hint returning. Clearing still
+  deletes nothing on disk. Blank — "no sync repo at all" — is now reachable only for a storage whose root is
+  **not** a git working tree.
+* **This is the answer the Git backbone already gives.** The backbone auto-adopts the SDL's own git root when
+  no dedicated repo path is set, which is why device state has been travelling between the user's computers
+  all along ([devices.mdx §11.2.1](./devices.mdx), [git_backbone.mdx](./git_backbone.mdx)). Making this field
+  agree with it means **one SDL, one git root, one answer** — the sync repo and the backbone stop disagreeing
+  about what the storage's repo *is*.
+* **Not a git working tree → the old behavior, stated honestly.** A storage rooted in a plain directory (a
+  Drive/Dropbox-only pile with no `.git/`) has nothing to adopt: the field stays empty with the hint *"This
+  storage's root is not a git repo — pick a sync repo to share tracking state."* Owned repos then keep their
+  tracking in **Local Storage only** — real and honored locally, simply not shared.
+* **What it changes for owned repos.** Because a sync repo now normally resolves, the per-repo toggle
+  ([repo_settings.mdx §2.9.1](./repo_settings.mdx#291-the-default-is-on--this-toggle-is-an-opt-out-locked))
+  is normally **enabled and ON** rather than disabled-with-a-setup-hint. Only **small text** travels either
+  way — media bytes still move over IPFS alone ([decisions.mdx](./decisions.mdx)).
+
+Resolving the effective sync repo — the explicitly configured pick first, the storage's own git root auto-adopted second — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo(storageId)` (the configured pick) with the SDL-root fallback the backbone already performs in `getGitBackboneRemote(storageId)` (same file), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the derived-value field + Override/Clear) and consumed per repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)`.
 
 ---
 
@@ -487,6 +527,29 @@ Reassigning here is not only a local grouping change; it has the same two conseq
 
 Reading the set of repos this storage owns (the owner mapping) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` (joins the repo list against `resolveRepoOwner`, returning the rows whose owner is this storage), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the Owned-repos TanStack table). The per-row reassign reuses the same endpoint as the manual reassign — `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner` (which, for a company target with a sync repo, also asserts via `owner-propagation.service.ts` — `assertCompanyOwnership()`, [repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)).
+
+### 4c.3 Membership comes from the remote org, not from where the repo sits on disk (LOCKED)
+
+Per [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)
+and [repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-decides-the-sync-repo-target-remote-first-locked),
+a repo is listed here because its **remote org** binds to this storage — **not** because it is physically
+inside this storage's directory.
+
+* **A repo outside the storage's directory still belongs to it.** `~/BGit/Bryan_git/charlie-kirk` (remote
+  `github.com/ACT3ai/charlie-kirk`) appears in the **ACT3ai** company's Owned-repos list even though it lives
+  nowhere near that company's root. Under a containment-first resolution it wrongly landed under **Personal**,
+  which meant its tracking mirrored to the wrong SDL — the reason this ordering is locked.
+* **Path containment is the fallback.** A repo with no forge org to bind — no remote, a local-path or
+  self-hosted remote, or a personal-account owner — falls to containment, and ultimately to **Personal**
+  ([repo_company_mapping.mdx §3](./repo_company_mapping.mdx#3-the-heuristic--which-parse-becomes-a-company-locked)).
+* **The list and the mirror agree by construction.** The rows shown here and the repos whose tracking mirrors
+  into this storage's sync repo (§4b, §4b.1) are the **same set**, resolved by the same owner lookup. If a
+  repo is in this table, its tracking targets **this** storage's sync repo unless its per-repo toggle opts out.
+* **Reassign still wins.** A manual override (§4c.1) overrules the remote derivation exactly as before; §4c.3
+  only fixes what the **auto** path resolves to.
+
+Resolving membership from the remote-derived owner (with the manual override taking precedence) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` / `ownerMatchesCompany(owner, row)`, fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)`.
 
 ---
 
@@ -711,10 +774,27 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    git working tree / reachable URL, not overlapping a mapped source directory or a big-file location) and
    persists to the machine-local config (§5) as `sync_repo`. It is an **additive mirror** of owned repos'
    Local-Storage tracking state, written to `<syncRepo>/repos/<repoKey>/` only for repos whose per-repo
-   toggle is on (default OFF). The section is **hidden** for `repo`, `local`, and `community` storages.
-   Concept + placement policy are cross-linked, not redefined
+   toggle is on (~~default OFF~~ — **superseded by AC 9b**). The section is **hidden** for `repo`, `local`, and
+   `community` storages. Concept + placement policy are cross-linked, not redefined
    ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
    [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
+9b. The sync-repo field **auto-adopts this storage's own SDL** (§4b.1, authority
+   [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)):
+   for a company/Personal storage whose root is a **git working tree**, the field shows that root as the
+   **effective value** with an **`(auto — this storage's own repo)`** hint rather than sitting empty; an
+   **[ Override… ]** affordance replaces it with an explicit pick (which **wins**), and **[ Clear ]** reverts to
+   the adopted value instead of blanking it. A storage root that is **not** a git working tree keeps the empty
+   field and the honest hint. This is the same answer the Git backbone already gives (`getGitBackboneRemote`) —
+   one SDL, one git root, one answer — so the per-repo mirror is normally **enabled and ON**
+   ([repo_settings.mdx §2.9.1](./repo_settings.mdx#291-the-default-is-on--this-toggle-is-an-opt-out-locked)),
+   an **opt-out** rather than an opt-in. Only tracking **text** is affected; media bytes still move over IPFS
+   alone.
+9c. The **Owned-repos list is resolved remote-org first** (§4c.3): a repo whose remote org binds to this storage
+   is listed **even when it lives outside this storage's directory** (e.g. `~/BGit/Bryan_git/charlie-kirk` with
+   remote `github.com/ACT3ai/charlie-kirk` under the **ACT3ai** company, not Personal), with **path containment
+   only as the fallback** for repos with no forge org. The rows in this table and the repos whose tracking
+   mirrors into this storage's sync repo are, by construction, the **same set**; a manual reassign (§4c.1)
+   still overrules the derivation.
 10. The relocated-`.lfbridge/` control (§3, kind `repo` only) is **complemented, not replaced,** by the
     data-category placement policy (§3.1): §3 places **a working repo's own** `.lfbridge/` on this
     computer, while the
@@ -804,5 +884,22 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   in storage-settings.service.ts rendered by StorageSettingsPage.tsx; reassign reuses POST /api/repos/:repoId/owner
   (repos.router) → assertCompanyOwnership in owner-propagation.service.ts for a company target w/ a sync repo.
   Cross-links repo_owner_propagation.mdx (added to siblings).
+
+  ADDED §4b.1 (LOCKED) AUTO-ADOPTION IN THE SETTINGS UI — authority storage_company §8.4.2 (which supersedes
+  §4b's "Default OFF, per-repo" and AC 9's parenthetical). A company/Personal storage whose ROOT is a git
+  working tree IS its own sync repo, so the remote field is NEVER empty: it shows the adopted SDL root as the
+  EFFECTIVE value in a derived state with an "(auto — this storage's own repo)" hint; [ Override… ] turns it
+  into an explicit pick that WINS (precedence = configured, else adopted); [ Clear ] reverts to the adopted
+  value rather than blanking it (blank is reachable only for a non-git root, which keeps the honest "pick a
+  sync repo" hint). This is the SAME answer getGitBackboneRemote already gives — one SDL, one git root, one
+  answer — so the per-repo toggle (repo_settings §2.9.1) is normally enabled and ON, an OPT-OUT. Only text
+  travels; bytes stay on IPFS. New AC 9b. ADDED §4c.3 (LOCKED) OWNED-REPOS MEMBERSHIP IS REMOTE-ORG FIRST, not
+  path containment: charlie-kirk (remote github.com/ACT3ai/…) lists under the ACT3ai company though it lives
+  outside that company's directory — containment-first wrongly filed it under Personal and mirrored its
+  tracking to the wrong SDL; containment is the fallback for repos with no forge org; the table's rows and the
+  repos mirroring into this storage's sync repo are the SAME SET by construction; manual reassign still wins.
+  New AC 9c. Code: getStateSyncRepo + getGitBackboneRemote + getOwnedRepos/ownerMatchesCompany
+  (storage-settings.service), resolveOwnerDedicatedRepo (artifact-placement.service), deriveOwnerForRemote
+  (git.service), StorageSettingsPage.tsx (the derived-value field).
 -->
 

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Devices / Peers (the per-computer registry + the graft)
-description: The device model. Every computer that carries a storage issues itself a stable unique device ID (a minted UUID) on first use, kept in ~/T local storage AND copied into every synced storage, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device also records a HARDWARE FINGERPRINT — Mac model + year, screen size (14"/16"), disk size, RAM, chip, logged-in username / home directory — which the app uses to (a) auto-name a new computer and (b) DISAMBIGUATE two similar machines by appending only the attributes that differ (two MacBook Pros → one shows "(14-inch)", the other "(16-inch)"). The Devices / Peers left-bar page shows a TanStack table of every device; it ALWAYS auto-seeds THIS computer so the table is never empty. Each device records itself as one file in the storage's Syncable Data Location — <SDL>/devices/<device>.yaml, at the SDL ROOT with NO .lfbridge/ segment, because an SDL is a dedicated LFB file repo and its root IS the .lfbridge area (artifact_placement_policy.mdx §0) — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; the hardware fingerprint; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices), left_bar.mdx (the "Devices / Peers" nav item).
+description: The device model. Every computer that carries a storage issues itself a stable unique device ID (a minted UUID) on first use, kept in ~/T local storage AND copied into every synced storage, and the user gives it a nice human name from the web app (e.g. "bryan-macbook"). Each device also records a HARDWARE FINGERPRINT — Mac model + year, screen size (14"/16"), disk size, RAM, chip, logged-in username / home directory — which the app uses to (a) auto-name a new computer and (b) DISAMBIGUATE two similar machines by appending only the attributes that differ (two MacBook Pros → one shows "(14-inch)", the other "(16-inch)"). The Devices / Peers left-bar page shows a TanStack table of every device; it ALWAYS auto-seeds THIS computer so the table is never empty. Each device records itself as one file in the storage's Syncable Data Location — <SDL>/devices/<device>.yaml, at the SDL ROOT with NO .lfbridge/ segment, because an SDL is a dedicated LFB file repo and its root IS the .lfbridge area (artifact_placement_policy.mdx §0) — so the registry of devices TRAVELS with the storage and every computer knows about every other. A device file is SELF-OWNED: a computer writes only its own file and trusts other devices' files as claims (the same trust model as the Sync List). Each device file carries: the device id (changeable in settings) + owner email; the nice name; the hardware fingerprint; this device's SYNC SCHEDULE (cadence + the specific times/windows it syncs this storage); and — the load-bearing part — the GRAFT: how the storage's shared, machine-independent directory hierarchy (the mapped source directories, keyed in mapped_dirs.yaml) maps onto THIS computer's local absolute paths, plus where this computer keeps the pulled files and whether it wants each mapped directory at all. The graft is what lets computer 2 pull the right files down to the RIGHT local locations from the SDL's YAML alone. Distinguishes the shared, travelling device registry (this spec, in the SDL) from the machine-local peers.yaml and config.yaml→computer identity (storage_local.mdx, which never travels). Hub siblings: syncable_data_location.mdx (the SDL that holds devices/), storage_local.mdx (this computer's identity + peers), sync_list.mdx (the trust model + pinned_by), storage_settings.mdx (per-computer settings), storage_company.mdx (multi-user companies whose members are devices), left_bar.mdx (the "Devices / Peers" nav item). Also defines two consequences of the registry beyond its own page: §6.9 a PEER'S NICE NAME is the label that names a REMOTE-ONLY row elsewhere in the product ("On bryan-mac-pro — not on this computer yet"), and §10.1 the registry is the BACKBONE'S PROOF-OF-LIFE — two mutually-fetched device files in a company SDL prove git fetch/merge/commit/push work on that repo, so missing cross-computer state is a cargo fault, never a transport one (storage_company.mdx §8).
 ---
 
 # LargeFileBridge — Devices / Peers
@@ -394,6 +394,40 @@ slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devic
 `GET /api/devices` (§6.6). These are page-level actions, distinct from any per-row `⋮` kebab
 ([menus.mdx](./menus.mdx)).
 
+### 6.9 A peer device label names a remote-only row (LOCKED)
+
+A device's **nice name** is not only a row in this page's table — it is the **word the rest of the product
+uses to tell the user which of their computers has a file**. Its load-bearing use is the **remote-only
+row** in [View One Repo](./one_repo.mdx): a file this computer does **not** have, shown red, whose tooltip
+reads
+
+```
+On bryan-mac-pro — not on this computer yet.
+```
+
+* **The `{device}` in that sentence is the peer's nice name from the travelling registry** (§2), reached
+  via the manifest entry's `pinned_by` / `addedByDevice` device **id** and resolved to a label through the
+  same registry the table reads. The **id** is the join key; the **name** is what the user sees.
+* **Why the label matters more here than in the table.** In the table a device is context. In a
+  remote-only row it is the *entire* actionable content of the message: *"somewhere else has this"* is not
+  a fix, *"your Mac Tower has this"* is. A missing or cryptic label degrades the product's most important
+  row into a shrug.
+* **Never fall back to a raw id or a PeerID in this sentence.** If the registry has no entry for the id,
+  the row says *"On another of your computers — not on this computer yet"* — honest, still healthy, never
+  a hex string in the user's face (the same posture as §6.4's truncated PeerID: ids are for joining, names
+  are for reading).
+* **A rename travels.** Renaming the Tower changes the sentence on the MacBook at the next backbone pass
+  (§10) — no separate propagation path, because the registry *is* the propagation path.
+* **The graft (§4) decides where the pulled bytes land** once the user acts on that row: this computer's
+  own local path for the storage's shared hierarchy, never the peer's.
+
+The rules for what a remote-only row is, what it counts toward, and what it may do are owned by
+[storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)
+— this section only fixes **where the device label in it comes from**.
+
+Resolving a device id to the nice name shown in peer-attributed UI is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `readDevices()` / `deviceRows()`, consumed when composing the row in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`.
+
 ---
 
 ## 7. The hardware fingerprint — identify the physical machine (no networking)
@@ -499,6 +533,38 @@ device registering itself and discovering the user's other machines:
 
 Net effect: rename a computer or upgrade its disk on one machine, and the next backbone pass carries the new nice
 name / fingerprint to every other computer's Devices / Peers table.
+
+### 10.1 The device registry is the proof-of-life of the backbone (LOCKED)
+
+The registry does a second job nobody designed it for, and it is the more important one: **it proves the
+transport works.**
+
+* **The evidence.** In the ACT3 company SDL (`~/BGit/Bryan_git/act3_large_files_bridge`) **both** of the
+  user's computers — `bryan-mac-pro` (the Mac Tower) and `bryanstarbuck-macbook-pro` (the MacBook) — are
+  already present in `<SDL>/devices/`, each self-written, committed, pushed, fetched and merged by the
+  other machine. Two computers, one repo, real round trips, for months.
+* **What that rules out.** When a big file the Tower pinned failed to appear on the MacBook, the registry
+  is what said *"this is not a git problem, not a credentials problem, not a remote problem, not a merge
+  problem."* Fetch, merge, commit and push were all demonstrably working **on that exact repo**. The road
+  was open; there was simply **no cargo on it** — the SDL's git log contained **nothing but device state**
+  ([storage_company.mdx §8.3](./storage_company.mdx#83-the-chain-and-where-each-link-was-broken)).
+* **The uncomfortable version of the same sentence.** Until the per-repo tracking mirror started
+  travelling, the device registry was the **only** thing the backbone carried. A backbone whose entire
+  payload is "which computers exist" is a courier delivering its own business card. **That is the gap
+  storage_company.mdx §8 closes** — the registry keeps proving the road works, and now the manifest,
+  decisions, and sidecars ride it too.
+* **Why the registry got there first — and why that is the pattern to copy.** Device write-back is
+  **on by default**, **auto-adopts** the SDL's own git root as its backbone, and **commits + pushes on the
+  first write and every update** (§11.1, §11.2.1). Tracking-state mirroring had none of those three: it
+  was **default OFF**, needed a **separately configured** sync repo, and had **no trigger** after a write.
+  Same repo, same git, opposite outcome. §8.4.2 makes the sync repo agree with the backbone about what the
+  company's repo *is*: **one SDL, one git root, one answer.**
+* **The diagnostic habit this locks.** When cross-computer state is missing, **look at `<SDL>/devices/`
+  first.** Two current device files mean the transport is healthy and the fault is upstream (nothing was
+  written) or downstream (nothing was reconciled) — never in the middle.
+
+Auto-adopting the SDL's own git root as the backbone — the behaviour that made the registry travel — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (§11.2.1), the same resolution the tracking mirror now follows via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
 
 ---
 
@@ -665,6 +731,20 @@ The pass itself — for every Git-backed storage, pull → write self device →
     plain **code** repo (type `repo`) is **never** adopted — its Category-B tracking state routes to Local
     Storage (+ the sync repo), never the code repo (whose committed `.lfbridge/` holds only Category-A
     content) — keeping the charter's git compliance boundary intact.
+13. A **peer's device nice name is the label that names a remote-only row** — the *"On {device} — not on
+    this computer yet"* tooltip on a file this computer does not have
+    ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)).
+    The device **id** is the join key, the **name** is what the user reads; with no registry entry the row
+    degrades to *"On another of your computers"* and **never** shows a raw id or PeerID; a rename travels
+    on the next backbone pass; and the **graft** (§4) — not the peer's path — decides where the pulled
+    bytes land (§6.9).
+14. The **device registry is the backbone's proof-of-life**: two current, mutually-fetched device files in
+    a company SDL (`bryan-mac-pro` + `bryanstarbuck-macbook-pro` in `act3_large_files_bridge`) prove
+    fetch / merge / commit / push all work **on that repo**, so missing cross-computer state is a
+    **cargo** fault — nothing written, or nothing reconciled — never a transport fault. Diagnosis starts
+    at `<SDL>/devices/` (§10.1). The three properties that got the registry travelling first —
+    **on by default**, **auto-adopted git root**, **commit + push on every write** — are the pattern the
+    tracking mirror now follows (§11.1, §11.2.1, storage_company.mdx §8.4.2).
 
 <!--
   The DEVICE / PEERS model. §1 identity: a MINTED stable UUID (distinct from the IPFS PeerID) + a
@@ -717,4 +797,26 @@ The pass itself — for every Git-backed storage, pull → write self device →
   repo (whose committed .lfbridge/ holds only Category-A content) so git_backbone.mdx §7 holds. Code:
   storage-settings.service getGitBackboneRemote() (explicit-then-root fallback) consumed by pin.service
   pinStorageUnitInner()/ensureDeviceRegisteredInner(). Keep in sync with git_backbone.mdx §1/§7, storage_company.mdx.
+
+  ADDED §6.9 + §10.1 + AC 13-14, both serving storage_company.mdx §8 (the load-bearing one-file-two-computers
+  use case, which is the AUTHORITY — cited, not restated). §6.9 (LOCKED) a PEER DEVICE LABEL NAMES A
+  REMOTE-ONLY ROW: the {device} in "On bryan-mac-pro — not on this computer yet" is the peer's nice name from
+  the travelling registry (§2), joined from the manifest entry's pinned_by/addedByDevice ID — id joins, name
+  reads; in that sentence the label is the ENTIRE actionable content ("somewhere else has this" is not a fix,
+  "your Mac Tower has this" is), so NEVER fall back to a raw id/PeerID — degrade to "On another of your
+  computers"; a rename travels on the next backbone pass (the registry IS the propagation path); the GRAFT
+  (§4) decides where pulled bytes land, never the peer's path. Row semantics themselves are owned by
+  storage_company.mdx §8.5. Code: devices.service readDevices()/deviceRows() → units.service
+  composeFileRows(). §10.1 (LOCKED) THE REGISTRY IS THE BACKBONE'S PROOF-OF-LIFE: bryan-mac-pro AND
+  bryanstarbuck-macbook-pro were both already in <act3_large_files_bridge>/devices/, mutually fetched/merged
+  for months — which is exactly what proved the missing-file bug was NOT git/credentials/remote/merge (the
+  SDL's log contained NOTHING BUT device state). The uncomfortable corollary: until the tracking mirror
+  travelled, the registry was the ONLY cargo — a courier delivering its own business card. It got there
+  first because device write-back is ON BY DEFAULT + AUTO-ADOPTS the SDL git root + COMMITS/PUSHES on first
+  write and every update, while tracking mirroring was default-OFF + needed a separate configured repo +
+  had no post-write trigger — same repo, same git, opposite outcome (fixed by storage_company §8.4.2: one
+  SDL, one git root, one answer). Diagnostic habit LOCKED: when cross-computer state is missing, read
+  <SDL>/devices/ FIRST — two current files ⇒ the fault is upstream (nothing written) or downstream (nothing
+  reconciled), never in the middle. Code: storage-settings.service getGitBackboneRemote() (§11.2.1), now
+  also followed by tracking-sync.service ensureSyncRepoMarker().
 -->

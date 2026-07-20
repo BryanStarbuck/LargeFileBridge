@@ -299,6 +299,8 @@ Every table whose rows are **files** — the one-repo task tabs ([one_repo.mdx](
   **git-ignored media file of any size**, which stays visible so the 5–100 MB clip case
   [repos.mdx §4.1](./repos.mdx) is never re-hidden) **or** a checked-in-nudge file (≥ the 50 MB
   checked-in threshold). Only the newly-surfaced small, not-git-ignored media hide behind the toggle.
+* **A remote-only row is never hidden by this toggle** — it is a large file, not an `analysisOnly` row
+  (§4e). "Large files only" answers *"is this big?"*, never *"is this here?"*.
 * Like Bookmarked-only it is a **single promoted checkbox, not a two-value facet** — "show me only the
   big files" is one high-frequency intent with an obvious off state. It is the **second** documented
   exception to §2.1 (§2.7 is the first), and the last.
@@ -871,6 +873,51 @@ navigate on click) and the **File System** column browser
 
 ---
 
+## 4e. Remote-only rows in a file table (LOCKED, site-wide)
+
+A file table's rows have always been **files on this disk**. They are not any more: a **remote-only** row —
+`FileRow.presence === "remote-only"`, a file another of the user's computers has pinned that this one does
+not have yet, composed from the reconciled manifest with **no local file behind it** — is defined and LOCKED
+in [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)
+and rendered by [one_repo.mdx §4.10](./one_repo.mdx#410-remote-only-rows--a-file-in-this-list-that-is-not-on-this-computer-locked).
+This section owns only what the **shared table** does with one.
+
+* **`Large files only` does NOT hide it (§2.9).** The toggle hides exactly one thing — small, not-git-ignored
+  `analysisOnly` media — and a remote-only row is not one: it is bridge payload the user decided to sync. The
+  predicate stays *"anything other than an `analysisOnly` row"*, so **no change is needed to make this
+  correct** — it is written down here so nobody "fixes" the toggle by adding a `presence` test. A row the
+  user cannot find is worse than a row they cannot act on.
+* **It filters like any other row, on the values it actually has.** Its **Pin (IPFS)** facet value is the
+  ordinary one for its decision (§2.4.1) — usually **Pinned** (`sync`), or **Undecided** while this computer
+  has not decided. On the **Git-ignore** facet it is **N/A**, which per §2.4.1 is **not a facet value**: a
+  file with no local path has no `git check-ignore` answer, so the Git-ignore facet simply does not select
+  it, and its Ignore icon renders `na`. The **File type** facet (§2.10) works normally — `fileTypeForName()`
+  reads the manifest **name**, which a remote-only row has.
+* **Search matches it.** Search is a substring over the **path**, and a remote-only row's `path` comes from
+  the manifest. A file the user knows they pinned on their tower must be findable by name on their laptop —
+  that is most of the point of showing the row.
+* **Sorting uses the manifest's values, and unknowns sort LAST.** `Size` and `CID` come from the manifest and
+  sort like any other row's. `Peers` counts the peers that hold it (never 0 — if no peer held it there would
+  be no row). **`Changed` is unknown** (there is no local `mtime` to read): it sorts **last** in either
+  direction and renders `—`, never a fabricated or epoch-zero date. In the icon columns' **On → Recommended →
+  Off → N/A** order (§3.6) its `na` analysis icons sort last, exactly like any other N/A.
+* **It supplies no `rowHref` (§4d.1).** There is no local file to open, so its `rowHref` returns **`""`** —
+  the documented "no destination" answer the shared handler already understands — and a modified click falls
+  through instead of opening a viewer on bytes that are not there. **Never invent a route for a row that has
+  no page.** Its one action is *pull it down*
+  ([one_repo.mdx §4.10](./one_repo.mdx#410-remote-only-rows--a-file-in-this-list-that-is-not-on-this-computer-locked)).
+* **Column visibility, responsive priority, and persistence are untouched.** `presence` is a **row** property,
+  never a column and never a facet of its own — there is no "Remote only" checkbox to persist, and no page's
+  saved view changes shape because of this feature.
+
+The row's optional `presence` field, and the composer that appends manifest entries with no local candidate, are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`, set by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
+the toggle, facets, search, sort, and `rowHref` that consume it are the unchanged shared surfaces in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+
+---
+
 ## 5. Acceptance criteria
 
 1. **Repos, the Full-paths files table, and Communities** each have a **leading ribbon bookmark
@@ -943,6 +990,15 @@ navigate on click) and the **File System** column browser
     Storages, Storage-detail files, IPFS pins, and Devices. Still open: Full-paths and the File System
     column browser, which need the equivalent OUTSIDE the shared `DataTable`. Done = a grep for
     `onRowClick=` in `packages/frontend/src` finds no call site lacking a `rowHref=`.
+16. **A file table renders rows that are not on this disk (§4e).** A **remote-only** row
+    (`FileRow.presence === "remote-only"`,
+    [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked))
+    is **not hidden by `Large files only`** (it is a large file, not an `analysisOnly` row); it **filters**
+    on its real Pin (IPFS) value and is **N/A** on Git-ignore (not a facet value, §2.4.1); it **searches** on
+    its manifest path; it **sorts** on the manifest's `Size` / `CID` / `Peers`, with the unknown **`Changed`**
+    rendering `—` and sorting **last** in either direction and its `na` icon states sorting last per §3.6;
+    and it supplies **`rowHref: ""`** — no fabricated route to bytes that are not here (§4d.1). `presence` is
+    a row property only: it is **never** a column, never a facet, and changes no persisted view (§4).
 
 ## 6. Tab-scoped column sets (LOCKED)
 
@@ -1026,6 +1082,20 @@ Applied in code:
   pages/repos/metricWarnings.ts. This does NOT touch §2.4.1's Pin facet: the facet value ☑ Undecided stays,
   and the Decision wire value `undecided` is UNCHANGED and still FROZEN (decisions.mdx §7) — only prose
   tying that checkbox to the removed tile was corrected.
+
+  §4e (NEW, LOCKED, site-wide) REMOTE-ONLY ROWS: a file table's rows are no longer necessarily files ON THIS
+  DISK — FileRow.presence === "remote-only" (a peer pinned it, the bytes aren't here; composed from the
+  reconciled manifest, NOT a statSync). Owned/LOCKED by storage_company.mdx §8.5, rendered by one_repo.mdx
+  §4.10; THIS file owns only what the shared DataTable does with one. "Large files only" (§2.9) must NOT hide
+  it — the toggle hides ONLY analysisOnly rows, and a remote-only row is bridge payload; written down so
+  nobody "fixes" the toggle by adding a presence test. Filters on its real Pin (IPFS) value (usually Pinned,
+  or Undecided on this computer); Git-ignore is N/A = NOT a facet value (§2.4.1) since there's no local path
+  for git check-ignore. Search works (path comes from the manifest — being findable by name on the second
+  computer is most of the point). Sort uses manifest Size/CID/Peers; Changed is UNKNOWN → renders "—" and
+  sorts LAST both directions (never a fabricated/epoch date); na icon states sort last per §3.6. rowHref
+  returns "" (§4d.1's documented no-destination answer) — never invent a route to bytes that aren't here;
+  the row's one action is pull-it-down. presence is a ROW property: never a column, never a facet, changes
+  no persisted view. AC 16 added.
 
   CHARTER NOTE: CLAUDE.md's Tables rule still says the filter/sort icons "open a dropdown to filter /
   sort the table." §2.2 and §3.5 move the common path OUT of those dropdowns onto always-visible

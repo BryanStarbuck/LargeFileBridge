@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo (Git) Backbone
-description: The per-repo Sync List backbone — the git transport that carries a repo-scope big-file manifest (large-file → IPFS CID + pin state) between the user's computers. UPDATED FOR THE DATA-CATEGORY SPLIT (artifact_placement_policy.mdx): the per-repo manifest is CATEGORY B tracking state, so it does NOT live committed inside the working repo's .lfbridge/. It lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml ALWAYS (machine-local, never touching git, so it can never merge-conflict), and it TRAVELS via the company/Personal SYNC REPO — the dedicated *_large_files_bridge tracking repo driven by the git_backbone.mdx engine — at <syncRepo>/repos/<repoKey>/manifest.yaml, union-merged, when that sync repo is configured and the per-repo toggle is on (default OFF). This SUPERSEDES the earlier design that committed <repo>/.lfbridge/manifest.yaml / LargeFilesBridge_SyncList.yaml into the working repo. The working repo's OWN git now carries only its small committed files (code) and its committed CATEGORY-A content (transcripts .transcription + AI descriptions .ai_description in .lfbridge/) — never the manifest. LOCKED rules that carry over to the sync-repo copy: the big files stay git-ignored and only the small manifest travels via git (git carries the list, IPFS carries the bytes — NEVER commit the large files); the manifest is written DETERMINISTICALLY (file entries sorted by path, stable key order) so independent edits on two computers merge cleanly and only genuine conflicts collide; git MERGE CONFLICT markers must be detected, the file quarantined and REFUSED (never load a half-merged manifest), then reconciled per hub §5.3; absence after a merge is NOT a delete (hub §5.2); a pull that brings a peer revision behind this machine's real state is reconciled by verifying local claims (hub §5.1). The per-repo manifest is AUTHORITATIVE for that repo's files (hub §5.4). Enabled per-repo via the sync-repo toggle (repo_settings.mdx §2) on a storage that has a sync repo configured. LFB writes/mirrors the file but never touches the working repo's git.
+description: The per-repo Sync List backbone — the git transport that carries a repo-scope big-file manifest (large-file → IPFS CID + pin state) between the user's computers. UPDATED FOR THE DATA-CATEGORY SPLIT (artifact_placement_policy.mdx): the per-repo manifest is CATEGORY B tracking state, so it does NOT live committed inside the working repo's .lfbridge/. It lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml ALWAYS (machine-local, never touching git, so it can never merge-conflict), and it TRAVELS via the company/Personal SYNC REPO — the dedicated *_large_files_bridge tracking repo driven by the git_backbone.mdx engine — at <syncRepo>/repos/<repoKey>/manifest.yaml, union-merged, when that sync repo is configured and the per-repo toggle is on (default OFF). This SUPERSEDES the earlier design that committed <repo>/.lfbridge/manifest.yaml / LargeFilesBridge_SyncList.yaml into the working repo. The working repo's OWN git now carries only its small committed files (code) and its committed CATEGORY-A content (transcripts .transcription + AI descriptions .ai_description in .lfbridge/) — never the manifest. LOCKED rules that carry over to the sync-repo copy: the big files stay git-ignored and only the small manifest travels via git (git carries the list, IPFS carries the bytes — NEVER commit the large files); the manifest is written DETERMINISTICALLY (file entries sorted by path, stable key order) so independent edits on two computers merge cleanly and only genuine conflicts collide; git MERGE CONFLICT markers must be detected, the file quarantined and REFUSED (never load a half-merged manifest), then reconciled per hub §5.3; absence after a merge is NOT a delete (hub §5.2); a pull that brings a peer revision behind this machine's real state is reconciled by verifying local claims (hub §5.1). The per-repo manifest is AUTHORITATIVE for that repo's files (hub §5.4). Enabled per-repo via the sync-repo toggle (repo_settings.mdx §2) on a storage that has a sync repo configured. LFB writes/mirrors the file but never touches the working repo's git. SUPERSEDED BY storage_company.mdx §8 (see §2.1 and §4.1 here): the mirror subtree is keyed by the repo's NORMALIZED GIT REMOTE — <syncRepo>/repos/<repoUid>/, not the path-derived <repoKey> — because a machine-local key made the two computers write different directories; the owning company/Personal storage's git-backed SDL is AUTO-ADOPTED as the sync repo and the per-repo mirror now defaults ON (the toggle became an opt-out, not an opt-in); and a pulled mirror is reconciled by PER-ENTRY MERGE on EVERY sync-repo pull (union by path, union pinned_by, absence never a delete), never a last-writer copy.
 ---
 
 # LargeFileBridge — Repo (Git) Backbone
@@ -102,6 +102,53 @@ The working repo, by contrast, holds only what travels with the repo itself:
 The Local-Storage manifest (and its optional sync-repo mirror) is written by code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest` (path from `manifestPath`, resolved via `tracking-root.service.ts` — `resolveTrackingRoot()` / `resolveStateSyncRepo()`).
 
+### 2.1 The mirror subtree is keyed by the REMOTE — `repos/<repoUid>/` (LOCKED, supersedes `<repoKey>` above)
+
+**Superseded:** the box above (and every `<syncRepo>/repos/<repoKey>/` in this spec) named the **mirror**
+subtree by the path-derived `repoKey`. The mirror is now keyed by the repo's **normalized git remote**.
+The rule is owned by [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked);
+this section binds it to the manifest's travel path and does not restate the rationale.
+
+```
+ALWAYS  →  ~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml   (Local Storage — PATH-keyed, unchanged)
+ALSO    →  <syncRepo>/repos/<repoUid>/manifest.yaml                (the travelling MIRROR — REMOTE-keyed)
+```
+
+* **`repoUid` = short hash of `host/owner/name`** — lowercased, with scheme, credentials, any `.git`
+  suffix and any trailing slash stripped, so `git@github.com:ACT3ai/charlie-kirk.git` and
+  `https://github.com/ACT3ai/charlie-kirk` fold to the same `github.com/act3ai/charlie-kirk`.
+* **Why the key had to change.** `repoKey` is `shortHash(resolve(repoPath))` — a **machine-local** value.
+  The same repo is `/Users/bryan/BGit/…` on one computer and `/Users/bryanstarbuck/BGit/…` on the other, so
+  the two machines wrote and looked for **different directories in the same sync repo**: the manifest
+  travelled perfectly and was never found. A machine-local value must never key machine-shared data.
+* **No remote ⇒ no mirror, and the product says so.** A repo with no git remote has no shared identity;
+  LFB tells the user in the repo's settings ("no remote — tracking stays on this computer") instead of
+  writing into a subtree no other computer will ever read.
+* **Local Storage is unchanged.** `repos/<repoKey>/` stays path-keyed — it is machine-local state and
+  *should* be. The same repo cloned twice on one machine keeps **two** Local-Storage state dirs (correct —
+  two working trees) and converges on **one** mirror subtree (correct — one repo).
+* **The union-merge attributes still cover it.** The `.gitattributes` the git backbone installs matches on
+  the **filename** (`manifest.yaml`, `decisions.yaml`), so it applies at any depth — rekeying the subtree
+  needs no attribute change ([git_backbone.mdx §4.2](./git_backbone.mdx#42-append-mostly-shared-lists-merge-by-union)).
+
+Deriving the remote-keyed mirror subtree is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) consumed by `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`); the remote-folding helper already shipping is `normalizeRemoteKey()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`.
+
+### 2.2 The owning SDL is the sync repo, and the mirror defaults ON (LOCKED, supersedes "default OFF")
+
+**Superseded:** wherever this spec says the sync-repo travel is **default OFF** and an **opt-in**, the
+default is now **ON** whenever an owning storage with a **git-backed SDL** resolves. The rule is owned by
+[storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked):
+
+* The owning company/Personal storage's SDL **is** the sync repo — auto-adopted from its own git root,
+  the same rule `getGitBackboneRemote()` already applies to the Git backbone, so the sync repo and the
+  backbone stop disagreeing about what the storage's repo *is*. An explicitly configured `sync_repo` still
+  wins when present.
+* **Ownership resolves from the repo's remote org first**, path containment only as a fallback.
+* The per-repo toggle ([repo_settings.mdx §2](./repo_settings.mdx)) still exists and still wins — it is now
+  an **opt-out**. Only when **no** owning storage with a git-backed SDL resolves (or the user opted out) is
+  the manifest Local-Storage-only.
+
 ---
 
 ## 3. Reconciliation with the placement policy (supersedes the old committed manifest)
@@ -148,6 +195,29 @@ never ground truth** (hub [§5](./sync_list.mdx#5-trust--reconciliation-the-load
 
 Reading the manifest a sync-repo pull delivered and folding it into Local Storage is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `readManifest` / `reconcileManifest` (consumed after `GitBackbone.pull()` on the sync repo).
+
+### 4.1 Folding it in is a PER-ENTRY MERGE, on EVERY pull (LOCKED)
+
+The bullet above says "folds it into the Local-Storage manifest." This section says **how**, and **when** —
+because "fold" *was once* implemented as a last-writer **copy** with **no caller at all**. Both halves are
+fixed: the fold **is** a per-entry union merge, and the pin passes call it. The rule is owned by
+[storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked) and is the
+hub's §5 trust model ([sync_list.mdx §5.7](./sync_list.mdx#57-the-sync-repo-mirror--keyed-by-remote-merged-on-every-pull-locked))
+applied to this backbone:
+
+* **Union by `path`** — an entry present on either side survives.
+* **Union `pinned_by`** — the two computers' pin claims add together. A copy erases the peer's claim, and
+  with it the entire *"a computer of yours has these bytes"* signal that the pull-down flow is built on.
+* **Newer `modified_at` wins a conflicting `cid` for the same path**; ties keep the local value. A genuine
+  content fork is still surfaced per hub [§5.3](./sync_list.mdx#53-conflicts-resolve-by-revision-then-content-then-time).
+* **Absence is never a delete** — restating §5.3 below, and now binding on the merge itself.
+* **This computer's own pin claim is re-derived from its real pinset** (hub §5.1), never adopted from what
+  arrived: a peer's manifest cannot make this machine believe it holds bytes it does not.
+* **It runs on every sync-repo backbone pull**, immediately after fetch + merge — not on demand. A
+  reconcile that only happens when someone clicks something is a reconcile that does not happen.
+
+Merging a pulled sync-repo subtree into Local Storage per entry is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`; it formerly copied the tree wholesale and had no callers — both halves are fixed), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after `GitBackbone.pull()`.
 
 ---
 
@@ -383,6 +453,18 @@ large_files:
 10. When a repo appears on both a computer list and its own per-repo manifest, the **per-repo manifest is
     authoritative for that repo's `files`** (hub §5.4); it honors the IPFS only-our-content defaults, uses
     only the user's own sync repo (no third party), and adopts a manifest only from an **allow-listed owner**.
+11. The **mirror subtree is keyed by the repo's normalized git REMOTE** — `<syncRepo>/repos/<repoUid>/`,
+    `host/owner/name` with scheme/creds/`.git`/trailing slash stripped — **never** by the path-derived
+    `<repoKey>`, so both computers read and write the same directory; a repo with **no remote does not
+    mirror and says so**; Local Storage stays `repos/<repoKey>/` (§2.1, superseding AC 1/AC 5's `<repoKey>`
+    mirror wording).
+12. The owning company/Personal storage's **git-backed SDL is auto-adopted as the sync repo** and the
+    per-repo mirror **defaults ON** — the toggle is an **opt-out**, an explicit `sync_repo` still wins, and
+    ownership resolves from the **remote org** before any path-containment fallback (§2.2, superseding
+    AC 5's "default OFF").
+13. A pulled mirror is folded in by **per-entry MERGE on every sync-repo pull** — union by `path`, union
+    `pinned_by`, newer `modified_at` wins a CID conflict, absence **never** a delete, own pin claim
+    re-derived from the real pinset — **never** a last-writer copy and never on-demand-only (§4.1).
 
 <!--
   This is the REPO (GIT) backbone spec — one of three (siblings: dropbox.mdx, google_drive.mdx; hub:
@@ -407,4 +489,21 @@ large_files:
   Code: manifest.service.ts writeManifest/readManifest/reconcileManifest (repos/<repoKey>/manifest.yaml via
   tracking-root.service resolveTrackingRoot/resolveStateSyncRepo), pin.service pinRepoFolder,
   tracking-sync.service mirrorToSyncRepo, git_backbone GitBackbone pull/commitAndPush.
+
+  ADDED §2.1 / §2.2 / §4.1 — the three storage_company.mdx §8 locks applied to THIS backbone (that spec is
+  the authority; link, don't restate). §2.1 SUPERSEDES every <syncRepo>/repos/<repoKey>/ in this file: the
+  MIRROR is keyed by the NORMALIZED REMOTE (repoUid = short hash of host/owner/name, lowercased, scheme/
+  creds/.git/trailing slash stripped, git@ and https:// folding together) because repoKey = shortHash(abs
+  path) is MACHINE-LOCAL — the two computers wrote different dirs in the same sync repo and the travelled
+  manifest was never found; no remote ⇒ no mirror AND say so; Local Storage repos/<repoKey>/ stays
+  path-keyed (same repo cloned twice = two Local-Storage dirs, ONE mirror subtree); the union-merge
+  .gitattributes matches on FILENAME so the rekey needs no attribute change. §2.2 SUPERSEDES "default OFF":
+  the owning storage's git-backed SDL is AUTO-ADOPTED as the sync repo (same getGitBackboneRemote rule as
+  the backbone), ownership resolves from the REMOTE ORG first, and the per-repo toggle becomes an OPT-OUT.
+  §4.1 makes "folds it into the Local-Storage manifest" precise: a PER-ENTRY MERGE (union path, union
+  pinned_by, newer modified_at wins a CID conflict, absence never a delete, own claim re-derived from the
+  real pinset) run on EVERY sync-repo pull right after fetch+merge — reconcileFromSyncRepo previously
+  last-writer-COPIED and had ZERO callers. AC 11-13 added. Code: tracking-root.service normalizeRemote/
+  repoUidFor → resolveStateSyncRepo (git.service normalizeRemoteKey is the shipping folding helper),
+  tracking-sync.service reconcileFromSyncRepo (real per-entry mergeManifests union) ← pin.service pinRepoFolder + reconcileMirroredRepos from syncStorageTextInner/pinStorageUnitInner.
 -->

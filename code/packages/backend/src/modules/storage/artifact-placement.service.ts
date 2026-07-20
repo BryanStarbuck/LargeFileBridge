@@ -35,7 +35,8 @@ import { expandHome } from "../fs/badges.js";
 import { LFBRIDGE_DIR } from "./tracking.service.js";
 import { resolveStorageType, usesLfbridgeDir, trackingBaseDir } from "./storage-type.service.js";
 import { resolveStateSyncRepo } from "./tracking-root.service.js";
-import { listStoragesPage } from "./storage.service.js";
+import { listStoragesPage, ensureCompanyForOwner } from "./storage.service.js";
+import { parseRemoteOwner } from "./repo-identity.js";
 import { resolveBackingLocations } from "./storage-settings.service.js";
 import { readSelfGraft } from "./devices.service.js";
 import { log } from "../../shared/logging.js";
@@ -176,16 +177,61 @@ function resolveOwningStorage(abs: string, index: OwnerStorage[]): { storage: Ow
 }
 
 /**
- * The absolute path of the SYNC REPO for a repo — the owning company/Personal storage's dedicated repo when
- * one is configured, else null (artifact_placement_policy.mdx §4). Used by the per-repo "sync tracking state"
- * toggle to decide what to write into the sync-repo marker (tracking-sync.service.ts). This COMPUTES the
- * owner's dedicated repo (unlike `resolveStateSyncRepo`, which just reads the already-written marker).
+ * The absolute path of the SYNC REPO for a repo (storage_company.mdx §8.4.2), resolved in this order:
+ *
+ *   1. **The repo's REMOTE ORG** → the company storage that claims it (`ensureCompanyForOwner`, §8.4.4) →
+ *      that storage's explicit dedicated repo, else — AUTO-ADOPTION — its own git-backed SDL root.
+ *   2. **Path containment** (the historical rule): the most specific mapped source dir that contains the
+ *      repo, else Personal as the catch-all for anything under `~` → the same dedicated-repo-else-SDL choice.
+ *
+ * Remote-first is load-bearing. `~/BGit/Bryan_git/charlie-kirk` (remote `github.com/ACT3ai/charlie-kirk`) is
+ * NOT physically inside the ACT3 company storage, so containment alone resolved it to **Personal** — the
+ * wrong storage — and the file's tracking state was mirrored where no teammate or second computer of the
+ * user's would ever look for it.
+ *
+ * Auto-adoption is the same rule the Git backbone already applies (`getGitBackboneRemote`): an SDL IS a git
+ * repo purpose-built for LFB's tracking text, so requiring a SECOND configured repo before anything travels
+ * only guaranteed that nothing did. Used by the per-repo "sync tracking state" toggle to decide what to write
+ * into the sync-repo marker (tracking-sync.service.ts). This COMPUTES the target (unlike
+ * `resolveStateSyncRepo`, which just reads the already-written marker).
  */
-export function resolveOwnerDedicatedRepo(repoRoot: string): string | null {
+export function resolveOwnerDedicatedRepo(repoRoot: string, remote?: string | null): string | null {
+  // 1. the repo's forge org → the company storage that claims it
+  const org = parseRemoteOwner(remote ?? null);
+  if (org?.knownForge) {
+    const company = ensureCompanyForOwner(org.owner);
+    if (company) {
+      const target = syncRepoRootFor(company.id, company.root);
+      if (target) return target;
+    }
+  }
+  // 2. path containment (mapped dirs, else Personal under ~)
   const abs = path.resolve(expandHome(repoRoot));
   const { index } = ownerIndex();
   const owned = resolveOwningStorage(abs, index);
-  return owned?.storage.dedicatedRepoPath ?? null;
+  if (!owned) return null;
+  return owned.storage.dedicatedRepoPath ?? autoAdoptedSdlRoot(owned.storage.root);
+}
+
+/** A storage's sync repo: its explicitly configured dedicated repo, else its AUTO-ADOPTED own git root. */
+function syncRepoRootFor(storageId: string, storageRoot: string): string | null {
+  try {
+    const backing = resolveBackingLocations(storageId);
+    if (backing.dedicatedRepo.enabled && backing.dedicatedRepo.path) {
+      return path.resolve(expandHome(backing.dedicatedRepo.path));
+    }
+  } catch (e) {
+    log.warn("placement", `backing read failed for ${storageId}: ${(e as Error).message}`);
+  }
+  return autoAdoptedSdlRoot(storageRoot);
+}
+
+/** The storage's own root when it is a git working tree — the auto-adopted sync repo (§8.4.2). Null when the
+ *  root is not under git, in which case there is nowhere for tracking state to travel and we say so upstream. */
+function autoAdoptedSdlRoot(storageRoot: string | null): string | null {
+  if (!storageRoot) return null;
+  const root = path.resolve(expandHome(storageRoot));
+  return fs.existsSync(path.join(root, ".git")) ? root : null;
 }
 
 /**

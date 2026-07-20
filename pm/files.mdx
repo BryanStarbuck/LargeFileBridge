@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — View one file
-description: The single-entity page for ONE file (route /file?path=<abs>). Reached from any file row's "View file" action, from clicking a file's name/path cell, or by selecting a file in the File System browser. It shows everything LargeFileBridge knows about that one file — identity (name, absolute path, size, created/modified, kind), its code badges (repo / pin / compress / ipfs), its pin decision + transfer status + CID + which peers hold it, its compression state, and its two sticky flags (Never IPFS, Do not compress). Because the page IS one file, it carries the top-right "⋮" MORE menu that renders the exact same File action catalog as that file's row kebab (menus.mdx §5.3) — plus the most-common action (Add to IPFS) as a visible primary button, and the two sticky flags as labeled switches. This spec defines the layout, the data payload (EntityView), the primary/more split, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneFilePage frontend.
+description: The single-entity page for ONE file (route /file?path=<abs>). Reached from any file row's "View file" action, from clicking a file's name/path cell, or by selecting a file in the File System browser. It shows everything LargeFileBridge knows about that one file — identity (name, absolute path, size, created/modified, kind), its code badges (repo / pin / compress / ipfs), its pin decision + transfer status + CID + which peers hold it, its compression state, and its two sticky flags (Never IPFS, Do not compress). Because the page IS one file, it carries the top-right "⋮" MORE menu that renders the exact same File action catalog as that file's row kebab (menus.mdx §5.3) — plus the most-common action (Add to IPFS) as a visible primary button, and the two sticky flags as labeled switches. This spec defines the layout, the data payload (EntityView), the primary/more split, the flag switches, and the acceptance criteria. Implemented by the /api/entity backend module and the ViewOneFilePage frontend. It also covers the file that LargeFileBridge knows about but this computer does not have — a REMOTE-ONLY file (FileRow.presence, storage_company.mdx §8.5): a healthy, red "on {device} — not on this computer yet" state whose only action is pull it down, never the red "this file is no longer at that path" error (§2.1).
 ---
 
 # LargeFileBridge — View one file
@@ -114,6 +114,43 @@ interface EntityView {
 a tracked large file in a registered repo to carry a decision). A loose file on disk still gets its
 identity, badges, compression heuristic, and both flags.
 
+### 2.1 A file row is not always a local file — `presence` (LOCKED)
+
+The row model this page is the single-entity view of carries an optional **`presence`**:
+
+```ts
+// packages/shared/src/types.ts — on FileRow
+presence?: "local" | "remote-only";   // ABSENT ⇒ "local"
+```
+
+* **Absent means `"local"`, so every existing row, reader, and page is unchanged.** This is additive by
+  construction; nothing needs a migration and no caller has to learn a new field to keep working.
+* **A `remote-only` file is one another of the user's computers has pinned and this one does not have.** Its
+  name, `path`, `sizeBytes`, `cid`, and `peers` come from the **reconciled manifest** — **not** from a
+  `statSync`, because there is no local file to stat — plus the peer **device** that holds it. The rule, and
+  the two-computer use case it exists for, are LOCKED in
+  [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked);
+  its rendering in the repo file list is [one_repo.mdx §4.10](./one_repo.mdx#410-remote-only-rows--a-file-in-this-list-that-is-not-on-this-computer-locked).
+* **On this page it is a HEALTHY state, and must never be shown as the not-found error.** §5's *"This file
+  is no longer at that path"* card means **something went wrong**. A remote-only file means **nothing went
+  wrong** — the bytes are safe on the user's other computer and simply have not been pulled here yet. So
+  when `exists` is false **because** the file is remote-only, the page renders the **red "not on this
+  computer yet"** state instead: *"On {device} — not on this computer yet."*, with the identity, size, CID,
+  and peers it does know, and a single **Pull it down** primary. Confusing the two would turn the product's
+  normal second-computer experience into an alarm.
+* **Its only action is pull it down.** **Compress… / Transcribe / AI-describe / OCR / Git ignore** (§7.1,
+  §4's Compression card) are **disabled and say why** — *"the bytes aren't on this computer yet"* — because
+  queueing analysis on absent bytes queues work that cannot run. The two **sticky flags** (§4) and the
+  **pin decision** are still writable: they are intent, and intent does not need the bytes. After the pull,
+  the next scan makes it an ordinary local file and the page renders normally.
+
+Carrying `presence` on the row model, and composing a remote-only entry from the reconciled manifest rather than a local stat, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`, set by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
+this page's not-found-vs-remote-only branch belongs in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()` and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage`.
+
 Assembling this `EntityView` payload (identity, badges, repo/pin context, compression heuristic, flags) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()`, served by `entity.router.ts` → `GET /api/entity`.
 
@@ -221,6 +258,14 @@ the transcribe hook, and the compress offer).
    file shows identity + badges + compression + flags with a "Not tracked" note (§5).
 6. Not-found / node-unreachable / loading states render per §5; nothing on this page ever **deletes** or
    **alters** the local file.
+7. **A remote-only file is a healthy state, not the not-found error (§2.1).** The row model carries an
+   optional **`presence: "local" | "remote-only"`** whose **absence means `"local"`**, so every existing
+   reader is unchanged ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)).
+   When the file is **remote-only**, this page shows the **red *"On {device} — not on this computer yet"***
+   state — with the identity, size, CID, and peers taken from the **reconciled manifest**, never a
+   `statSync` — and **not** §5's *"no longer at that path"* card. Its **only** action is **Pull it down**;
+   Compress / Transcribe / AI-describe / OCR / Git-ignore are **disabled and say why**, while the pin
+   decision and both sticky flags stay writable. After the pull it becomes an ordinary local file.
 
 <!--
   View-one-FILE single-entity page (route /file?path=). Renders the File action catalog from
@@ -231,4 +276,16 @@ the transcribe hook, and the compress offer).
   (viewer-first /image + /video — a medium routes there, this page is the properties-first fallback and
   links to the viewer via §7). Primary-vs-more split is §3. When the File catalog changes, it changes in
   menus.mdx and this page inherits it.
+  §2.1 (NEW, LOCKED) PRESENCE ON THE ROW MODEL: FileRow gains OPTIONAL presence: "local" | "remote-only";
+  ABSENT ⇒ "local" so the change is additive and no existing reader/migration is affected. A remote-only
+  file = one another of the user's computers pinned that this one doesn't have; its name/path/size/cid/
+  peers come from the RECONCILED MANIFEST (never a statSync) plus the peer device. AUTHORITY =
+  storage_company.mdx §8.5 (LOCKED); the file-list rendering = one_repo.mdx §4.10 — link, don't restate.
+  THE TRAP THIS SECTION CLOSES: exists:false must NOT route a remote-only file into §5's "This file is no
+  longer at that path" card — that card means something WENT WRONG, while remote-only means nothing did
+  (the bytes are safe on the other computer, just not pulled yet). Render the red "On {device} — not on
+  this computer yet." state instead, with a single Pull-it-down primary. Only action = pull; compress/
+  transcribe/AI-describe/OCR/git-ignore DISABLED and SAY WHY (analysis on absent bytes queues work that
+  cannot run); the pin decision + both sticky flags STAY writable because they are intent, and intent
+  doesn't need the bytes. After the pull the next scan makes it an ordinary local file. AC 7 added.
 -->

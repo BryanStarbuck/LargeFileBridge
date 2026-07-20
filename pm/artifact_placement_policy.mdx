@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Artifact & Tracking-State Placement Policy (the data-category split)
-description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. TWO orthogonal rules. Rule ONE (§0, the storage-KIND rule) — .lfbridge/ exists ONLY inside a working git repo (Git Storage, e.g. ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/), where LFB is a guest and quarantines its files in one hidden corner; a DEDICATED LFB FILE REPO (the Personal/Company/Community SDL storage, e.g. ~/BGit/Bryan_git/personal_large_files_bridge/) has NO .lfbridge/ AT ALL — the SDL repo root IS the .lfbridge area, so artifacts AND the SDL's own metadata (storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml, devices/, analysis/) all sit at the ROOT (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…, NOT .lfbridge/_Mirror/…). Keyed on resolved storage KIND via trackingBaseDir()/usesLfbridgeDir() (storage-type.service.ts), never on a path or name; default is `repo` (keeps .lfbridge/); an SDL's own .git/ never demotes it to a working repo; a pre-existing SDL .lfbridge/ is migrated to the root by migrate-sdl-lfbridge.ts with a read-fallback until migrated. Rule TWO (§1+, the DATA-CATEGORY split, not a content threshold) — Category A, the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description), lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), repo_owner_propagation.mdx (how the repo→company ownership that decides WHICH sync repo a repo mirrors to travels to teammates and is consent-gated), and scan.mdx.
+description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. TWO orthogonal rules. Rule ONE (§0, the storage-KIND rule) — .lfbridge/ exists ONLY inside a working git repo (Git Storage, e.g. ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/), where LFB is a guest and quarantines its files in one hidden corner; a DEDICATED LFB FILE REPO (the Personal/Company/Community SDL storage, e.g. ~/BGit/Bryan_git/personal_large_files_bridge/) has NO .lfbridge/ AT ALL — the SDL repo root IS the .lfbridge area, so artifacts AND the SDL's own metadata (storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml, devices/, analysis/) all sit at the ROOT (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…, NOT .lfbridge/_Mirror/…). Keyed on resolved storage KIND via trackingBaseDir()/usesLfbridgeDir() (storage-type.service.ts), never on a path or name; default is `repo` (keeps .lfbridge/); an SDL's own .git/ never demotes it to a working repo; a pre-existing SDL .lfbridge/ is migrated to the root by migrate-sdl-lfbridge.ts with a read-fallback until migrated. Rule TWO (§1+, the DATA-CATEGORY split, not a content threshold) — Category A, the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description), lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), repo_owner_propagation.mdx (how the repo→company ownership that decides WHICH sync repo a repo mirrors to travels to teammates and is consent-gated), and scan.mdx. TWO REFINEMENTS LOCKED BY storage_company.mdx §8 (the one-file-two-computers use case): (1) the SYNC-REPO MIRROR SUBTREE IS KEYED BY repoUid — a short hash of the NORMALIZED GIT REMOTE (host/owner/name) — NOT by repoKey (the machine-local path hash), because a path hash differs on every computer so two machines wrote different directories in the same sync repo and nothing ever matched; Local Storage stays repoKey-keyed on purpose (two keys, two jobs: "this repo on this computer" vs "this repo, anywhere"), and a repo with NO git remote cannot mirror at all and the product says so; and (2) the SDL manifest-path rule is explicit — an SDL's committed manifest.yaml belongs at the SDL ROOT, resolved through trackingBaseDir(), so manifest.service.ts's hardcoded <root>/.lfbridge/manifest.yaml is a §0 VIOLATION that leaves two divergent manifests in one company storage. Reconciling a pulled mirror is a per-entry MERGE (union by path, union pinned_by, newer modified_at wins, absence is never a delete), never a wholesale copy.
 ---
 
 # LargeFileBridge — Artifact & Tracking-State Placement Policy
@@ -148,6 +148,34 @@ in code:
   Its `.lfbridge/` is migrated to the root by the same one-shot migration on the next pass. The reverse
   (SDL → working repo) is not migrated automatically; LFB logs a WARN and keeps reading both layouts.
 
+### 0.4 The SDL's own committed `manifest.yaml` sits at the SDL ROOT (LOCKED)
+
+§0.1 lists `manifest.yaml` among the SDL metadata that moved to the root, but that file has a **second,
+separate writer** — the *committed* manifest a storage's git backbone carries. That writer **used to
+hardcode** the `.lfbridge/` segment; it now resolves through `trackingBaseDir()` like every other path.
+Naming the rule explicitly here so the old hardcode reads as the **violation** it was rather than as an
+alternative convention:
+
+| Storage kind | The storage's committed `manifest.yaml` belongs at |
+| --- | --- |
+| **`repo`** — a working git repo | it does **not** have one. A working repo's manifest is **Category-B** tracking state in Local Storage (§2), and travels via the sync repo — never committed into the working tree ([storage_local.mdx §9.2](./storage_local.mdx#92-repo-manifests-travel-via-the-sync-repo-not-the-working-repo-locked)). |
+| **`personal` / `company` / `community`** — an SDL | **`<root>/manifest.yaml`** — the root, exactly like `storage.yaml`, `files.yaml`, and `devices/`. **Never `<root>/.lfbridge/manifest.yaml`.** |
+
+* **There is exactly one correct path per storage.** An SDL that has both `<root>/manifest.yaml` and
+  `<root>/.lfbridge/manifest.yaml` is in the failure state [storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes)
+  reports from the field: **two divergent `files: []` manifests in the same company storage**, each read by a
+  different caller, neither ever agreeing with the other. Two manifests in one storage is not a fallback —
+  it is a **bug**.
+* **The path must be resolved, not composed.** Every manifest path — committed or tracking — resolves
+  through the §0.2 choke point `trackingBaseDir(root, type?)`. A writer that joins `.lfbridge` itself has
+  bypassed the storage-kind rule and will be wrong for every SDL, because **kind, not path shape, decides**.
+* **The read-fallback of §0.3 still applies during migration.** An un-migrated SDL that only has
+  `.lfbridge/manifest.yaml` is still read from there, so no manifest is reported missing mid-migration —
+  but nothing **new** is ever written to that path.
+
+Resolving the committed manifest path for a storage through the storage-kind choke point (it formerly hardcoded `<root>/.lfbridge/manifest.yaml`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `committedManifestPath(repoPath)`, consumed by `readCommittedManifest()` / `writeCommittedManifest()` (and by the SDL pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner()`); the storage-kind base directory it must defer to is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()`.
+
 ---
 
 ## 1. The two categories (LOCKED)
@@ -280,7 +308,43 @@ addition to Local Storage.
 
 Resolving the owning storage's sync repo for a given repo (null when none is configured or the toggle is
 off) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (reads the per-repo toggle + the owning storage's backing locations from `storage-settings.service.ts`; returns the sync-repo `repos/<repoKey>/` root or null), consumed by the Category-B writers.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (reads the per-repo toggle + the owning storage's backing locations from `storage-settings.service.ts`; returns the sync-repo `repos/<repoUid>/` root or null — see §4.1), consumed by the Category-B writers.
+
+### 4.1 The mirror subtree is keyed by `repoUid` — the REMOTE, not the path (LOCKED)
+
+**This supersedes the `<syncRepo>/repos/<repoKey>/` wording in §2, §3, §4, §5 and §7** wherever it names the
+**mirror**. The authority is [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked);
+this section only records what it means for placement.
+
+```
+ALWAYS  →  ~/T/_large_files_bridge/repos/<repoKey>/     repoKey = shortHash(resolve(repoPath))   ← MACHINE-LOCAL
+ALSO    →  <syncRepo>/repos/<repoUid>/                  repoUid = shortHash(host/owner/name)     ← MACHINE-SHARED
+```
+
+* **Two keys, two jobs.** `repoKey` names **"this repo on this computer"**; `repoUid` names **"this repo,
+  anywhere."** Local Storage is machine-local state and **stays path-keyed** — that is correct and does not
+  change. Only the **mirror** subtree changes key.
+* **Why it had to change.** A **machine-local value must never key machine-shared data.** The same repo is
+  `/Users/bryan/BGit/…` on one computer and `/Users/bryanstarbuck/BGit/…` on the other, so under the old
+  path-hash key the two machines wrote and looked for **different directories inside the same sync repo**.
+  The tracking text could travel perfectly and still never be found.
+* **Normalization (the exact key).** Lowercase; strip scheme, credentials, any `.git` suffix, and any
+  trailing slash; fold `git@host:owner/name` and `https://host/owner/name` to one **`host/owner/name`**.
+  `https://github.com/ACT3ai/charlie-kirk.git` → `github.com/act3ai/charlie-kirk`. `repoUid` is a short hash
+  of that string.
+* **No remote → no mirror, said out loud.** A repo with no git remote has no shared identity, so it
+  **cannot** mirror. LFB does not invent one and does not silently write into a subtree no other computer
+  will read: the repo's settings say *"no remote — tracking stays on this computer"*
+  ([repo_settings.mdx §2](./repo_settings.mdx)). Local Storage still works exactly as before.
+* **The same repo cloned twice on one machine converges in the mirror and stays split locally.** Two working
+  trees at two paths get **two** `repos/<repoKey>/` directories (right — they are different working trees)
+  and **one** `<syncRepo>/repos/<repoUid>/` subtree (right — they are the same repo). Where the two clones
+  disagree, §5.1's merge rules apply: union, never clobber.
+* **The subtree shape is unchanged** — `<syncRepo>/repos/<repoUid>/` mirrors the same layout as §3. Only the
+  directory name is derived differently.
+
+Deriving the remote-keyed shared identity and joining the mirror subtree is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) (the remote-derived key, over the existing normalizer `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `normalizeRemoteKey()` / `parseRemoteOwner()`) and `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`, returning null when the repo has no remote); `repoKeyFor()` / `repoStateDir()` in the same file stay path-keyed for Local Storage.
 
 ---
 
@@ -307,6 +371,26 @@ Because Local Storage is authoritative and the sync repo is an additive mirror, 
 Mirroring the changed `repos/<repoKey>/` subtree into the sync repo and reconciling a pulled subtree back
 into Local Storage is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (invoked after Category-B writes and on the storage's git-backbone pull).
+
+### 5.1 Receiving is a per-entry MERGE, never a wholesale copy (LOCKED)
+
+The pull half of §5 is a **merge**, and the rules are locked in
+[storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked). Restated
+here only as the constraint on this policy's `manifest.yaml` reconcile:
+
+* **Union by `path`** — an entry present on either side survives.
+* **Absence is never a delete** — an entry missing from the incoming copy is untrusted, not a removal.
+* **Union `pinned_by`** — the two computers' pin claims are added together, never replaced. A
+  last-writer copy erases the peer's claim and with it the entire "a peer has this" signal.
+* **Newer `modified_at` wins** a conflicting CID for the same path; ties keep the local value.
+* **This computer's own claim is re-derived from its real pinset**, never adopted from what arrived
+  ([storage_local.mdx §9.5](./storage_local.mdx#95-the-ipfs-pinset-is-the-source-of-truth--pinned_by-is-a-stale-cache)).
+* **The reconcile runs on every backbone pull**, not on demand — a merge that only happens when someone
+  clicks something is a merge that does not happen.
+* **It must land in BOTH manifests.** A repo's CID/pin facts live in two files
+  ([storage_local.mdx §9.2.1](./storage_local.mdx#921-a-repos-cidpin-facts-live-in-two-files-locked),
+  [storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)); reconciling only
+  one leaves the product counting a pull it cannot show, or showing a row it cannot pull.
 
 ---
 
@@ -454,6 +538,21 @@ never be in a git tree at all.
     `resolveTrackingRoot()` / `resolveStateSyncRepo()` (tracking-root.service.ts), `mirrorToSyncRepo()` /
     `reconcileFromSyncRepo()` (tracking-sync.service.ts), and the routed `refreshCounts()` /
     `writeRepoStorage()` (repo-storage.service.ts).
+11. The **mirror** subtree is `<syncRepo>/repos/<repoUid>/`, where `repoUid` is a short hash of the
+    **normalized git remote** (`host/owner/name`, lowercased, scheme/creds/`.git`/trailing slash stripped) —
+    **never** the path-derived `repoKey` (§4.1, [storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)).
+    Local Storage stays at `repos/<repoKey>/`. Two computers with the same repo at **different absolute
+    paths** resolve to the **same** mirror subtree; the same repo cloned twice on one machine keeps **two**
+    Local-Storage directories and **one** mirror subtree.
+12. A repo with **no git remote** does **not** mirror, and the product **says so** in the repo's settings —
+    it never writes into a subtree no other computer can find (§4.1).
+13. An **SDL's committed `manifest.yaml` lives at `<root>/manifest.yaml`**, resolved through
+    `trackingBaseDir()` — **never** `<root>/.lfbridge/manifest.yaml` (§0.4). A storage containing **both**
+    is a defect, not a supported layout; the §0.3 read-fallback may still read an un-migrated
+    `.lfbridge/` copy but nothing new is written there.
+14. Reconciling a pulled mirror is a **per-entry merge** — union by `path`, union `pinned_by`, newer
+    `modified_at` wins, **absence is never a delete**, this computer's own claim re-derived from its real
+    pinset — and it lands in **both** manifests a repo keeps (§5.1).
 
 <!--
   AUTHORITATIVE placement policy. TWO ORTHOGONAL RULES.
@@ -499,4 +598,28 @@ never be in a git tree at all.
     repo_owner_propagation.mdx: WHICH sync repo a repo mirrors to is decided by its OWNER, and that ownership
     assignment travels to teammates (assertion in <syncRepo>/owner_map.yaml keyed by git remote) + is
     consent-gated — this policy supplies only the reason it matters (ownership moves where tracking flows).
+
+  ADDED (from storage_company.mdx §8, the one-file-two-computers use case — that section is the AUTHORITY):
+  - §0.4 the SDL committed-manifest path rule. An SDL's committed manifest.yaml belongs at <root>/manifest.yaml,
+    resolved via trackingBaseDir(); manifest.service.ts's committedManifestPath() hardcodes
+    <root>/.lfbridge/manifest.yaml, which is a §0 VIOLATION and leaves TWO divergent files: [] manifests in one
+    company storage (observed in the field, §8.7). A working repo has no committed manifest at all — its
+    manifest is Category-B. Read-fallback for un-migrated SDLs stays; nothing NEW is written to .lfbridge/.
+  - §4.1 the mirror is keyed by repoUid (short hash of the NORMALIZED GIT REMOTE host/owner/name), NOT repoKey.
+    SUPERSEDES the <syncRepo>/repos/<repoKey>/ wording in §2/§3/§4/§5/§7 wherever it names the MIRROR. Local
+    Storage stays repoKey/path-keyed ON PURPOSE — two keys, two jobs ("this repo on this computer" vs "this
+    repo, anywhere"). The old path hash meant the two computers wrote DIFFERENT dirs in the SAME sync repo, so
+    nothing ever matched. No remote → no mirror, and the product SAYS so. Same repo cloned twice = 2 local
+    dirs, 1 mirror subtree. Code: normalizeRemote/repoUidFor + resolveStateSyncRepo (tracking-root.service.ts),
+    over the existing normalizeRemoteKey/parseRemoteOwner (git.service.ts).
+  - §5.1 receiving is a per-entry MERGE, never a wholesale copy (union by path, union pinned_by, newer
+    modified_at wins, absence is NEVER a delete, own claim re-derived from the real pinset, runs on every
+    backbone pull) and it must land in BOTH of the two manifests a repo keeps (storage_local §9.2.1).
+  - AC 11–14 for the above.
+
+  2026-07-20 spec-vs-code correction. §0.4 no longer describes the `.lfbridge/` hardcode as LIVE: manifest.service.ts's
+  committedManifestPath() now does path.join(trackingBaseDir(repoPath), "manifest.yaml"), so the rule is satisfied in
+  code and the defect is stated in the past tense as the lesson (never hand-join `.lfbridge/`; resolve through the
+  §0.2 choke point). Its "handled in code" line was rewritten accordingly, and the SDL pin-pass reference corrected
+  from the non-existent `runStoragePin()` to `pinStorageUnitInner()`.
 -->

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use-Case Tour — one repo across two computers (Mac tower ↔ Mac laptop, January → May)
-description: The end-to-end scenario tour that walks ONE repo (the "Charlie Kirk repo") as it is enlisted on a user's day-to-day Mac tower and later on their Mac laptop, month by month from January to May of the first year. It is the narrative that ties together every moving part of LargeFileBridge for a repo storage — the special-file classifier, the per-repo tracking state that lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repo_storage.yaml, per-file <name>.yaml sidecars, decisions.yaml, manifest.yaml, and the per-computer history log — NEVER the working repo), the company/Personal SYNC REPO that is the ONLY way that tracking state travels between the two computers, IPFS pinning decisions (including files pinned by hand on the command line OUTSIDE LFB), the "a peer pinned files this computer doesn't have — pull them down" warning and its guided popup, the two-checkbox decision with the DYNAMIC action-button label, compression with before/after hashing and the perceptual fingerprint, transcription, and the sticky "we already asked, do not re-ask on the other computer" rule. Each month states what the user does, what LargeFileBridge does automatically, exactly what it writes to disk and where, which warnings appear, and what we should DOUBLE-CHECK. Sibling of repo_tracking_scheme.mdx (the on-disk scheme every step writes), artifact_placement_policy.mdx (the data-category placement policy that puts tracking in Local Storage + the sync repo), special_files.mdx (the classifier), decisions.mdx (the two-axis sticky decisions), warnings.mdx (the pull-down warning + dynamic button), compression.mdx (before/after hash), perceptual_fingerprint.mdx (the content fingerprint), devices.mdx (the two computers' unique names + the graft that maps the repo to a different local path), storage_repo.mdx (the repo-storage concept), and use_cases.mdx (the UC-format sibling this complements with a chronological tour).
+description: The end-to-end scenario tour that walks ONE repo (the "Charlie Kirk repo") as it is enlisted on a user's day-to-day Mac tower and later on their Mac laptop, month by month from January to May of the first year. It is the narrative that ties together every moving part of LargeFileBridge for a repo storage — the special-file classifier, the per-repo tracking state that lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repo_storage.yaml, per-file <name>.yaml sidecars, decisions.yaml, manifest.yaml, and the per-computer history log — NEVER the working repo), the company/Personal SYNC REPO that is the ONLY way that tracking state travels between the two computers, IPFS pinning decisions (including files pinned by hand on the command line OUTSIDE LFB), the "a peer pinned files this computer doesn't have — pull them down" warning and its guided popup, the two-checkbox decision with the DYNAMIC action-button label, compression with before/after hashing and the perceptual fingerprint, transcription, and the sticky "we already asked, do not re-ask on the other computer" rule. Each month states what the user does, what LargeFileBridge does automatically, exactly what it writes to disk and where, which warnings appear, and what we should DOUBLE-CHECK. Sibling of repo_tracking_scheme.mdx (the on-disk scheme every step writes), artifact_placement_policy.mdx (the data-category placement policy that puts tracking in Local Storage + the sync repo), special_files.mdx (the classifier), decisions.mdx (the two-axis sticky decisions), warnings.mdx (the pull-down warning + dynamic button), compression.mdx (before/after hash), perceptual_fingerprint.mdx (the content fingerprint), devices.mdx (the two computers' unique names + the graft that maps the repo to a different local path), storage_repo.mdx (the repo-storage concept), and use_cases.mdx (the UC-format sibling this complements with a chronological tour). §9 adds the CONCRETE, named-machines run of the same journey — one git-ignored 5.3MB mp4 in the company-owned charlie-kirk repo travelling from the Mac Tower (bryan-mac-pro) to the MacBook (bryanstarbuck-macbook-pro) through the ACT3 company SDL (act3_large_files_bridge) — nine steps from pin to red remote-only row to pulled bytes, following the rules LOCKED in storage_company.mdx §8 (remote-derived mirror key, auto-adopted SDL sync repo with the mirror default ON, merge-not-copy on receive, and FileRow.presence = "remote-only").
 ---
 
 # LargeFileBridge — Two-Computer Tour (Mac tower ↔ Mac laptop)
@@ -10,6 +10,15 @@ answers which question"* with UC-N flows, this document answers *"what actually 
 repo lives on two of my computers over five months"* — and in doing so it exercises **every** on-disk
 write and **every** decision surface a repo storage has. It is the reference the team walks to confirm
 the whole system holds together.
+
+**The authority for the cross-computer mechanics is
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked).**
+That section LOCKS *how* one file reaches a second computer — the six-link chain, the remote-derived
+mirror key, the auto-adopted SDL sync repo with the mirror **default ON**, merge-not-copy on receive, and
+the new `FileRow.presence: "remote-only"`. This tour **agrees with it and does not restate it**: §9 below
+walks that exact journey step by step with the real machines, and every rule it leans on is cited back to
+§8 rather than re-argued here. Where this tour's earlier months describe the mechanics in older wording
+(the mirror subtree key, the per-repo toggle's default), §8 **supersedes** it — flagged inline.
 
 Two computers, one repo, five months:
 
@@ -72,6 +81,18 @@ Large File Bridge webapp to sync changes"*) and turned on the Charlie Kirk repo'
 `repos/<repoKey>/` subtree to `<syncRepo>/repos/<repoKey>/`, so the tower's manifest, decisions, and sidecars
 reach the laptop. (Absent the sync repo, each computer would simply keep its own Local-Storage copy and the
 February pull-down reconcile below would have nothing to reconcile against.)
+
+**Superseded in two details** by
+[storage_company.mdx §8.4.1/§8.4.2](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked),
+which is the authority:
+
+* **The mirror subtree is `<syncRepo>/repos/<repoUid>/`, not `repos/<repoKey>/`** — `repoUid` is derived
+  from the repo's **normalized git remote**, because `repoKey` is a hash of an **absolute path** and the
+  two computers therefore wrote and looked in **different directories**. Local Storage stays path-keyed
+  (`~/T/_large_files_bridge/repos/<repoKey>/`) on purpose; only the **mirror** changes key.
+* **The per-repo mirror is ON by default**, and the owning company storage's git-backed SDL is
+  **auto-adopted** as the sync repo — the user does not have to find and flip a setting to make the
+  product's core promise work. The per-repo toggle survives as an **opt-out**.
 
 ---
 
@@ -191,6 +212,13 @@ missing,false,~/BGit/charlie-kirk/videos/2074257725697970542.mp3
 *(All absent from the working tree; none of the manifest CIDs pinned on this laptop's node — `ipfs pin ls`
 returns "not pinned" for each. The `.mp3` has no manifest CID, so it is shown for completeness but is not
 a pull candidate.)*
+
+**Reconciling is a MERGE, not a copy** — union by `path`, **union `pinned_by`**, newer `modified_at` wins a
+CID conflict, absence is **never** a delete, and this computer's own pin claim is re-derived from its real
+pinset. That rule is LOCKED in
+[storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked); a
+last-writer copy would erase the tower's pin claim on the laptop and with it the entire "a peer has this"
+signal this month depends on. The reconcile runs on **every** backbone pull of the SDL, never on demand.
 
 **The warning.** This becomes a **warning with a button** — *"A computer of yours pinned files this
 computer doesn't have yet — pull them down."* ([warnings.mdx §10.8](./warnings.mdx), the pull-them-down
@@ -380,6 +408,163 @@ another.**
    [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx), [decisions.mdx](./decisions.mdx),
    [compression.mdx](./compression.mdx), and [warnings.mdx](./warnings.mdx).
 
+**The concrete journey (§9), per
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked):**
+
+7. **All nine steps of §9 pass with the real machines** — the Tower (`bryan-mac-pro`) pins
+   `videos/2079054276320440416.mp4` in `charlie-kirk`, its manifest entry mirrors into
+   `<act3_large_files_bridge>/repos/<repoUid>/`, the SDL commits **and pushes**, the MacBook
+   (`bryanstarbuck-macbook-pro`) fetches + merges + **per-entry reconciles** into its Local Storage, and
+   **View One Repo** shows the file as a **red remote-only row** it can pull.
+8. **The mirror subtree is keyed by the normalized remote** (`github.com/act3ai/charlie-kirk` →
+   `repos/<repoUid>/`), so both computers read and write the **same** directory despite
+   `/Users/bryan/…` vs. `/Users/bryanstarbuck/…`; a repo with **no remote** does not mirror and **says
+   so** (§9.3, storage_company.mdx §8.4.1).
+9. **The absent file is counted, not just shown** — it is in the `Pull down` metric, in `Add to IPFS`
+   while undecided on this computer, and in the repo's **To Do** batch as a `pull_down` recommendation;
+   acting pulls the bytes over IPFS and the next scan turns it into an **ordinary local row** with no
+   further prompting (§9.6–§9.8).
+
+---
+
+## 9. The load-bearing journey, end to end — one file, two computers (LOCKED)
+
+Months §2–§6 above tour the *whole* repo-storage surface. **This section is the single narrowest path
+through it** — one file, two named computers, nine steps — and it is the run that decides whether the
+product works at all. Its rules are **owned by**
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked);
+this section is the *walk*, that section is the *law*. Where they could disagree, §8 wins.
+
+### 9.1 The cast (the real machines)
+
+| | |
+| --- | --- |
+| **The file** | `videos/2079054276320440416.mp4` — 5.3 MB, **git-ignored** (`.gitignore` → `videos/`) |
+| **Working repo** | `~/BGit/Bryan_git/charlie-kirk` — remote `https://github.com/ACT3ai/charlie-kirk.git` |
+| **Company storage (SDL)** | `~/BGit/Bryan_git/act3_large_files_bridge` — remote `github.com/ACT3ai/act3_large_files_bridge` |
+| **Computer A — "the Tower"** | device **`bryan-mac-pro`** — has the file, pinned it, CID `bafybeihf5o…k7tmi` |
+| **Computer B — "the MacBook"** | device **`bryanstarbuck-macbook-pro`** — has the repo cloned, **not** the file |
+
+Both devices already appear in `<act3_large_files_bridge>/devices/`
+([devices.mdx §10.1](./devices.mdx#101-the-device-registry-is-the-proof-of-life-of-the-backbone-locked)),
+which is exactly why this journey is a **cargo** problem and not a **transport** problem: the road between
+the two computers has been open and in daily use the whole time.
+
+### 9.2 Step 1 — the Tower pins the file and records it
+
+The user decides to sync the file ([decisions.mdx](./decisions.mdx)); LFB pins it and writes the
+`path → cid + pinned_by: bryan-mac-pro` entry into the repo's Local-Storage tracking manifest at
+`~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`. This link has always worked. Nothing here is new
+— it is where the cargo starts.
+
+### 9.3 Step 2 — the manifest mirrors into the company SDL, keyed by the REMOTE
+
+The repo's owner resolves from its **remote org** (`ACT3ai`) to the **ACT3 company storage**, whose
+git-backed SDL is **auto-adopted** as the sync repo, and whose per-repo mirror is **ON by default**
+([storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)).
+The mirror lands at:
+
+```
+~/BGit/Bryan_git/act3_large_files_bridge/repos/<repoUid>/manifest.yaml
+        repoUid = shortHash("github.com/act3ai/charlie-kirk")   ← the NORMALIZED REMOTE
+```
+
+Path containment would have resolved `charlie-kirk` to **Personal** — the wrong storage — because the
+working repo does not live inside the SDL. And a path-hash key would have written a directory the MacBook
+would never look in. **A machine-local value must never key machine-shared data.**
+
+Deriving the shared repo identity and the mirror subtree is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) / `resolveStateSyncRepo()`.
+
+Resolving the owning storage from the remote org and auto-adopting its SDL is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()`, consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()` / `mirrorToSyncRepo()`.
+
+### 9.4 Step 3 — the SDL commits and pushes (and does it now, not in ten minutes)
+
+The SDL's git backbone stages pathspec-lessly, so **anything written into the SDL ships**. What the mirror
+must add is a **trigger**: a mirror write announces itself to the SDL it wrote into (debounced), so a
+decision the user just made leaves the Tower in seconds rather than on the next device-worker tick
+([storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes)).
+
+Nudging the owning SDL's backbone after a tracking write is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (which must resolve an SDL for a path inside a **working repo**, not no-op).
+
+### 9.5 Step 4 — the MacBook fetches, merges, and reconciles per entry
+
+On the MacBook, the SDL's ordinary backbone cycle (`fetch` → automatic `merge`) brings
+`repos/<repoUid>/manifest.yaml` down. LFB then **reconciles it into Local Storage as a per-entry merge**
+([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)): union
+by `path`, **union `pinned_by`** (so the Tower's claim survives alongside this machine's), newer
+`modified_at` wins a CID conflict, **absence is never a delete**, and this computer's own claim is
+re-derived from its **real pinset** — a peer's manifest can never make this machine believe it holds bytes
+it does not. It runs on **every** backbone pull, not when someone clicks something.
+
+The merge must land in **both** per-repo manifests the UI reads, or the MacBook counts a `Pull down` it
+cannot show a row for ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)).
+
+Merging a pulled sync-repo subtree into Local Storage is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()`.
+
+### 9.6 Step 5 — the red remote-only row appears in View One Repo
+
+The user opens [View One Repo](./one_repo.mdx) for `charlie-kirk` on the MacBook. The file is **a row in
+the list even though no local file exists** — composed from the reconciled manifest entry rather than a
+disk `stat`, carrying `presence: "remote-only"`, its name, size, and CID, and `addedByDevice:
+bryan-mac-pro`. It renders **red**, and its tooltip reads:
+
+```
+On bryan-mac-pro — not on this computer yet.
+```
+
+The peer's **device label** in that sentence comes from the travelling device registry
+([devices.mdx §6.9](./devices.mdx#69-a-peer-device-label-names-a-remote-only-row-locked)) — which is why
+the row can name *which* of your computers has the bytes instead of saying "somewhere else".
+
+This is a **healthy** state, not an alarm: red here means *"available, not here yet"*, never *"lost"*.
+Its **only** action is **pull it down** — compress / transcribe / describe / OCR / git-ignore are disabled
+and say why, because there are no local bytes to work on
+([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)).
+
+Composing remote-only rows from the reconciled manifest is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`, with the field in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`.
+
+### 9.7 Step 6 — it is counted, and it is offered
+
+Showing the row is not enough; the user must be **told there is something to do** without hunting:
+
+* **`Pull down` metric tile** — always counts it. That tile's whole job is *"a computer of yours has bytes
+  you don't."*
+* **`Add to IPFS` metric** — counts it while **this** computer has not decided it; the row is a
+  recommendation to bring the file here and pin it.
+* **The [To Do](./to_do.mdx) tab** — it appears as a `pull_down` recommendation in this company's batch,
+  the same batch-popup surface as UC-20 in [use_cases.mdx §9](./use_cases.mdx).
+* **No space, compression, git-ignore, or analysis metric counts it** — there are no local bytes to
+  reclaim, shrink, ignore, or analyze.
+
+Reading the peers-have-it list and pulling it are handled in code (the **same** manifest for both, per §8.6):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()`.
+
+### 9.8 Step 7 — the user pulls, and the row becomes ordinary
+
+The user clicks pull (from the row, the tile, or the To-Do batch). LFB pins the CID locally, which
+**fetches the bytes down over IPFS** to the grafted local path
+([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)) — the
+MacBook's own `~/BGit/Bryan_git/charlie-kirk/videos/`, not the Tower's path. A `pull` + `ipfs_pin` event is
+appended `on_device: bryanstarbuck-macbook-pro`, the MacBook's own history log records it, and those writes
+mirror **back** into the SDL so the Tower learns the file is now on two computers.
+
+The next scan finds a real file on disk, so the row loses `presence: "remote-only"` and becomes an
+**ordinary local row**. Nothing re-prompts: the decision is recorded, sticky, and shared (§6).
+
+### 9.9 What this journey proves that the five-month tour does not
+
+The Jan–May tour proves the **surfaces** are right. This journey proves the **chain** is connected:
+identity (a remote-derived key), ownership (a remote-derived owner), default (a mirror that is on),
+transport (a commit that is triggered), receipt (a merge, with callers), and display (a row that can exist
+without a file). Five of those six links existed while the product still delivered nothing —
+*"a working road and a working destination, and never put the cargo on the truck"*
+([storage_company.mdx §8.3](./storage_company.mdx#83-the-chain-and-where-each-link-was-broken)).
+
 <!--
   Chronological tour: ONE repo (charlie-kirk) across studio-tower (Mac tower) + bryan-macbook-pro (laptop),
   Jan→May. DATA-CATEGORY SPLIT (artifact_placement_policy): ALL tracking state (repo_storage.yaml, sidecars,
@@ -402,4 +587,24 @@ another.**
   both sticky+shared); only brand-new files notify. Reuses: repo_tracking_scheme, artifact_placement_policy,
   special_files, decisions, warnings, compression, perceptual_fingerprint, devices (graft/different-path +
   unique names), storage_repo. 100% of the source scenario is captured.
+
+  ADDED (§9, LOCKED-by-reference): the CONCRETE journey with the real machines — Tower bryan-mac-pro →
+  MacBook bryanstarbuck-macbook-pro, one git-ignored 5.3MB videos/2079054276320440416.mp4 in charlie-kirk
+  (remote github.com/ACT3ai/charlie-kirk) travelling through the ACT3 company SDL act3_large_files_bridge.
+  Nine steps: pin+record → mirror into <SDL>/repos/<repoUid>/ keyed by the NORMALIZED REMOTE (not the
+  path hash, not path containment) → commit+push TRIGGERED by the mirror write (not the 10-min tick) →
+  fetch+merge+PER-ENTRY RECONCILE (union path, UNION pinned_by, absence never a delete, own claim
+  re-derived from the real pinset) → red remote-only row in View One Repo ("On bryan-mac-pro — not on this
+  computer yet") → counted in Pull down + Add to IPFS + the To Do batch, excluded from space/compress/
+  git-ignore/analysis → user pulls, bytes arrive over IPFS at the GRAFTED local path → ordinary local row,
+  no re-prompt. §9.9 states what this proves that the 5-month tour does not (the CHAIN, not the surfaces).
+  AUTHORITY IS storage_company.mdx §8 — this file WALKS, that file RULES; every rule cited, none re-argued.
+  Two earlier passages flagged SUPERSEDED by §8.4.1/§8.4.2: the mirror subtree is repos/<repoUid>/ (remote-
+  derived) NOT repos/<repoKey>/ (Local Storage stays path-keyed on purpose), and the per-repo mirror is ON
+  by default with the company SDL auto-adopted as the sync repo (the toggle is now an OPT-OUT). §3 gained
+  the merge-not-copy note. AC 7-9 added. Code cited (all named in §8): tracking-root.service
+  normalizeRemote/repoUidFor/resolveStateSyncRepo, artifact-placement.service resolveOwnerDedicatedRepo,
+  tracking-sync.service ensureSyncRepoMarker/mirrorToSyncRepo/reconcileFromSyncRepo, sync-trigger.service
+  noteArtifactWritten, pin.service pinRepoFolder/pinStorageUnitInner/syncStorageTextInner/missingPinnedFromPeers/pullMissing, units.service
+  composeFileRows, shared types FileRow.presence.
 -->

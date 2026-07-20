@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Backbone Resilience (the data flow must never silently stop)
-description: The authoritative spec for keeping LargeFileBridge's cross-computer data flow ALIVE. The web app on each computer is the only thing running this repo, so if its backbone machinery stalls, two computers silently drift apart — one keeps committing locally, the other never sees it, and the user "can't find" work that was supposedly pinned. This spec turns that failure class into a first-class requirement: enumerate every way the flow can stop (the OS trigger job dies or points at a stale path, the history diverges because something OTHER than LFB committed into the repo, a local commit is left stranded/unpushed, a merge conflict, an auth failure, IPFS down, the app not running), and for EACH one lock a detection, a self-healing recovery, and a way it is surfaced. Locks the never-stop guarantees: (1) an in-process WATCHDOG in the always-on web app that runs any overdue worker itself and repairs a drifted/dead launchd job, so a broken OS trigger can never silently halt the flow; (2) FOREIGN-COMMITTER coexistence — LFB is not assumed to be the only committer of the repo, so it tolerates and DELIVERS commits it did not author (e.g. a machine-wide auto-commit), never force-pushing and never discarding them; (3) the ALWAYS-PUSH-WHEN-AHEAD rule — a push is attempted whenever the local branch is ahead of the remote for ANY reason, not only when this pass made its own commit, so a stranded commit can never sit forever; (4) STALENESS surfacing — a worker that has not run within twice its interval is flagged overdue on the Scans page. Written from a real incident (2026-07-07, §8). Sibling of git_backbone.mdx (the fetch/merge/commit/push engine this hardens), pin_process.mdx (the full pass), devices.mdx (the every-10-min device write-back), and storage_local.mdx §13 (the background-process transparency contract).
+description: The authoritative spec for keeping LargeFileBridge's cross-computer data flow ALIVE. The web app on each computer is the only thing running this repo, so if its backbone machinery stalls, two computers silently drift apart — one keeps committing locally, the other never sees it, and the user "can't find" work that was supposedly pinned. This spec turns that failure class into a first-class requirement: enumerate every way the flow can stop (the OS trigger job dies or points at a stale path, the history diverges because something OTHER than LFB committed into the repo, a local commit is left stranded/unpushed, a merge conflict, an auth failure, IPFS down, the app not running), and for EACH one lock a detection, a self-healing recovery, and a way it is surfaced. Locks the never-stop guarantees: (1) an in-process WATCHDOG in the always-on web app that runs any overdue worker itself and repairs a drifted/dead launchd job, so a broken OS trigger can never silently halt the flow; (2) FOREIGN-COMMITTER coexistence — LFB is not assumed to be the only committer of the repo, so it tolerates and DELIVERS commits it did not author (e.g. a machine-wide auto-commit), never force-pushing and never discarding them; (3) the ALWAYS-PUSH-WHEN-AHEAD rule — a push is attempted whenever the local branch is ahead of the remote for ANY reason, not only when this pass made its own commit, so a stranded commit can never sit forever; (4) STALENESS surfacing — a worker that has not run within twice its interval is flagged overdue on the Scans page; and (5) the DEBOUNCED POST-MIRROR NUDGE (F8, §6.1) — a tracking mirror written into a company/Personal SDL between timer ticks announces itself so the backbone commits and pushes it on a debounce instead of waiting up to a full interval, coalescing to one commit+push per storage, running the ordinary cycle under the same per-storage git lock, resolved by OWNERSHIP rather than path prefix, and remaining a latency fix that the timer cycle still backstops. Written from a real incident (2026-07-07, §8). Sibling of git_backbone.mdx (the fetch/merge/commit/push engine this hardens), pin_process.mdx (the full pass), devices.mdx (the every-10-min device write-back), and storage_local.mdx §13 (the background-process transparency contract).
 ---
 
 # LargeFileBridge — Backbone Resilience
@@ -63,6 +63,7 @@ Each row is a way the flow has stopped or could stop. For each: how LFB **detect
 | **F5** | **Auth failure on a URL remote** — no cached credential / expired token | fetch/push classified as an auth error ([git_backbone.mdx §5](./git_backbone.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt)) | keep pinning over IPFS; do **not** hang or retry blindly | "re-authenticate this Git remote" problem |
 | **F6** | **IPFS node down** — bytes can't move even though git text can | `ipfs.health() !== "ok"` at the top of a unit pin | skip byte work this pass, keep the git text flowing, retry next pass | unit error on the storage |
 | **F7** | **App not running** — the web app is closed, so nothing (not even the watchdog) runs | the launchd trigger still fires the OS worker independently of the app; on next app start, boot reconcile + watchdog catch up | OS worker keeps the 10/15-min cadence while the app is down; the app re-converges on launch | last-run age visible on next open |
+| **F8** | **Tracking mirror written, never announced** — LFB mirrors a repo's tracking state into the SDL between timer ticks, so it sits uncommitted in the sync repo's working tree for up to a full interval | the mirror step knows it wrote; nothing downstream is told | the write **nudges** its SDL's backbone on a **debounce** (§6.1 below, [git_backbone.mdx §6.2](./git_backbone.mdx#62-a-mirror-write-nudges-its-sdls-backbone--debounced-locked)); the next timer tick is the backstop | — (it just flows sooner) |
 
 The load-bearing insight: **F1, F2, and F3 are the ones that fail *silently*** — they produce no error,
 no toast, no conflict; the flow just quietly stops. They are exactly the incident (§8), and §3/§4/§6 are
@@ -194,6 +195,36 @@ The rule this locks in:
 Attempting the push whenever the branch is ahead of the remote (not only after a fresh local commit), via an ahead-count check, is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`).
 
+### 6.1 The debounced post-mirror nudge — the write is the trigger (LOCKED)
+
+§6 guarantees that whatever is **ahead** eventually gets pushed. This section removes the **wait** for the
+class of write that matters most to the user: a tracking mirror. When LFB mirrors a repo's tracking state
+into a company/Personal SDL (`<syncRepo>/repos/<repoUid>/`), that write lands **between** timer ticks, so
+without a nudge it sits uncommitted in the sync repo's working tree until the 10-minute device write-back
+or the 15-minute pass happens to come around (**F8**). A decision the user just made then takes minutes to
+leave the machine, and the second computer looks broken. The mechanics are owned by
+[git_backbone.mdx §6.2](./git_backbone.mdx#62-a-mirror-write-nudges-its-sdls-backbone--debounced-locked)
+and [storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes);
+what this spec locks is how it fits the resilience contract:
+
+* **The nudge is a latency fix, never a correctness dependency.** The timer cycle remains the guarantee —
+  a nudge that is dropped, debounced away, or lost to a restart costs **seconds of freshness, never
+  delivery**. Correctness must never depend on the nudge firing, exactly as §6 refuses to depend on device
+  write-back timestamp churn.
+* **Debounced, so it cannot become a commit storm.** A pass that mirrors hundreds of files coalesces into
+  **one** commit + push per storage. An un-debounced per-write push would be its own failure mode — a repo
+  the user's other computer can never finish fetching.
+* **It runs the ordinary cycle, under the same locks.** The nudge triggers the §5 fetch → auto-merge →
+  push path with §6's always-push-when-ahead and the non-fast-forward retry, and takes the same per-storage
+  Git lock as the timer workers (§3), so a nudge and a scheduled pass never run git on one working copy at
+  once.
+* **It must resolve the SDL by ownership, not path prefix.** The mirror is written *on behalf of* a working
+  repo that lives nowhere near the SDL, so a root-prefix lookup finds no storage and the nudge silently
+  no-ops — a **silent** failure of exactly the kind §1 forbids, and the reason F8 is in the taxonomy at all.
+
+The debounced nudge, and the storage-resolution trap it must avoid, are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` / `flushArtifactSync()` (debounce + coalesce per storage; `storageIdForPath()` returns null for a working-repo path, so the mirror must announce the SDL it wrote into), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()`.
+
 ---
 
 ## 7. Staleness surfacing — an overdue worker is visible (LOCKED)
@@ -280,7 +311,11 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
    re-merges, and re-pushes once, never force (§5, §6).
 6. **Staleness is surfaced.** A worker installed + enabled but not run within **2× its interval** is
    flagged **overdue** on the Scans page, distinct from off and from failed (§7).
-7. **Nothing fails silent.** An unrecoverable merge conflict, an auth failure, or a down IPFS node
+7. **A tracking-mirror write nudges its SDL's backbone on a debounce** (F8, §6.1): one coalesced commit +
+   push per storage, running the ordinary fetch → merge → push cycle under the same per-storage Git lock,
+   resolved by **ownership** rather than path prefix — and the timer cycle remains the guarantee, so a lost
+   nudge costs freshness, never delivery.
+8. **Nothing fails silent.** An unrecoverable merge conflict, an auth failure, or a down IPFS node
    becomes a **surfaced problem** on the storage/worker while the rest of the flow keeps moving — never a
    swallowed error (§2, §5).
 
@@ -305,4 +340,18 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
        ScansPage workerHealth.
   Keep in sync with git_backbone.mdx (§6.1 always-push, §4/§5 merge), pin_process.mdx (the pass + watchdog note),
   devices.mdx (the 10-min write-back), storage_local.mdx §13 (transparency contract + overdue).
+
+  ADDED for storage_company.mdx §8.7 / git_backbone.mdx §6.2 (those are the authority — link, don't restate):
+  NEW failure F8 = a tracking mirror written into an SDL BETWEEN timer ticks sits uncommitted for up to a
+  full interval, so a decision the user just made takes minutes to leave the machine. NEW §6.1 THE DEBOUNCED
+  POST-MIRROR NUDGE ("the write is the trigger"): after mirroring <syncRepo>/repos/<repoUid>/, announce it to
+  the SDL and schedule a debounced commit+push. Four locks: (1) it is a LATENCY fix, never a correctness
+  dependency — a dropped nudge costs seconds of freshness, never delivery (same discipline as §6 refusing to
+  depend on device-file timestamp churn); (2) DEBOUNCED so hundreds of mirrored files coalesce into ONE
+  commit+push per storage (an un-debounced per-write push is its own failure mode); (3) it runs the ORDINARY
+  §5/§6 cycle under the same per-storage git lock as the timer workers, not a second weaker path; (4) it must
+  resolve the SDL by OWNERSHIP — noteArtifactWritten's storageIdForPath() is a ROOT-PREFIX lookup and a mirror
+  is written on behalf of a working repo nowhere near the SDL, so a prefix lookup silently no-ops (a silent
+  failure, which is why F8 belongs in the taxonomy). AC 7 added (old 7 → 8). Code: sync-trigger.service
+  noteArtifactWritten/flushArtifactSync ← tracking-sync.service mirrorToSyncRepo.
 -->

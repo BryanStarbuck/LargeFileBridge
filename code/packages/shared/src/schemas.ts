@@ -311,8 +311,47 @@ export const AppConfigSchema = z.object({
   // The single computer-wide storage budget LFB may devote to ALL community content combined
   // (communities.mdx §5.2). Bytes. null = not yet set → the service proposes a recommendation.
   community_budget: z.number().nullable().default(null),
+  // Where a NEW storage directory is created (storage_company.mdx §10.3, AC 6). Creating a company storage
+  // makes `<parent>/<org-slug>_large_files_bridge/` on disk, and the parent must be a SETTING rather than
+  // one person's layout baked into the source — the product ships to people whose repos are not under
+  // `~/BGit/Bryan_git`. `null` means "derive it": the directory where the user's existing
+  // `*_large_files_bridge` storages already live (see storagesParentDir() in company-discovery.service.ts),
+  // so the common case needs no configuration at all and the uncommon case is one setting away.
+  storages: z
+    .object({
+      parent_dir: z.string().nullable().default(null),
+    })
+    .prefault({}),
 });
 export type AppConfig = z.infer<typeof AppConfigSchema>;
+
+// ── org → company discovery, machine-local state (storage_company.mdx §10.2/§10.3) ──────────────────
+// `~/T/_large_files_bridge/company_discovery.yaml`. Two pieces of state, both MACHINE-LOCAL on purpose:
+//
+//   • `membership` — the cached answer to "has the user authored a commit in this repo?". The test itself
+//     is a `git log --author=…` per repo and there can be ~200 repos, so re-running it on every page load
+//     would make the Storages page pay for a full pass over the object store of every repo on the disk.
+//     A `true` never expires (a commit you authored cannot become un-authored); a `false` expires after
+//     `MEMBERSHIP_FALSE_TTL_MS`, because §10.2's "not-yet-committed is not never" REQUIRES a no to become
+//     a yes on its own the first time the user commits to one of that org's repos.
+//   • `dismissed` — orgs the user waved away in the proposal list (§10.3: "a dismissed org stays
+//     dismissed"). Local because it is a UI preference about what to offer on THIS computer, not a fact
+//     about the org that other members need.
+export const CompanyDiscoveryStateSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  membership: z
+    .record(
+      z.string(), // absolute repo path
+      z.object({
+        authored: z.boolean().default(false),
+        checked_at: iso.optional(),
+      }),
+    )
+    .prefault({}),
+  dismissed: z.array(z.string()).default([]), // org slugs (normalized, lowercase)
+});
+export type CompanyDiscoveryState = z.infer<typeof CompanyDiscoveryStateSchema>;
 
 // ── per-community subscription config (communities.mdx §8) ──────────────────
 // `pin/c/<community_id>/config.yaml`: the user's per-community choices — intent (get/support) +
@@ -381,9 +420,16 @@ export const RepoUnitConfigSchema = z.object({
     .prefault({}),
   // Whether THIS repo additionally mirrors its Category-B tracking state (repo_storage.yaml, sidecars,
   // history, decisions.yaml, manifest.yaml) to the owning company/Personal storage's SYNC REPO so it travels
-  // (artifact_placement_policy.mdx §4). Default OFF — Local-Storage-only. Enabled only when the owner has a
-  // sync repo configured; toggled from the per-repo settings page (repo_settings.mdx §2.9).
-  sync_repo: z.object({ enabled: z.boolean().default(false) }).prefault({}),
+  // (artifact_placement_policy.mdx §4). The mirror is ON by default and this toggle is an OPT-OUT
+  // (storage_company.mdx §8.4.2, repo_settings.mdx §2.9.1).
+  //
+  // TRI-STATE ON PURPOSE — `enabled` is OPTIONAL, not defaulted. ABSENT means "the default" (ON); only an
+  // explicit `false` opts out. A `.default(false)` here would be indistinguishable from a user who chose
+  // OFF, and because every repo's config predates this feature, EVERY repo would have read as opted-out —
+  // no marker written, nothing mirrored, nothing travelling, and no remote-only row could ever exist. The
+  // whole cross-computer feature was inert behind this one default (§8.4.2: "a default that has to be found
+  // and switched on before anything works is a bug wearing a setting's clothes").
+  sync_repo: z.object({ enabled: z.boolean().optional() }).prefault({}),
   // The LOCAL grouping override (repo_company_mapping.mdx §5.2). ABSENT (null) => auto-derive the owner from
   // the git remote (source:"auto"). PRESENT => the user reassigned this repo (source:"manual"), sticky across
   // rescans and NEVER overwritten by a teammate. `company_id` is set only when kind==="company". Machine-local

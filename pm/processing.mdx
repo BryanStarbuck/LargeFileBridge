@@ -678,6 +678,46 @@ other producer.
 The To-Do batch Apply that writes decisions then enqueues the effects is served in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (fans the checked recommendations out to `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` as `compress` / `transcribe` tasks and `pull_down` recommendations as **pin/fetch** work (the `pin` op — [job_queue.mdx §4b](./job_queue.mdx); `pull_down` is **not** a `JobOp`)), triggered from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
 
+### 4.6.1 A `pull_down` job for a remote-only row — the path (LOCKED)
+
+`pull_down` is the one recommendation kind whose subject **is not on this computer**. Its row is a
+**`presence: "remote-only"`** `FileRow`
+([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)) —
+built from a peer computer's reconciled manifest, with no local bytes behind it. This subsection **confirms
+the job path** for that case; it adds no op, no table, and no surface.
+
+**The path, end to end.** Apply → **`pin` op** (not a `JobOp` named `pull_down`) → pin the manifest CID on
+this node, which **fetches the bytes over IPFS** → **materialize** them into the working tree at the
+manifest's recorded path → the file becomes an ordinary local row on the next scan.
+
+* **`pull_down` is a recommendation kind, not a queue op.** It is enqueued as **`pin`/fetch** work
+  ([job_queue.mdx §4b](./job_queue.mdx)) — as §4.6 already states — and shows in the items table with
+  **`op: "pin"`**. The **Kind** facet (§4.3.1a) reads Audio/Video/Image from the filename in the manifest
+  entry, which is available without the bytes.
+* **The item's identity comes from the manifest.** `path` is where the file **will land**, `sizeBytes` is
+  the **manifest's recorded size** — never a local `stat`, which would throw for a file that is not there.
+  A progress read must never assume the path exists on disk before the job completes.
+* **The whole batch reads from one manifest.** The list the user checked and the pull action must read the
+  **same** Local-Storage tracking manifest
+  ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)). Reading the
+  SDL-only committed manifest for a **working repo** finds nothing, so **every item settles `failed`** — a
+  full-red batch row for work that was perfectly enqueueable. That is a **reader** defect, never a transport
+  or provider failure, and it must not be diagnosed from the Processing page's failure counters.
+* **Compress is a follow-on, strictly ordered.** When the batch's compress axis is checked for a pulled
+  file, its **`compress` job is enqueued only after that file's bytes land** — never in parallel with the
+  fetch. Two items, one file, in order.
+* **No analysis op is ever enqueued for a `pull_down` row.** `transcribe` / `describe` / `ocr` are `na` on a
+  remote-only row (§8.5); queueing them would create work that cannot run and would settle as noise in the
+  five-way outcome taxonomy (§4.3.1).
+* **Failure semantics.** A CID that will not resolve on the network settles **`failed`** (we tried, it broke)
+  — it is **not** `rejected` (nothing judged the content) and **not** `halted` (it was attempted). One bad
+  CID never fails the rest: the fan-out is per-item through the shared IPFS limiter.
+* **A mixed batch is still ONE batch row.** Pull-downs + compress + transcribe from one Apply land as a
+  single `mixed` row ([processing_batches.mdx §1.2](./processing_batches.mdx)), exactly as §4.6 requires.
+
+The pull itself — pin the CID, materialize the bytes, then hand the file to the compress queue — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pullMissing(repoRoot, checkedPaths, { compress })` (bounded fan-out through the shared IPFS limiter; per-item failure containment), enqueued from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply`.
+
 ---
 
 ## 5. The one polled source — `GET /api/progress` (extended)
@@ -820,6 +860,16 @@ The extended payload is assembled in code:
    **transcribe slug's** Apply is the **main producer of transcribe jobs**; a **mixed** batch fans out all
    three kinds into the same queue and the same `GET /api/progress` poll, with no new surface — and lands as
    **ONE** batch row of kind `mixed` ([processing_batches.mdx §1.2](./processing_batches.mdx)), never three.
+8a. **`pull_down` for a remote-only row (§4.6.1):** a checked `pull_down` recommendation enqueues a
+    **`pin`/fetch** job (there is no `pull_down` `JobOp`) whose subject **is not on this disk**: its `path`
+    is where the file **will land** and its `sizeBytes` is the **manifest's** recorded size — no surface may
+    `stat` it before the job completes. A checked **compress** axis for the same file is enqueued **only
+    after its bytes land** (two items, one file, ordered), and **no analysis op** (`transcribe` / `describe`
+    / `ocr`) is ever enqueued for such a row. An unresolvable CID settles **`failed`** (attempted and broke),
+    never `rejected` or `halted`, and one bad CID never fails the rest. A **whole batch** settling `failed`
+    here means the pull action read a **different manifest** than the list did
+    ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)) — a reader defect,
+    not a transport failure.
 9. **Scale — 2,000+ items (§4.4):** enqueuing **2,000 AI descriptions** (or any large batch) and opening
    `/processing` — including in a **second browser that did nothing** — **loads promptly and stays smooth**:
    the poll keeps answering because **no producer blocks the event loop** (async transcode + async base64
@@ -962,4 +1012,20 @@ The extended payload is assembled in code:
   + what makes it final), to_fix.mdx §2.4/§2.7 (circuit; the transient ceiling the rejection rate is NOT),
   compression.mdx §12 (a batch producer + error list), to_do.mdx + to_do_batches.mdx +
   transcribe_calc_engine.mdx (the TO DO batch Apply producer, §4.6).
+   §4.6.1 (NEW, LOCKED) THE pull_down JOB PATH FOR A REMOTE-ONLY ROW — the one recommendation kind whose
+      SUBJECT IS NOT ON THIS COMPUTER (a presence:"remote-only" FileRow built from a peer's reconciled
+      manifest, storage_company.mdx §8.5). CONFIRMS the path, adds NO op/table/surface: Apply → the **pin**
+      op (there is NO pull_down JobOp) → pin the manifest CID (pinning FETCHES the bytes) → materialize into
+      the working tree at the manifest's path → ordinary local row on the next scan. Item identity is
+      MANIFEST-SOURCED: path = where it WILL LAND, sizeBytes = the manifest's recorded size — NEVER a local
+      stat (which would throw on a file that isn't there); Kind facet reads off the manifest FILENAME, which
+      exists without the bytes. Compress is STRICTLY ORDERED after arrival (two items, one file), never
+      parallel with the fetch. NO analysis op is ever enqueued for such a row (transcribe/describe/ocr are
+      `na` — it'd be work that cannot run and noise in the five-way taxonomy). An unresolvable CID = FAILED
+      (we tried, it broke), never rejected (nothing judged content) and never halted (it WAS attempted); one
+      bad CID never fails the rest (per-item fan-out through the shared IPFS limiter). *** A WHOLE batch
+      settling failed = the pull action read a DIFFERENT MANIFEST than the list did (§8.6, the shipped
+      pullMissing→readCommittedManifest defect) — a READER defect, not transport, and NOT to be diagnosed off
+      the failure counters. *** Mixed batch is still ONE row of kind "mixed". Code: pin.service pullMissing()
+      ← todo.router POST /api/todo/batches/:id/apply. AC 8a added.
 -->

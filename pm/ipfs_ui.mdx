@@ -1081,6 +1081,14 @@ The IPFS fault sites that must record to the trail (start-failure diagnosis, con
     `analysis[]` field (built in `ipfs-page.service.ts` `buildTrackedIndex`) plus the resolved filename kind,
     with **path-less / untracked pins reading `na`**; each header is icon-only and its hover fills the
     left-bar hover-info panel. The **File System** page shows **none**.
+25. **The per-repo IPFS tab counts files this computer does not have (§21.1):** a **remote-only** row
+    ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked))
+    appears in the tab's table **red**, with the peer named in `Peers`, a populated `CID`, the manifest's
+    size, and the tooltip *"On {device} — not on this computer yet."* It counts toward **`Pull down`
+    always** and **`Undecided` while undecided here**, counts toward **`Not backed up` never** (it has ≥1
+    peer by construction), becomes **`Pending`** only once a pull-down job is enqueued for it, and counts
+    toward **no** space / compression / git-ignore / analysis panel. It is a **healthy** state — the tab
+    never escalates it to a node-health or data-loss warning, and its only offer is **pull it down**.
 
 ---
 
@@ -1101,6 +1109,41 @@ The per-repo screen ([one_repo.mdx](./one_repo.mdx)) carries an **IPFS tab** amo
 
 This is presentation only over the same `RepoDetail` the screen already loads — selecting the tab never
 refetches or mutates anything.
+
+### 21.1 What the tab's panels count once a peer's manifest arrives (LOCKED)
+
+The IPFS tab's four panels — `Undecided`, `Pull down`, `Not backed up`, `Pending` — were always correct and
+always read **zero for files this computer does not have**, because the per-repo manifest that names a peer's
+pinned files never travelled between the user's two computers. That travel is fixed and **owned** by
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked)
+(the "one file, two computers" use case). This subsection says only **what the panels count now** — no panel
+is added, removed, or redesigned.
+
+**A remote-only row is a real row here.** A file the peer pinned and this computer lacks is a
+**`presence: "remote-only"`** `FileRow` ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)) —
+composed from the reconciled manifest, with **no local bytes**. On this tab it appears in the filtered table
+(it is large and/or media by the manifest's own record), rendered **red** with the row tooltip
+*"On {device} — not on this computer yet."* Its `Peers` cell names the peer that holds it and its `CID` cell
+is populated; its `Size` is the manifest's recorded size, not a `stat`.
+
+| Panel | Does a remote-only row count? |
+| --- | --- |
+| **`Pull down`** | **Always.** This is the panel the row exists for — "a computer of yours has bytes you don't." |
+| **`Undecided`** / `Add to IPFS` | **Yes, while this computer has not decided the file.** The row is a recommendation to bring the file here and pin it. Once decided `sync`, it leaves this panel and stays in `Pull down` until the bytes land. |
+| **`Not backed up`** (sync files with 0 peers) | **No.** By construction it has **≥1 peer** — a peer's pin is exactly what made the row exist. Counting it here would invert the meaning of the panel. |
+| **`Pending`** | **Only after the user acts.** A remote-only row is not "in transfer" merely by existing; it becomes `Pending` when a pull-down job is enqueued for it ([processing.mdx §4.6.1](./processing.mdx#461-a-pull_down-job-for-a-remote-only-row--the-path-locked)). |
+| Space / compression / git-ignore / analysis panels | **Never** — there are no local bytes to reclaim, compress, ignore, or analyze (§8.5). |
+
+**Sorting.** The tab's worst-first order (`missing`/`error` → `pending` → `undecided` → `pinned`, then Size
+desc) already ranks a remote-only row at the top: it reads `missing` locally. That is the intended
+prominence — the biggest bytes this computer is missing lead the table.
+
+**It is not an alarm.** A red remote-only row is a **healthy** state — *"available, not here yet"*, never
+*"lost"*. The IPFS tab must not escalate it into a node-health or data-loss warning; the only offer is
+**pull it down** ([warnings.mdx §10.8.12a](./warnings.mdx#10812a-where-this-warnings-list-actually-comes-from--one-manifest-and-the-remote-only-row-locked)).
+
+The panels' counts come from the same `RepoDetail` the tab already reads, composed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends the remote-only rows) and `computeRepoDetail()` (`taskMetrics`), with the pull-down list itself from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
 
 <!--
   This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct
@@ -1142,4 +1185,17 @@ refetches or mutates anything.
   configHealth+upgrade blocks on GET /node; job phases repairing/migrating + upgrading. Backend home:
   ipfs-config-health.service.ts. NOTE: user said "ipfs.mdx" but this NODE-LIFECYCLE surface belongs here
   in ipfs_ui.mdx; ipfs.mdx stays the PINSET table spec.
+
+  §21.1 (NEW, LOCKED) WHAT THE PER-REPO IPFS TAB'S PANELS COUNT once a peer's manifest actually ARRIVES.
+  The four panels (Undecided · Pull down · Not backed up · Pending) were never wrong — they read ZERO for
+  absent files because the per-repo manifest never travelled. The travel is OWNED by storage_company.mdx §8
+  (link, never restate). NO panel added/removed/redesigned. A presence:"remote-only" FileRow (§8.5) is a REAL
+  row on this tab: red, tooltip "On {device} — not on this computer yet", Peers names the peer, CID populated,
+  Size from the MANIFEST not a stat. Counting table: Pull down = ALWAYS · Undecided/Add to IPFS = while
+  undecided here · Not backed up = NEVER (it has ≥1 peer BY CONSTRUCTION — a peer's pin is what made the row;
+  counting it would invert the panel's meaning) · Pending = only AFTER a pull-down job is enqueued (existing
+  ≠ in transfer) · space/compression/git-ignore/analysis = never (no local bytes). The tab's existing
+  worst-first sort already floats it (it reads `missing`) — that's the intended prominence. It is a HEALTHY
+  state, never escalated to a node-health/data-loss warning; only offer = pull it down (warnings §10.8.12a).
+  AC 25 added.
 -->

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Personal Storage
-description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a devices/<device-id>.yaml at the Personal repo ROOT — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The Personal SDL repo has NO .lfbridge/ directory AT ALL — .lfbridge/ is a working-repo-only concept and the SDL ROOT *is* the .lfbridge area (artifact_placement_policy.mdx §0 owns that rule) — so storage.yaml (name + type: personal), mapped_dirs.yaml, the files.yaml fingerprint index, the IPFS manifest.yaml, bookmarks.yaml, the media-analysis outputs (analysis/), the path-mirrored artifacts, and the devices/ registry ALL sit at the repo root (~/BGit/Bryan_git/personal_large_files_bridge/devices/<device-id>.yaml, NOT .lfbridge/devices/…); big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + tracking-area layout in storages.mdx), artifact_placement_policy.mdx §0 (the storage-kind rule that says an SDL has no .lfbridge/), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated). PART II (§16–§26) specifies the SYNCHRONIZATION ENGINE v2 for dedicated LFB file repos (the Personal SDL + company sync repos) — the repos where LFB is the sole author, which is the license for headless auto-merge. It opens with a cited v1 audit whose central finding is the STOWAWAY DEFECT: no code path in LFB has committing artifacts as its purpose, so transcripts/AI-descriptions reach the server only as stowaways on the device-registration worker's pathspec-less `git add -A` (proven live: a HEAD commit of 12 .ai_description files + one devices/*.yaml, titled "LFB: backbone device state"), the pin worker is not installed at all, and six silent forever-cases (F1–F6) can sever the ride with no diagnostic anywhere. v2 fixes it structurally: producing a durable artifact schedules its own sync via an on-disk crash-survivable OUTBOX (producers never write into the working copy, which is what makes the pull stage's clean-tree precondition true); a four-stage pass (PULL → WRITE+RECONCILE → RESOLVE → PUSH) with unbounded IPFS byte work EVICTED from between pull and push, holding the conflict window to a 60-second budget (v1's window exceeds its own interval on a first sync, where P(collision) ≈ (N−1)·W/T > 100% and convergence is impossible); a mandatory reconciliation header (schema/updated_at/updated_by) on LOGICAL time, with clocks as a hint and never an authority; a five-class taxonomy (self-owned / append-log / derived / shared-mutable / local-only) that assigns every one of the ~23 kinds of synced data an exhaustive permutation table; a deterministic 9-rung headless resolution ladder that ends in KEEP-BOTH quarantine and never asks a user, never force-pushes, and never resolves by discarding; a priority ladder where no device has standing and fidelity beats newness; and an observability contract where silence is the defect.
+description: The Personal storage spec. A user's own personal large files, tracked as a directory-based storage whose Syncable Data Location is a Git repo the user configures — conventionally ~/BGit/Bryan_git/personal_large_files_bridge/. This is the CANONICAL Git-backbone use case: one user with two (or more) computers, each running LFB, each pointed at the same Personal repo. On each computer the user opens Personal storage settings, turns Git ON, and supplies the repo either as a LOCAL FILE PATH (a checkout already on that box) or as an HTTP(S) URL (a Git server not mapped to the local filesystem, which LFB clones into a machine-local working-copy cache). Turning Git on GRANTS LFB permission to run git fetch, git merge (automatic), git add/commit, and git push on every backbone pass, carried by the git_backbone.mdx engine using simple-git over the system git binary. Each computer registers itself as a UNIQUE device: it writes a devices/<device-id>.yaml at the Personal repo ROOT — its stable minted id plus a hardware fingerprint (model, year, disk, screen, RAM, chip, OS user) collected from OS APIs, falling back to a composed fingerprint — into the Personal repo, and reads the OTHER devices' files to discover the user's other computers, which then appear in the Devices left-bar tab. There is exactly one Personal storage per user. The Personal SDL repo has NO .lfbridge/ directory AT ALL — .lfbridge/ is a working-repo-only concept and the SDL ROOT *is* the .lfbridge area (artifact_placement_policy.mdx §0 owns that rule) — so storage.yaml (name + type: personal), mapped_dirs.yaml, the files.yaml fingerprint index, the IPFS manifest.yaml, bookmarks.yaml, the media-analysis outputs (analysis/), the path-mirrored artifacts, and the devices/ registry ALL sit at the repo root (~/BGit/Bryan_git/personal_large_files_bridge/devices/<device-id>.yaml, NOT .lfbridge/devices/…); big files stay in their natural home directories, git-ignored, moving over IPFS while the small SDL text moves over Git. Personal's SDL, being a git working tree, IS Personal's sync repo — auto-adopted with nothing to configure (§14.2, the Personal counterpart of storage_company.mdx §8.4.2), which is the same repo the backbone already commits devices/ over, so a Personal-owned repo's tracking state mirrors BY DEFAULT and the per-repo toggle becomes an OPT-OUT; the residual Local-Storage-only cases are a non-git Personal root or a repo with no git remote, and ownership — resolved remote-org first — still decides, so a repo under ~/ whose remote names a company org mirrors to that company's SDL instead. Personal's settings page also lists the repos owned by Personal — including the auto-defaulted no-org repos — with a per-row reassign dropdown (Personal | each company | + New company…) to move any to a company (§14.1 → storage_settings.mdx §4c); moving a repo to a company with a sync repo records a travelling ownership assertion (repo_owner_propagation.mdx) that applies on the company members' machines only via review-and-consent, moves NO bytes, and re-targets the repo's tracking mirror from Personal's sync repo to the company's. Sibling of storage_repo / storage_company / storage_community (shared storage.yaml + tracking-area layout in storages.mdx), artifact_placement_policy.mdx §0 (the storage-kind rule that says an SDL has no .lfbridge/), storage_settings.mdx (where Git is turned on and the Owned-repos list renders), git_backbone.mdx (the Git engine), devices.mdx (the device registry + graft), syncable_data_location.mdx (the SDL that travels), repo_company_mapping.mdx (the owner mapping), and repo_owner_propagation.mdx (how a company reassignment travels + is consent-gated). PART II (§16–§26) specifies the SYNCHRONIZATION ENGINE v2 for dedicated LFB file repos (the Personal SDL + company sync repos) — the repos where LFB is the sole author, which is the license for headless auto-merge. It opens with a cited v1 audit whose central finding is the STOWAWAY DEFECT: no code path in LFB has committing artifacts as its purpose, so transcripts/AI-descriptions reach the server only as stowaways on the device-registration worker's pathspec-less `git add -A` (proven live: a HEAD commit of 12 .ai_description files + one devices/*.yaml, titled "LFB: backbone device state"), the pin worker is not installed at all, and six silent forever-cases (F1–F6) can sever the ride with no diagnostic anywhere. v2 fixes it structurally: producing a durable artifact schedules its own sync via an on-disk crash-survivable OUTBOX (producers never write into the working copy, which is what makes the pull stage's clean-tree precondition true); a four-stage pass (PULL → WRITE+RECONCILE → RESOLVE → PUSH) with unbounded IPFS byte work EVICTED from between pull and push, holding the conflict window to a 60-second budget (v1's window exceeds its own interval on a first sync, where P(collision) ≈ (N−1)·W/T > 100% and convergence is impossible); a mandatory reconciliation header (schema/updated_at/updated_by) on LOGICAL time, with clocks as a hint and never an authority; a five-class taxonomy (self-owned / append-log / derived / shared-mutable / local-only) that assigns every one of the ~23 kinds of synced data an exhaustive permutation table; a deterministic 9-rung headless resolution ladder that ends in KEEP-BOTH quarantine and never asks a user, never force-pushes, and never resolves by discarding; a priority ladder where no device has standing and fidelity beats newness; and an observability contract where silence is the defect.
 ---
 
 # LargeFileBridge — Personal Storage
@@ -499,7 +499,12 @@ can also have a sync repo** — indeed it is the **canonical** one: the Personal
   Personal SDL.
 * **Default: Local Storage only.** With no Personal dedicated repo configured (or the per-repo toggle off), a
   Personal-owned repo keeps its tracking in Local Storage only — real and honored locally, simply not yet shared,
-  and never in the working repo. Nothing changes until you turn the Personal backbone on and opt the repo in.
+  and never in the working repo. ~~Nothing changes until you turn the Personal backbone on and opt the repo in.~~
+  **SUPERSEDED** by §14.2 and
+  [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked):
+  once the Personal SDL is a git working tree it **is** the sync repo, adopted without configuration, and the
+  per-repo mirror is **ON by default**. This bullet now describes only the residual case — a Personal storage
+  whose root is not a git repo — where there is genuinely nowhere to mirror to.
 * **Ownership decides.** A repo mirrors to **Personal's** sync repo only while its owner is **Personal**
   (default or a manual reassignment, [repo_company_mapping.mdx §7.2](./repo_company_mapping.mdx#72-artifact-placement-follows-the-owner));
   reassign it to a company and its tracking mirrors to that company's sync repo instead.
@@ -534,6 +539,44 @@ section only ties it to Personal:
   the files and the Local-Storage tracking copy are untouched.
 
 The Owned-repos read (`getOwnedRepos("personal")`) and the reassign endpoint (`POST /api/repos/:repoId/owner`) are the same as cited in [storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) — for a company target with a sync repo it also asserts via `owner-propagation.service.ts` — `assertCompanyOwnership()`.
+
+### 14.2 The Personal SDL IS the sync repo, and the mirror is ON by default (LOCKED)
+
+Personal's counterpart of
+[storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked),
+which is the authority for the rule; this section states only what is Personal-specific. It supersedes §14's
+"Default: Local Storage only" for every Personal storage whose root is a git working tree.
+
+* **Auto-adoption — and here it is barely a new idea.** §14 already says the §5 Personal Git backbone **is**
+  Personal's sync repo. §14.2 makes that **automatic**: the Personal SDL's own git root is adopted as the sync
+  repo with **nothing to configure**. An explicitly configured `sync_repo`
+  ([storage_settings.mdx §4b.1](./storage_settings.mdx#4b1-auto-adoption--the-field-shows-the-storages-own-sdl-as-the-effective-value-locked))
+  still **wins**; adoption is the fallback.
+* **This is what the backbone was already doing.** Turning the backbone on (§5) grants LFB fetch / merge /
+  commit / push on the Personal repo, and the device registry (§4) has been travelling over exactly that repo
+  since the first pass. The sync repo simply stops disagreeing with the backbone about which repo Personal's
+  is — **one SDL, one git root, one answer**.
+* **Default ON for Personal-owned repos.** With Personal's SDL adopted, a Personal-owned repo's Category-B
+  tracking mirrors by default; the per-repo toggle
+  ([repo_settings.mdx §2.9.1](./repo_settings.mdx#291-the-default-is-on--this-toggle-is-an-opt-out-locked)) is
+  an **opt-out**. The canonical two-computer story (§3, §6) therefore works out of the box rather than after
+  the user finds and flips a setting.
+* **The residual OFF cases, stated honestly.** A Personal storage whose root is **not** a git working tree has
+  nothing to adopt; a repo with **no git remote** has no shared identity to mirror under
+  ([storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)).
+  Both keep their tracking in **Local Storage only**, which is real and honored locally — the UI says so
+  plainly and raises no warning.
+* **Ownership still decides.** A repo mirrors to **Personal's** SDL only while its owner is Personal — which,
+  under [repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-decides-the-sync-repo-target-remote-first-locked),
+  is resolved **remote-org first**. A repo merely *living under* `~/` no longer counts as Personal's when its
+  remote names a company org; that repo's tracking travels over the **company's** SDL instead, and Personal's
+  Owned-repos list (§14.1) sheds it.
+* **Nothing about bytes changes.** Personal's media still moves only over IPFS, only for decided files
+  ([decisions.mdx](./decisions.mdx)). This decides where **tracking text** travels — the same small text the
+  Personal repo already carries alongside `devices/`.
+
+Adopting the Personal SDL's own git root as the sync repo when no explicit pick is configured is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo(storageId)` with the SDL-root fallback already performed by `getGitBackboneRemote(storageId)` (same file), resolved per repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` and mirrored by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ---
 
@@ -590,7 +633,20 @@ The Owned-repos read (`getOwnedRepos("personal")`) and the reassign endpoint (`P
     repo's per-repo toggle is on, a **Personal-owned** repo's LFB tracking state is **additionally mirrored** to
     **`<syncRepo>/repos/<repoKey>/`** — in addition to Local Storage `~/T/_large_files_bridge/repos/<repoKey>/`,
     never instead of it ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) — and carried to the
-    user's other computers over the same backbone; default is Local-Storage-only, and **ownership** decides.
+    user's other computers over the same backbone; ~~default is Local-Storage-only~~ (**superseded by AC 12b**),
+    and **ownership** decides.
+12b. **Personal's SDL is auto-adopted as its sync repo and the mirror defaults ON** (§14.2, authority
+    [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)):
+    when the Personal storage's root is a **git working tree**, it **is** the sync repo with nothing to
+    configure (an explicit `sync_repo` still wins), so a Personal-owned repo's tracking mirrors by default and
+    the per-repo toggle is an **opt-out**
+    ([repo_settings.mdx §2.9.1](./repo_settings.mdx#291-the-default-is-on--this-toggle-is-an-opt-out-locked)) —
+    the §3/§6 two-computer story works **out of the box**, not after a setting is found and flipped. The
+    residual Local-Storage-only cases are a **non-git Personal root** and a repo with **no git remote**, both
+    stated plainly in the UI and neither a warning. Ownership is resolved **remote-org first**
+    ([repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-decides-the-sync-repo-target-remote-first-locked)),
+    so a repo under `~/` whose remote names a company org mirrors to **that company's** SDL and leaves
+    Personal's Owned-repos list. **No bytes behavior changes.**
 13. Personal's [settings page](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage) lists
     the **repos owned by Personal** — including the **auto-defaulted no-org repos** — with a per-row
     **reassign dropdown** (Personal · each company · **+ New company…**) to move any to a company (§14.1). Moving
@@ -1983,4 +2039,19 @@ storage forever (invariant 2, §16.3).
   images absent on the laptop (§3); surfaces on To Do page as a slug (to_do.mdx, decision_toggles.mdx);
   transcribe discovery via transcribe_calc_engine.mdx → transcribe slug. Code: todo-batch.engine.ts
   recalcForStorage, todo-batches.store.ts batchFileName, transcribe-scan.engine.ts.
+  §14.2 (NEW, LOCKED) Personal's counterpart of storage_company §8.4.2 (the authority), superseding §14's
+  "Default: Local Storage only" and AC 12's "default is Local-Storage-only": when the Personal storage's ROOT is
+  a git working tree it IS the sync repo, AUTO-ADOPTED with nothing to configure (an explicit sync_repo still
+  WINS — adoption is the fallback). This is barely new — §14 already said the §5 backbone IS Personal's sync
+  repo, and the device registry has travelled over exactly that repo since the first pass; §14.2 just stops the
+  sync repo and the backbone disagreeing about which repo Personal's is (one SDL, one git root, one answer).
+  Consequence: a Personal-owned repo's Category-B tracking mirrors BY DEFAULT and repo_settings §2.9.1's toggle
+  is an OPT-OUT, so the §3/§6 two-computer story works OUT OF THE BOX rather than after a setting is found and
+  flipped. Residual Local-Storage-only cases stated honestly (non-git Personal root; repo with no git remote →
+  no shared identity per §8.4.1) — neither is a warning. Ownership is still what decides, but resolved
+  REMOTE-ORG FIRST (repo_company_mapping §7.3), so a repo merely living under ~/ whose remote names a company
+  org mirrors to THAT company's SDL and leaves Personal's §14.1 Owned-repos list. NO bytes behavior changes —
+  media still moves over IPFS for decided files only. New AC 12b. Code: getStateSyncRepo +
+  getGitBackboneRemote (storage-settings.service), resolveOwnerDedicatedRepo (artifact-placement.service),
+  mirrorToSyncRepo (tracking-sync.service).
 -->

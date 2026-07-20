@@ -24,8 +24,9 @@ import {
   shareStatus,
 } from "../storage/decisions.service.js";
 import { effectiveFlags } from "../store-model/config.service.js";
-import { setSyncRepoMarker } from "../storage/tracking-sync.service.js";
+import { ensureSyncRepoMarker } from "../storage/tracking-sync.service.js";
 import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
+import { repoUidFor } from "../storage/repo-identity.js";
 import { getStorageRow } from "../storage/storage.service.js";
 import { assertCompanyOwnership, withdrawCompanyOwnership } from "../storage/owner-propagation.service.js";
 import { track } from "../progress/progress.registry.js";
@@ -76,6 +77,38 @@ async function repoDetailWithPins(folder: string): Promise<RepoDetail> {
     log.debug("repos", `pinset fetch skipped for ${folder} (node unreachable?): ${(e as Error).message}`);
   }
   return computeRepoDetail(folder, health, pinset);
+}
+
+/**
+ * The per-repo sync-repo mirror as the settings page should show it (repo_settings.mdx §2.9.1,
+ * storage_company.mdx §8.4.2). The mirror is ON by default, so this reports the EFFECTIVE state — an absent
+ * `enabled` means ON, and only an explicit `false` is an opt-out.
+ *
+ * It also reports whether the repo CAN mirror at all, because a toggle that silently does nothing is worse
+ * than a disabled one that explains itself. Two honest "no" cases: a repo with no git remote has no identity
+ * the user's other computers could agree on (§8.4.1), and a repo whose owning storage has no git-backed SDL
+ * has nowhere to mirror to.
+ */
+function syncRepoSetting(c: ReturnType<typeof getRepoConfig>): RepoSettings["syncRepo"] {
+  const optedOut = c.sync_repo?.enabled === false;
+  const remote = c.repo.remote ?? null;
+  if (!repoUidFor(remote)) {
+    return { enabled: false, available: false, reason: "No git remote — this repo's tracking stays on this computer." };
+  }
+  let target: string | null = null;
+  try {
+    target = c.repo.path ? resolveOwnerDedicatedRepo(c.repo.path, remote) : null;
+  } catch {
+    target = null; // owner resolution failed → treat as "nowhere to mirror to" rather than claiming success
+  }
+  if (!target) {
+    return {
+      enabled: false,
+      available: false,
+      reason: "No company or personal storage owns this repo yet, so there is nowhere for its tracking state to travel.",
+    };
+  }
+  return { enabled: !optedOut, available: true, target };
 }
 
 /** Repo-relative paths that carry the sticky Never-IPFS flag (decisions.mdx §17) — the IPFS axis is rejected
@@ -437,9 +470,13 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
     // read: ON → point it at the owning storage's dedicated sync repo (null if none configured, which leaves
     // it Local-Storage-only); OFF → remove the marker (artifact_placement_policy.mdx §4).
     if (p.syncRepo?.enabled !== undefined) {
-      const repoPath = getRepoConfig(folder).repo.path;
+      const cfg = getRepoConfig(folder);
+      const repoPath = cfg.repo.path;
       if (repoPath) {
-        setSyncRepoMarker(repoPath, p.syncRepo.enabled ? resolveOwnerDedicatedRepo(repoPath) : null);
+        // The toggle is now an OPT-OUT (storage_company.mdx §8.4.2): ON re-resolves the owning storage's
+        // sync repo (remote-org first) and re-stamps the marker with this repo's shared `repoUid`; OFF
+        // removes the marker and the repo keeps its tracking in Local Storage only.
+        ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, p.syncRepo.enabled);
       }
     }
     res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
@@ -557,7 +594,8 @@ function toRepoSettings(repoId: string, folder: string): RepoSettings {
     // Transcription / AI-description placement (repo_settings.mdx §4-5, placement_radios.mdx).
     transcription: { placement: c.artifacts.transcription_placement },
     aiDescription: { placement: c.artifacts.ai_description_placement },
-    // Whether this repo mirrors its tracking state to the owner's sync repo (repo_settings.mdx §2.9).
-    syncRepo: { enabled: c.sync_repo.enabled },
+    // Whether this repo mirrors its tracking state to the owner's sync repo (repo_settings.mdx §2.9.1).
+    // Reported as the EFFECTIVE state, with an honest reason when the repo cannot mirror at all.
+    syncRepo: syncRepoSetting(c),
   };
 }

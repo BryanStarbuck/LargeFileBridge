@@ -15,6 +15,11 @@ import fs from "node:fs";
 import crypto from "node:crypto";
 import { resolveRepoStateDir } from "../../config/state-dir.js";
 
+// A repo's MACHINE-INDEPENDENT identity (storage_company.mdx §8.4.1) — re-exported here because this module
+// is the one place callers look for "how a repo is keyed". `repoKeyFor` (below) keys Local Storage by path;
+// `repoUidFor` keys the SHARED sync-repo mirror by the normalized git remote. Two keys, two jobs.
+export { repoUidFor, normalizeRemoteKey } from "./repo-identity.js";
+
 /** Stable 12-hex key for a repo/root — sha1 of its resolved absolute path (the same scheme storage.service's
  *  `shortHash`/`storageSid` uses). Keys the Local-Storage per-repo state directory and the sync-repo subtree. */
 export function repoKeyFor(root: string): string {
@@ -71,25 +76,40 @@ export function resolveTrackingRoot(
   return repoStateDir(root);
 }
 
-/** The marker file (in the Local-Storage per-repo state dir) whose one line is the absolute path of the
- *  owning company/Personal storage's SYNC REPO, written when the per-repo "sync tracking state to the
- *  company repo" toggle is turned on (repo_settings.mdx). Absent → no sync repo → Local-Storage-only. */
+/** The marker file (in the Local-Storage per-repo state dir) recording where this repo's tracking state
+ *  mirrors to. TWO lines (storage_company.mdx §8.4.1):
+ *    line 1 — the absolute path of the owning company/Personal storage's SYNC REPO
+ *    line 2 — this repo's `repoUid`, its MACHINE-INDEPENDENT identity (hash of the normalized git remote)
+ *  Absent → no sync repo → Local-Storage-only. A legacy one-line marker is still honored (it just cannot
+ *  name a shared subtree, so it resolves to null and the next `ensureSyncRepoMarker()` pass rewrites it). */
 const SYNC_REPO_MARKER = ".sync-repo";
 
-/** The per-repo subtree inside the owning storage's SYNC REPO — `<syncRepo>/repos/<repoKey>/` — or null when
- *  no sync repo is configured for this repo (the default). Leaf-safe (fs only): the marker is written by
- *  tracking-sync.service.ts `setSyncRepoMarker()` when the per-repo toggle is enabled. Used both by the
- *  Category-B additive mirror (tracking-sync.service.ts) and by the Category-A artifact `sync_repo` placement
- *  option (artifact-placement.service.ts). */
-export function resolveStateSyncRepo(root: string): string | null {
+/** Read the two-line sync-repo marker → `{ syncRepo, repoUid }`, or null when absent/blank. */
+export function readSyncRepoMarker(root: string): { syncRepo: string; repoUid: string | null } | null {
   try {
-    const marker = path.join(repoStateDir(root), SYNC_REPO_MARKER);
-    const syncRepo = fs.readFileSync(marker, "utf8").trim();
+    const raw = fs.readFileSync(path.join(repoStateDir(root), SYNC_REPO_MARKER), "utf8");
+    const [syncRepo, repoUid] = raw.split("\n").map((l) => l.trim());
     if (!syncRepo) return null;
-    return path.join(syncRepo, "repos", repoKeyFor(root));
+    return { syncRepo, repoUid: repoUid || null };
   } catch {
     return null; // no marker → default: Local-Storage-only
   }
+}
+
+/** The per-repo subtree inside the owning storage's SYNC REPO — **`<syncRepo>/repos/<repoUid>/`** — or null
+ *  when no sync repo is configured for this repo, or when the repo has no remote to derive a shared identity
+ *  from (storage_company.mdx §8.4.1). Leaf-safe (fs only): the marker is written by tracking-sync.service.ts
+ *  `setSyncRepoMarker()` / `ensureSyncRepoMarker()`. Used both by the Category-B additive mirror
+ *  (tracking-sync.service.ts) and by the Category-A artifact `sync_repo` placement option
+ *  (artifact-placement.service.ts).
+ *
+ *  Keyed by `repoUid`, NEVER by `repoKey`: repoKey is sha1(absolute path), so the user's two computers would
+ *  write to different directories inside the same sync repo and never see each other's state — the defect
+ *  §8.4.1 closes. */
+export function resolveStateSyncRepo(root: string): string | null {
+  const marker = readSyncRepoMarker(root);
+  if (!marker || !marker.repoUid) return null;
+  return path.join(marker.syncRepo, "repos", marker.repoUid);
 }
 
 /** The path of the sync-repo marker in this repo's Local-Storage state dir (written/removed by

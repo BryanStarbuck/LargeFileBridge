@@ -181,6 +181,85 @@ export function readDevices(storageRoot: string): DeviceRecord[] {
   return out;
 }
 
+// ── Peer device LABELS: the word the rest of the product uses for "which computer has it" (§6.9) ──────
+// A device's nice name is not only a row on the Devices page — it is the ENTIRE actionable content of a
+// remote-only row's sentence ("On bryan-mac-pro — not on this computer yet", storage_company.mdx §8.5).
+// "Somewhere else has this" is not a fix; "your Mac Tower has this" is. So a raw id must NEVER reach that
+// sentence: an id is for JOINING, a name is for READING (§6.9, same posture as the truncated PeerID in §6.4).
+
+/** How long a built label index stays warm. The registry is a handful of small YAML files, but a file table
+ *  composes rows per repo and the repos list does it for every repo — re-reading every storage's `devices/`
+ *  each time would turn a label lookup into a per-page fs storm. 30 s is far shorter than a rename's
+ *  propagation (a backbone pass, §10), so a renamed computer still shows up promptly. */
+const LABEL_INDEX_TTL_MS = 30_000;
+let labelIndexCache: { at: number; key: string; map: Map<string, string> } | null = null;
+
+/**
+ * The `device id | device name` → NICE NAME index for peer-attributed UI (§6.9), built from the travelling
+ * registry of the given storage roots plus the machine-local `peers.yaml`. Keys are lower-cased and BOTH the
+ * id and the name are keys, because the join token a caller holds may be either: a manifest's `pinned_by`
+ * carries this product's device NAMES, while a sidecar/peer record may carry the minted ID.
+ * Memoized for {@link LABEL_INDEX_TTL_MS} so callers may treat it as cheap.
+ */
+export function deviceLabelIndex(storageRoots: string[]): Map<string, string> {
+  const key = [...storageRoots].sort().join(" ");
+  const now = Date.now();
+  if (labelIndexCache && labelIndexCache.key === key && now - labelIndexCache.at < LABEL_INDEX_TTL_MS) {
+    return labelIndexCache.map;
+  }
+  const map = new Map<string, string>();
+  const add = (token: string | null | undefined, label: string | null | undefined) => {
+    if (!token || !label) return;
+    const t = token.trim().toLowerCase();
+    if (t) map.set(t, label);
+  };
+  for (const root of storageRoots) {
+    // A malformed/absent registry is a claim we simply don't have — never fatal (§2.1).
+    for (const rec of readDevices(root)) {
+      add(rec.device.id, rec.device.name);
+      add(rec.device.name, rec.device.name);
+    }
+  }
+  try {
+    for (const p of peerRows()) {
+      add(p.id, p.label);
+      add(p.ipfsPeerId, p.label);
+      add(p.label, p.label);
+    }
+  } catch (e) {
+    log.warn("storage", `deviceLabelIndex: peers.yaml read failed: ${(e as Error).message}`);
+  }
+  labelIndexCache = { at: now, key, map };
+  return map;
+}
+
+/** Tokens that are IDs, not names: a minted UUID, a long hex string, or a libp2p PeerID. A token like this
+ *  must never be shown to the user (§6.9) — if the registry can't name it, the caller says "another of your
+ *  computers" instead. */
+function looksLikeDeviceId(token: string): boolean {
+  return (
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(token) ||
+    /^[0-9a-f]{16,}$/i.test(token) ||
+    /^(12D3Koo|Qm)[1-9A-HJ-NP-Za-km-z]{20,}$/.test(token)
+  );
+}
+
+/**
+ * Resolve one `pinned_by` / `addedByDevice` token to the label a user should read (§6.9). Returns the
+ * registry's nice name when it knows the token; otherwise keeps a token that already IS a plausible nice
+ * name (this product writes names into `pinned_by`, and a peer whose device file hasn't arrived yet still
+ * deserves to be named); and returns NULL for an id-shaped token, which is the caller's cue to say
+ * "another of your computers" rather than put a hex string in the user's face.
+ */
+export function resolveDeviceLabel(
+  token: string | null | undefined,
+  index: Map<string, string>,
+): string | null {
+  const t = (token ?? "").trim();
+  if (!t) return null;
+  return index.get(t.toLowerCase()) ?? (looksLikeDeviceId(t) ? null : t);
+}
+
 /**
  * Read THIS computer's graft for a storage (mappedKey → { localPath, wanted }). Empty when this device has
  * no device file yet. Used by the storage settings page (§4a) to show each mapped row's local path here.

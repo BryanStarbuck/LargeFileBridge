@@ -2363,13 +2363,83 @@ The registry `scope` for these is `device` (or `computer` for the roster rollup,
 
 *Where shown:* the [One repo](./one_repo.mdx) page (top `StatusBanner`) and the [IPFS Shared-files](./ipfs.mdx) page, whenever a repo you just enlisted (or re-opened) on **this** computer has manifest entries that another of your computers already pinned but **this** computer lacks. This is the **February** step of the two-computer tour ([use_case_two_computers.mdx §3](./use_case_two_computers.mdx)). **NEW — closes the gap that the "pull them down" flow previously existed only as a silent background reconcile ([pin_process.mdx §5](./pin_process.mdx), [scan.mdx §2.1](./scan.mdx)) with no user-facing prompt.**
 
-**(A) Detect it & all conditions.** For each repo, LFB compares the **committed manifest** (which arrived via the git backbone and lists each large file → CID) against the **local working tree** and the **running IPFS node's pinset**. A file qualifies when it is **`exists_status: missing`** locally **AND** its manifest CID is **not pinned** on this node — i.e. a peer pinned it, its identity travelled in the manifest, but its bytes are not here yet. The concrete reconcile report is a per-file `exists_status,ipfs_pinned` table (e.g. five `charlie-kirk` clips all `missing,false`); a manifest entry with no CID, or a stray media file not in the manifest, is **not** a pull candidate. Fires only when ≥1 file qualifies and this repo is enlisted here. *Computed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers(repoRoot)` (joins the manifest against `fs.exists` + `ipfs pin ls`), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` in the repo verdict payload.
+**(A) Detect it & all conditions.** For each repo, LFB compares the **committed manifest** (which arrived via the git backbone and lists each large file → CID) against the **local working tree** and the **running IPFS node's pinset**. A file qualifies when it is **`exists_status: missing`** locally **AND** its manifest CID is **not pinned** on this node — i.e. a peer pinned it, its identity travelled in the manifest, but its bytes are not here yet. The concrete reconcile report is a per-file `exists_status,ipfs_pinned` table (e.g. five `charlie-kirk` clips all `missing,false`); a manifest entry with no CID, or a stray media file not in the manifest, is **not** a pull candidate. Fires only when ≥1 file qualifies and this repo is enlisted here. *Computed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers(repoRoot)` (joins the manifest against `fs.exists` + `ipfs pin ls`), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` in the repo verdict payload. **"Committed manifest" here is superseded by §10.8.12a** — the entries arrive over the git backbone, but they are read from the **Local-Storage tracking manifest** ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)).
 
 **(B) The popup.** Two-pane (§4.0), because it targets specific files. *What this is:* "Another of your computers (**{addedByDevice}**) pinned **{n}** files that aren't on this computer yet. LargeFileBridge can pull them down over IPFS." *Why it matters:* until you pull them, this computer is not a real second copy of those files — losing the other machine would lose them. *The subjects list (right pane, §4.5):* one **checked** row per qualifying file, and — because the bytes are **not here** — each row is described **from the committed manifest + the peer's per-file sidecar identity** ([repo_tracking_scheme.mdx §3.1](./repo_tracking_scheme.mdx)): **file name · target directory it will land in · file size · "added by {device}."** The user unchecks any they don't want (e.g. turns 1 of 5 off → pulls 4). *Options (left pane, §4.3):* two independent checkboxes, both default-checked — **Add to IPFS (pin)** and **Compress** — so the composed action-button label (§4.4.1) reads **"Compress and Continue: IPFS Add ›"** and collapses to **"Continue: IPFS Add ›"** when Compress is unchecked, always carrying the live checked-file count.
 
-**(C) The fix.** For each checked file, pin its manifest CID on this node — which **fetches the bytes down over IPFS** (the manifest/sidecar carry the CID / SID) — and, if the Compress axis is checked, queue a compress pass after the bytes arrive. Each pulled file gets a `pull` + `ipfs_pin` event `on_device:<this computer>` in its sidecar and a `PULL` line in this computer's `history/<device>.txt` ([repo_tracking_scheme.mdx §3.2/§4](./repo_tracking_scheme.mdx)); the warning then **leaves the page** (§5.3.1). *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pullMissing(repoRoot, checkedPaths, { compress })` (pins each CID, no re-add of bytes that fetch on pin), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` `POST /:repoId/pull`. **Not destructive** (it only *adds* local copies) — no red confirm.
+**(C) The fix.** For each checked file, pin its manifest CID on this node — which **fetches the bytes down over IPFS** (the manifest/sidecar carry the CID / SID) — and, if the Compress axis is checked, queue a compress pass after the bytes arrive. Each pulled file gets a `pull` + `ipfs_pin` event `on_device:<this computer>` in its sidecar and a `PULL` line in this computer's `history/<device>.txt` ([repo_tracking_scheme.mdx §3.2/§4](./repo_tracking_scheme.mdx)); the warning then **leaves the page** (§5.3.1). *Fix in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pullMissing(repoRoot, checkedPaths, { compress })` (pins each CID, no re-add of bytes that fetch on pin), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` `POST /:repoId/pull`. **Not destructive** (it only *adds* local copies) — no red confirm. **Which manifest `pullMissing` reads is superseded by §10.8.12a** — it must be the *same* one the list came from.
 
 **Notes / gaps.** Distinct from §10.8.7 (only-this-computer / zero peers) and §10.1.14 (untracked-pinned import backlog): here the files **are** tracked and pinned *elsewhere* — the action is to **replicate them here**, not to adopt or back up. This is the direct user-facing surface for the background reconcile in [pin_process.mdx §5](./pin_process.mdx); the two share `missingPinnedFromPeers`.
+
+#### 10.8.12a Where this warning's list actually comes from — one manifest, and the remote-only row (LOCKED)
+
+This warning was never broken; it was **never fed**. The per-repo manifest that names a peer's pinned files
+did not travel between the two computers at all, so `missingPinnedFromPeers()` read a manifest with
+`files: []` and the warning correctly never fired. The travel is fixed — and **owned** — by
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked)
+(the load-bearing "one file, two computers" use case): remote-keyed mirror subtrees (§8.4.1), the company
+SDL auto-adopted as the sync repo with the mirror ON by default (§8.4.2), and a per-entry **merge** on every
+backbone pull (§8.4.3). **Read §8 for the mechanism; this subsection only states what changes for the
+warning.** Nothing about the popup's design (§4.0–§4.6) changes — it was always right, and now it has rows.
+
+**The one manifest (LOCKED).** The pull-down **list** and the pull **action** must read the **same**
+manifest — the **Local-Storage tracking manifest** at `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`,
+which is where the reconciled peer entries land
+([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)).
+
+* **The defect this closes.** `missingPinnedFromPeers()` reads the tracking manifest (correct);
+  `pullMissing()` reads the **SDL-only committed manifest** (`readCommittedManifest`) — which, for a
+  **working repo**, finds nothing, so **every checked file in the batch fails**. The user would see a
+  correct list, click Apply, and get a whole-batch failure. **Both must read `readRepoTrackingManifest`.**
+* This **supersedes** the wording in **(A)** and **(C)** above that calls the source "the committed
+  manifest" — the entries arrive over the git backbone as §10.8.12 (A) says, but the file they are read
+  from is the tracking manifest, not `<root>/.lfbridge/manifest.yaml`.
+* **A peer's absence is never a delete.** A file that disappears from an incoming manifest stops being
+  offered here and deletes nothing locally
+  ([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)); a
+  peer's pin claim is likewise **unioned**, never overwritten, so the very signal this warning is built on
+  cannot be erased by a sync.
+
+Reading the one manifest both the pull-down list and the pull action agree on is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()` (both `readRepoTrackingManifest`).
+
+**The subjects are remote-only rows.** Every file this warning lists is, by definition, a
+**`presence: "remote-only"`** row ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)) —
+built from the reconciled manifest entry, with **no local bytes** behind it. That governs how the popup's
+right pane renders it:
+
+* **Red, with the row tooltip *"On {device} — not on this computer yet."*** This is a **healthy** state, not
+  a missing-file alarm: red means *"available, not here yet"*, never *"lost"*. The educate copy in the left
+  pane must not read like data loss.
+* **The Compress axis is the only optional axis, and it is a queued follow-on** — it runs *after* the bytes
+  land, never on absent bytes. The **Transcribe / AI Description / OCR** axes are **`na`** on a remote-only
+  row and are **not offered**: analysis on a file that is not on this disk would queue work that cannot run.
+* **The media preview pane (§4.5.2) has nothing local to show.** A remote-only row previews as its
+  **identity** — name, size, target directory, *"added by {device}"* — not as a playable video, and
+  **Space** (§4.5.3) does nothing for it. Previewing must never trigger a fetch: pulling bytes is the
+  **Apply**, never a hover.
+* **The kind-filter row (§4.5.4) still applies** — kind comes from the filename in the manifest entry, which
+  is present without the bytes.
+
+**Where the number comes from.** The count this warning headlines is the same `Pull down` metric the One-Repo
+tile shows, and a remote-only row counts toward **`Pull down` always** and **`Add to IPFS` while undecided
+here** — and toward **no** space, compression, git-ignore, or analysis metric (§8.5). The builder is
+unchanged; only its input is non-empty now.
+
+The warning's headline, educate copy, options and targets are built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildPullDownWarning()` (reads `RepoDetail.missingPinned`), ranked into the header primary by `topRecommendation()`.
+
+**Acceptance (this warning).**
+
+* With the Tower having pinned a git-ignored big file in a company-owned working repo, the laptop's One-Repo
+  page **fires this warning** with that file in the list, described from the manifest (name · target
+  directory · size · *"added by {device}"*) — **no local file required**.
+* **Apply pulls it down and succeeds** — the list and the action read the same manifest, so a checked file
+  never fails with "not in the manifest"; the row then becomes an ordinary local row and the warning
+  **leaves the page** (§5.3.1).
+* The popup offers **pin** (and optionally **compress after arrival**) and **never** offers transcribe /
+  describe / OCR on a remote-only row.
+* A file dropping out of a peer's manifest **removes it from this list and deletes nothing**.
 
 ## 10.9 Background workers, schedule, Git backbone & pin resilience
 
@@ -2937,4 +3007,19 @@ enqueue). **Note:** the per-file *pre-compress safety* warnings (may-grow, cwebp
 disabled) remain §10.5.11–§10.5.16 — this entry is only the tile/header **offer** that opens the batch.
 
 <!-- CATALOG-END -->
+<!-- §10.8.12a (NEW, LOCKED) the "pull them down" warning was never BROKEN, it was never FED: the per-repo
+     manifest naming a peer's pinned files never travelled, so missingPinnedFromPeers() read files: [] and the
+     warning correctly never fired. The travel is OWNED by storage_company.mdx §8 (link, don't restate).
+     What changes HERE: (1) ONE manifest — the pull-down LIST and the pull ACTION must both read the
+     Local-Storage tracking manifest (readRepoTrackingManifest); the shipped defect is pullMissing() reading
+     the SDL-only readCommittedManifest, which for a WORKING repo finds nothing and fails EVERY checked file
+     (a correct list + a whole-batch failure). This SUPERSEDES the "committed manifest" wording in §10.8.12
+     (A) and (C). (2) every subject is a presence:"remote-only" FileRow (§8.5) — red, tooltip "On {device} —
+     not on this computer yet", a HEALTHY state ("available, not here yet" ≠ "lost"), Compress is a queued
+     follow-on AFTER the bytes land, transcribe/describe/OCR are `na` and NOT offered (can't analyze absent
+     bytes), the left-pane preview shows IDENTITY not playable media and hovering must NEVER fetch (pulling
+     is the Apply), kind-filter still works (kind comes from the manifest filename). (3) counts toward Pull
+     down always + Add to IPFS while undecided, and no space/compression/git-ignore/analysis metric. A peer's
+     absence is never a delete (§8.4.3 union merge). buildPullDownWarning() is unchanged — only its input is
+     non-empty now. -->
 <!-- Batch relationship (§1a): most file-scoped catalog warnings above are projections of a per-storage TO DO Batch (to_do_batches.mdx); the blue-arrow popup IS the batch popup, the same batch renders as a slug on the To Do page (to_do.mdx), and applying from either surface writes the same decisions to the Local-Storage decisions.yaml (~/T/_large_files_bridge/repos/<repoKey>/, mirrored to the company sync repo when enabled — never the working repo) and clears both. Engine/config warnings (§10.1) are NOT batches and never appear on the To Do page. -->

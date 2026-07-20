@@ -105,6 +105,7 @@ type: company
 created: 2026-05-01T10:12:00Z
 company:
   company_name: "ACT3 AI"     # which company — the label shown in the Storages tab
+  owner_slugs: ["ACT3ai"]     # §8.4.4 the forge orgs this company claims — binds remotes to this storage
   # company-scoped child properties:
   division: "Film"            # optional
   allow_list: ["bryan@whitehatengineering.com", "…"]   # who may carry this storage
@@ -247,7 +248,285 @@ The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`PO
 
 ---
 
-## 8. Acceptance criteria
+## 8. The load-bearing use case — one file, two computers (LOCKED)
+
+This is **the** use case company storage exists to serve, written as one concrete file's journey. Everything
+above (§1 the SDL, §5 the auto-derived company, §7 the sync repo) is machinery; **this section is the
+product promise those parts must add up to.** If this walkthrough does not work end to end, the company
+storage is decorative.
+
+### 8.1 The scenario
+
+One user, two of their own computers, one company (`ACT3ai`), one working repo, one big file:
+
+| | |
+| --- | --- |
+| **Working repo** | `~/BGit/Bryan_git/charlie-kirk` — remote `https://github.com/ACT3ai/charlie-kirk.git` |
+| **The file** | `videos/2079054276320440416.mp4` — 5.3 MB, **git-ignored** (`.gitignore:27` → `videos/`) |
+| **Company storage (SDL)** | `~/BGit/Bryan_git/act3_large_files_bridge` — remote `github.com/ACT3ai/act3_large_files_bridge` |
+| **Computer A ("the Tower")** | device `bryan-mac-pro` — has the file, pinned it, CID `bafybeihf5o…k7tmi` |
+| **Computer B ("the laptop")** | device `bryanstarbuck-macbook-pro` — has the repo cloned, does **not** have the file |
+
+Both computers already appear in `<companySDL>/devices/`, so the **transport is proven** — the SDL's git
+backbone fetches, merges, commits and pushes between them today. What fails is that **nothing but device
+state rides it.**
+
+### 8.2 What the user must see (the acceptance narrative)
+
+On the **laptop**, with the file still absent from its disk, opening
+[View One Repo](./one_repo.mdx) for `charlie-kirk`:
+
+1. **The file is a row in the file list** — by name, size, and CID — even though **no local file exists**.
+   It renders in the **red / "not on this computer"** state ([one_repo.mdx §4.9](./one_repo.mdx),
+   §8.5 below), because the user chose to sync it and this machine does not have it yet.
+2. **It is counted in the `Pull down` metric tile** — the tile whose whole job is "a computer of yours has
+   bytes you don't."
+3. **It is counted in the `Add to IPFS` metric** when this computer has not decided it — the row is a
+   recommendation to bring the file here and pin it.
+4. **It appears in the [To Do](./to_do.mdx) tab** as a `pull_down` recommendation in this company's batch.
+5. **Acting on any of those pulls the bytes down over IPFS** and the row turns from red to a normal local
+   row.
+
+None of the five works today. §8.3 names why, link by link.
+
+### 8.3 The chain, and where each link was broken
+
+The journey has **six links**. Five of the six were already built; the chain still delivered nothing
+because **every link has to hold**, and three did not.
+
+| # | Link | Status found | The break |
+| --- | --- | --- | --- |
+| 1 | **Pin + record.** Tower pins the file and records `path → cid + pinned_by` in its manifest | ✅ works | — |
+| 2 | **Identity.** Both computers agree on *which repo* a mirrored manifest belongs to | ❌ **broken** | keyed by `sha1(absolute path)` — a different value on each computer (§8.4) |
+| 3 | **Ownership + adoption.** The repo resolves to *this company's* SDL as its sync repo | ❌ **broken** | ownership resolved by **path containment** (→ Personal), and the mirror is **default OFF** (§8.4) |
+| 4 | **Send.** The manifest is copied into the SDL and **committed + pushed** | ✅ works *once fed* | `mirrorToSyncRepo` copies, and `commitAndPush` stages pathspec-lessly (`git add -A`), so anything written to the SDL **does** ship — it just needs a **trigger** after a mirror write instead of waiting for the 10-minute device worker |
+| 5 | **Receive.** The laptop merges the pulled manifest into its own tracking state | ❌ **broken** (since fixed) | `reconcileFromSyncRepo()` had **zero callers**, and it *last-writer-copied* rather than merged — it is now a real per-entry union merge (`mergeManifests`) with callers on both pin passes |
+| 6 | **Surface.** The absent-but-known file becomes a row, a metric, a To-Do item | ⚠️ partial | `missingPinnedFromPeers()` + the `Pull down` tile + the To-Do batch all exist — they were simply always fed an empty manifest; the **file list itself** has no way to show a non-local file (§8.5) |
+
+**The diagnosis in one line:** the product had a working road and a working destination, and never put the
+cargo on the truck.
+
+Evidence on the Tower at the time of writing: the file's CID is recorded locally in
+`~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`, the repo's config says `sync_repo: enabled: false`,
+and `<companySDL>/manifest.yaml` reads `files: []` with a git log containing nothing but `LFB: device state`.
+
+### 8.4 The four rules this use case LOCKS
+
+#### 8.4.1 A repo's shared identity is its REMOTE, never its path (LOCKED)
+
+The subtree a repo's tracking mirrors to is **`<syncRepo>/repos/<repoUid>/`**, where **`repoUid` is derived
+from the repo's normalized git remote URL** — not from its absolute path.
+
+* **Normalization.** Lowercase; drop scheme, credentials, and any `.git` suffix or trailing slash; fold
+  `git@host:owner/name` and `https://host/owner/name` to the same **`host/owner/name`**. So
+  `https://github.com/ACT3ai/charlie-kirk.git` → `github.com/act3ai/charlie-kirk`. `repoUid` is a short hash
+  of that string.
+* **Why this is load-bearing.** The old key was `sha1(path.resolve(root))`. The same repo lives at
+  `/Users/bryan/BGit/…` on the Tower and `/Users/bryanstarbuck/BGit/…` on the laptop, so the two computers
+  wrote and looked for **different directories** in the same sync repo. The manifest could have travelled
+  perfectly and still never been found. **A machine-local value must never key machine-shared data.**
+* **No remote → no shared identity.** A repo with no git remote **cannot** mirror. That is honest, not a
+  failure: LFB says so in the repo's settings ("no remote — tracking stays on this computer") rather than
+  silently writing to a subtree no other computer will ever read.
+* **The Local-Storage path is unchanged.** `~/T/_large_files_bridge/repos/<repoKey>/` stays keyed by path —
+  it is machine-local state and *should* be. Only the **mirror** subtree changes key. The two keys coexist
+  deliberately: one names "this repo on this computer", the other names "this repo, anywhere".
+
+Deriving the shared identity and the mirror subtree is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) (the remote-derived key) and `resolveStateSyncRepo()` (which now joins `repos/<repoUid>/`).
+
+#### 8.4.2 The company SDL IS the sync repo, and the mirror is ON by default (LOCKED)
+
+This **supersedes §7's "Default: OFF"** for the case where a sync repo can be resolved at all.
+
+* **Auto-adoption.** A company storage whose root is a git working tree (the normal case — an SDL *is* a
+  git repo, §1) **is** the company's sync repo. The user does not configure a second repo to make the
+  product's core promise work. An explicitly configured `sync_repo` in the company's
+  [storage settings](./storage_settings.mdx) still **wins** when present; auto-adoption is the fallback,
+  not an override.
+* **This is the rule the Git backbone already follows.** `getGitBackboneRemote()` **already** auto-adopts an
+  SDL's own git root when no dedicated repo path is configured — which is precisely why device state has
+  been travelling between the two computers all along ([devices.mdx §11.2.1](./devices.mdx)). The sync repo
+  simply stops disagreeing with the backbone about what the company's repo *is*. **One SDL, one git root,
+  one answer.**
+* **Ownership comes from the remote, not from path containment.** `charlie-kirk` is **not** inside
+  `act3_large_files_bridge`, so a containment test resolves it to **Personal** — the wrong storage. The
+  owning storage is the one the repo's **remote org** maps to (§5,
+  [repo_company_mapping.mdx](./repo_company_mapping.mdx)): remote org `ACT3ai` → the `ACT3ai` company
+  storage. Path containment remains the fallback for repos with no remote org.
+* **Default ON.** When an owning storage with a git-backed SDL resolves, the per-repo mirror is **on**. The
+  per-repo toggle ([repo_settings.mdx §2.9](./repo_settings.mdx)) still exists and still wins — it is now an
+  **opt-out**, not an opt-in.
+* **Why the default flipped.** Default-OFF meant the shipped configuration of the product did not do the
+  thing the product is for. The mirrored payload is **small text** (a manifest, a decisions ledger,
+  sidecars) whose entire purpose is to travel; there is no bandwidth, privacy, or safety argument for
+  withholding it from the user's *own* SDL — the same SDL that is already committing and pushing this
+  computer's device fingerprint. A default that has to be found and switched on before anything works is a
+  bug wearing a setting's clothes.
+* **Nothing about bytes changes.** This decides where *tracking text* travels. Media bytes still move only
+  over IPFS, only for files the user decided to sync ([decisions.mdx](./decisions.mdx)).
+
+Resolving the owning storage from the repo's remote and auto-adopting its SDL as the sync repo is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()` (now remote-owner first, containment second), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
+
+#### 8.4.3 Receiving is a MERGE, never a copy (LOCKED)
+
+An incoming mirrored manifest is a set of **claims from another computer**
+([sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule)). Reconciling it into
+Local Storage therefore **merges per file entry** and never overwrites the local manifest wholesale:
+
+* **Union by `path`.** An entry present on either side survives. An entry **absent** from the incoming copy
+  is **never** treated as a delete — absence is untrusted.
+* **Union `pinned_by`.** The two computers' pin claims are **added together**, never replaced. A
+  last-writer copy would erase the Tower's claim on the laptop and with it the entire "a peer has this"
+  signal — the exact signal this use case is built on.
+* **Conflicting CID for the same path** resolves by the newer `modified_at`; ties keep the local value.
+* **This computer's own claim is re-derived from its real pinset**, never from what arrived
+  ([ipfs.mdx](./ipfs.mdx)): a peer's manifest cannot make this machine believe it holds bytes it does not.
+* **Reconcile runs on every backbone pull** for the SDL, not on demand. A merge that only happens when
+  someone clicks something is a merge that does not happen.
+
+Merging a pulled sync-repo subtree into Local Storage is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
+
+#### 8.4.4 Binding a forge org to a company storage — `owner_slugs` (LOCKED)
+
+§8.4.2 needs to turn the remote's org slug (`ACT3ai`) into **a specific company storage row**. Today nothing
+does: `deriveOwnerForRemote()` returns `companyId: null`, and the only join is a best-effort normalized
+name comparison that fails the moment the directory is named `act3_large_files_bridge` while the org is
+`ACT3ai` — an off-by-two-letters mismatch silently costing the user the entire feature.
+
+* **The binding is explicit and it travels.** The company descriptor (§2) carries
+  **`company.owner_slugs: ["ACT3ai", …]`** — the forge orgs this company storage claims. It lives in the
+  committed `storage.yaml`, so once one member binds an org, **every** member's computer resolves it the
+  same way. A company may claim several orgs; an org belongs to at most one company.
+* **How a slug resolves, in order.** (1) An **explicit `owner_slugs` entry** (case-insensitive) — always
+  wins. (2) A **normalized name match** against the company's `company_name`, row name, or root slug (the
+  existing best-effort rule). (3) **A single company storage** on this computer takes an unclaimed org — the
+  overwhelmingly common case is one company, and refusing to guess there means the product does nothing for
+  the user who has exactly one. More than one company and no match ⇒ **unresolved**, and LFB says which orgs
+  are unclaimed rather than guessing.
+* **A resolution by rule 2 or 3 is written back as an `owner_slugs` entry.** The heuristic runs **once**;
+  from then on the binding is a recorded fact the user can see, edit, and share — not a guess re-made on
+  every pass. This is how a fuzzy match becomes an auditable one.
+* **The user can always correct it** from the company's [storage settings](./storage_settings.mdx), and a
+  **manual owner override** on a repo ([repo_company_mapping.mdx §5](./repo_company_mapping.mdx)) still
+  beats every rule above — the user always wins.
+
+Resolving a forge-org slug to a company storage row (and recording the binding) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (the function §5 cites; it exists and implements all three rules above, with heuristic write-back in `recordOwnerSlug()`), backed by the descriptor's `company.owner_slugs`.
+
+### 8.5 Remote-only rows — a file in the list that is not on this disk (LOCKED)
+
+Today **every** row in the One-Repo file list comes from the scanner's local disk walk, so a file this
+computer does not have **cannot be shown**. That makes the most important row in this use case invisible.
+
+* **A `FileRow` may be `remote-only`.** The row carries **`presence: "local" | "remote-only"`** (absent ⇒
+  `"local"`, so every existing row and reader is unchanged). A `remote-only` row is composed from the
+  reconciled **manifest** entry, not from a `statSync`: name, `path`, `sizeBytes`, `cid`, and `peers` all
+  come from the manifest, and `addedByDevice` names the peer that has it.
+* **Four conditions, all required** — a manifest entry becomes a remote-only row only when it has a **CID**,
+  is claimed by **at least one device that is not this one**, has **no scanned candidate**, and has **no
+  file on this disk**. The peer-claim condition is what keeps a stale self-only entry — a file *this*
+  computer deleted on purpose — from resurrecting as a row that offers to pull bytes nobody has. Absence
+  still deletes nothing (§8.4.3); it simply stops being offered.
+* **It renders red**, consistent with the existing pin-icon rule ([one_repo.mdx §4.9](./one_repo.mdx)):
+  decided-to-sync but not pinned here **is** the red state; a remote-only row is the purest case of it.
+  Its row tooltip reads *"On {device} — not on this computer yet."*
+* **What it counts toward.** `Pull down` **always**. `Add to IPFS` when this computer has not decided it.
+  It counts toward **no space, compression, or git-ignore metric** — there are no local bytes to reclaim,
+  compress, or ignore — and toward **no analysis metric** (`transcribe` / `describe` / `ocr` are `na`):
+  offering to transcribe a file whose bytes are absent would queue work that cannot run.
+  This mirrors how `analysisOnly` rows are excluded from the large-file metrics
+  ([one_repo.mdx §4.1](./one_repo.mdx)).
+* **Its actions are exactly one:** *pull it down*. Compress / transcribe / describe / OCR / git-ignore are
+  **disabled** on the row and say why. Once pulled, the next scan makes it an ordinary local row.
+* **It is never a "missing file" alarm.** A remote-only row is a **normal, healthy** state — it is how a
+  second computer learns what exists. The red says *"available, not here yet"*, not *"lost"*.
+* **Deletion is still not inferred.** A file that vanishes from a peer's manifest does not delete anything
+  here (§8.4.3); it simply stops being offered.
+
+Composing remote-only rows by joining the reconciled manifest against the scanned candidates is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends manifest entries with no local candidate and no local file), with the type in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`.
+
+### 8.6 Two manifests must not disagree
+
+A repo's CID/pin facts are written to **two** files today — the unit manifest at
+`~/T/_large_files_bridge/pin/r/<folder>/manifest.yaml` (which the file rows read) and the Local-Storage
+tracking manifest at `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml` (which the pull-down reader
+and the mirror read). **Reconcile must land in both**, or the laptop counts a `Pull down` it cannot show a
+row for — or shows a row it cannot pull.
+
+Likewise the pull action must read the **same** manifest the pull-down list was built from. Reading the
+SDL-only committed manifest for a *working repo* finds nothing and fails every file in the batch — a
+defect this section closes by naming the single reader.
+
+Reading the one manifest both the pull-down list and the pull action agree on is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()` (both `readRepoTrackingManifest`).
+
+### 8.7 Four smaller defects this use case also closes
+
+Found while tracing the chain; each one alone was enough to keep the file invisible on the laptop. The
+first three are **fixed** — the rule each one now states is the standing rule; only the last bullet's
+`companyId` join remains open.
+
+* **The SDL's own manifest goes through the storage-kind base directory.** `committedManifestPath()` is
+  `path.join(trackingBaseDir(repoPath), "manifest.yaml")` — so a company SDL's manifest lands at
+  `<root>/manifest.yaml` and a working repo's at `<repo>/.lfbridge/manifest.yaml`, with **exactly one**
+  manifest per storage. It formerly hardcoded `<root>/.lfbridge/manifest.yaml`, which **violated §1's
+  locked rule** (an SDL has no `.lfbridge/` at all,
+  [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)) and left **two** divergent
+  `files: []` manifests in the same storage. Never join `.lfbridge/` by hand — go through
+  `trackingBaseDir()`.
+
+  Placing an SDL's committed manifest by storage kind is handled in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `committedManifestPath()`, over `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()`.
+* **A mirror write triggers a backbone sync.** Committing otherwise waits for the 10-minute device
+  worker's pass. The mirror announces the **destination it wrote into** — `dst`, the path **inside the
+  SDL** — not the working-repo root, so the owning SDL resolves and commits + pushes within seconds.
+  The trap that was avoided: `noteArtifactWritten()` resolves the owning storage **by root prefix**, so
+  announcing a path inside a **working repo** returns no storage id and no-ops. That prefix resolution is
+  fragile precisely because its failure mode is silent — always hand it a path under the SDL root.
+
+  Announcing the mirrored tracking state to its SDL is handled in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (calls `noteArtifactWritten(dst, "tracking-state")`).
+* **The company is bound to the org.** §5 above names `ensureCompanyForOwner(slug)`, and the function
+  **exists**: it resolves a forge-org slug to a company storage by (1) an explicit `company.owner_slugs`
+  claim, (2) a normalized name match, (3) a lone company storage adopting an unclaimed org — writing rule
+  2/3 wins back as an explicit `owner_slugs` entry so the heuristic runs once and becomes visible, editable,
+  shareable. Binding the remote-org slug to the company storage is what makes "`ACT3ai` → this SDL" a fact
+  the code can act on rather than a string in a label.
+
+  Resolving a forge-org slug to its company storage is handled in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner()` (heuristic write-back via `recordOwnerSlug()`).
+
+  **Still open:** `deriveOwnerForRemote()` returns `companyId: null`, so the owner block the rest of the
+  product reads is **not yet joined** to a company storage row — §8.4.2's ownership lookup has to call
+  `ensureCompanyForOwner()` itself. The remaining work is to fill that `companyId` at derivation time.
+
+  The unjoined owner derivation is in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote()`.
+* **The same repo cloned twice must not confuse the two.** This machine has `charlie-kirk` at **two**
+  paths, and the path-hash key gives them separate, non-communicating state directories. Under §8.4.1 they
+  share one `repoUid` — which is correct: they *are* the same repo. Local Storage stays split per path
+  (right: they are different working trees); the **mirror** converges (right: one repo, one shared
+  tracking identity). Where the two clones disagree, the merge rules of §8.4.3 apply — union, never clobber.
+
+### 8.8 Out of scope here (named so it is not mistaken for done)
+
+* **Rolling a company's many repos up into the SDL's own root `manifest.yaml`/`files.yaml`** is a separate
+  feature. This use case only requires the **per-repo** subtrees under `<SDL>/repos/<repoUid>/` to travel.
+* **A repo the other computer does not have cloned at all.** If the laptop has no `charlie-kirk` working
+  tree, there is no One-Repo page to show a row on. The mirrored subtree still arrives and still names the
+  repo's remote, so offering "clone this repo" is a natural follow-on — but it is **not** part of this
+  acceptance narrative.
+* **Indexing a storage's own big files** (`indexStorageFiles`) still has no automatic trigger. That is a
+  real gap for a company storage that maps source directories (§1.1) — but it is not on this file's path
+  from the Tower to the laptop.
+
+---
+
+## 9. Acceptance criteria
 
 1. There is **one company storage per company**, rooted in its own directory (e.g.
    `~/BGit/Bryan_git/act3_large_files_bridge/`), which is the storage's **Syncable Data Location** —
@@ -288,6 +567,305 @@ The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`PO
    machines **only via review-and-consent**, never silently — and **moves no bytes**, only re-targeting which
    sync repo the repo's tracking mirrors to.
 
+**The §8 use case — a big file reaching the user's second computer:**
+
+10. **The whole narrative passes.** With the Tower having pinned a git-ignored big file in a company-owned
+    working repo, the laptop's **View One Repo** page for that repo shows the file as a **red remote-only
+    row**, counts it in **`Pull down`** (and in **`Add to IPFS`** while undecided here), lists it in the
+    **To Do** tab, and **pulls the bytes down over IPFS** when the user acts — after which it becomes an
+    ordinary local row (§8.2).
+11. **The mirror subtree is keyed by the repo's normalized git REMOTE** (`repos/<repoUid>/`), never by an
+    absolute-path hash, so both computers read and write the same directory; a repo with **no remote** does
+    not mirror and **says so** (§8.4.1). Local Storage stays path-keyed.
+12. **The owning company storage's git-backed SDL is auto-adopted as the sync repo, and the per-repo mirror
+    defaults ON** — an explicit `sync_repo` still wins, the per-repo toggle is now an **opt-out**, and
+    ownership is resolved from the repo's **remote org** before any path-containment fallback (§8.4.2).
+13. **Receiving is a per-entry MERGE, never a copy** — union by `path`, union `pinned_by`, newer
+    `modified_at` wins a CID conflict, absence is **never** a delete, and this computer's own pin claim is
+    re-derived from its real pinset. It runs on **every** SDL backbone pull, not on demand (§8.4.3).
+14. **A `FileRow` may be `remote-only`** — composed from the reconciled manifest with no local file behind
+    it, rendered **red** with *"On {device} — not on this computer yet"*, offering **only** pull-down, and
+    excluded from every space / compression / git-ignore / analysis metric (§8.5).
+15. **Both per-repo manifests agree**, and the pull-down list and the pull action read the **same** one
+    (§8.6); an SDL's own manifest lives at **`<root>/manifest.yaml`**, never `<root>/.lfbridge/` (§8.7).
+16. **A mirror write nudges its SDL's backbone** (debounced) rather than waiting for the next timer tick,
+    and the remote-org slug is **bound** to the company storage so ownership resolves to a real row (§8.7).
+17. **A forge org binds to a company storage through `owner_slugs`** in the committed descriptor —
+    explicit entry, then normalized name match, then a lone company storage claiming an unclaimed org; a
+    match won by heuristic is **written back** as an explicit entry so it is auditable and travels, and a
+    manual owner override still beats all of it (§8.4.4).
+
+---
+
+## 10. A company IS a forge organization (LOCKED)
+
+A company storage is **one-to-one with a forge organization**. The org is a level in every repo's remote
+URL — `https://github.com/**ACT3ai**/charlie-kirk.git` — so **the repos already say which company they
+belong to**. LFB does not ask the user to draw that map; it reads it off the disk.
+
+```
+        the disk                       the URL level              the storage
+  ┌────────────────────┐        ┌─────────────────────┐     ┌────────────────────────────┐
+  │ ~/BGit/…/charlie-  │  git   │ github.com/ ACT3ai  │     │ act3_large_files_bridge/   │
+  │   kirk/.git/config ├───────►│              /repo  ├────►│   storage.yaml             │
+  └────────────────────┘ remote └─────────────────────┘     │   company.owner_slugs:     │
+                                        ▲                   │     ["ACT3ai"]             │
+        …102 more repos ────────────────┘                   └────────────────────────────┘
+```
+
+This is what makes **more than one company** work without configuration: three orgs across the user's repos
+mean three companies, each with its own storage, each knowing exactly which repos are its own.
+
+### 10.1 Finding the organizations
+
+LFB already walks the scanner roots for git working trees and records each one's `origin`. Grouping them by
+org needs no new scan:
+
+* **Parse the remote** into `host / owner / repo`; **`owner` IS the organization**
+  ([repo_company_mapping.mdx §2](./repo_company_mapping.mdx)). SSH and HTTPS forms fold together.
+* **Group every repo by org.** The result is the candidate list: each org, its display casing, and the repos
+  that belong to it.
+* **No network, ever.** The org is read from a string in `.git/config`. LFB never calls a forge API to ask
+  who owns what ([external_tools_policy.mdx](./external_tools_policy.mdx)) — the URL is sufficient and
+  offline.
+* **A repo whose remote does not parse** (a bare local path, a self-hosted host we do not recognize, or no
+  remote at all) belongs to **no org**, and therefore to Personal. It is not a company candidate.
+
+### 10.2 Which organizations are actually YOURS (LOCKED)
+
+**Not every org on the disk is a company you belong to** — and this is the difference between a useful
+feature and an unusable one. A real developer machine is full of clones of other people's projects. Measured
+on the machine this spec was written against: **32 distinct orgs**, of which **28 were clones** — `KDE`,
+`OpenShot`, `xai-org`, `twitter`, `mltframework`, `NatronGitHub`, … Creating a company storage per org would
+have made **31 directories and 31 Storages entries** for organizations the user has no membership in.
+
+The test is **local, cheap, and decisive**:
+
+> **An org becomes a company only when the user's own git identity has authored at least one commit in one
+> of that org's repos on this computer.**
+
+* **Why this test.** Cloning is passive; committing is membership. `git log --author=<your email>` answers it
+  from the local object store with no network and no credentials. On the measured machine it cut 32 orgs to
+  **4**, and every one of the 4 was correct.
+* **Your own account is Personal, not a company.** An org listed in `personal_accounts`
+  ([settings.mdx](./settings.mdx)) resolves to **Personal** and is never proposed as a company — that is what
+  keeps `github.com/<you>/<your-repo>` out of the company list.
+* **The test is a PROPOSAL filter, never a lock.** The user can add any org as a company by hand, and can
+  dismiss a proposed one. A heuristic decides what to *offer*; the user decides what *exists*.
+* **Not-yet-committed is not never.** An org that fails the test today passes the first time the user commits
+  to one of its repos. Nothing needs re-scanning by hand.
+* **Say the number.** The Storages page reports what was skipped — *"28 organizations you've only cloned from
+  were ignored"* — with a way to see them. A silent filter and a bug look identical
+  ([warnings.mdx](./warnings.mdx)).
+
+### 10.3 Proposing and creating the company storages (LOCKED)
+
+Creating a company storage **makes a real directory on the user's disk and runs `git init` in it**. That is
+not something to do behind the user's back, and the charter is explicit that LFB surfaces and offers rather
+than acting on files on its own. So:
+
+* **LFB proposes; one click creates.** Every qualifying org (§10.2) with no company storage yet appears as a
+  proposed row — org name, repo count, the directory that would be created — with a checkbox, and a single
+  **Create company storages** button makes all the checked ones at once. Unchecking one before creating means
+  no directory is ever made for it.
+* **A dismissed org stays dismissed.** Dismissal is remembered per org so the same proposal does not return
+  on the next scan. It can be undone from the company settings.
+* **Adopt before you create.** If a company storage already **claims** the org — an explicit
+  `company.owner_slugs` entry, or a normalized name match (§8.4.4) — it is **adopted**, never duplicated.
+  This is exactly how `act3_large_files_bridge` (named `Act3`) serves the org `ACT3ai`: it is adopted and the
+  binding is written back, rather than a second `act3ai_large_files_bridge` appearing beside it.
+* **What creation does.** Make `<storages parent>/<org-slug>_large_files_bridge/`, `git init` it, and write
+  a `storage.yaml` carrying `type: company`, `company_name` (the org's display casing, renameable per §6),
+  and **`company.owner_slugs: ["<org>"]`** — the binding, recorded up front so it never has to be guessed
+  again. The storage then appears in the Storages tab by the ordinary discovery rules.
+* **A brand-new company storage has NO git remote yet, and LFB must say so.** It can commit locally, but
+  nothing travels until the user supplies a remote (a local path or an HTTP(S) URL,
+  [git_backbone.mdx §3](./git_backbone.mdx)). A repo that commits forever and never pushes, silently, is the
+  worst failure this product has — see §11.2.
+* **The parent directory is a setting**, defaulting to where the user's existing `*_large_files_bridge`
+  storages already live. It is not hardcoded to one person's layout.
+
+### 10.4 What the linkage buys (LOCKED)
+
+Once org → company storage is a recorded fact, three things follow with no further configuration:
+
+1. **A repo knows its company.** Its remote's org resolves to exactly one company storage
+   (§8.4.4), which is the storage whose settings list it under Owned repos
+   ([storage_settings.mdx §4c](./storage_settings.mdx)).
+2. **A repo knows where its tracking state travels.** That company's SDL is its sync repo (§8.4.2), so its
+   `repos/<repoUid>/` subtree mirrors there and reaches the user's other computers and their teammates.
+3. **Companies stay separate.** Two orgs never share a storage, so one company's tracking text is never
+   pushed into another company's repo. **This is a confidentiality boundary, not just tidiness** — the org
+   in the URL is what enforces it.
+
+Deriving the org from a repo's remote, grouping repos by org, applying the authored-commit membership test, and creating a company storage per org is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (group + membership test) and `createCompanyStorage(org)` (mkdir + `git init` + descriptor with `owner_slugs`), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/organizations` and `POST /api/storages/companies`.
+
+---
+
+## 11. The company tracking repo governs itself (LOCKED)
+
+The company's dedicated tracking repo is **Large File Bridge's to drive**. LFB has permission to — and
+therefore **must** — `fetch`, `merge`, `commit`, and `push` it, and **resolve merge conflicts
+automatically**, without ever waiting on the user.
+
+> **The load-bearing sentence.** *Waiting for the customer to resolve a conflict means it never gets
+> resolved.* A tracking repo that is stuck pending a human is a tracking repo that has stopped syncing —
+> and a sync product that has stopped syncing is indistinguishable from one that was never installed. The
+> user did not ask for a git workflow; they asked for their files to be on both computers.
+
+This is not a new engine. It is the **same** cycle Personal already runs
+([storage_personal.mdx §16.1](./storage_personal.mdx) puts a company sync repo explicitly in scope, and
+[git_backbone.mdx](./git_backbone.mdx) is written against "a storage", never against Personal). What §11
+does is close the gaps where the company case is exposed to failures Personal rarely hit — because a
+company repo now carries the whole `repos/<repoUid>/` mirror, not just a device file.
+
+### 11.1 A conflict is ALWAYS resolved, never surfaced as homework (LOCKED)
+
+Today one unresolvable conflict **freezes the storage's entire backbone**: the merge aborts, and the commit
+and push are skipped on every subsequent cycle. Nothing travels again until a human runs git by hand. Two
+specific defects make that likely now:
+
+* Only `repo_storage.yaml` has an auto-resolution, and it applies **only when every conflicted path is one**
+  — a single sidecar in the same merge aborts the resolvable ones too.
+* The union-merge attribute list covers `manifest.yaml`, `decisions.yaml` and `owner_map.yaml`, but **not**
+  `files.yaml`, the `files/<rel>.yaml` sidecars, or `repo_storage.yaml` — all of which now ride in every
+  company repo inside `repos/<repoUid>/`.
+
+**The rule: every file LFB owns in this repo has a defined automatic resolution, and a conflict in one file
+never blocks another.** Resolution is per file, by what the file *is*:
+
+| Data shape | Files | Automatic resolution |
+| --- | --- | --- |
+| **Append-only lists** | `manifest.yaml`, `decisions.yaml`, `owner_map.yaml`, `history/<device>.txt`, `files/<rel>.yaml` events | **Union** both sides, then fold on read (§8.4.3). Nothing is lost, because nothing was ever meant to be overwritten. |
+| **Regenerable caches** | `repo_storage.yaml`, `files.yaml` | **Drop the file from the merge** and let the next pass rebuild it from Local Storage. Neither side's copy is worth preserving, so there is nothing to reconcile. |
+| **Self-owned** | `devices/<self>.yaml` | This computer's copy wins; other devices' files are never touched. |
+| **Shared mutable** | `storage.yaml`, `mapped_dirs.yaml`, `bookmarks.yaml` | Field-level merge where the shape allows (set-valued fields **union**; `owner_slugs` in particular is a set); otherwise newest `updated_at` wins, and the losing value is **recorded in the log**, never discarded silently. |
+
+* **Per-file, not per-merge.** Each conflicted path is resolved by its own rule. A mixed conflict resolves
+  the files it can and only escalates the ones it genuinely cannot.
+* **Escalation is the last resort, and it is still not homework.** If a file has no rule, LFB quarantines
+  that one file (the same way a half-merged manifest is quarantined today), completes the merge, and
+  **keeps the backbone moving** — then surfaces the quarantined file. One unresolvable file must never stop
+  the other thousand from syncing.
+* **Never destructive.** Resolution only ever unions, regenerates, or picks a side and records it. LFB does
+  not `reset --hard`, `clean`, or force-push ([git_backbone.mdx §1](./git_backbone.mdx)).
+
+### 11.2 A repo that cannot push must SAY so (LOCKED)
+
+The highest-value fault found in the company path: when the tracking repo has **no `origin`**, the cycle
+still "succeeds". It commits, returns without pushing, sets no problem, and logs nothing — **indistinguishable
+from a healthy repo with nothing to do.** A `git init`ed company storage can therefore accumulate local
+commits forever while the user believes their computers are in sync.
+
+* **No remote ⇒ a loud, standing fault.** Say it once per storage, in the log and on the storage's row:
+  *"Large File Bridge is tracking this company locally, but it has no remote — nothing is reaching your
+  other computers."* With the fix in one click: add a remote.
+* **Committed-but-unpushed is a first-class state**, not an absence. The pass reports it, and the
+  always-push-when-ahead rule keeps retrying it once a remote exists
+  ([backbone_resilience.mdx §6](./backbone_resilience.mdx)).
+* **Every silent null becomes loud.** A backing read that fails, a backbone that will not resolve, a push
+  that never happened — each gets a log line naming the storage and the reason. Silence must mean success.
+
+### 11.3 One repo, one lock (LOCKED)
+
+The company path has **two** independent locks over the same working tree: the pin/device cycle's
+per-storage lock, and a separate one used when writing `owner_map.yaml`. Two locks are not a lock. Every
+git operation against a storage's working copy — pin pass, device write, mirror nudge, ownership assertion —
+takes **the same per-storage lock**, so the tree is never touched by two writers at once.
+
+### 11.4 Push retries
+
+A push rejected as non-fast-forward is re-pulled and retried. The retry budget is **three attempts with
+backoff**, not one — a single retry loses to any peer that pushes twice while we are working. After the last
+attempt the commit stays local, the fault is reported, and the ahead-count rule sends it on the next cycle.
+
+Driving the company tracking repo's autonomous cycle and resolving its conflicts is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (per-file conflict resolution) and `commitAndPush()` (ahead-count push + retry budget), driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `syncStorageTextInner()` under `withStorageGitLock()`.
+
+---
+
+## 12. Use case — three organizations, three companies, one linkage
+
+The acceptance narrative for §10 and §11. It is deliberately the *multi*-company case, because one company
+hides every mapping bug.
+
+### 12.1 The setup
+
+A developer's laptop holds repos from several places at once:
+
+| Org in the remote | Repos on disk | Do they commit there? | Outcome |
+| --- | --- | --- | --- |
+| `ACT3ai` | 102 | yes | **Company** — adopts the existing `act3_large_files_bridge` |
+| `stoke-gh` | 2 | yes | **Company** — new storage created |
+| `trykimu` | 2 | yes | **Company** — new storage created |
+| `BryanStarbuck` | 28 | yes | **Personal** — it is the user's own account |
+| `KDE`, `OpenShot`, `xai-org`, `twitter`, … (28 orgs) | ~40 | no — clones only | **Ignored**, and the count is reported |
+
+### 12.2 What must happen
+
+1. **Discovery reads the orgs off the remotes** — no forge API call, no user mapping step.
+2. **The membership test cuts 32 orgs to 3 companies** (§10.2); the user's own account goes to Personal, and
+   the 28 cloned orgs are skipped with a visible count.
+3. **`ACT3ai` adopts the existing storage** rather than creating `act3ai_large_files_bridge` beside it, and
+   the adoption is written into `owner_slugs` so it never has to be re-guessed (§10.3).
+4. **`stoke-gh` and `trykimu` are PROPOSED**, not created. Nothing touches the disk until the user clicks
+   **Create company storages**.
+5. **On confirmation**, two directories exist, each `git init`ed, each with a `storage.yaml` naming its org.
+   Both appear in the Storages tab. Both report **"no remote yet — nothing is reaching your other
+   computers"** (§11.2) until the user supplies one.
+6. **Every repo lands under exactly one company.** All 102 `ACT3ai` repos list under ACT3, the two `stoke-gh`
+   repos under stoke-gh, and **no repo appears under two companies**.
+7. **Each company's tracking travels in its own repo.** An `ACT3ai` repo's `repos/<repoUid>/` subtree mirrors
+   into the ACT3 storage and **never** into stoke-gh's (§10.4.3).
+8. **The cycle runs itself.** Once a remote is set, each company storage pulls, merges, commits, and pushes
+   on its own schedule, resolving conflicts per §11.1, with **no git command ever asked of the user**.
+9. **A new org appears the moment it is earned.** The first commit the user authors in a repo from a new org
+   makes that org a proposal on the next scan.
+
+### 12.3 What this proves that §8 does not
+
+§8 proves one file reaches one other computer. §12 proves the **mapping** underneath it: that the product can
+tell three companies apart on a disk that mentions thirty-two organizations, put each repo under the right
+one, keep their tracking repos separate, and do it without the user drawing a single line between a repo and
+a company.
+
+---
+
+## 13. Acceptance criteria — §10–§12
+
+1. **A company storage is 1:1 with a forge organization**, derived from the org level of each repo's git
+   remote, offline, with no forge API call (§10, §10.1).
+2. **Repos are grouped by org**, and an org qualifies as a company **only** when the user's git identity has
+   authored a commit in one of its repos on this computer (§10.2). An org in `personal_accounts` resolves to
+   **Personal** and is never proposed. A repo with no parseable remote belongs to no org.
+3. **Skipped orgs are counted and visible** — the user can see what the membership filter excluded and add
+   any of them by hand (§10.2).
+4. **Company storages are PROPOSED, never silently created** — one click creates the checked ones; an
+   unchecked or dismissed org produces no directory, and dismissal is remembered (§10.3).
+5. **An org already claimed by a company storage is ADOPTED, never duplicated**, and the binding is written
+   back to `company.owner_slugs` (§10.3, §8.4.4). `ACT3ai` adopts `act3_large_files_bridge`.
+6. **Creation makes `<parent>/<org-slug>_large_files_bridge/`**, `git init`s it, and writes a `storage.yaml`
+   with `type: company`, `company_name`, and `owner_slugs: ["<org>"]`. The parent directory is a **setting**,
+   not a hardcoded path (§10.3).
+7. **Each company's repos and tracking are separate** — a repo resolves to exactly one company, and one
+   company's `repos/<repoUid>/` mirror never enters another's repo (§10.4).
+8. **The company tracking repo runs itself**: pull → merge → commit → push, on schedule, with **no git
+   command ever required of the user** (§11).
+9. **Every conflict has an automatic resolution, applied PER FILE** — union for append-only lists, regenerate
+   for caches, self-owned wins for device files, field/set merge or newest-wins-and-log for shared mutable
+   state. A conflict in one file **never blocks** another, and an unresolvable file is quarantined while the
+   backbone keeps moving (§11.1). Resolution is never destructive: no `reset --hard`, no `clean`, no
+   force-push.
+10. **A repo with no remote reports a standing, loud fault** and is never mistaken for healthy;
+    committed-but-unpushed is a reported state, and every silent null becomes a log line naming the storage
+    and the reason (§11.2).
+11. **One lock per storage** covers every git operation against its working tree, including ownership
+    assertions (§11.3); a rejected push is retried **three times with backoff** before the commit is left for
+    the next cycle's ahead-count push (§11.4).
+12. **The §12 narrative passes end to end** on a machine with 32 orgs: 3 companies, correct adoption, nothing
+    created without consent, every repo under exactly one company, and no user-run git (§12.2).
+
 <!--
   Company storage = a company's SHARED big files, one per company. The root (e.g.
   ~/BGit/Bryan_git/act3_large_files_bridge/) is the storage's SYNCABLE DATA LOCATION (small travelling
@@ -323,4 +901,61 @@ The Owned-repos read (`getOwnedRepos(storageId)`) and the reassign endpoint (`PO
   re-targets which sync repo the owned repo's Category-B tracking mirrors to. Same getOwnedRepos(storageId) +
   POST /api/repos/:repoId/owner (→ assertCompanyOwnership) code as storage_settings §4c. Cross-links
   repo_owner_propagation.mdx (added to siblings).
+
+  §8 (NEW, LOCKED) THE LOAD-BEARING USE CASE — one git-ignored 5.3MB mp4 in a company-owned working repo
+  (charlie-kirk, remote github.com/ACT3ai/charlie-kirk) travelling from the Tower (bryan-mac-pro, pinned it)
+  to the laptop (bryanstarbuck-macbook-pro, doesn't have it) via the ACT3 company SDL
+  (act3_large_files_bridge). Written because the machinery of §1/§5/§7 existed and STILL delivered nothing.
+  §8.2 the 5-point acceptance narrative (red remote-only ROW in the One-Repo list + Pull down tile +
+  Add to IPFS while undecided + To Do batch + pull works). §8.3 the SIX-LINK CHAIN table with the 3 real
+  breaks — the diagnosis line is "a working road and a working destination, and never put the cargo on the
+  truck." Transport was PROVEN working all along (both devices already in <SDL>/devices/, commit log is
+  nothing but "LFB: device state"; git add -A means anything written to the SDL does ship).
+  §8.4.1 LOCKED repoUid = hash of NORMALIZED REMOTE (host/owner/name, lowercased, scheme+creds+.git+slash
+  stripped; git@ and https:// fold together) keys <syncRepo>/repos/<repoUid>/ — the old sha1(abs path) is a
+  MACHINE-LOCAL value keying MACHINE-SHARED data, so the two computers wrote different dirs (/Users/bryan vs
+  /Users/bryanstarbuck). Local Storage repos/<repoKey>/ STAYS path-keyed on purpose (two keys, two jobs).
+  No remote → no mirror, and SAY so. §8.4.2 LOCKED supersedes §7's "Default: OFF": company SDL git root is
+  AUTO-ADOPTED as the sync repo (exactly what getGitBackboneRemote already does for the backbone — one SDL,
+  one git root, one answer), ownership resolves from the REMOTE ORG first (path containment sent charlie-kirk
+  to Personal — wrong storage), and the per-repo toggle becomes an OPT-OUT. Rationale: a default that must be
+  found and switched on before anything works is a bug wearing a setting's clothes; the payload is small text
+  whose purpose is to travel. §8.4.4 LOCKED owner_slugs BINDS a forge org to a company storage row: the
+  ACT3ai-vs-act3_large_files_bridge off-by-two-letters mismatch silently cost the whole feature, so the
+  descriptor carries company.owner_slugs (committed → travels; a company may claim several orgs, an org
+  belongs to one company). Resolution order = explicit owner_slugs → normalized name match → SINGLE company
+  storage takes an unclaimed org (refusing to guess when there is exactly one company means the product does
+  nothing for the common case); >1 company + no match = unresolved and SAY which orgs are unclaimed. A
+  rule-2/3 win is WRITTEN BACK as an owner_slugs entry so the heuristic runs once and becomes auditable.
+  Manual owner override still beats everything. Implements the missing ensureCompanyForOwner(slug).
+  §8.4.3 LOCKED receiving is a per-entry MERGE not a copy (reconcileFromSyncRepo
+  had ZERO callers AND last-writer-copied): union by path, UNION pinned_by (a copy would erase the peer's
+  claim = the whole signal), newer modified_at wins CID conflicts, absence NEVER a delete, own claim
+  re-derived from the real pinset, runs on EVERY backbone pull. §8.5 also LOCKS the FOUR conditions for a remote-only row (cid + a
+  NON-SELF peer claim + no scanned candidate + no file on disk) — the peer-claim condition stops a file this
+  computer deliberately deleted from resurrecting as a row offering to pull bytes nobody has.
+  §8.5 LOCKED NEW FileRow.presence =
+  "local"|"remote-only" (absent ⇒ local, so every existing reader is unchanged) — until now every row came
+  from the scanner's disk walk so a non-local file COULD NOT be shown; renders red per one_repo §4.9,
+  counts ONLY toward Pull down (+ Add to IPFS while undecided), na for transcribe/describe/ocr (can't analyze
+  absent bytes), only action is pull, and it is a HEALTHY state ("available, not here yet" ≠ "lost").
+  §8.6 the TWO manifests (pin/r/<folder>/ read by the rows, repos/<repoKey>/ read by pull-down + the mirror)
+  must both receive the merge, and pullMissing must stop reading readCommittedManifest (SDL-only → finds
+  nothing → fails every file). §8.7 four smaller defects: committedManifestPath hardcodes .lfbridge/ (violates
+  §1's SDL rule, two divergent manifests); a mirror write must trigger its SDL's backbone (noteArtifactWritten
+  no-ops for working-repo paths); ensureCompanyForOwner is CITED IN §5 BUT DOES NOT EXIST (companyId stays
+  null → ownership can't resolve); the same repo cloned at two paths shares one repoUid (correct — same repo)
+  while Local Storage stays split (also correct). §8.8 explicitly OUT of scope: rolling many repos up into the
+  SDL's own root manifest, a repo not cloned on the other computer, and auto-triggering indexStorageFiles.
+  AC 10-16 added for all of it. Old §8 AC renumbered to §9 (no inbound anchors pointed at #8).
+
+  2026-07-20 spec-vs-code correction. Three of §8.7's four "defects" are FIXED in code and are now stated as
+  rules in the present tense, with the defect kept in the past tense as the lesson: (1) committedManifestPath()
+  now does path.join(trackingBaseDir(repoPath), "manifest.yaml") — one manifest per storage, placed by storage
+  KIND, never a hand-joined .lfbridge/; (2) mirrorToSyncRepo() announces `dst` (the mirror destination INSIDE
+  the SDL) to noteArtifactWritten, so the root-prefix trap is avoided — the warning about why prefix
+  resolution is fragile (silent no-op) is kept; (3) ensureCompanyForOwner() EXISTS in storage.service.ts with
+  all three resolution rules plus write-back via recordOwnerSlug(). The remaining gap is narrowed to the real
+  one: deriveOwnerForRemote() in git.service.ts still returns companyId: null, so the owner block the product
+  reads is not yet joined to a company storage row. §8.4.4's code line no longer says the function is missing.
 -->

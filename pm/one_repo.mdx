@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — One repo
-description: The per-repo screen (route /repos/$repoId) a Repos-table row opens. The header is two rows — the repo name (never wrapped, never squeezed) plus the width-measured task-tab strip and the smart "View recommendation ›" / "Scan now" primary on row one, and the repo's absolute directory path on its own full-width, never-wrapping row beneath. Under it the metrics strip runs the FULL page width on ONE row that never wraps (the hover-explanation moved to the left-bar hover-info panel), leading with the TWO decision tiles — Add to IPFS and Git Ignore — which replaced the single Undecided tile and absorbed "Big, not git-ignored". Below that is one TanStack Table — one row per large git-ignored file — where the user makes the core decision: Add to IPFS (pin) / Ignore / Undecided. The table has the standard search + icon-only filter/sort control row over an always-visible facet rail carrying TWO separate facets — Pin (IPFS) and Git-ignore, never merged and never named "Decision" (tables.mdx §2.4) — five leading icon control columns, per-row and bulk actions, size, CID, and which peers hold each file; ⌘-click / middle-click a row opens its viewer in a new tab. Defines the summary counts, the FileRow type, the decision model, bulk actions, Pin-now (an action-link, no longer the header primary), and empty/loading states.
+description: The per-repo screen (route /repos/$repoId) a Repos-table row opens. The header is two rows — the repo name (never wrapped, never squeezed) plus the width-measured task-tab strip and the smart "View recommendation ›" / "Scan now" primary on row one, and the repo's absolute directory path on its own full-width, never-wrapping row beneath. Under it the metrics strip runs the FULL page width on ONE row that never wraps (the hover-explanation moved to the left-bar hover-info panel), leading with the TWO decision tiles — Add to IPFS and Git Ignore — which replaced the single Undecided tile and absorbed "Big, not git-ignored". Below that is one TanStack Table — one row per large git-ignored file — where the user makes the core decision: Add to IPFS (pin) / Ignore / Undecided. The table has the standard search + icon-only filter/sort control row over an always-visible facet rail carrying TWO separate facets — Pin (IPFS) and Git-ignore, never merged and never named "Decision" (tables.mdx §2.4) — five leading icon control columns, per-row and bulk actions, size, CID, and which peers hold each file; ⌘-click / middle-click a row opens its viewer in a new tab. Defines the summary counts, the FileRow type, the decision model, bulk actions, Pin-now (an action-link, no longer the header primary), and empty/loading states. A row is not always a local file: a `FileRow` may be REMOTE-ONLY (`presence: "remote-only"`) — composed from the reconciled peer manifest for a file another of the user's computers has pinned and this one does not have yet — rendered RED, counting only toward Pull down (and Add to IPFS while undecided), offering only "pull it down" (§4.10, locked by storage_company.mdx §8.5).
 ---
 
 # LargeFileBridge — One repo
@@ -73,6 +73,7 @@ export interface FileRow {
   transfer: TransferStatus;   // meaningful for decision === "sync" (see §4.2)
   peers: string[];       // ids of your computers currently pinning this file
   changedAt: string;     // ISO date-time the file last changed on disk
+  presence?: "local" | "remote-only";  // absent ⇒ "local" (§4.10) — a remote-only row has NO local file
 }
 
 export type TransferStatus =
@@ -84,6 +85,13 @@ export type TransferStatus =
   | "error"      // last transfer failed
   | "na";        // not applicable (decision is ignore/undecided)
 ```
+
+> **`presence` is optional and defaults to `"local"`, so every existing row and every existing reader is
+> unchanged.** It exists because a row no longer has to come from this computer's disk: a file another of the
+> user's computers pinned, learned from the **reconciled manifest**, is a **remote-only** row here (§4.10).
+> The rule is owned by
+> [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked);
+> this page renders it and does not restate it.
 
 ---
 
@@ -787,6 +795,10 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
 | **Set to sync, not here yet** | **RED filled** pin ("red fill") | `decision === "sync"` **and** `pinnedHere === false` | You chose to sync it, but **this** computer does not have it pinned yet. The pin pass will **pull it down**; the red flags the transient out-of-sync gap ([pin_process.mdx §2](./pin_process.mdx)). |
 | **Pinned locally** (outside LFB) | **GREEN filled** pin | `decision !== "sync"` **and** `pinnedForeign === true` | The bytes are **already pinned on this node** under a foreign CID (a bare `ipfs add`, IPFS Desktop, another tool — **we don't care which local software pinned it**, [ipfs.mdx §1.1](./ipfs.mdx)). Discovered by the background pass ([foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx#6-surfacing--the-file-shows-as-pinned-in-the-web-app-locked)). Reality without intent. **Click to have Large File Bridge sync it too.** |
 
+* **The RED state also covers the row with no local file at all.** A **remote-only** row (§4.10,
+  [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked))
+  is `decision === "sync"` with `pinnedHere === false` and **no bytes here whatsoever** — it renders in this
+  same red state and needs **no new icon vocabulary**.
 * **`pinnedHere` is a LIVE, CANONICAL read of this node's pinset — never a per-file hash on the read path.**
   The blue↔red split is driven by `FileRow.pinnedHere`, computed by testing the file's recorded manifest CID
   against `ipfs.canonicalPinnedSet()` (this node's `ipfs pin ls`, canonicalized to CIDv1 base32 so a `Qm…`
@@ -830,6 +842,58 @@ recorded foreign-pin index via `foreignPinByAbsPath`), fed by
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (the `pin` `LfbColumn`, four-state via `TaskIconCell` with red/green `doneColor` overrides), through the shared
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`.
+
+### 4.10 Remote-only rows — a file in this list that is not on this computer (LOCKED)
+
+**Every row in this table used to come from the scanner's local disk walk** (`status.candidates`), so a file
+this computer does not have **could not be shown at all** — which made the single most important row of the
+two-computer use case invisible. A `FileRow` may now be **`presence: "remote-only"`**: composed from the
+**reconciled peer manifest** (name, `path`, `sizeBytes`, `cid`, `peers`, and the peer device that holds it),
+with **no `statSync` and no local file behind it**.
+
+**The rule is LOCKED in
+[storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)**
+— that is the authority for what a remote-only row *is*. This section states only how **this page** renders
+and behaves around one:
+
+* **It renders RED — the same red the Pin icon already means (§4.9).** *Decided to sync, not pinned here* is
+  the existing **red filled pin** state, and a remote-only row is its purest case: the user chose to sync the
+  file and this machine does not merely lack the pin, it lacks the bytes. **No new color, no new icon
+  vocabulary** ([tables.mdx §4c.4a](./tables.mdx#4c4a-the-pin-is-three-state--grey--blue--red-locked)). The
+  **row tooltip** (and its left-bar hover-info text, §3.2) reads *"On {device} — not on this computer yet."*
+* **It is a HEALTHY state, never a missing-file alarm.** Red here means *"available, not here yet"* — never
+  *"lost"*. It is how a second computer learns what exists. A file that disappears from a peer's manifest
+  **deletes nothing** here; it simply stops being offered
+  ([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)).
+* **Metric participation — `Pull down` always, `Add to IPFS` while undecided here, and nothing else.** It
+  counts toward **no space, compression, or git-ignore metric** (there are no local bytes to reclaim,
+  compress, or refuse to commit — the **Git Ignore** tile's `gitIgnoreCandidates()` predicate excludes it,
+  §3.2.2) and toward **no analysis metric**: `transcribe` / `describe` / `ocr` are **`na`**, because offering
+  to transcribe a file whose bytes are absent queues work that cannot run. **This mirrors exactly how
+  `analysisOnly` rows are excluded from the large-file metrics** (§4.1) — one row model, two reasons a row
+  can be present without owing every obligation.
+* **The summary counts (§4.1) follow the same split.** A remote-only row is a real pin decision, so it counts
+  in `N Pin` (or `N Undecided` while this computer has not decided); it is **never** counted as
+  `N Pinned locally` — nothing is pinned locally.
+* **Its only action is *pull it down*.** Compress · Transcribe · AI Description · OCR · Git-ignore are
+  **disabled** on the row (rendered `na`, inert) and **say why** on hover — *"the bytes aren't on this
+  computer yet — pull it down first."* The **Pin** icon stays live (the decision axis is still the user's to
+  set), and the row's `⋮` kebab shows the file catalog with the same items disabled. **After the pull, the
+  next scan finds a real local file and the row becomes an ordinary local row** — nothing special persists.
+* **It does not duplicate the pull-down popup.** The `Pull down` metric tile, its two-pane educate-and-fix
+  popup, and the To-Do `pull_down` batch **already exist** and are fed by the same reconciled manifest
+  ([warnings.mdx §4](./warnings.mdx), [to_do.mdx](./to_do.mdx)); the new capability here is **only** that the
+  file is also a **row in the file list**. Acting from the row, the tile, or the batch runs the one pull.
+* **Table behavior** — the `☑ Large files only` toggle does **not** hide it (it is a large file; it is not an
+  `analysisOnly` row), and its sort/filter behavior is
+  [tables.mdx §4e](./tables.mdx#4e-remote-only-rows-in-a-file-table-locked-site-wide). Which **tabs** show it
+  (All and IPFS, never the analysis tabs) is [task_tabs.mdx §4.8](./task_tabs.mdx#48-remote-only-rows-belong-on-all-and-ipfs-only-locked).
+
+Composing remote-only rows — appending reconciled manifest entries that have no local candidate and no local file, with `presence`, `transcribe`/`describe`/`ocr` forced to `na`, and their exclusion from the space / compression / git-ignore / analysis metrics — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` and `computeTaskMetrics()`, with the type in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`; rendered (red pin, tooltip, disabled task icons) by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, with the metric counts in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `metricCount()` / `gitIgnoreCandidates()`.
 
 ---
 
@@ -951,6 +1015,16 @@ recorded foreign-pin index via `foreignPinByAbsPath`), fed by
     cell icon shows a `title` tooltip **and** fills the **left-bar hover-info panel** with a plain-English
     explanation of the icon (§3.2, §4.3, §4.8). The **Pin decision**, **Decided by**, **Decided**, and **Status**
     columns are removed (§4.3.1); the two decision axes remain as data, set via the Pin/Ignore icons.
+14. **A file this computer does not have can still be a row (§4.10).** A `FileRow` with
+    **`presence: "remote-only"`** — composed from the reconciled peer manifest, **no local file behind it**
+    (absent `presence` ⇒ `"local"`, so nothing existing changes) — appears in the file list, renders in the
+    **red** Pin state of §4.9 with the tooltip *"On {device} — not on this computer yet"*, counts toward
+    **`Pull down` always** and **`Add to IPFS` while undecided here**, and counts toward **no** space /
+    compression / git-ignore / analysis metric (`transcribe` / `describe` / `ocr` are `na`), exactly as
+    `analysisOnly` rows are excluded from the large-file metrics. Its **only** action is **pull it down**;
+    compress / transcribe / describe / OCR / git-ignore are **disabled and say why**. It is **never** a
+    missing-file alarm, and after a pull the next scan makes it an ordinary local row. Authority:
+    [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked).
 
 <!--
   Keep this page aligned with repos.mdx (the list it drills into) and left_bar.yaml (the nav).
@@ -1007,4 +1081,20 @@ recorded foreign-pin index via `foreignPinByAbsPath`), fed by
   install / on-off / 15-min schedule) is the Scans left-bar PAGE, not this repo's strip toggle. All
   tables are TanStack tables. The left bar lives in ./left_bar.mdx + pm/left_bar.yaml — never redefine
   it here.
+  REMOTE-ONLY ROWS (§4.10, NEW): until now EVERY row came from the scanner's local disk walk
+  (status.candidates), so a file this computer doesn't have COULD NOT BE SHOWN — which hid the most
+  important row of the two-computer use case. FileRow gains OPTIONAL presence: "local" | "remote-only"
+  (absent ⇒ "local", so every existing row/reader is untouched); a remote-only row is composed from the
+  RECONCILED MANIFEST (name/path/sizeBytes/cid/peers + the peer device), never a statSync. Renders in the
+  EXISTING §4.9 RED pin state (decided-to-sync-but-not-pinned-here — no new color/icon), tooltip "On
+  {device} — not on this computer yet." Counts toward Pull down ALWAYS + Add to IPFS while undecided here;
+  counts toward NO space/compression/git-ignore metric and NO analysis metric (transcribe/describe/ocr =
+  na — queueing analysis on absent bytes queues work that cannot run), mirroring the analysisOnly
+  exclusion (§4.1). Never counted as "Pinned locally". ONLY action = pull it down; compress/transcribe/
+  describe/OCR/git-ignore disabled AND say why; after the pull the next scan makes it an ordinary local
+  row. It is a HEALTHY state ("available, not here yet" ≠ "lost") — a file vanishing from a peer's manifest
+  deletes nothing. Does NOT duplicate the pull-down popup/tile/To-Do batch (they already exist and are fed
+  by missingPinnedFromPeers) — the NEW capability is only that the file is also a ROW. Large-files-only
+  does NOT hide it (tables.mdx §4e); tab placement = All + IPFS only (task_tabs.mdx §4.8). AUTHORITY =
+  storage_company.mdx §8.5 (LOCKED) — link it, don't restate it. AC 14 added.
 -->

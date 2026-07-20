@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo → Company / Personal mapping
-description: How every git repo LFB knows about is mapped to an OWNER — a company or the user's Personal storage — so repos group under their owner in the left bar and the Repos list. The mapping is DERIVED, offline, from the git remote origin URL: LFB parses host + owner + repo out of the URL shapes (git@github.com:ORG/repo.git, https://github.com/ORG/repo.git, plus gitlab.com, bitbucket.org, codeberg.org, git.sr.ht), then applies a heuristic — a known forge whose owner segment is NOT one of the user's configured personal accounts defaults to a COMPANY named after that org; no forge / no owner / an owner that IS a personal account defaults to PERSONAL (the existing catch-all Personal storage). Deriving a company auto-creates a company storage so it appears as its own child under Storages; because org slugs are cryptic, the user opens that company's settings to set a friendly DISPLAY NAME shown everywhere. The user can always REASSIGN a repo between company and personal (manual override wins over the heuristic) and can maintain a "my personal accounts" list so their own github user repos are never miscategorized. The limitation is documented honestly: a plain github.com/<owner>/<repo> cannot be perfectly told apart org-vs-personal from the URL alone, and LFB never calls a network API to resolve it (local-first) — it defaults per the heuristic and lets the user correct it. Covers the new repo `owner` field and its persistence, the settings controls, non-default cases (multiple remotes, no remote, local-path remote, SSH vs HTTPS forms, ambiguous owner, renamed org, repo moved between owners, monorepo submodules), and error cases. Sibling of storages.mdx, storage_company.mdx, storage_personal.mdx, repos.mdx, repo_settings.mdx, left_bar.mdx, devices.mdx.
+description: How every git repo LFB knows about is mapped to an OWNER — a company or the user's Personal storage — so repos group under their owner in the left bar and the Repos list. The mapping is DERIVED, offline, from the git remote origin URL: LFB parses host + owner + repo out of the URL shapes (git@github.com:ORG/repo.git, https://github.com/ORG/repo.git, plus gitlab.com, bitbucket.org, codeberg.org, git.sr.ht), then applies a heuristic — a known forge whose owner segment is NOT one of the user's configured personal accounts defaults to a COMPANY named after that org; no forge / no owner / an owner that IS a personal account defaults to PERSONAL (the existing catch-all Personal storage). Deriving a company auto-creates a company storage so it appears as its own child under Storages; because org slugs are cryptic, the user opens that company's settings to set a friendly DISPLAY NAME shown everywhere. The user can always REASSIGN a repo between company and personal (manual override wins over the heuristic) and can maintain a "my personal accounts" list so their own github user repos are never miscategorized. The limitation is documented honestly: a plain github.com/<owner>/<repo> cannot be perfectly told apart org-vs-personal from the URL alone, and LFB never calls a network API to resolve it (local-first) — it defaults per the heuristic and lets the user correct it. The derived owner is also BOUND to a real company storage row (§6.1) — a companyId, not just a slug string — and that binding is what lets ownership decide the SYNC-REPO TARGET (§7.3): the owning storage is the one the repo's REMOTE ORG binds to, with path containment only as the fallback, so a repo like ~/BGit/Bryan_git/charlie-kirk (remote github.com/ACT3ai/charlie-kirk) resolves to the ACT3ai company rather than Personal even though it lives outside that company's directory; the mirror target is that storage's configured sync repo else its own git root auto-adopted, and it now defaults ON (storage_company.mdx §8.4.2, superseding §7.2's "default OFF"). Covers the new repo `owner` field and its persistence, the settings controls, non-default cases (multiple remotes, no remote, local-path remote, SSH vs HTTPS forms, ambiguous owner, renamed org, repo moved between owners, monorepo submodules), and error cases. Sibling of storages.mdx, storage_company.mdx, storage_personal.mdx, repos.mdx, repo_settings.mdx, left_bar.mdx, devices.mdx.
 ---
 
 # LargeFileBridge — Repo → Company / Personal mapping
@@ -283,6 +283,38 @@ media-pile company are the same storage kind at different levels of configuratio
 Ensuring (creating-if-absent) the company storage for a derived/assigned owner slug is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (returns the company id; creates the `storage.yaml` via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()` as a company row.
 
+### 6.1 Binding the slug to a real company storage row (LOCKED)
+
+Deriving the string `ACT3ai` is not the same thing as knowing **which storage** that is. The binding is what
+makes *"remote org `ACT3ai` → this SDL"* a **fact the code can act on** rather than a label, and everything
+downstream — the sync-repo target (§7.3), the Owned-repos list
+([storage_settings.mdx §4c](./storage_settings.mdx#4c-owned-repos--the-repos-mapped-to-this-storage)), the
+ownership assertion ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx)) — needs it.
+
+* **The owner block carries a real `companyId`.** A derived company owner (§1.1) must resolve its
+  **`companyId`** to the id of an existing **company storage row**, not leave it null. The `ownerSlug` stays
+  as the derivation's evidence; the `companyId` is the join.
+* **Matching, in order.** (1) A **manual** `owner_override` naming a company id matches **exactly**. (2) An
+  auto-derived slug matches a company storage row by its **explicit org binding** when the row records one.
+  (3) Failing that, by a **normalized comparison** — lowercased, non-alphanumerics stripped — of the slug
+  against the row's `company_name`, its row `name`, and its root-derived slug. (4) No match → **create** the
+  company row (§6) and bind it.
+* **The normalized name match is a best-effort bridge, not the design.** It exists because the binding is not
+  wired yet (below); the **explicit** binding is the correct answer and should win wherever it is present.
+* **Renaming does not break the binding.** The friendly display name is user-editable
+  ([storage_company.mdx §6](./storage_company.mdx#6-the-friendly-display-name)); the binding is to the org
+  **slug**, so renaming `ACT3ai` to *"ACT3 AI"* leaves every repo still bound to the same storage row.
+* **Known gap (stated so it is not mistaken for done).** `ensureCompanyForOwner(slug)` is **cited above and in
+  [storage_company.mdx §5](./storage_company.mdx#5-repos-auto-derived-from-an-org-appear-as-this-company) but
+  does not exist in the code**, and `deriveOwnerForRemote()` returns **`companyId: null`** — so an
+  auto-derived company owner is today never joined to a discovered company storage row. This is the same
+  defect named in
+  [storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes); closing
+  it is a precondition for §7.3's ownership lookup to resolve to anything.
+
+Deriving the owner and the best-effort company match that stands in for the binding until it is wired are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)` (returns `companyId: null` today — the gap) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `ownerMatchesCompany(owner, row)` (exact `companyId` for a manual override, normalized slug/name comparison for an auto owner), consumed by `getOwnedRepos(storageId)` in the same file.
+
 ---
 
 ## 7. How ownership drives grouping and artifact placement
@@ -316,9 +348,42 @@ Ownership decides **which sync repo** a repo's LFB tracking state may travel to
   company sees it. A **Personal**-owned repo can likewise mirror to Personal's sync repo
   ([storage_personal.mdx §14](./storage_personal.mdx#14-personals-optional-sync-repo)).
 * Ownership only decides **which** company-vs-personal sync repo is the mirror target; the additive mirror
-  itself is **default OFF** and per-repo. Transcripts / descriptions are a **separate data category** that
-  obey the per-repo placement radios ([repo_settings.mdx](./repo_settings.mdx),
+  itself is ~~**default OFF**~~ and per-repo. **SUPERSEDED** — the mirror now defaults **ON** per
+  [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)
+  and §7.3 below; the per-repo toggle remains, as an **opt-out**. Transcripts / descriptions are a **separate
+  data category** that obey the per-repo placement radios ([repo_settings.mdx](./repo_settings.mdx),
   [placement_radios.mdx](./placement_radios.mdx)).
+
+### 7.3 Ownership decides the sync-repo target, remote first (LOCKED)
+
+The authority is
+[storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked).
+What that rule adds **here** is that this spec's derivation is no longer only a *grouping* input — it is the
+input that decides **where a repo's tracking text travels**. The two systems, the git-remote→company mapping
+and the sync-repo→storage mapping, were disconnected; ownership is the joint.
+
+* **The remote org resolves the owning storage; path containment is only the fallback.** A repo's owner is the
+  storage its **remote org** binds to (§3, §6.1). Only when there is no forge org to bind — no remote, a
+  local-path or self-hosted remote, or an owner on the personal-accounts list (§3 cases 1/2/4/5) — does
+  physical containment inside a storage's directory decide.
+* **Why the order matters, concretely.** `~/BGit/Bryan_git/charlie-kirk` has remote
+  `github.com/ACT3ai/charlie-kirk` but does **not** live inside the `ACT3ai` company storage's directory. A
+  containment-first test resolves it to **Personal** — the wrong storage, and therefore the wrong sync repo,
+  and therefore a manifest that travels to nobody who needs it. A repo's **remote** is the thing its
+  teammates and its other computers agree on; its **path** is a fact about one disk.
+* **The owning storage's SDL is the target.** Having resolved the owner, the mirror root is that storage's
+  sync repo — the explicitly configured one when present, else the storage's **own git root, auto-adopted**
+  (§8.4.2). So the answer is normally *"yes, there is one"*, not *"none configured"*.
+* **This changes no bytes and no grouping.** §7.1's left-bar/Repos grouping is unchanged; ownership was
+  always the group key. What is new is that the same key now also names a **destination**, and that
+  destination carries **small text only** ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+* **Reassignment re-targets it.** A manual reassignment (§5) moves the mirror target with the ownership —
+  that is exactly what
+  [storage_settings.mdx §4c.2](./storage_settings.mdx#4c2-reassigning-records-the-travelling-assertion--and-re-targets-tracking-locked)
+  already describes; §7.3 only makes the *auto* path resolve the same way the manual path already does.
+
+Resolving the owning storage from the repo's remote before any containment test, and returning its sync repo, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` (today matches only by mapped dirs or the Personal catch-all — the containment-first behavior this section corrects), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner()` / `deriveOwnerForRemote()` and consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`.
 
 ---
 
@@ -393,6 +458,21 @@ Ownership decides **which sync repo** a repo's LFB tracking state may travel to
    the per-repo sync toggle is on — the state lives in Local Storage always regardless (§7.2,
    [artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
    [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
+8b. The derived owner is **bound to a real company storage row** (§6.1): its **`companyId`** names an existing
+   company storage — matched by the manual override's exact id, else the row's explicit **org binding**, else a
+   **normalized** slug/name comparison, else by **creating** the row (§6) — and the binding is to the **org
+   slug**, so renaming the company's friendly display name never breaks it. The **known gap** is stated, not
+   hidden: `ensureCompanyForOwner(slug)` does not exist yet and `deriveOwnerForRemote()` returns
+   `companyId: null`, so an auto-derived company owner is not yet joined to a company storage row.
+8c. **Ownership decides the sync-repo target, resolved REMOTE-ORG FIRST** (§7.3, authority
+   [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)):
+   the owning storage is the one the repo's **remote org** binds to, with **path containment only as the
+   fallback** for repos with no forge org — so `~/BGit/Bryan_git/charlie-kirk` (remote
+   `github.com/ACT3ai/charlie-kirk`) resolves to the **ACT3ai** company, not Personal, despite living outside
+   that company's directory. The target is that storage's configured sync repo, else its **own git root
+   auto-adopted**, and the additive mirror **defaults ON** (the per-repo toggle in
+   [repo_settings.mdx §2.9.1](./repo_settings.mdx#291-the-default-is-on--this-toggle-is-an-opt-out-locked) is
+   an **opt-out**) — superseding AC 8's and §7.2's "default OFF". No bytes move; grouping (§7.1) is unchanged.
 9. All **non-default / edge cases** (§8) resolve as tabled — SSH↔HTTPS stable, origin-only, one owner per repo
    (submodules included), renamed/moved org re-derives auto owners — and the **error cases** (§9) fail safe toward
    Personal, never delete a user-touched company, and surface (never swallow) creation failures.
@@ -426,4 +506,22 @@ Ownership decides **which sync repo** a repo's LFB tracking state may travel to
   storage_company.mdx (rename + sync repo), storage_personal.mdx (default owner + personal-accounts +
   sync repo), repos.mdx (RepoRow + config.yaml persistence pattern), repo_settings.mdx (Owner control + §2.9 sync
   toggle), left_bar.mdx/left_bar.yaml (repos nested under owner), artifact_placement_policy.mdx + repo_tracking_scheme.mdx (sync-repo mirror routing).
+
+  ADDED §6.1 (LOCKED) the SLUG → COMPANY-STORAGE-ROW BINDING: deriving the string "ACT3ai" is not knowing WHICH
+  storage it is; the owner block must carry a real companyId, matched in order by (1) the manual override's exact
+  id, (2) the row's explicit org binding, (3) a normalized (lowercased, non-alphanumerics stripped) comparison of
+  the slug against company_name / row name / root slug, (4) else CREATE the row (§6). Binding is to the org SLUG
+  so renaming the friendly display name never breaks it. KNOWN GAP stated plainly (same one as storage_company
+  §8.7): ensureCompanyForOwner(slug) is cited everywhere but DOES NOT EXIST, and deriveOwnerForRemote returns
+  companyId:null, so an auto-derived company owner is never joined to a company storage row — a precondition for
+  §7.3. Code: deriveOwnerForRemote (git.service), ownerMatchesCompany + getOwnedRepos (storage-settings.service).
+  ADDED §7.3 (LOCKED) OWNERSHIP DECIDES THE SYNC-REPO TARGET, REMOTE FIRST — authority storage_company §8.4.2.
+  Joins the two previously disconnected systems (git-remote→company mapping and sync-repo→storage mapping): the
+  owning storage is the one the REMOTE ORG binds to, path containment only the fallback for repos with no forge
+  org, so charlie-kirk (remote github.com/ACT3ai/…) resolves to ACT3ai and NOT Personal despite living outside
+  that company's directory; the target is that storage's configured sync repo else its OWN GIT ROOT auto-adopted,
+  and the mirror DEFAULTS ON (repo_settings §2.9.1 toggle = opt-out) — superseding §7.2's and AC 8's "default
+  OFF". Grouping (§7.1) unchanged, no bytes move. New AC 8b + 8c. Code: resolveOwnerDedicatedRepo
+  (artifact-placement.service — today containment-first, which §7.3 corrects), parseRemoteOwner/
+  deriveOwnerForRemote (git.service), resolveStateSyncRepo (tracking-root.service).
 -->

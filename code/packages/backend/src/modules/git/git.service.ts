@@ -21,6 +21,10 @@ import { storageUnitDir } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
 import { LFBRIDGE_DIR } from "../storage/storage-type.service.js";
+// The remote parser lives in a LEAF module so tracking-root.service.ts can derive a repo's shared identity
+// (repoUid) without importing this heavy module — one parser, no cycle (storage_company.mdx §8.4.1).
+import { parseRemoteOwner } from "../storage/repo-identity.js";
+export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { log } from "../../shared/logging.js";
 
 /** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2).
@@ -103,29 +107,6 @@ export function classifyRemoteVisibility(remoteUrl: string | null): "public" | "
   return "private";
 }
 
-// The public forge hosts we recognize for owner/organization parsing (repo_company_mapping.mdx §2). Same set
-// classifyRemoteVisibility trusts. On these, a repo URL carries `<host>/<owner>/<repo>`, and `<owner>` is the
-// GitHub org / GitLab group / user account.
-const KNOWN_FORGES = /(github\.com|gitlab\.com|bitbucket\.org|codeberg\.org|git\.sr\.ht)/i;
-
-/** The parsed pieces of a remote origin URL (repo_company_mapping.mdx §2), or null when it isn't a
- *  host/owner/repo URL (a bare local path, or an unparseable shape). NO NETWORKING — pure string parsing per
- *  the charter. Handles the scp-like (`git@host:owner/repo.git`), https, ssh://, and git:// shapes. */
-export function parseRemoteOwner(
-  remoteUrl: string | null,
-): { host: string; owner: string; repo: string; knownForge: boolean } | null {
-  const r = (remoteUrl ?? "").trim();
-  if (!r) return null;
-  // scp-like: git@github.com:Owner/Repo.git
-  let m = /^[\w.-]+@([\w.-]+):([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(r);
-  // url forms: https://github.com/Owner/Repo.git · ssh://git@github.com/Owner/Repo · git://…
-  if (!m) m = /^(?:https?|ssh|git):\/\/(?:[^@/]+@)?([\w.-]+)(?::\d+)?\/([^/]+)\/(.+?)(?:\.git)?\/?$/.exec(r);
-  if (!m) return null;
-  const [, host, owner, repo] = m;
-  if (!host || !owner || !repo) return null;
-  return { host, owner, repo, knownForge: KNOWN_FORGES.test(host) };
-}
-
 /**
  * Derive a repo's owner from its git remote (repo_company_mapping.mdx §3), conservatively toward Personal.
  * A known-forge remote whose owner is NOT one of the user's personal accounts → a COMPANY named after the
@@ -167,25 +148,6 @@ export function deriveOwnerForRemote(
     host: parsed?.host ?? null,
     ownerSlug: null,
   };
-}
-
-/**
- * The NORMALIZED remote key `host/owner/repo` (repo_owner_propagation.mdx §2) — the identity that lets one
- * member's clone of a repo be matched to another member's clone (a repoKey is a per-machine path hash and can
- * never travel). SSH and HTTPS forms of the same remote collapse to one key because both parse to the same
- * host/owner/repo (repo_company_mapping.mdx §2). Returns null when the remote has no host/owner/repo (a bare
- * local path or an unparseable/absent remote — such a repo can't be company-asserted). Case is PRESERVED for
- * display; callers compare case-insensitively (see {@link sameRemoteKey}).
- */
-export function normalizeRemoteKey(remote: string | null): string | null {
-  const p = parseRemoteOwner(remote);
-  if (!p) return null;
-  return `${p.host}/${p.owner}/${p.repo}`;
-}
-
-/** Case-insensitive equality of two normalized remote keys (SSH/HTTPS already collapsed by normalizeRemoteKey). */
-export function sameRemoteKey(a: string | null, b: string | null): boolean {
-  return !!a && !!b && a.toLowerCase() === b.toLowerCase();
 }
 
 /**

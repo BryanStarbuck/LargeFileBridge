@@ -217,6 +217,54 @@ Applied files drop out of the **next** recompute, so the slug shrinks or disappe
 The batch popup reuses the warning popup component, in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` (mounts the shared `WarningPopup` body; apply → `POST /api/todo/batches/:id/apply`).
 
+### 6.1 A pull-down batch from a peer computer (LOCKED)
+
+The **pull-down** slug and popup are the surface for the product's load-bearing promise: *a file the user
+pinned on one of their computers reaches the other one.* The whole flow above already implements it — it was
+simply never given a non-empty batch, because the per-repo manifest that names a peer's pinned files did not
+travel. That travel is owned by
+[storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked)
+and the item shape by [to_do_batches.mdx §3.4](./to_do_batches.mdx#34-where-a-pull_down-item-comes-from--a-peer-computers-mirrored-manifest-locked).
+This subsection says only **how a pull-down batch differs from the others when it renders** — nothing about
+the slug (§5.1) or the popup (§6) is redesigned.
+
+**Every row is a file that is not on this computer.** Each is a
+**`presence: "remote-only"`** subject ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)),
+described **entirely from the manifest**. That changes four things and nothing else:
+
+1. **The row's identity is manifest-sourced.** Name, **target directory it will land in**, **size** (the
+   manifest's recorded size, never a local `stat`), and **"from {device}"**. There is no local path to
+   reveal in Finder and no modified date to show.
+2. **Two toggle columns, not three — and never an analysis axis.** **pin** is the batch's reason for
+   existing and is pre-checked; **git-ignore** shows when the file is not already ignored; **compress**
+   shows only for compressible kinds and is explicitly a **follow-on that runs after the bytes arrive**.
+   **Transcribe / AI description / OCR are never offered** on a pull-down row — analysis on absent bytes
+   would queue work that cannot run.
+3. **The left pane cannot preview media.** §6's "flips to a full-size media preview on hover" degrades, for
+   these rows only, to an **identity card** — name, size, target directory, *"pinned on {device}"* — and
+   **Space** does nothing. **Hovering must never fetch bytes:** pulling is the **Apply**, never a preview
+   side effect.
+4. **The tone is opportunity, not loss.** The educate copy reads *"these live on your other computer and can
+   be copied here"*, never *"these files are missing"*. Red on these rows means **available, not here yet**
+   ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)).
+
+**Apply on a pull-down batch** enqueues a **pull-down fetch** per checked row — pin the manifest CID so the
+bytes arrive over IPFS, then materialize them into the working tree — watchable on
+[Processing](./processing.mdx#461-a-pull_down-job-for-a-remote-only-row--the-path-locked). A checked
+compress axis runs **after** its file's bytes land. Because the list and the Apply read the **same**
+manifest ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)), a row the
+user can see is a row that can be pulled — a listed file must never fail with *"not in the manifest"*.
+
+**The slug's device name.** The `pull_down` template's *"from {device}"* cell and its sentence name the peer
+from the item's `pinned_on` (the peers holding it, this computer excluded). With more than one peer it reads
+the first plus a count (*"from studio-tower +1"*); with none resolvable it degrades to *"another computer"* —
+it is never blank and never invents a name.
+
+**A batch that empties itself is normal.** Pulled files drop out of the next recalc, and a file that
+disappears from a peer's manifest also drops out — **without deleting anything here**
+([to_do_batches.mdx §3.4](./to_do_batches.mdx#34-where-a-pull_down-item-comes-from--a-peer-computers-mirrored-manifest-locked)).
+The slug shrinking to nothing is success or a peer's own decision, never an error state.
+
 ---
 
 ## 7. "Show what could be transcribed" (LOCKED)
@@ -280,6 +328,17 @@ The To-Do page and [warnings](./warnings.mdx) are **two views of one model**:
    that enqueues background jobs on Processing.
 7. A repo's batch is the **same** model as its page warning; applying from either surface clears it from
    both; non-file-batch warnings do not appear as slugs.
+8. **A pull-down batch renders files that are not on this computer (§6.1).** Its rows are **remote-only**
+   subjects described **entirely from the peer's mirrored manifest** — name, target directory, manifest
+   size, *"from {device}"* (first peer + count when several, *"another computer"* when unresolvable, never
+   blank). The popup shows **pin** (pre-checked) and, where applicable, **git-ignore** and a **post-arrival
+   compress**; it **never** offers transcribe / AI description / OCR. The left pane degrades to an
+   **identity card** instead of a media preview, **Space** does nothing, and **hovering never fetches
+   bytes**. Apply enqueues a pull-down fetch per checked row and **cannot fail with "not in the manifest"**,
+   because the list and the Apply read the same manifest
+   ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)). The copy reads as
+   **opportunity, not loss**, and a slug that empties itself — pulled, or dropped from a peer's manifest —
+   is normal and deletes nothing locally.
 
 <!--
   To Do page (/todo, nav item "To Do" ListTodo, after Scans before Settings, count badge). Renders each
@@ -291,4 +350,22 @@ The To-Do page and [warnings](./warnings.mdx) are **two views of one model**:
   decisions + queues effects async → Processing). Header link "Show what could be transcribed" runs
   transcribe_calc_engine → transcribe slugs → ~80% popup, default-checked, "Transcribe N files" → bg jobs.
   Same model as warnings.mdx (repo batch = repo page banner). Page: TodoPage.tsx. Data: to_do_batches.mdx.
+
+  §6.1 (NEW, LOCKED) A PULL-DOWN BATCH FROM A PEER COMPUTER — the surface for the product's load-bearing
+  promise (a file pinned on one computer reaches the other). The slug + popup ALREADY implemented it; they
+  were never given a non-empty batch because the per-repo manifest never travelled (travel owned by
+  storage_company.mdx §8; item shape by to_do_batches.mdx §3.4 — link, don't restate). NOTHING in §5.1/§6 is
+  redesigned. What differs: every row is a presence:"remote-only" subject (§8.5) described ENTIRELY from the
+  manifest → (1) identity is manifest-sourced (name · target dir it will LAND in · manifest size never a
+  stat · "from {device}"); no Finder reveal, no modified date. (2) TWO toggle columns not three — pin
+  (pre-checked) + git-ignore when not already ignored + compress ONLY for compressible kinds and ONLY as a
+  post-arrival follow-on; transcribe/describe/OCR are NEVER offered (can't analyze absent bytes).
+  (3) the left pane CANNOT preview media — degrades to an IDENTITY CARD, Space does nothing, and HOVERING
+  MUST NEVER FETCH (pulling is the Apply, never a preview side effect). (4) tone = OPPORTUNITY not loss;
+  red here means "available, not here yet". Apply → one pull-down fetch per checked row (pin the CID → bytes
+  arrive → materialize into the working tree), watchable on processing.mdx §4.6.1; compress runs AFTER the
+  bytes land. List + Apply read the SAME manifest (§8.6) so a visible row can always be pulled — never "not
+  in the manifest". Device name = first of pinned_on + count ("from studio-tower +1"), degrades to "another
+  computer", never blank, never invented. A slug emptying itself (pulled, or dropped from a peer's manifest)
+  is NORMAL and deletes nothing locally. AC 8 added.
 -->

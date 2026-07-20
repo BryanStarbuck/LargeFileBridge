@@ -123,17 +123,29 @@ export function RepoSettingsPage() {
         />
       )}
 
+      {/* The mirror is ON by default and this control is an OPT-OUT (repo_settings.mdx §2.9.1,
+          storage_company.mdx §8.4.2). When the repo cannot mirror at all we show the toggle OFF and
+          DISABLED with the reason, rather than an inviting switch that silently does nothing. */}
       {s.syncRepo && (
         <Section title="Company sync repo">
           <Toggle
             label="Sync this repo's tracking state to the company sync repo"
             checked={s.syncRepo.enabled}
+            disabled={!s.syncRepo.available}
             onChange={(v) => patch.mutate({ syncRepo: { enabled: v } })}
           />
           <p style={{ margin: "4px 0 0", fontSize: 12, opacity: 0.7 }}>
-            Off by default — Large File Bridge keeps this repo's compression, big-file, and git-ignore
-            tracking in Local Storage, never in the working repo. Turn this on to also mirror it to the
-            owning company or Personal storage's sync repo so it travels to your other computers.
+            {s.syncRepo.available ? (
+              <>
+                On by default — Large File Bridge keeps this repo's compression, big-file, and git-ignore
+                tracking in Local Storage, never in the working repo, and also mirrors it to the owning
+                company or Personal storage's sync repo so it travels to your other computers. Turn this off
+                to keep it on this computer only.
+                {s.syncRepo.target ? <> Mirroring to <code>{s.syncRepo.target}</code>.</> : null}
+              </>
+            ) : (
+              s.syncRepo.reason
+            )}
           </p>
         </Section>
       )}
@@ -228,10 +240,20 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     </div>
   );
 }
-function Toggle({ label, checked, onChange }: { label: string; checked: boolean; onChange: (v: boolean) => void }) {
+function Toggle({
+  label,
+  checked,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  checked: boolean;
+  onChange: (v: boolean) => void;
+  disabled?: boolean;
+}) {
   return (
-    <label className="flex items-center gap-2 py-0.5 text-sm">
-      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} />
+    <label className={`flex items-center gap-2 py-0.5 text-sm ${disabled ? "opacity-60" : ""}`}>
+      <input type="checkbox" checked={checked} disabled={disabled} onChange={(e) => onChange(e.target.checked)} />
       {label}
     </label>
   );

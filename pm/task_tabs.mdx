@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Task Tabs (the per-repo file screen's All / IPFS / Compress / Transcribe / AI descriptions / OCR tabs)
-description: The tab strip that sits a little right of center in the One-repo header's first row (the repo name on the left — the biggest, boldest text on the page, which never wraps and is never squeezed; the gear + the smart "View recommendation" / "Scan now" primary on the right), with SIX tabs — All, IPFS, Compress, Transcribe, AI descriptions, OCR — one selected at a time. The strip is width-measured: tabs that don't fit move, always from the RIGHT, into a trailing down-chevron overflow menu that renders only when something overflows, and the active tab is always swapped back into the visible set. Selecting a tab re-tunes EVERYTHING below it: the metrics-panel strip, the visible table columns, the default sort, and which files the table shows. The All tab is the overview and is metrics-forward, leading with the two adjacent decision tiles — Add to IPFS and Git Ignore — which replaced the single Undecided tile and absorbed the old "Big, not git-ignored". Each metric panel is deliberately NARROW — as wide as its widest word — a small label (rendered with the catalog's exact casing; it wraps onto as many lines as it needs) stacked over a big centered number; a light-green rounded rectangle with a big 0 when nothing is to be done. THE METRIC PANELS ARE THIS PAGE'S ONLY WARNING SURFACE — there is no separate warning banner: clicking a panel opens that metric's educate-and-fix popup. The strip takes the FULL page width, is ONE row, and NEVER wraps — the region that used to be docked to its right is gone, so nothing reserves width from it. The IPFS / Compress / Transcribe / AI descriptions / OCR tabs narrow the file set and columns to that one task. The Transcribe tab adds a three-state Transcribe status icon (filled indigo = done · orange-edge/99%-white = could be transcribed · thin-light-grey edge = not applicable). The explanation for whatever the user hovers (a panel, a row, a status icon, an action link) is published to the hover-info panel at the BOTTOM OF THE LEFT BAR so the panels themselves stay terse. Companion to one_repo.mdx (the page that hosts the tabs), warnings.mdx (the metric popups), decision_toggles.mdx (the toggle grammar the status icons echo), Transcribe.mdx / compression.mdx / ipfs_ui.mdx / ai_description.mdx / ocr.mdx (the per-tab tasks), special_files.mdx (the classifier that scopes each tab), left_bar.mdx (the panel the hover text lands in), and non_intrusive_tooltip.mdx (the hover-info content model).
+description: The tab strip that sits a little right of center in the One-repo header's first row (the repo name on the left — the biggest, boldest text on the page, which never wraps and is never squeezed; the gear + the smart "View recommendation" / "Scan now" primary on the right), with SIX tabs — All, IPFS, Compress, Transcribe, AI descriptions, OCR — one selected at a time. The strip is width-measured: tabs that don't fit move, always from the RIGHT, into a trailing down-chevron overflow menu that renders only when something overflows, and the active tab is always swapped back into the visible set. Selecting a tab re-tunes EVERYTHING below it: the metrics-panel strip, the visible table columns, the default sort, and which files the table shows. The All tab is the overview and is metrics-forward, leading with the two adjacent decision tiles — Add to IPFS and Git Ignore — which replaced the single Undecided tile and absorbed the old "Big, not git-ignored". Each metric panel is deliberately NARROW — as wide as its widest word — a small label (rendered with the catalog's exact casing; it wraps onto as many lines as it needs) stacked over a big centered number; a light-green rounded rectangle with a big 0 when nothing is to be done. THE METRIC PANELS ARE THIS PAGE'S ONLY WARNING SURFACE — there is no separate warning banner: clicking a panel opens that metric's educate-and-fix popup. The strip takes the FULL page width, is ONE row, and NEVER wraps — the region that used to be docked to its right is gone, so nothing reserves width from it. The IPFS / Compress / Transcribe / AI descriptions / OCR tabs narrow the file set and columns to that one task. The Transcribe tab adds a three-state Transcribe status icon (filled indigo = done · orange-edge/99%-white = could be transcribed · thin-light-grey edge = not applicable). The explanation for whatever the user hovers (a panel, a row, a status icon, an action link) is published to the hover-info panel at the BOTTOM OF THE LEFT BAR so the panels themselves stay terse. Remote-only rows — files a peer computer has pinned that this one does not have yet (storage_company.mdx §8.5) — belong on the All and IPFS tabs only; they are never shown on Compress / Transcribe / AI descriptions / OCR, because their analysis status is `na` and padding those tabs with un-runnable work would be a lie (§4.8). Companion to one_repo.mdx (the page that hosts the tabs), warnings.mdx (the metric popups), decision_toggles.mdx (the toggle grammar the status icons echo), Transcribe.mdx / compression.mdx / ipfs_ui.mdx / ai_description.mdx / ocr.mdx (the per-tab tasks), special_files.mdx (the classifier that scopes each tab), left_bar.mdx (the panel the hover text lands in), and non_intrusive_tooltip.mdx (the hover-info content model).
 ---
 
 # LargeFileBridge — Task Tabs
@@ -691,6 +691,49 @@ Describe/OCR/Compress, a **small PDF on OCR**. `analysisOnly` rows are **never b
 exactly as the checked-in-nudge rows are ([scan.mdx §4.1](./scan.mdx), the `nudgeOnly` exclusion), so
 surfacing a thumbnail for OCR never silently pins it to IPFS.
 
+### 4.8 Remote-only rows belong on All and IPFS only (LOCKED)
+
+A row in the file list is no longer always a local file. A **remote-only** row — a file another of the
+user's computers has pinned and this one does not have yet, composed from the reconciled manifest with no
+local bytes behind it — is defined and locked in
+[storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)
+and rendered by [one_repo.mdx §4.10](./one_repo.mdx#410-remote-only-rows--a-file-in-this-list-that-is-not-on-this-computer-locked).
+This section says only where the **tabs** put it:
+
+| Tab | Shows remote-only rows? | Why |
+| --- | --- | --- |
+| **All** | **Yes** | All is the overview — *"everything this repo has"* now honestly includes files that exist on the user's other computer. Hiding them here is what made the two-computer case invisible. |
+| **IPFS** | **Yes** | The pin axis is exactly what a remote-only row is about: decided to sync, not here yet. It sorts to the **top** of the tab's worst-first transfer-urgency sort (§4.2) — a file that is *not on this machine at all* is the worst case of "missing". |
+| **Compress** | **No** | Nothing to compress — there are no local bytes. |
+| **Transcribe** | **No** | `transcribe` is `na`. |
+| **AI descriptions** | **No** | `describe` is `na`. |
+| **OCR** | **No** | `ocr` is `na`. |
+
+* **The three analysis tabs must not be padded.** Each of those tabs' `rowFilter` selects files whose task
+  status is `could` or `done`; a remote-only row is **`na`** on all three ([one_repo.mdx §4.10](./one_repo.mdx)),
+  so it is filtered out **by the existing rule, with no special case** — the tab keeps its promise that every
+  row on it is work that can actually be started. Showing a row the user cannot act on would inflate the tab
+  and hand them a disabled icon as an answer.
+* **The metrics strip follows the same line.** A remote-only row raises the **`Pull down`** tile (always) and
+  the **`Add to IPFS`** tile (while this computer has not decided it), and raises **no** `Compressible
+  videos` / `Compressible images` / `Transcribable` / `AI Describable` / `OCRable` / `Git Ignore` count
+  (§2.5, §2.5.1). So on a laptop that is simply behind, the analysis tiles stay honest green zeros while
+  `Pull down` carries the number.
+* **The worst-first header recommendation is unchanged** (§2.7): `ipfs-down → pull-down → add-to-IPFS →
+  transcribe → describe → compress → ocr`. Remote-only rows feed the **pull-down** link — already the second
+  and one of the two `bad`-state links — so the laptop's header primary correctly reads a **red "View
+  recommendation ›"** that opens the existing Pull-down popup. **No new recommendation link and no new
+  ordering is introduced.**
+* **`Large files only` does not hide them** on any tab ([tables.mdx §4e](./tables.mdx#4e-remote-only-rows-in-a-file-table-locked-site-wide)):
+  a remote-only row is a large file, not an `analysisOnly` row. It is unaffected by the OCR tab's default-OFF
+  exception (§4.6) because the OCR tab does not show it at all.
+
+The tab that admits or excludes a remote-only row is the tab's own `rowFilter` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`
+(the analysis tabs' `could`/`done` predicates already exclude `na`), over the rows composed by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`,
+whose per-tile counts come from `computeTaskMetrics()`.
+
 ---
 
 ## 5. The Transcribe status icon — three states (LOCKED)
@@ -1029,6 +1072,16 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
     ([one_repo.mdx §4.3.1](./one_repo.mdx)); the two decision axes still exist as data, set via the Pin/Ignore
     icons. The **Compress** tab additionally shows its **green Compress status icon** as a **content** column
     (§4.3, §6) — Compress is not one of the five leading icons.
+15. **Remote-only rows appear on All and IPFS, and on no other tab (§4.8).** A row with
+    `presence: "remote-only"` ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked),
+    [one_repo.mdx §4.10](./one_repo.mdx#410-remote-only-rows--a-file-in-this-list-that-is-not-on-this-computer-locked))
+    shows on **All** and on **IPFS** (where it sorts to the **top** of the worst-first transfer-urgency
+    sort), and is excluded from **Compress / Transcribe / AI descriptions / OCR** by those tabs' existing
+    `could`/`done` predicates because its task status is **`na`** — no special case, and no tab is ever
+    padded with work that cannot run. It raises the **`Pull down`** tile (always) and **`Add to IPFS`**
+    (while undecided here) and **no** compression / analysis / `Git Ignore` count, so the analysis tiles stay
+    green zeros on a merely-behind computer. The worst-first chain and the header primary are **unchanged** —
+    remote-only rows feed the existing **pull-down** link.
 
 <!--
   Task Tabs = the SIX-tab strip (All / IPFS / Compress / Transcribe / AI descriptions / OCR) in ROW 1 of
@@ -1116,4 +1169,17 @@ filtered `data`, and the tab's `metrics` to `MetricsStrip`).
   green); could-edge + N/A hairline identical across all three. New FileRow.describe (TaskStatus); TaskMetrics
   gains describable/described; TaskTabId = all|ipfs|compress|transcribe|ai-descriptions|ocr. Owns the task-tab surface for transcribe AND describe;
   ai_description.mdx owns the describe feature, describe_calc_engine.mdx the bulk-discovery engine.
+  §4.8 (NEW, LOCKED) REMOTE-ONLY ROWS ON THE TABS: a FileRow may be presence:"remote-only" (a peer computer
+  pinned it, this one doesn't have the bytes) — defined+LOCKED in storage_company.mdx §8.5, rendered by
+  one_repo.mdx §4.10; this file only places it. SHOWN on All (the overview must honestly include what your
+  other computer has) and IPFS (it is the purest "decided to sync, not here" case and sorts to the TOP of
+  the tab's worst-first transfer-urgency sort). NOT shown on Compress/Transcribe/AI descriptions/OCR — its
+  transcribe/describe/ocr are `na`, so those tabs' EXISTING could/done rowFilters already exclude it: NO
+  special case, and no analysis tab is ever padded with work that cannot run (a disabled icon is not an
+  answer). Metrics follow: raises Pull down ALWAYS + Add to IPFS while undecided here, raises NO
+  compressible/transcribable/describable/OCRable/Git Ignore count — so on a merely-behind laptop the
+  analysis tiles stay green zeros while Pull down carries the number. The worst-first chain (§2.7) is
+  UNCHANGED: remote-only rows feed the existing pull-down link (already a `bad` state, already 2nd), so no
+  new recommendation and no re-ordering. Large-files-only never hides them (tables.mdx §4e); the OCR
+  default-OFF exception is irrelevant since OCR doesn't show them. AC 15 added.
 -->

@@ -128,6 +128,21 @@ export function OneRepoPage() {
     },
   });
 
+  // Pull ONE remote-only file's bytes down over IPFS (storage_company.mdx §8.5). The row is built from a
+  // peer's manifest entry, so "pull it down" is the only action it can offer — and the same endpoint the
+  // Pull-down popup uses, so one file and a whole batch travel the identical path.
+  const pullOne = useMutation({
+    mutationFn: (p: string) => api.pull(repoId, [p], { compress: false }),
+    onSuccess: () => {
+      void qc.invalidateQueries({ queryKey: ["repo", repoId] });
+      toast.success("Pulling it down — the bytes are on their way over IPFS.");
+    },
+    onError: (e: Error) => {
+      clientLog.error("OneRepoPage.pullOne", e);
+      toast.error(e.message);
+    },
+  });
+
   const pinNow = useMutation({
     mutationFn: (paths?: string[]) => api.pinNow(repoId, paths),
     onSuccess: (r: PinNowResult) => {
@@ -313,28 +328,41 @@ export function OneRepoPage() {
         // Reality without intent — rendered as a GREEN filled pin, distinct from intent-blue, so the app
         // never shows "not pinned" for a file the node genuinely holds.
         const foreignPinned = !decided && f.pinnedForeign === true;
-        const state: TaskStatus = decided || foreignPinned ? "done" : "could";
-        const doneColor = missingHere ? "#dc2626" : foreignPinned ? "#15803d" : undefined;
+        // FIFTH state (storage_company.mdx §8.5): a REMOTE-ONLY row — another of your computers has this
+        // file's bytes and this one does not. It is the purest case of the red state (wanted here, not here),
+        // so it renders red whatever this computer has decided, and its one action is PULL IT DOWN rather
+        // than a decision toggle. Red here means "available, not here yet" — never "lost".
+        const remoteOnly = f.presence === "remote-only";
+        const state: TaskStatus = decided || foreignPinned || remoteOnly ? "done" : "could";
+        const doneColor = missingHere || remoteOnly ? "#dc2626" : foreignPinned ? "#15803d" : undefined;
+        const onDevice = f.addedByDevice ? `On ${f.addedByDevice}` : "On another of your computers";
         return (
           <TaskIconCell
             kind="pin"
             state={state}
             doneColor={doneColor}
-            disabled={ipfsDown || blockedByNeverIpfs}
+            disabled={ipfsDown || (blockedByNeverIpfs && !remoteOnly)}
             title={
-              blockedByNeverIpfs
-                ? "Add to IPFS is blocked by Never-IPFS"
-                : foreignPinned
-                  ? "Pinned locally — this file is already pinned on this computer's IPFS node (by other IPFS software, which is fine). Click to have Large File Bridge sync it across your computers too."
-                  : !decided
-                    ? "Not set to sync — click to add this file to IPFS"
-                    : missingHere
-                      ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
-                      : "Synced (pinned) on this computer — click to stop syncing this file"
+              remoteOnly
+                ? `${onDevice} — not on this computer yet. Click to pull it down over IPFS.`
+                : blockedByNeverIpfs
+                  ? "Add to IPFS is blocked by Never-IPFS"
+                  : foreignPinned
+                    ? "Pinned locally — this file is already pinned on this computer's IPFS node (by other IPFS software, which is fine). Click to have Large File Bridge sync it across your computers too."
+                    : !decided
+                      ? "Not set to sync — click to add this file to IPFS"
+                      : missingHere
+                        ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
+                        : "Synced (pinned) on this computer — click to stop syncing this file"
             }
             extraHover={fileSummary(f)}
-            // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2).
-            onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: !decided, gitignore: !!f.gitignore })}
+            // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2) — except for a
+            // remote-only row, whose only meaningful action is to fetch the bytes.
+            onActivate={() =>
+              remoteOnly
+                ? pullOne.mutate(f.path)
+                : setAxes.mutate({ paths: [f.path], ipfs: !decided, gitignore: !!f.gitignore })
+            }
           />
         );
       },
@@ -351,8 +379,13 @@ export function OneRepoPage() {
         // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so OFF is
         // not ours to perform — show it ON but locked and name the rule (git_ignore.mdx §5.5).
         const locked = !!f.gitignoreLocked;
-        const title =
-          locked && f.gitignoreRule
+        // A remote-only row has no bytes on this computer (storage_company.mdx §8.5), so there is nothing
+        // here for git to ignore — the toggle is disabled and says why rather than writing a .gitignore line
+        // for a path this working tree does not contain.
+        const remoteOnly = f.presence === "remote-only";
+        const title = remoteOnly
+          ? "Not on this computer yet — pull it down first, then you can git-ignore it."
+          : locked && f.gitignoreRule
             ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}. ` +
               `That rule covers more than this file, so Large File Bridge will not rewrite it.`
             : on
@@ -362,7 +395,7 @@ export function OneRepoPage() {
           <TaskIconCell
             kind="ignore"
             state={on ? "done" : "could"}
-            disabled={locked}
+            disabled={locked || remoteOnly}
             title={title}
             extraHover={fileSummary(f)}
             onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !on })}

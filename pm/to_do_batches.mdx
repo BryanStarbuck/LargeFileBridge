@@ -192,6 +192,52 @@ they had in the shared ledger.
 Setting/clearing `dismissed` (and the materially-changed reset) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `dismissBatch(id)` and `TodoBatchCalcEngine.reconcileDismissed()`.
 
+### 3.4 Where a `pull_down` item comes from — a peer computer's mirrored manifest (LOCKED)
+
+Every other category is computed from **files this computer can see**. `pull_down` is the one category whose
+items describe **files that are not on this disk at all** — so it has a different, and until now empty,
+input.
+
+* **The input is the reconciled per-repo manifest**, not the disk walk. A peer computer pinned the file and
+  recorded `path → cid + pinned_by` in its manifest; that manifest travelled to this computer through the
+  owning storage's sync repo and was **merged** into Local Storage. The mechanism is owned by
+  [storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked) —
+  remote-keyed mirror subtrees (§8.4.1), the SDL auto-adopted with the mirror ON (§8.4.2), and a per-entry
+  union merge on every backbone pull (§8.4.3). **This spec does not restate it; it consumes it.**
+* **Why every `pull_down` total used to read 0.** The manifest never travelled, so the engine's
+  `missingPinnedFromPeers()` call joined an **empty** file list and emitted nothing. The category, the
+  `pattern`, the slug template and the popup were all shipped and all correct — they had no data. A batch
+  with `pull_down: { count: 0 }` on a repo whose peer has pinned files is a **travel** bug, never a batch bug.
+* **The one manifest.** The engine and the Apply path must read the **same** manifest — the Local-Storage
+  tracking manifest at `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`
+  ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)). Reading the
+  SDL-only committed manifest for a **working repo** finds nothing and **fails every item in the batch** —
+  a correct list followed by a whole-batch failure.
+* **What an item carries, and where each field comes from.** For a `pull_down` item the manifest is the
+  *only* source — there is no `stat` to fall back on:
+
+| Field | Source for a `pull_down` item |
+| --- | --- |
+| `path` | the manifest entry's repo-relative path (the file will **land** here) |
+| `size_bytes` | the manifest's recorded size — **never** a local `stat` |
+| `cid` | the manifest entry's CID; an entry with **no CID is not a candidate** (nothing to pull) |
+| `pinned_on` | the union of `pinned_by` **minus this computer** — the peers that already hold it |
+| `recommend` | `{ ipfs: true, git_ignore: true }` — pin it here, and keep it out of Git |
+
+* **Absence is never a delete.** A file that drops out of a peer's manifest simply **stops being
+  recommended** on the next recalc (§5, recalculate-and-replace). It is not a deletion, not a warning, and
+  nothing local is touched (§8.4.3).
+* **A `pull_down` item's recommendation never includes an analysis axis.** `transcribe` / `describe` / `ocr`
+  are meaningless for bytes that are not here; `compress` is offered only as a **follow-on after the bytes
+  land** ([to_do.mdx §6.1](./to_do.mdx#61-a-pull-down-batch-from-a-peer-computer-locked)). This matches the
+  remote-only row rule in
+  [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked).
+* **Deduplication still applies.** A path emitted as `pull_down` is `seen` and is **not** re-emitted as
+  `pin` or `git_ignore` — one file, one recommendation, in the highest-value category.
+
+Emitting `pull_down` items from the reconciled manifest is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `recalcRepo()` (the `pull_down` block, first and `seen`-marking), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
+
 ---
 
 ## 4. Transcribe batches — a sibling `kind` (LOCKED)
@@ -279,6 +325,15 @@ These routes are served in code:
 7. The calc engine **recalculates and replaces** a storage's whole batch each scan; Apply writes decisions
    + effects and never edits the batch file; applied files drop out of the next recompute.
 8. The API exposes list (slugs) / detail (items) / apply / dismiss / transcribe-scan.
+9. **`pull_down` items are built from the reconciled per-repo manifest, not the disk walk (§3.4).** Their
+   `size_bytes` / `cid` / `pinned_on` come from the **manifest** (no local `stat` exists), an entry with no
+   CID is not a candidate, `pinned_on` excludes this computer, and `recommend` is `{ ipfs, git_ignore }` with
+   **no analysis axis** (compress is a post-arrival follow-on only). The engine and the Apply path read the
+   **same** manifest — the Local-Storage tracking manifest
+   ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)) — so a listed file
+   can never fail Apply with "not in the manifest". A path emitted as `pull_down` is **not** re-emitted as
+   `pin` or `git_ignore`, and a file that vanishes from a peer's manifest simply stops being recommended on
+   the next recalc — **never** a delete.
 
 <!--
   TO DO Batch = per-storage bundle of recommended file actions. ONE per storage: personal_2_do.yaml,
@@ -289,4 +344,21 @@ These routes are served in code:
   survives (and only while unchanged). Apply writes decisions (shared ledger) + effects, never edits the
   file. Produced by to_do_batch_calc_engine.mdx (scan) + transcribe_calc_engine.mdx (on-demand). Read by
   to_do.mdx (slugs+popup) and projected as warnings.mdx. Frozen filename form: *_2_do.yaml.
+
+  §3.4 (NEW, LOCKED) WHERE A pull_down ITEM COMES FROM. Every other category is computed from files this
+  computer CAN SEE; pull_down is the ONE category whose items describe files NOT ON THIS DISK, so its input
+  is the reconciled per-repo MANIFEST (a peer pinned it and recorded path→cid+pinned_by; the manifest
+  travelled via the owning storage's sync repo and was MERGED in). Mechanism owned by storage_company.mdx §8
+  — CONSUMED here, never restated. Why every pull_down total used to read 0: the manifest never travelled, so
+  missingPinnedFromPeers() joined an EMPTY file list — the category/pattern/slug/popup were all shipped and
+  all CORRECT with no data. A 0 where a peer has pinned files is a TRAVEL bug, never a batch bug. Field
+  sourcing table (manifest is the ONLY source — there is no stat): path = where it will LAND; size_bytes =
+  the manifest's recorded size NEVER a local stat; cid required (no CID → not a candidate); pinned_on =
+  union(pinned_by) MINUS this computer; recommend = {ipfs, git_ignore}. NO analysis axis ever (can't
+  transcribe/describe/OCR absent bytes); compress only as a POST-ARRIVAL follow-on. Absence is never a
+  delete — a vanished peer entry just stops being recommended on the next recalculate-and-replace. Dedup
+  holds: a pull_down path is `seen` and never re-emitted as pin/git_ignore. The engine and Apply must read
+  the SAME manifest (the Local-Storage tracking one, §8.6) or a correct list is followed by a whole-batch
+  failure. Code: todo-batch.engine recalcRepo() pull_down block ← pin.service missingPinnedFromPeers().
+  AC 9 added.
 -->

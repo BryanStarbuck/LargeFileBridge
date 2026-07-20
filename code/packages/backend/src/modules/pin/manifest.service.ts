@@ -10,14 +10,19 @@ import path from "node:path";
 import YAML from "yaml";
 import { ManifestSchema, type Manifest, type ManifestFile } from "@lfb/shared";
 import { resolveTrackingRoot } from "../storage/tracking-root.service.js";
+import { trackingBaseDir } from "../storage/storage-type.service.js";
 import { mirrorToSyncRepo } from "../storage/tracking-sync.service.js";
 import { log } from "../../shared/logging.js";
 
-/** The committed manifest for an SDL storage lives in its `.lfbridge/` (that dedicated repo IS the travel
- *  vehicle, storage_personal.mdx §1). A plain repo storage does NOT use this — its manifest is Category-B
- *  tracking state in Local Storage (see {@link repoTrackingManifestPath}). */
+/** The committed manifest for an SDL storage lives at the storage ROOT — `<root>/manifest.yaml` — because an
+ *  SDL has NO `.lfbridge/` at all: `.lfbridge/` is a working-repo-only concept and the SDL root IS the
+ *  tracking area (artifact_placement_policy.mdx §0, storage_company.mdx §1/§8.7). This used to hardcode
+ *  `<root>/.lfbridge/manifest.yaml`, which violated that locked rule and left TWO divergent manifests in the
+ *  same company storage. Routed through `trackingBaseDir()` so there is exactly one answer per storage kind.
+ *  A plain repo storage does NOT use this — its manifest is Category-B tracking state in Local Storage
+ *  (see {@link repoTrackingManifestPath}). */
 export function committedManifestPath(repoPath: string): string {
-  return path.join(repoPath, ".lfbridge", "manifest.yaml");
+  return path.join(trackingBaseDir(repoPath), "manifest.yaml");
 }
 
 /** A repo storage's manifest is Category-B tracking state: it lives in LOCAL STORAGE at

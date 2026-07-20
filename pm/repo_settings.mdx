@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo Settings (Per-Repo)
-description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the pinned on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). It ALSO holds three organized sections added on top of those: a Transcription section and an IDENTICAL AI-descriptions section, each mounting the shared 3-way placement radio (placement_radios.mdx) that chooses where the repo's `.transcription` / `.ai_description` artifacts are written — (a) the repo's hidden `.lfbridge/` folder (default, committed, travels by git), (b) beside the media file (a deliberate opt-in reintroduction of the previously-superseded beside-media layout, now with the extension APPENDED not replaced), or (c) the owning company/Personal storage's LFB sync repo (only enabled when that storage has one configured, else disabled with a setup hint); switching a radio affects only FUTURE artifacts and a "move existing" action migrates the rest — plus an Ownership section showing the repo's derived company/Personal owner (auto from git remote vs. manual) with a reassign control, and a per-repo "Sync this repo's tracking state to the company sync repo" toggle (default OFF, enabled only when the owner has a sync repo) that ADDITIONALLY mirrors this repo's Category-B tracking state to <syncRepo>/repos/<repoKey>/ on top of Local Storage. Both config.yaml (this computer's participation) and the repo-wide repo_storage.yaml (repo-wide tracking state) are machine-local under Local Storage ~/T/_large_files_bridge/repos/<repoKey>/ — neither lives in the working repo. Everything on this page writes to that repo's pin/r/<repo_name>/config.yaml (new fields transcription.placement, aiDescription.placement, ownership, and sync_repo.enabled on RepoSettings). Settings not overridden here fall back to the global values.
+description: The per-repo settings page. Reached by the GEAR ICON shown on a single repo's page (the "one repo" view) — clicking the gear opens this settings page scoped to that one repo. It holds the settings that can differ per repo: the big-file threshold override (a checkbox that is OFF by default = inherit the global setting from settings.mdx; ON reveals a value + MB/GB/TB unit dropdown that overrides just this repo), the pinned on/off master toggle, the large-file selection rules (follow .gitignore, include/exclude globs), the pinning/fetch policy, and sharing (private to your own computers vs. shared with allow-listed participants). It ALSO holds three organized sections added on top of those: a Transcription section and an IDENTICAL AI-descriptions section, each mounting the shared 3-way placement radio (placement_radios.mdx) that chooses where the repo's `.transcription` / `.ai_description` artifacts are written — (a) the repo's hidden `.lfbridge/` folder (default, committed, travels by git), (b) beside the media file (a deliberate opt-in reintroduction of the previously-superseded beside-media layout, now with the extension APPENDED not replaced), or (c) the owning company/Personal storage's LFB sync repo (only enabled when that storage has one configured, else disabled with a setup hint); switching a radio affects only FUTURE artifacts and a "move existing" action migrates the rest — plus an Ownership section showing the repo's derived company/Personal owner (auto from git remote vs. manual) with a reassign control, and a per-repo "Sync this repo's tracking state to the company sync repo" toggle that ADDITIONALLY mirrors this repo's Category-B tracking state to <syncRepo>/repos/<repoKey>/ on top of Local Storage — a toggle whose default is now ON (§2.9.1, superseding the old default OFF per storage_company.mdx §8.4.2), because an owning company/Personal SDL that is a git working tree is AUTO-ADOPTED as the sync repo, making the control an OPT-OUT; an absent sync_repo block means default-ON and only an explicit false opts out, while a repo with no git remote (nothing to address a mirror to) or no owning storage renders the toggle disabled and OFF with an honest hint rather than a warning. Both config.yaml (this computer's participation) and the repo-wide repo_storage.yaml (repo-wide tracking state) are machine-local under Local Storage ~/T/_large_files_bridge/repos/<repoKey>/ — neither lives in the working repo. Everything on this page writes to that repo's pin/r/<repo_name>/config.yaml (new fields transcription.placement, aiDescription.placement, ownership, and sync_repo.enabled on RepoSettings). Settings not overridden here fall back to the global values.
 ---
 
 # LargeFileBridge — Repo Settings (Per-Repo)
@@ -175,7 +175,11 @@ default that state — `repo_storage.yaml`, `files.yaml`, the per-file sidecars,
 [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
 
 * A **toggle: "Sync this repo's tracking state to the company sync repo."**
-* **Default: OFF** — tracking state stays in Local Storage only.
+* **Default: OFF** — tracking state stays in Local Storage only. **SUPERSEDED** by
+  [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)
+  and by §2.9.1 below: when an owning storage with a **git-backed SDL** resolves, the default is **ON** and this
+  toggle is an **opt-out**. The sentence above survives only as the description of the *residual* case — no sync
+  repo can be resolved at all — where there is nothing to mirror to.
 * **Enabled only when the owning company/Personal storage has a sync repo configured**
   ([storage_settings.mdx §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state),
   owner resolved per §6); otherwise the toggle is **disabled with a hint** — *"No sync repo is configured for
@@ -193,6 +197,53 @@ artifacts use (those default to `lfbridge` regardless).
 
 Reading whether a sync repo exists for the owner, and persisting this per-repo toggle, is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null` when none configured or the toggle is off) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (writes `sync_repo.enabled`).
+
+### 2.9.1 The default is ON — this toggle is an OPT-OUT (LOCKED)
+
+The authority for this rule is
+[storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked);
+this section says only what it means **on this page**. It supersedes the "Default: OFF" bullet above.
+
+* **An owning storage's SDL that is a git working tree IS its sync repo.** No second repo has to be
+  configured for this toggle to have somewhere to point: a company / Personal SDL is normally a git repo, and
+  LFB **auto-adopts** it. An **explicitly configured `sync_repo`** on the owning storage
+  ([storage_settings.mdx §4b](./storage_settings.mdx#4b-the-sync-repo--an-additive-mirror-of-owned-repos-tracking-state))
+  still **wins**; auto-adoption is the **fallback**, never an override.
+* **So the toggle ships ON.** When an owning storage with a git-backed SDL resolves, this repo's Category-B
+  tracking state mirrors by default. The toggle **still exists and still wins** — the user can switch it off
+  for a repo whose tracking they do not want travelling — it is simply an **opt-out** now, not an opt-in.
+  The reason for the flip is in §8.4.2 and is not restated here: the shipped configuration of the product
+  must already do the thing the product is for.
+* **Absent means default, not off.** A repo whose `config.yaml` has **no** `sync_repo` block resolves to the
+  **default (ON)**. Only an explicit `sync_repo.enabled: false` — written because the user moved this toggle —
+  turns the mirror off. A repo that predates the flip and never had the block therefore starts mirroring; that
+  is intended.
+* **No git remote → cannot mirror, and the UI says so.** A repo's shared identity is its **remote**, never its
+  path ([storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)),
+  so a repo with **no remote** has no subtree any other computer would ever read. The toggle renders
+  **disabled and OFF** with the honest hint — *"No git remote — this repo's tracking stays on this
+  computer."* This is a **statement of fact, not a warning**: nothing is broken, there is simply nothing to
+  address the mirror to. It is not an error state, it raises no warning banner
+  ([warnings.mdx](./warnings.mdx)), and the repo works normally in every other respect.
+* **No owning storage resolves → also disabled, with a different hint.** If ownership resolves to a company
+  that has no discovered company storage row, or to Personal before Personal exists, there is no SDL to adopt.
+  The toggle renders **disabled and OFF** with the setup hint — *"No storage owns this repo yet. Set up
+  &lt;Owner&gt; in Storage settings."* — matching the placement radio's disabled state
+  ([placement_radios.mdx §5.1](./placement_radios.mdx#51-sync_repo-disabled-when-no-sync-repo-exists)). Both
+  disabled cases keep the tracking state in **Local Storage only**, which is real and honored locally
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); nothing is lost, it is simply not shared
+  yet.
+* **Ownership decides WHICH sync repo, and it now resolves from the REMOTE first.** The target is the owning
+  storage's sync repo, and that owner is derived from the repo's **remote org** before any path-containment
+  test ([repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-decides-the-sync-repo-target-remote-first-locked)).
+  A repo like `~/BGit/Bryan_git/charlie-kirk` with remote `github.com/ACT3ai/charlie-kirk` therefore mirrors to
+  the **ACT3ai** company SDL even though it sits nowhere near that company's directory.
+* **Still only text, still additive.** ON changes nothing about **bytes**. Media moves over IPFS, for decided
+  files only ([decisions.mdx](./decisions.mdx)); Local Storage remains the authoritative copy and the mirror
+  is written **in addition to** it, never instead of it.
+
+Resolving the owner's sync repo — the explicitly configured one first, the SDL's own git root auto-adopted second — and writing this toggle's marker is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` (remote-owner first, path containment second), with the SDL-root fallback the Git backbone already performs in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)`, persisted by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `setSyncRepoMarker(repoRoot, syncRepoRoot)` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/settings`.
 
 ---
 
@@ -418,7 +469,12 @@ ownership:
   owner: null              # §6 — company id or "personal"; null = use derived
   source: auto             # auto | manual
 sync_repo:
-  enabled: false           # §2.9 — mirror this repo's tracking state to the owner's sync repo (default off)
+  enabled: false           # §2.9 — mirror this repo's tracking state to the owner's sync repo.
+                           # The literal "(default off)" this line used to carry is SUPERSEDED (§2.9.1,
+                           # storage_company.mdx §8.4.2): an ABSENT sync_repo block resolves to the
+                           # default, which is now ON whenever an owning storage with a git-backed SDL
+                           # resolves. Only an explicit `false` — written by the user moving the toggle —
+                           # opts this repo out.
 ```
 
 * `transcription.placement` and `ai_description.placement` are **machine-local intents**; the `sync_repo`
@@ -427,9 +483,11 @@ sync_repo:
   (§6.1, [placement_radios.mdx §6](./placement_radios.mdx#6-persistence)).
 * `ownership.owner` is the **manual override**; when null, the owner is the git-remote derivation
   ([repo_company_mapping.mdx](./repo_company_mapping.mdx)). `source` records which of the two applied.
-* `sync_repo.enabled` is the **§2.9 per-repo tracking-state mirror toggle** (default off); when on, this
-  repo's Category-B tracking state is additionally mirrored to `<syncRepo>/repos/<repoKey>/`
-  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+* `sync_repo.enabled` is the **§2.9 per-repo tracking-state mirror toggle** (~~default off~~ — **default ON**
+  per §2.9.1 / [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked));
+  when on, this repo's Category-B tracking state is additionally mirrored to `<syncRepo>/repos/<repoKey>/`
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)). **Absent ⇒ default**, so the field is a
+  tri-state on disk (`true` / `false` / absent) and only an explicit `false` opts a repo out.
 
 The two placement enums, the ownership override, and the sync-repo toggle are added to the shared type and
 mapped by the settings router in code:
@@ -484,6 +542,17 @@ The placement enums are consumed when an artifact is written by
     `decisions.yaml`, `manifest.yaml`) is **additionally mirrored** to `<syncRepo>/repos/<repoKey>/` — in
     addition to Local Storage `~/T/_large_files_bridge/repos/<repoKey>/`, never instead of it, and never in the
     working repo ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)); logs never travel there.
+    **AC 13's "default OFF" is superseded by AC 14.**
+14. **The §2.9 toggle's default is ON and it reads as an opt-out** (§2.9.1, authority
+    [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)).
+    Concretely: an owning storage whose SDL is a **git working tree** is **auto-adopted** as the sync repo (an
+    explicitly configured `sync_repo` still wins); an **absent** `sync_repo` block in `config.yaml` resolves to
+    the default **ON**, and only an explicit `sync_repo.enabled: false` opts a repo out; a repo with **no git
+    remote** renders the toggle **disabled + OFF** with *"No git remote — this repo's tracking stays on this
+    computer"* (a fact, not a warning); a repo whose owner resolves to **no storage** renders it **disabled +
+    OFF** with the *"Set up &lt;Owner&gt; in Storage settings"* hint; and the mirror target follows ownership
+    derived **remote-org first** ([repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-decides-the-sync-repo-target-remote-first-locked)).
+    No **bytes** behavior changes in any of these cases.
 
 <!-- summary -->
 The per-repo Settings page (gear icon on a single repo) holding settings that differ per repo. Locked
@@ -509,5 +578,19 @@ showing the derived company/Personal owner + source with a reassign control. New
 resolveStateSyncRepo, tracking-sync.service mirrorToSyncRepo, resolveArtifactPlacement (Category-A radio).
 Keep aligned with artifact_placement_policy.mdx + repo_tracking_scheme.mdx (the placement policy + file
 shapes), placement_radios.mdx, storage_settings.mdx §4b, repo_company_mapping.mdx (owner).
+
+ADDED §2.9.1 (LOCKED) — the §2.9 toggle's default FLIPS to ON and it becomes an OPT-OUT, per the authority
+storage_company.mdx §8.4.2 (which supersedes storage_company §7's "Default: OFF" and this file's §2.9 bullet,
+the §7 yaml comment, and AC 13). Rules: an owning company/Personal SDL that is a git working tree IS
+auto-adopted as the sync repo, so no second repo need be configured (an explicitly configured sync_repo still
+WINS — auto-adoption is the fallback, not an override); an ABSENT sync_repo block resolves to the default ON,
+making the field tri-state on disk (true/false/absent) so only an explicit false opts a repo out; NO GIT REMOTE
+= disabled+OFF with the honest hint "No git remote — this repo's tracking stays on this computer" (a fact, not
+a warning, no banner) because a repo's shared identity is its remote (§8.4.1); NO OWNING STORAGE = disabled+OFF
+with the "Set up <Owner> in Storage settings" hint, matching placement_radios §5.1; the mirror TARGET follows
+ownership derived REMOTE-ORG FIRST (repo_company_mapping §7.3), so charlie-kirk → the ACT3ai SDL despite living
+nowhere near it; nothing about BYTES changes. New AC 14. Code cited: resolveOwnerDedicatedRepo
+(artifact-placement.service), getGitBackboneRemote (storage-settings.service — the SDL-root fallback the Git
+backbone already performs), setSyncRepoMarker (tracking-sync.service) via PATCH /api/repos/:repoId/settings.
 -->
 

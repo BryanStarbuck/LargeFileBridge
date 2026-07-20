@@ -39,6 +39,14 @@ import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
 import { getStoragePinned, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
+// The sync-repo mirror: send (mirrorToSyncRepo, via writeRepoTrackingManifest), receive (reconcile), and the
+// per-entry merge that keeps a peer's pin claim alive (storage_company.mdx §8.4.2/§8.4.3/§8.6).
+import {
+  ensureSyncRepoMarker,
+  reconcileFromSyncRepo,
+  reconcileMirroredRepos,
+  mergeManifests,
+} from "../storage/tracking-sync.service.js";
 import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js";
 import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -212,9 +220,21 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
     ),
   );
 
-  // Drop manifest entries whose decision is no longer "sync".
+  // Drop manifest entries whose decision is no longer "sync" — EXCEPT the ones another of the user's
+  // computers pins (storage_company.mdx §8.5). Those are "known here, owned elsewhere": their identity
+  // arrived over the sync repo, this computer has made no decision about them, and they are the raw material
+  // for the red remote-only row + the Pull down metric. Dropping them would delete the peer's claim on every
+  // pin pass and silently re-empty the very list this feature exists to fill — the local decision axis is not
+  // a licence to forget what a peer told us (§8.4.3: absence is never a delete).
+  const knownFromPeers = new Set<string>();
   for (const rel of [...byPath.keys()]) {
-    if (t.decisions[rel] !== "sync") byPath.delete(rel);
+    if (t.decisions[rel] === "sync") continue;
+    const entry = byPath.get(rel)!;
+    if (entry.cid && entry.pinned_by.some((d) => d && d !== t.label)) {
+      knownFromPeers.add(rel);
+      continue;
+    }
+    byPath.delete(rel);
   }
 
   // Fetch missing: rehydrate any manifest file we don't have ON DISK here yet — pin its CID AND
@@ -228,6 +248,11 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
       [...byPath.values()].map((entry) =>
         ipfsLimiter.run(async () => {
           if (!entry.cid) return;
+          // A peer-known file this computer has NOT decided to sync is an OFFER, not an obligation
+          // (storage_company.mdx §8.5). Fetching it here would silently download every big file the user's
+          // other machines hold — the opposite of "we surface and offer, we never act on files on our own"
+          // (the charter). It stays a red remote-only row until the user pulls it.
+          if (knownFromPeers.has(entry.path)) return;
           const abs = t.resolveAbs(entry.path);
           if (abs === null) return; // ungrafted mapped dir — known-but-absent on this computer
           if (fs.existsSync(abs)) return; // already on disk here — nothing to fetch
@@ -306,6 +331,16 @@ export async function pinRepoFolder(
     log.info("pin", `${folder}: manual Pin now — enabling background pinning (pinned=true).`);
   }
   const repoPath = expandHome(cfg.repo.path);
+  // The mirror is ON by default (storage_company.mdx §8.4.2): make sure this repo's marker names the owning
+  // storage's sync repo and this repo's shared `repoUid`, then fold in whatever a peer computer pushed
+  // there. Both are best-effort — a repo that cannot mirror (no remote, no owning storage) simply pins
+  // locally, exactly as before.
+  ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
+  reconcileFromSyncRepo(repoPath);
+  // §8.6 — the two manifests must not disagree. The reconcile lands in Local Storage; the One-Repo file rows
+  // read the UNIT manifest, so fold the peer's entries across before the pass rather than leaving a
+  // Pull-down count that no row can explain.
+  const unitManifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath));
   return runUnitPin(
     {
       kind: "repo",
@@ -314,7 +349,7 @@ export async function pinRepoFolder(
       decisions: cfg.decisions,
       fetchMissing: cfg.pin.fetch_missing,
       resolveAbs: (rel) => path.join(repoPath, rel),
-      manifest: getRepoManifest(folder),
+      manifest: unitManifest,
       status: getRepoStatus(folder),
       writeManifest: (m) => writeRepoManifest(folder, m),
       writeStatus: (s) => writeRepoStatus(folder, s),
@@ -482,6 +517,13 @@ async function pinStorageUnitInner(id: string): Promise<void> {
       gitResult.problem = `Git pull failed: ${(e as Error).message}`;
     });
     if (gitResult.problem) log.warn("pin", `storage ${id} git: ${gitResult.problem}`);
+    // Fold in what the pull delivered (storage_company.mdx §8.4.3: reconcile runs on EVERY backbone pull,
+    // not just the git-only cycle). Without this a full pin pass fetches the SDL's text and drops the
+    // `repos/<repoUid>/` subtrees on the floor for that cycle — the peer's file stays invisible until some
+    // later pass happens to be the other kind.
+    await reconcileMirroredRepos(root).catch((e) =>
+      log.warn("pin", `storage ${id}: reconciling mirrored repos failed: ${(e as Error).message}`),
+    );
   }
 
   // DEVICE WRITE-BACK (devices.mdx §12) — write this computer's own device file REGARDLESS of the IPFS
@@ -604,6 +646,13 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
       result.problem = `Git pull failed: ${(e as Error).message}`;
     });
     if (result.problem) log.warn("pin", `${tag} storage ${id} git: ${result.problem}`);
+    // 1b. FOLD IN what the pull just delivered (storage_company.mdx §8.4.3). Every `repos/<repoUid>/` subtree
+    //     another of the user's computers pushed is merged into this machine's Local Storage — which is what
+    //     turns "the Tower pinned a file" into a row, a metric, and a To-Do item over here. Runs on EVERY
+    //     pull, never on demand; best-effort, so a bad subtree can never fail the git cycle.
+    await reconcileMirroredRepos(root).catch((e) =>
+      log.warn("pin", `${tag} storage ${id}: reconciling mirrored repos failed: ${(e as Error).message}`),
+    );
   }
 
   // 2. WRITE/UPDATE this device's own file (self-owned). Runs even without a backbone so the local file
@@ -809,9 +858,13 @@ export async function pullMissing(
 ): Promise<{ pulled: number; failed: number }> {
   let manifest: Manifest;
   try {
-    manifest = readCommittedManifest(repoRoot);
+    // The SAME manifest `missingPinnedFromPeers` built the list from (storage_company.mdx §8.6). This read
+    // `readCommittedManifest` — the SDL-only `<root>/manifest.yaml` — which for a WORKING repo does not
+    // exist, so every CID lookup missed and every checked file in the batch failed. A pull action must never
+    // read a different manifest than the list it is acting on.
+    manifest = readRepoTrackingManifest(repoRoot);
   } catch (e) {
-    log.warn("pin", `pullMissing: cannot read committed manifest for ${repoRoot}: ${(e as Error).message}`);
+    log.warn("pin", `pullMissing: cannot read tracking manifest for ${repoRoot}: ${(e as Error).message}`);
     return { pulled: 0, failed: checkedPaths.length };
   }
   const byPath = new Map(manifest.files.map((f) => [f.path, f]));

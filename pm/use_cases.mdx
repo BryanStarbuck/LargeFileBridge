@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Use Cases & UI Redesign
-description: A usability-led redesign of LargeFileBridge. Defines the product's one job (tell a non-expert whether their big files are safely pinned across their computers, and if not, exactly what is broken and how to fix it), a single three-state health model (Broken / Improvable / Fixed) used on every screen, a progressive-disclosure rule (surface the status + the one next action; push technical detail lower or behind a chevron), the reusable diagnostic components (StatusBanner, DiagnosticCard, Disclosure, StatTile, PageHeader, Section), a set of customer use-case flows written from the non-expert's point of view, and a per-page layout redesign for every screen except the Home/Repos dashboard (which is kept as-is). This is the source of truth the page redesign code follows.
+description: A usability-led redesign of LargeFileBridge. Defines the product's one job (tell a non-expert whether their big files are safely pinned across their computers, and if not, exactly what is broken and how to fix it), a single three-state health model (Broken / Improvable / Fixed) used on every screen, a progressive-disclosure rule (surface the status + the one next action; push technical detail lower or behind a chevron), the reusable diagnostic components (StatusBanner, DiagnosticCard, Disclosure, StatTile, PageHeader, Section), a set of customer use-case flows written from the non-expert's point of view, and a per-page layout redesign for every screen except the Home/Repos dashboard (which is kept as-is). This is the source of truth the page redesign code follows. §10 registers the product's LOAD-BEARING use case — one big git-ignored file reaching the user's second computer (UC-24 the red remote-only row, UC-25 pulling it down) — whose authority is storage_company.mdx §8 and whose narrated walk-through is use_case_two_computers.mdx §9.
 ---
 
 # LargeFileBridge — Use Cases & UI Redesign
@@ -231,6 +231,11 @@ them**, in order of likelihood, and hand them the fix.
   yet."*).
 * **Outcome:** the user never has to know *which* of the four causes it was — the page told them and
   gave them the button.
+* **The fifth cause — and the one this app exists for — is §10.** UC-2 above diagnoses a file that
+  **should have left this computer**. Its mirror image is a file that **should have arrived**: the other
+  computer pinned it and this one has never heard of it. That journey is **UC-24 / UC-25** (§10), whose
+  authority is
+  [storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked).
 
 ### UC-3 — "The app says something's red. What do I do?"
 * **Any red** the user sees is a `DiagnosticCard` or red `StatusBanner` — so it **always** has: a
@@ -461,6 +466,14 @@ The directory category rollup (the four charter category counts) is computed in 
   appears as a **To Do slug** (and, for a repo, its page **warning banner**), opens a **batch popup**
   whose rows carry **two-axis decision toggles pre-set to RECOMMENDED**, and **Apply** writes the
   team-shared decision and queues the effect — never an inline, un-confirmed mutation.
+* **AC-9** The **load-bearing cross-computer use case** (§10, UC-24 / UC-25) passes end to end on a
+  second computer: a big file another of the user's computers pinned appears in **View One Repo** as a
+  **red remote-only row** naming the peer device, is counted in **`Pull down`** (and **`Add to IPFS`**
+  while undecided here), is listed in the **To Do** tab, and **pulls its bytes down over IPFS** on
+  request — after which it is an ordinary local row. The rules are LOCKED in
+  [storage_company.mdx §8](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked);
+  the step-by-step walk is
+  [use_case_two_computers.mdx §9](./use_case_two_computers.mdx#9-the-load-bearing-journey-end-to-end--one-file-two-computers-locked).
 
 ---
 
@@ -600,3 +613,65 @@ see the dedicated tour **[use_case_todo_batches.mdx](./use_case_todo_batches.mdx
   hidden until its contents **materially change**. It **never** deletes files or touches bytes; it is a *not
   now*, and the files keep whatever decisions they already had
   ([to_do_batches.mdx §3.3](./to_do_batches.mdx#33-dismissed--the-red-trash-flag-locked)).
+
+---
+
+## 10. The load-bearing use case — a big file reaching my second computer
+
+**This is the one the product exists for.** Everything else in this document makes an existing answer
+easier to read; **this** journey is the answer. If it does not work, the app is a very well-designed
+report about nothing.
+
+**Authority:**
+[storage_company.mdx §8 — "The load-bearing use case — one file, two computers" (LOCKED)](./storage_company.mdx#8-the-load-bearing-use-case--one-file-two-computers-locked).
+It owns the mechanics: the six-link chain and where it broke, the **remote-derived** mirror key
+(§8.4.1), the **auto-adopted company SDL as sync repo with the mirror default ON** (§8.4.2),
+**merge-not-copy** on receive (§8.4.3), and the new **`FileRow.presence: "remote-only"`** (§8.5). The
+narrated, month-and-machine walk-through is
+[use_case_two_computers.mdx §9](./use_case_two_computers.mdx#9-the-load-bearing-journey-end-to-end--one-file-two-computers-locked).
+The two UCs below are the **user-facing** face of those rules and deliberately do not restate them.
+
+### UC-24 — "My other computer has a video this one has never heard of."
+* **Enters:** **View One Repo** for a repo they have cloned on both machines (e.g. `charlie-kirk`),
+  on the computer that does **not** have the file.
+* **Sees:** the file **as a row** — by name, size, and CID — even though **no local file exists**. It is
+  **red**, and its tooltip names the peer: *"On bryan-mac-pro — not on this computer yet."* The peer's
+  label is its device name from the travelling registry
+  ([devices.mdx §6.9](./devices.mdx#69-a-peer-device-label-names-a-remote-only-row-locked)).
+* **Also sees it counted, not just shown:** in the **`Pull down`** tile (*"a computer of yours has bytes
+  you don't"*), in **`Add to IPFS`** while this computer has not decided it, and as a `pull_down` row in
+  the repo's **[To Do](./to_do.mdx)** batch. It counts toward **no** space, compression, git-ignore, or
+  analysis metric — there are no local bytes to reclaim, shrink, ignore, or transcribe.
+* **Reads as healthy, not broken:** red here means *"available, not here yet"*, never *"lost"*. This is
+  **how a second computer learns what exists**; it is the normal first sight of every new file.
+* **Its only action is pull.** Compress / transcribe / describe / OCR / git-ignore are disabled on the
+  row **and say why** — no dead-end greyed buttons (AC-2).
+
+### UC-25 — "Bring it over."
+* **Enters:** the red row's pull action, the **`Pull down`** tile, or the **To Do** batch popup — all
+  three lead to the same place (UC-20's batch popup, §9).
+* **Sees:** LFB pins the CID on this computer, which **fetches the bytes over IPFS** to **this** machine's
+  local path (the [graft](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)
+  — never the other computer's path), as background work on [Processing](./processing.mdx).
+* **Outcome:** the next scan finds a real file, the row drops its remote-only state and becomes an
+  **ordinary local row**, and the decision is recorded — so **no computer re-asks** about it
+  ([decisions.mdx](./decisions.mdx)).
+* **What must never happen:** a file vanishing from a peer's manifest is **never** read as a delete here,
+  and a peer's claim never makes this computer believe it holds bytes it does not
+  (storage_company.mdx §8.4.3).
+
+<!--
+  ADDED §10 (+ AC-9, + a pointer from UC-2): registers the product's LOAD-BEARING use case — a big
+  git-ignored file that one of the user's computers pinned reaching their SECOND computer. AUTHORITY is
+  storage_company.mdx §8 (LOCKED: six-link chain, remote-derived repoUid mirror key §8.4.1, company SDL
+  auto-adopted as sync repo + mirror DEFAULT ON §8.4.2, merge-not-copy on receive §8.4.3, new
+  FileRow.presence "remote-only" §8.5); the narrated walk is use_case_two_computers.mdx §9. This file
+  contributes only the USER-FACING face: UC-24 = the RED REMOTE-ONLY ROW in View One Repo (named/sized/CID
+  with no local file, tooltip "On {device} — not on this computer yet" from the device registry, counted in
+  Pull down + Add to IPFS while undecided + the To Do batch, excluded from space/compress/git-ignore/
+  analysis metrics, pull is its ONLY action and the rest say why — a HEALTHY state, "available, not here
+  yet" ≠ "lost"); UC-25 = PULLING IT (row/tile/To-Do all reach the same UC-20 batch popup, bytes arrive over
+  IPFS at THIS computer's GRAFTED path, row becomes ordinary, decision sticky so nobody re-asks; absence in
+  a peer manifest is never a delete). UC-2 gained a "fifth cause" pointer: UC-2 diagnoses a file that should
+  have LEFT this computer, §10 is the mirror image — one that should have ARRIVED.
+-->

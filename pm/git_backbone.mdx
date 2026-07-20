@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The Git Backbone Engine (fetch · merge · commit · push)
-description: The authoritative spec for how LargeFileBridge drives Git as a git backbone. When a storage (most often the user's Personal storage) is configured with a Git repo, LFB is granted permission to run the real Git commands — git fetch, git merge (with automatic merge), git add/commit, and git push — on every pin pass, so the small travelling text of the Syncable Data Location (the storage descriptor, the device registry, the mapped-directory list, the IPFS manifest/CID list, and the derived-artifact records) is pulled down, merged, and pushed back up between the user's own computers. Locks the LIBRARY choice (simple-git, a thin wrapper over the system git binary — chosen over isomorphic-git and nodegit because real merges must be done by real git), the two REMOTE shapes a user can configure (a LOCAL FILE PATH to a checked-out working tree on this box, versus an HTTP(S) URL to a Git server that is NOT mapped to the local filesystem, which LFB clones into a machine-local working-copy cache), the pull cycle (fetch → merge with the ort strategy → resolve/report conflicts), the push cycle (stage only this device's self-owned files → commit → push, retry-on-reject by re-pulling and re-merging), the auto-merge design that makes conflicts rare (self-owned per-device files + union-merge .gitattributes for append-mostly lists), the credential model for URL remotes (the OS git credential helper / a stored token, never LFB prompting for a password), and the permission/compliance boundary (LFB touches ONLY the user's own configured repos, never a third party's, honoring the charter's no-public-relay posture). Sibling of storage_settings.mdx (where the Git backbone is turned on per storage), storage_personal.mdx (the canonical two-computer use case that drives this), syncable_data_location.mdx (the SDL text this engine carries), devices.mdx (the self-owned device files that ride it), and pin_process.mdx (the full pass this cycle runs inside).
+description: The authoritative spec for how LargeFileBridge drives Git as a git backbone. When a storage (most often the user's Personal storage) is configured with a Git repo, LFB is granted permission to run the real Git commands — git fetch, git merge (with automatic merge), git add/commit, and git push — on every pin pass, so the small travelling text of the Syncable Data Location (the storage descriptor, the device registry, the mapped-directory list, the IPFS manifest/CID list, and the derived-artifact records) is pulled down, merged, and pushed back up between the user's own computers. Locks the LIBRARY choice (simple-git, a thin wrapper over the system git binary — chosen over isomorphic-git and nodegit because real merges must be done by real git), the two REMOTE shapes a user can configure (a LOCAL FILE PATH to a checked-out working tree on this box, versus an HTTP(S) URL to a Git server that is NOT mapped to the local filesystem, which LFB clones into a machine-local working-copy cache), the pull cycle (fetch → merge with the ort strategy → resolve/report conflicts), the push cycle (stage only this device's self-owned files → commit → push, retry-on-reject by re-pulling and re-merging), the auto-merge design that makes conflicts rare (self-owned per-device files + union-merge .gitattributes for append-mostly lists), the credential model for URL remotes (the OS git credential helper / a stored token, never LFB prompting for a password), and the permission/compliance boundary (LFB touches ONLY the user's own configured repos, never a third party's, honoring the charter's no-public-relay posture). Also locks two rules the one-file-two-computers use case depends on (storage_company.mdx §8): merge=union is the TRANSPORT, not the reconciliation — the pulled repos/<repoUid>/ mirror is folded into Local Storage by a PER-ENTRY merge in step 4 of the cycle, never a wholesale copy, and the attribute patterns are filename-matched so the mirror's remote-keyed rekey needs no .gitattributes change; and §6.2, a mirror write NUDGES its SDL's backbone on a debounce ("the write is the trigger") instead of waiting for the next timer tick, coalescing to one commit+push per storage and resolving the SDL by ownership rather than root-prefix. Sibling of storage_settings.mdx (where the Git backbone is turned on per storage), storage_personal.mdx (the canonical two-computer use case that drives this), syncable_data_location.mdx (the SDL text this engine carries), devices.mdx (the self-owned device files that ride it), and pin_process.mdx (the full pass this cycle runs inside).
 ---
 
 # LargeFileBridge — The Git Backbone Engine
@@ -171,6 +171,25 @@ repos/*/manifest.yaml   merge=union
 repos/*/decisions.yaml  merge=union
 ```
 
+**The union is the transport, not the reconciliation.** Git's `merge=union` keeps both computers' lines so
+the *file* never conflicts; what LFB then believes is decided by the **per-entry merge** that reads the
+result — union by `path`, union `pinned_by`, newer `modified_at` wins a CID conflict, absence never a
+delete, this computer's own pin claim re-derived from its real pinset
+([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked),
+[sync_list.mdx §5.7](./sync_list.mdx#57-the-sync-repo-mirror--keyed-by-remote-merged-on-every-pull-locked)).
+A union-merged file that is then **copied** wholesale into Local Storage throws that away — which is exactly
+what happened. The fold belongs in step 4 of the cycle, immediately after the merge (§6).
+
+**The union patterns are matched by filename, so the mirror's rekey is free.** The subtree a repo's tracking
+mirrors to is now keyed by the repo's **normalized git remote** — `repos/<repoUid>/`, not the machine-local
+`repos/<repoKey>/` ([storage_company.mdx §8.4.1](./storage_company.mdx#841-a-repos-shared-identity-is-its-remote-never-its-path-locked)).
+The attribute lines LFB writes are bare filenames (`manifest.yaml`, `decisions.yaml`), which git applies at
+**any depth**, so the rekey needs **no** `.gitattributes` change — but a future pattern that anchors a path
+segment would silently stop union-merging the mirror, and that is a defect to hunt for.
+
+The union-merge patterns (bare filenames, matched at any depth, so both `repos/<repoKey>/` and `repos/<repoUid>/` are covered) are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` written by `GitBackbone.ensureMergeAttributes()`.
+
 ### 4.2.1 The sync repo's committed tracking payload must never be git-ignored (LOCKED, learned from a defect)
 
 This backbone drives a **sync repo** — a dedicated `*_large_files_bridge` company/Personal tracking repo
@@ -281,6 +300,10 @@ order, wrapped around the storage's normal reconcile + IPFS byte work:
    run the storage's normal reconcile ([pin_process.mdx §5](./pin_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates)):
    fetch/pin the marked CIDs to their **grafted** local paths ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)),
    inherit derived artifacts, write this device's own `devices/<device>.yaml`, update `manifest.yaml`.
+   **This is also where a pulled `repos/<repoUid>/` mirror is folded into Local Storage by per-entry merge**
+   ([§4.2](#42-append-mostly-shared-lists-merge-by-union),
+   [storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)) — on
+   **every** pull, not on demand.
 5. **`git add` (self-owned only) → `git commit`** — stage **only this device's** files (§4.1) plus any
    shared list this device appended to, and commit if anything changed. Nothing to commit → no empty
    commit.
@@ -329,6 +352,33 @@ that is ahead. This is the Git-layer half of the broader resilience contract in
 
 Attempting the push whenever the branch is ahead of the remote — not only after a fresh local commit — via an ahead-count check is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`, treating a missing upstream ref as "push to establish it").
+
+### 6.2 A mirror write nudges its SDL's backbone — debounced (LOCKED)
+
+Steps 5–6 fire on a **timer**. A tracking mirror written *between* ticks therefore sits in the sync repo's
+working tree, uncommitted, until the next 15-minute pass or 10-minute device write-back happens to run —
+so a decision the user just made can take ten minutes to leave the machine. **The write is the trigger:**
+after LFB mirrors a repo's tracking state into `<syncRepo>/repos/<repoUid>/`, it **announces that write to
+the SDL it wrote into**, which schedules a **debounced** commit + push of that storage — the same mechanism
+durable artifacts already use. Rule owned by
+[storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes):
+
+* **Debounced, never per-write.** A pin pass mirrors many files; each announcement coalesces into **one**
+  commit + push per storage, so the SDL does not get a commit per file.
+* **The nudge is additive, not a replacement.** The timer cycle (§6) still runs, and a missed nudge is
+  covered by the next tick — this only removes the *latency*, never the guarantee.
+* **The debounced push is the ordinary §6 cycle** — fetch → auto-merge → commit → push, with the
+  always-push-when-ahead rule (§6.1) and the non-fast-forward retry. It is **not** a second, weaker path.
+* **It announces the destination it wrote into — a path inside the SDL.** `noteArtifactWritten()` resolves
+  the owning storage by **root prefix**, so announcing the *working repo's* root would find nothing
+  (`charlie-kirk` is not inside `act3_large_files_bridge`) and the nudge would silently no-op. The mirror
+  step therefore announces **`dst`**, the mirror destination under `<syncRepo>/repos/<repoUid>/`, which it
+  already knows — and the prefix lookup lands on the right SDL. This trap is **avoided**, not removed:
+  prefix resolution stays fragile precisely because its failure mode is a silent no-op, so never hand
+  `noteArtifactWritten()` a path outside the storage you mean.
+
+Announcing a mirror write to its SDL so the backbone commits + pushes it on a debounce is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (resolves the storage by root prefix via `storageIdForPath()`, which is why it is handed the SDL-side destination), invoked from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (passes `dst`, not the repo root).
 
 ---
 
@@ -384,6 +434,16 @@ Enforcing that Git operations only ever target a user-configured storage backbon
    non-fast-forward reject; the cycle is idempotent (§6).
 7. LFB drives Git **only** on user-configured storage backbones — never a merely-discovered or
    third-party repo, never a force-push — the Git analogue of the charter's no-public-relay rule (§1, §7).
+8. **`merge=union` is the transport, not the reconciliation.** The union keeps both sides' lines so the
+   file never conflicts; what LFB believes afterward comes from the **per-entry merge** of the pulled
+   `repos/<repoUid>/` mirror in **step 4** of the cycle — union by `path`, union `pinned_by`, newer
+   `modified_at` wins a CID conflict, absence never a delete — never a wholesale copy (§4.2, §6,
+   [storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)). The
+   attribute patterns are **filename-matched**, so the mirror's remote-keyed rekey needs no
+   `.gitattributes` change.
+9. **A mirror write nudges its SDL's backbone on a debounce** rather than waiting for the next timer tick;
+   the nudge coalesces to one commit + push per storage, runs the ordinary §6 cycle, and resolves the SDL
+   by **ownership** (a working-repo path prefix resolves to nothing) — §6.2.
 
 <!--
   AUTHORITATIVE spec for LFB's GIT BACKBONE ENGINE. Turning on a storage's Git backbone (storage_settings
@@ -417,4 +477,29 @@ Enforcing that Git operations only ever target a user-configured storage backbon
   storage_settings.mdx §4.1 (the toggle + remote), storage_personal.mdx (the two-computer use case that
   drives this), syncable_data_location.mdx (the SDL text carried), devices.mdx (self-owned files that ride
   it), pin_process.mdx (the full pass this runs inside).
+
+  ADDED for storage_company.mdx §8 (that spec is the authority — link, don't restate). §4.2 gains two
+  paragraphs: (a) merge=union is the TRANSPORT, not the RECONCILIATION — the union keeps both sides' lines
+  so the FILE never conflicts, but what LFB believes comes from the PER-ENTRY merge that reads the result
+  (union path, union pinned_by, newer modified_at wins a CID conflict, absence never a delete, own pin claim
+  re-derived from the real pinset); a union-merged file then COPIED wholesale into Local Storage throws all
+  of that away, which is what shipped; (b) the UNION_MERGE_PATHS lines are bare FILENAMES, which git applies
+  at any depth, so rekeying the mirror from repos/<repoKey>/ to repos/<repoUid>/ (§8.4.1 — remote-derived,
+  because a machine-local key made the two computers write different dirs) needs NO .gitattributes change —
+  but a future path-anchored pattern would silently stop union-merging the mirror. §6 step 4 now names the
+  fold as part of the cycle (on EVERY pull, not on demand). NEW §6.2 (LOCKED) THE POST-MIRROR NUDGE: steps
+  5-6 fire on a timer, so a mirror written between ticks sits uncommitted for up to ~10 min; "the write is
+  the trigger" — a mirror write announces itself to the SDL it wrote into and schedules a DEBOUNCED commit+
+  push (one per storage, not per file), running the ordinary §6 cycle (always-push-when-ahead + non-ff
+  retry), additive to the timer, never a second weaker path. The trap it closes: noteArtifactWritten()
+  resolves the storage by ROOT PREFIX, and a mirror is written on behalf of a working repo that is nowhere
+  near the SDL, so a prefix lookup no-ops — the announcement must name the STORAGE, which the mirror step
+  already knows. AC 8 + 9 added. Code: git.service UNION_MERGE_PATHS/ensureMergeAttributes, sync-trigger.
+  service noteArtifactWritten ← tracking-sync.service mirrorToSyncRepo.
+
+  2026-07-20 spec-vs-code correction. §6.2's last bullet no longer says the nudge "no-ops for a working-repo
+  path" as a live defect: mirrorToSyncRepo() announces `dst` — the mirror destination INSIDE the SDL — not the
+  working-repo root, so the root-prefix lookup resolves correctly. The trap is stated in the past tense and the
+  warning is kept, because prefix resolution's failure mode is a SILENT no-op: never hand noteArtifactWritten()
+  a path outside the storage you mean.
 -->
