@@ -59,7 +59,29 @@ const SDL_ROOT_PAYLOAD: ReadonlySet<string> = new Set([
   "decisions.yaml",
   "devices",
   "analysis",
+  // COMPANY-SIDE PAYLOAD — the set above was written from the personal SDL's shape and stopped there, so the
+  // two names that carry a company storage's actual content were unprotected:
+  //   • `repos/` — the mirrored per-repo tracking subtrees (`repos/<repoUid>/repo_storage.yaml`, the
+  //     per-file sidecars, the per-repo manifest). On the reference machine this is the ENTIRE travelling
+  //     payload of the company SDL — its root holds nothing else but `devices/`, `manifest.yaml` and
+  //     `storage.yaml` — while the personal SDL has no `repos/` at all. A `repos/` line in that repo's
+  //     `.gitignore` would therefore silently sever cross-computer sync for the company and be healed for
+  //     nobody, since this is the list that does the healing.
+  //   • `owner_map.yaml` — the travelling company-ownership assertion (repo_owner_propagation.mdx §2), which
+  //     by definition exists only in a company SDL.
+  "repos",
+  "owner_map.yaml",
 ]);
+
+/** True when a `.gitignore` line would swallow the SDL's travelling payload — the legacy `.lfbridge/`
+ *  directory or one of the root names it moved to. Anchored (`/x`) and bare (`x`) forms both count; blanks,
+ *  comments and negations never do. Exported as a pure predicate so the payload set can be regression-tested
+ *  without a git working copy. */
+export function ignoresSdlPayloadLine(line: string): boolean {
+  const t = line.trim().replace(/^\//, "").replace(/\/$/, "");
+  if (!t || t.startsWith("#") || t.startsWith("!")) return false; // blank / comment / negation
+  return t === LFBRIDGE_DIR || SDL_ROOT_PAYLOAD.has(t);
+}
 
 /** True for any `repo_storage.yaml` path a Git-backed working tree might carry — the top-level legacy shape
  *  (`.lfbridge/repo_storage.yaml`, pre-redesign) and the current sync-repo mirror
@@ -350,9 +372,7 @@ export class GitBackbone {
   /** True when a `.gitignore` line would swallow the SDL's travelling payload — the legacy `.lfbridge/`
    *  directory or one of the root names it moved to. Anchored (`/x`) and bare (`x`) forms both count. */
   private ignoresSdlPayload(line: string): boolean {
-    const t = line.trim().replace(/^\//, "").replace(/\/$/, "");
-    if (!t || t.startsWith("#") || t.startsWith("!")) return false; // blank / comment / negation
-    return t === LFBRIDGE_DIR || SDL_ROOT_PAYLOAD.has(t);
+    return ignoresSdlPayloadLine(line);
   }
 
   /** Ensure the union-merge `.gitattributes` so shared append-mostly lists never conflict (git_backbone.mdx §4.2). */

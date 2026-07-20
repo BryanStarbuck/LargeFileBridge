@@ -152,14 +152,24 @@ describe("remoteOnlyRows — the laptop sees the Tower's file (§8.5)", () => {
 });
 
 // ── the persisted default that would have kept the feature off for every existing repo ───────────────
-import { clearPersistedSyncRepoFalse } from "../../config/migrate-sync-repo-default.js";
+import YAML from "yaml";
+import { RepoUnitConfigSchema } from "@lfb/shared";
+import {
+  clearPersistedSyncRepoFalse,
+  repairEmptySyncRepoBlock,
+} from "../../config/migrate-sync-repo-default.js";
 
 describe("clearPersistedSyncRepoFalse — a schema default is not a user's choice (§8.4.2)", () => {
-  it("drops an `enabled: false` the old default persisted", () => {
+  it("drops an `enabled: false` the old default persisted, leaving a VALID empty block", () => {
     // 178 repo configs on the reference machine carried this line. Left in place, every one of them reads
     // as an explicit opt-out and nothing ever mirrors.
+    //
+    // But `enabled` is the block's ONLY child, so the first version of this migration removed the line and
+    // left a bare `sync_repo:` — which YAML parses as `null`, and `z.object(...).prefault({})` rejects. It
+    // ran once on the reference machine and made all 178 configs unreadable: no scan, no To-Do recalc, no
+    // reconcileMirroredRepos, for every repo at once. The output must stay PARSEABLE — see the assertion below.
     const before = "pinned: true\nsync_repo:\n  enabled: false\nowner_override: null\n";
-    expect(clearPersistedSyncRepoFalse(before)).toBe("pinned: true\nsync_repo:\nowner_override: null\n");
+    expect(clearPersistedSyncRepoFalse(before)).toBe("pinned: true\nsync_repo: {}\nowner_override: null\n");
   });
 
   it("leaves an explicit `true` alone and reports no change", () => {
@@ -173,8 +183,41 @@ describe("clearPersistedSyncRepoFalse — a schema default is not a user's choic
   it("touches nothing outside the sync_repo block — including an `enabled: false` elsewhere", () => {
     const yaml = "big_file_override:\n  enabled: false\n  value: 100\nsync_repo:\n  enabled: false\npinned: true\n";
     expect(clearPersistedSyncRepoFalse(yaml)).toBe(
-      "big_file_override:\n  enabled: false\n  value: 100\nsync_repo:\npinned: true\n",
+      "big_file_override:\n  enabled: false\n  value: 100\nsync_repo: {}\npinned: true\n",
     );
+  });
+
+  // THE ACCEPTANCE TEST for the outage: whatever this migration writes must still LOAD. Asserting the exact
+  // string is not enough — that is what the original test did, and it happily froze the broken output in place.
+  it("produces output the repo-unit schema can still parse", () => {
+    const before = "pinned: true\nsync_repo:\n  enabled: false\nowner_override: null\n";
+    const after = clearPersistedSyncRepoFalse(before)!;
+    const parsed = RepoUnitConfigSchema.safeParse(YAML.parse(after));
+    expect(parsed.success).toBe(true);
+    // And absence still means the mirror is ON (§8.4.2) — the whole point of removing the line.
+    expect(parsed.success && parsed.data.sync_repo.enabled).toBeUndefined();
+  });
+});
+
+describe("repairEmptySyncRepoBlock — cleaning up after the version that shipped broken", () => {
+  it("rewrites a valueless `sync_repo:` as an explicit empty map", () => {
+    const broken = "pinned: true\nsync_repo:\nowner_override: null\n";
+    expect(RepoUnitConfigSchema.safeParse(YAML.parse(broken)).success).toBe(false); // the live failure
+    const fixed = repairEmptySyncRepoBlock(broken)!;
+    expect(fixed).toBe("pinned: true\nsync_repo: {}\nowner_override: null\n");
+    expect(RepoUnitConfigSchema.safeParse(YAML.parse(fixed)).success).toBe(true);
+  });
+
+  it("leaves a block that has children alone", () => {
+    expect(repairEmptySyncRepoBlock("sync_repo:\n  enabled: true\n")).toBeNull();
+  });
+
+  it("is idempotent — an already-repaired file reports no change", () => {
+    expect(repairEmptySyncRepoBlock("sync_repo: {}\npinned: true\n")).toBeNull();
+  });
+
+  it("handles the block running to end-of-file", () => {
+    expect(repairEmptySyncRepoBlock("pinned: true\nsync_repo:\n")).toBe("pinned: true\nsync_repo: {}\n");
   });
 });
 

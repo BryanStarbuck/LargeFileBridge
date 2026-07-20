@@ -244,13 +244,44 @@ function classifyByConvention(root: string): StorageType | null {
   return null;
 }
 
+/**
+ * The canonical home for dedicated LFB file repos (`~/BGit/Bryan_git/`), and every `*_large_files_bridge`
+ * directory in it — personal AND company alike.
+ *
+ * One shallow readdir of a single directory, so it is cheap enough to run on every discovery pass, and it
+ * finds a company SDL that was cloned after the scanner roots were configured. Returns [] if the directory
+ * does not exist (a machine that keeps its SDLs elsewhere relies on `scanner.roots`, exactly as before).
+ */
+function conventionalSdlDirs(): string[] {
+  const home = path.join(os.homedir(), "BGit", "Bryan_git");
+  let entries: fs.Dirent[];
+  try {
+    entries = fs.readdirSync(home, { withFileTypes: true });
+  } catch {
+    return []; // not this machine's layout — the scanner roots are the only source, as before
+  }
+  return entries
+    .filter((e) => e.isDirectory() && e.name.endsWith(CONVENTION_SUFFIX))
+    .map((e) => path.join(home, e.name))
+    .filter(safeIsDir);
+}
+
 /** Walk each scanner root (bounded depth) collecting storage roots: those with a descriptor OR the name convention. */
 function discoverRoots(): string[] {
   const roots = new Set<string>();
   const scanRoots = getAppConfig().scanner.roots.map(expandHome).filter(safeIsDir);
-  // Always probe the canonical personal path even if it's outside the scanner roots.
-  const personal = path.join(os.homedir(), "BGit", "Bryan_git", `personal${CONVENTION_SUFFIX}`);
-  if (safeIsDir(personal)) roots.add(personal);
+  // ALWAYS probe the canonical SDL home, even when it is outside the scanner roots — and probe it for EVERY
+  // storage there, not just the personal one.
+  //
+  // This used to name exactly one path, `personal_large_files_bridge`. That gave the personal storage a
+  // guarantee the COMPANY storage did not have: a company SDL was found only if it happened to sit inside a
+  // `scanner.roots` entry within DISCOVER_DEPTH. Narrow the roots, or move the company SDL somewhere else,
+  // and it drops out of `listStorageIds()` entirely — so `pushDeviceBackbone()` never visits it, its text
+  // never commits or pushes, and NOTHING warns: the "no resolvable git backbone" warning in pin.service.ts
+  // only fires for a storage that was discovered in the first place. Personal, meanwhile, keeps working, so
+  // the failure looks like "company sync is broken" rather than "the company storage does not exist".
+  // Convention is the whole point of the `_large_files_bridge` suffix; apply it evenly.
+  for (const dir of conventionalSdlDirs()) roots.add(dir);
 
   const visit = (dir: string, depth: number): void => {
     if (readDescriptor(dir) || classifyByConvention(dir)) roots.add(dir);

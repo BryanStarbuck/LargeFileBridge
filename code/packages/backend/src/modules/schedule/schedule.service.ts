@@ -27,7 +27,14 @@ const noopInstaller: SchedulerInstaller = {
   },
   installedIntervalSeconds: () => null,
   installedTriggerScript: () => null,
+  installedNodeBin: () => null,
+  installedLogPaths: () => null,
 };
+
+/** The state root this process would install a plist against — the one place worker log paths come from. */
+function stateRootNow(): string {
+  return resolveStateDir();
+}
 
 function installer(): SchedulerInstaller {
   return process.platform === "darwin" ? launchdInstaller : noopInstaller;
@@ -133,6 +140,39 @@ export async function jobsPageData(): Promise<JobsPageData> {
   };
 }
 
+/**
+ * The node binary to bake into a worker plist — a path that SURVIVES A RUNTIME UPGRADE.
+ *
+ * `process.execPath` is version-pinned by every version manager there is: Homebrew hands us
+ * `/opt/homebrew/Cellar/node/26.4.0/bin/node`, and the day `brew upgrade node` runs, that directory is
+ * deleted. launchd then has a plist whose interpreter does not exist, so the job dies instantly on every
+ * fire — SILENTLY, because a job that never starts writes nothing to our logs and never reaches stampRun.
+ * That is the same failure mode as the run-worker.mjs path bug, one argument to the left, and it was live on
+ * the reference machine: the `scan` plist pointed at node 26.4.0 while the installed runtime was 26.5.0.
+ *
+ * So prefer a STABLE symlink (`/opt/homebrew/bin/node`, `/usr/local/bin/node`, `/usr/bin/node`) — but only
+ * one that currently resolves to the very binary we are running. That proviso is what makes this safe: we
+ * never point a worker at some other node that happens to be on the box, only at a durable alias for THIS
+ * one. When the package manager later upgrades node, the alias follows it and the worker keeps running.
+ * With no such alias (nvm, a bare tarball, an unusual layout) we fall back to `process.execPath` unchanged.
+ */
+export function stableNodeBin(execPath: string = process.execPath): string {
+  let realExec: string;
+  try {
+    realExec = fs.realpathSync(execPath);
+  } catch {
+    return execPath;
+  }
+  for (const candidate of ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]) {
+    try {
+      if (fs.realpathSync(candidate) === realExec) return candidate;
+    } catch {
+      // candidate absent or dangling — try the next
+    }
+  }
+  return execPath;
+}
+
 // The full install options for a worker plist — the same set whether we're installing fresh or
 // re-rendering an existing plist to fix a drifted interval (reconcileWorkerSchedules).
 function buildInstallOpts(kind: WorkerKind) {
@@ -148,7 +188,7 @@ function buildInstallOpts(kind: WorkerKind) {
     label: labelFor(kind),
     worker: kind,
     intervalSeconds: intervalFor(kind),
-    nodeBin: process.execPath,
+    nodeBin: stableNodeBin(),
     triggerScript,
     apiPort: getAppConfig().server.backend_port,
     logOut: path.join(stateRoot, "log.log"),
@@ -242,10 +282,39 @@ export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResul
       // swallows rather than throws). Without this check, a worker stuck in that state stayed "overdue"
       // FOREVER: `have === want` short-circuited the whole function before it ever looked at whether
       // launchd had the job loaded, so the repair path was never even attempted again.
+      // THE INTERPRETER. Same silent-death class as the trigger script, one argument to the left: the plist
+      // bakes in an absolute node path, and a runtime upgrade deletes the version-pinned one it was built
+      // from. Live on the reference machine — the `scan` plist named node 26.4.0 after the box had moved to
+      // 26.5.0, so launchd had been failing to spawn it on every fire with nothing in our logs. Heal on
+      // drift from what we would install now, and on a baked path that no longer exists.
+      const wantNode = stableNodeBin();
+      const haveNode = inst.installedNodeBin(label);
+      const nodeDrift = haveNode !== null && haveNode !== wantNode;
+      const nodeMissing = haveNode !== null && !fs.existsSync(haveNode);
+      // THE LOG PATHS. launchd will not start a job whose StandardOutPath/StandardErrorPath it cannot open,
+      // so a plist pointing into a directory that has since been removed is a dead worker — and the state
+      // root can legitimately move (LFB_STATE_DIR). Live on the reference machine: the `device` plist — the
+      // every-10-minute git pull/commit/push for EVERY storage — had been installed by a run whose
+      // LFB_STATE_DIR was a temp scratchpad, so its logs pointed inside /private/tmp and would stop
+      // resolving the moment that directory was reaped.
+      const wantLogs = { out: path.join(stateRootNow(), "log.log"), err: path.join(stateRootNow(), "error.err") };
+      const haveLogs = inst.installedLogPaths(label);
+      const logDrift = haveLogs !== null && (haveLogs.out !== wantLogs.out || haveLogs.err !== wantLogs.err);
+      const logDirMissing = haveLogs !== null && !fs.existsSync(path.dirname(haveLogs.out));
+
       const shouldBeEnabled = block.enabled;
       const osEnabledNow = await inst.isEnabled(label);
       const notActuallyLoaded = shouldBeEnabled && !osEnabledNow;
-      if (have === want && !scriptDrift && !scriptMissing && !notActuallyLoaded) {
+      if (
+        have === want &&
+        !scriptDrift &&
+        !scriptMissing &&
+        !nodeDrift &&
+        !nodeMissing &&
+        !logDrift &&
+        !logDirMissing &&
+        !notActuallyLoaded
+      ) {
         // already correct — nothing to do
         results.push({ kind, wantsOn: shouldBeEnabled, osEnabledAfter: shouldBeEnabled ? osEnabledNow : null });
         continue;
@@ -260,9 +329,13 @@ export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResul
       const osEnabledAfter = shouldBeEnabled ? await inst.isEnabled(label) : null;
       const why = scriptDrift || scriptMissing
         ? `trigger script ${haveScript ?? "?"} → ${wantScript}`
-        : notActuallyLoaded
-          ? `launchd didn't actually have the job loaded — re-bootstrapped`
-          : `interval ${have ?? "?"}s → ${want}s`;
+        : nodeDrift || nodeMissing
+          ? `node binary ${haveNode ?? "?"}${nodeMissing ? " (GONE — the job could not start at all)" : ""} → ${wantNode}`
+          : logDrift || logDirMissing
+            ? `log paths ${haveLogs?.out ?? "?"}${logDirMissing ? " (directory GONE — launchd could not open it)" : ""} → ${wantLogs.out}`
+            : notActuallyLoaded
+              ? `launchd didn't actually have the job loaded — re-bootstrapped`
+              : `interval ${have ?? "?"}s → ${want}s`;
       if (shouldBeEnabled && !osEnabledAfter) {
         log.warn("schedule", `${kind}: schedule repair did not take — launchd still won't load the job (${why})`);
       } else {

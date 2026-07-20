@@ -103,6 +103,26 @@ export const launchdInstaller: SchedulerInstaller = {
       return null;
     }
   },
+  installedNodeBin(label) {
+    try {
+      const xml = fs.readFileSync(agentPath(label), "utf8");
+      // ProgramArguments is [node, <trigger script>, worker, port] — the interpreter is the FIRST string.
+      const m = xml.match(/<key>ProgramArguments<\/key>\s*<array>\s*<string>([^<]*)<\/string>/);
+      return m ? m[1] : null;
+    } catch {
+      return null;
+    }
+  },
+  installedLogPaths(label) {
+    try {
+      const xml = fs.readFileSync(agentPath(label), "utf8");
+      const out = xml.match(/<key>StandardOutPath<\/key>\s*<string>([^<]*)<\/string>/);
+      const err = xml.match(/<key>StandardErrorPath<\/key>\s*<string>([^<]*)<\/string>/);
+      return out && err ? { out: out[1], err: err[1] } : null;
+    } catch {
+      return null;
+    }
+  },
   async isEnabled(label) {
     try {
       await run("launchctl", ["print", domainTarget(label)]);

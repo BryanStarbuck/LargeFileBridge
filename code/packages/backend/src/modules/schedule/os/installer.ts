@@ -12,6 +12,14 @@ export interface SchedulerInstaller {
   /** The worker trampoline script path baked into the CURRENTLY-INSTALLED schedule, or null if not installed /
    *  not readable. Used to detect a drifted/broken path (e.g. after a code move) so the plist self-heals. */
   installedTriggerScript(label: string): string | null;
+  /** The node binary baked into the CURRENTLY-INSTALLED schedule, or null if not installed / not readable.
+   *  A version-pinned interpreter path disappears the moment the runtime is upgraded, and the OS job then
+   *  dies on every fire with nothing in our logs — so this is compared against what we would install now. */
+  installedNodeBin(label: string): string | null;
+  /** The stdout/stderr paths baked into the CURRENTLY-INSTALLED schedule, or null if not installed /
+   *  not readable. launchd refuses to spawn a job whose log file it cannot open, so a plist left pointing at
+   *  a directory that has since been removed is a dead worker. */
+  installedLogPaths(label: string): { out: string; err: string } | null;
 }
 
 export interface InstallOpts {

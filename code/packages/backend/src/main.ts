@@ -42,7 +42,7 @@ import { resolveStateDir } from "./config/state-dir.js";
 import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
 import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
-import { migrateSyncRepoDefault } from "./config/migrate-sync-repo-default.js";
+import { migrateSyncRepoDefault, repairEmptySyncRepoBlocks } from "./config/migrate-sync-repo-default.js";
 import { log, flushLogs, logError } from "./shared/logging.js";
 import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
 import { recordSessionStart } from "./shared/session.js";
@@ -172,6 +172,10 @@ async function main(): Promise<void> {
   // Without this the tracking mirror stays off for every pre-existing repo and the cross-computer
   // feature works only on a fresh install (storage_company.mdx §8.4.2).
   migrateSyncRepoDefault(resolveStateDir());
+  // Repair the bare `sync_repo:` (= null) that the FIRST version of the migration above left behind when it
+  // removed the block's only child. It made every repo unit config unreadable; this must run before anything
+  // below reads one.
+  repairEmptySyncRepoBlocks(resolveStateDir());
 
   // One-time, idempotent backfill of the SHARED per-file decision ledger from the legacy machine-local
   // `decisions:` enum (decisions.mdx §13). Runs AFTER the sync→pin migration (it reads pin/r/<repo>/config.yaml)

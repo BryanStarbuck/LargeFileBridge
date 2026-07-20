@@ -96,6 +96,32 @@ byte**.
 
 ---
 
+### 1.2 A company storage gets the SAME guarantees as the personal one (LOCKED)
+
+Every asymmetry between "how the personal storage is treated" and "how a company storage is treated" is a
+latent company-only outage — and it is the *worst* kind of outage, because personal keeps working, so the
+symptom looks like "company sync is broken" rather than like the rule that actually caused it. Two such
+asymmetries existed and are now closed.
+
+* **Discovery is by CONVENTION, evenly applied.** The canonical SDL home (`~/BGit/Bryan_git/`) is always
+  probed, and **every** `*_large_files_bridge` directory in it is adopted — personal and company alike.
+  Previously exactly one path was hardcoded (`personal_large_files_bridge`), so a company SDL was found only
+  if it happened to fall inside a `scanner.roots` entry within the discovery depth. Narrow those roots, or
+  keep the company SDL anywhere else, and the company storage vanished from the storage list entirely — so
+  the device worker never visited it, its text never committed or pushed, and **nothing warned**, because the
+  "no resolvable git backbone" warning only fires for a storage that was discovered in the first place.
+* **The `.gitignore` payload guard covers company-shaped payload.** The rule that strips a `.gitignore` line
+  which would swallow the SDL's travelling text (§8.4.2.1, [git_backbone.mdx §4.2.1](./git_backbone.mdx)) was
+  written from the personal SDL's root shape. It therefore missed `repos/` — the mirrored `repos/<repoUid>/`
+  tracking subtrees, which on the reference machine are the company SDL's **entire** payload and which the
+  personal SDL does not have at all — and `owner_map.yaml`, which is company-only by definition. Both are now
+  in the guarded set.
+
+Probing the canonical SDL home for every conventional storage is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `conventionalSdlDirs()`, consumed by `discoverRoots()`.
+Guarding the travelling payload against a `.gitignore` rule is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `SDL_ROOT_PAYLOAD` / `ignoresSdlPayloadLine()`, applied by `GitBackbone.ensureSdlCommittable()`.
+
 ## 2. `storage.yaml` for a company
 
 ```yaml
@@ -376,6 +402,38 @@ This **supersedes §7's "Default: OFF"** for the case where a sync repo can be r
 
 Resolving the owning storage from the repo's remote and auto-adopting its SDL as the sync repo is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()` (now remote-owner first, containment second), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
+
+##### 8.4.2.1 A line-level migration must leave a PARSEABLE file (LOCKED)
+
+The one-time migration above shipped with a defect that took the whole product down, and the rule it teaches
+is more important than the migration itself.
+
+* **What happened.** `sync_repo.enabled` is the block's **only** child. The migration removed that line and
+  left the parent key behind, so every config ended with a bare `sync_repo:` — which YAML parses as **`null`**,
+  not as an empty map. `z.object({...}).prefault({})` fills in for `undefined`, **never** for `null`, so the
+  repo unit schema rejected it outright. All **178** repo unit configs became unreadable at once, from one
+  removed line: no `registerRepo`, no To-Do recalc, no `reconcileMirroredRepos`, no per-repo pin pass — and
+  the error surfaced as `Invalid schema at …/act3_large_files_bridge/config.yaml` on operations that had
+  nothing to do with that repo, which reads as "the company storage is broken."
+* **The rule for every future migration.** A migration that edits YAML **by line** must leave a file the
+  schema still accepts. When removing a block's last child, emit an explicit empty map (`sync_repo: {}`) —
+  never a valueless parent key. Assert it: a migration test that only compares output **strings** will
+  happily freeze broken output in place, which is exactly what happened here. Every migration test must parse
+  its own output through the real schema.
+* **The store must survive it anyway.** Defence in depth: a valueless block is now read as **absent**, so the
+  schema's own default applies, and the file is rewritten in its normal shape on the next update. The repair
+  is deliberately narrow — it acts only on "expected object, received null" and only where the input really
+  is `null`, so a legitimately `.nullable()` field (e.g. `owner_override: null`) is untouched and every other
+  validation failure still fails loudly.
+* **Already-damaged machines are repaired.** The original migration's marker was already written, so it could
+  never run again and never fix what it left behind. A **separate** repair pass with its own marker restores
+  the empty block on disk (178/178 on the reference machine), so nothing downstream — another tool, an older
+  build, a human reading the YAML — has to know about the read-time workaround.
+
+Surviving a valueless block on read is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `dropEmptyBlocks()`.
+Emitting a parseable file, and repairing the machines the broken version already ran on, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sync-repo-default.ts` — `clearPersistedSyncRepoFalse()` and `repairEmptySyncRepoBlocks()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
 
 #### 8.4.3 Receiving is a MERGE, never a copy (LOCKED)
 
