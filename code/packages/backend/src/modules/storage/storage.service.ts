@@ -368,8 +368,19 @@ function ownerSlugsOf(row: StorageRow): string[] {
  *  fact (§8.4.4). Idempotent + best-effort: a failed write just means the heuristic runs again next time. */
 function recordOwnerSlug(row: StorageRow, slug: string): void {
   try {
-    const desc = readDescriptor(row.root);
-    if (!desc) return; // not initialized — nothing to write into; the match still stands for this pass
+    let desc = readDescriptor(row.root);
+    if (!desc) {
+      // A convention-named company dir with no `storage.yaml` (the common shape of a storage the user made
+      // by hand) has nowhere to record the binding, so the heuristic would re-run forever and the org would
+      // never become an auditable, travelling fact. Initialize the descriptor here — that IS the "set this
+      // storage up" step, and doing it at the moment we learn its org is the least surprising time.
+      ensureStorage(row.root, "company", {
+        name: row.name,
+        company: { companyName: row.companyName ?? row.name },
+      });
+      desc = readDescriptor(row.root);
+      if (!desc) return; // still nothing (unwritable dir) — the match stands for this pass, unrecorded
+    }
     const have = ownerSlugsOf(row);
     if (have.some((s) => normalizeSlug(s) === normalizeSlug(slug))) return;
     writeDescriptor(row.root, {
@@ -406,20 +417,24 @@ export function ensureCompanyForOwner(slug: string | null): StorageRow | null {
   const claimed = companies.find((r) => ownerSlugsOf(r).some((s) => normalizeSlug(s) === want));
   if (claimed) return claimed;
 
-  // An org already claimed by SOME company must never be re-bound by a weaker rule below.
-  const unclaimedBySomeoneElse = (r: StorageRow) => !companies.some((c) => c.id !== r.id && ownerSlugsOf(c).some((s) => normalizeSlug(s) === want));
+  // A company that ALREADY claims an org must never absorb a second one by heuristic. A company storage is
+  // 1:1 with a forge organization (§10); a company MAY claim several orgs, but only because a person said so
+  // — never because a guess fired twice. Without this the "lone company" rule below adopted EVERY org on the
+  // machine in turn: on the reference disk, `ACT3ai`, `BryanStarbuck` and `trykimu` all resolved to the one
+  // existing company, which is exactly the cross-company mixing §10.4.3 calls a confidentiality boundary.
+  const claimsNothingYet = (r: StorageRow) => ownerSlugsOf(r).length === 0;
 
-  // 2. normalized name match
+  // 2. normalized name match — the company's own name IS the org (`Act3 AI` ⇢ `act3ai`).
   const byName = companies.find(
-    (r) => unclaimedBySomeoneElse(r) && [r.companyName, r.name].some((n) => n && normalizeSlug(n) === want),
+    (r) => claimsNothingYet(r) && [r.companyName, r.name].some((n) => n && normalizeSlug(n) === want),
   );
   if (byName) {
     recordOwnerSlug(byName, slug!);
     return byName;
   }
 
-  // 3. a lone company storage adopts the unclaimed org
-  if (companies.length === 1 && unclaimedBySomeoneElse(companies[0]!)) {
+  // 3. a lone, UNCLAIMED company storage adopts the org — the "you only have one company" case.
+  if (companies.length === 1 && claimsNothingYet(companies[0]!)) {
     recordOwnerSlug(companies[0]!, slug!);
     return companies[0]!;
   }

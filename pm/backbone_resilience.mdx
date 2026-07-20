@@ -60,14 +60,17 @@ Each row is a way the flow has stopped or could stop. For each: how LFB **detect
 | **F2** | **Diverged history** — the branch has local commits AND the remote has commits, because something OTHER than LFB committed into the repo (a machine-wide auto-commit) or a prior push was rejected | every cycle fetches; a non-fast-forward push, or a non-zero ahead-count, reveals it | **fetch → auto-merge → push** — the merge folds in the remote, the push delivers the local side; never force, never discard (§4, §5) | only if the merge truly conflicts (F4) |
 | **F3** | **Stranded local commit** — the branch is ahead of the remote but this pass had nothing of its own to commit, so the old code returned before pushing and the commit sat forever | `origin/<branch>..HEAD` ahead-count > 0 (§6) | **always push when ahead** — a push is attempted whenever the branch is ahead, not only after a fresh commit (§6) | — (it just flows) |
 | **F4** | **Unresolvable merge conflict** — git itself declines to auto-merge | `git merge` exits conflicted | **abort** the merge (tree stays clean), keep pinning over IPFS, and **surface** the conflicted paths ([git_backbone.mdx §4.3](./git_backbone.mdx#43-the-strategy-and-the-fallback-when-git-truly-cannot-resolve)) | conflict problem on the storage |
-| **F5** | **Auth failure on a URL remote** — no cached credential / expired token | fetch/push classified as an auth error ([git_backbone.mdx §5](./git_backbone.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt)) | keep pinning over IPFS; do **not** hang or retry blindly | "re-authenticate this Git remote" problem |
+| **F5** | **Auth failure on a URL remote** — no cached credential / expired token | fetch/push classified as an auth error ([git_backbone.mdx §5](./git_backbone.mdx#5-credentials-for-a-url-remote--the-os-git-credential-helper-never-a-prompt-locked)) | keep pinning over IPFS; do **not** hang or retry blindly | "re-authenticate this Git remote" problem |
 | **F6** | **IPFS node down** — bytes can't move even though git text can | `ipfs.health() !== "ok"` at the top of a unit pin | skip byte work this pass, keep the git text flowing, retry next pass | unit error on the storage |
 | **F7** | **App not running** — the web app is closed, so nothing (not even the watchdog) runs | the launchd trigger still fires the OS worker independently of the app; on next app start, boot reconcile + watchdog catch up | OS worker keeps the 10/15-min cadence while the app is down; the app re-converges on launch | last-run age visible on next open |
 | **F8** | **Tracking mirror written, never announced** — LFB mirrors a repo's tracking state into the SDL between timer ticks, so it sits uncommitted in the sync repo's working tree for up to a full interval | the mirror step knows it wrote; nothing downstream is told | the write **nudges** its SDL's backbone on a **debounce** (§6.1 below, [git_backbone.mdx §6.2](./git_backbone.mdx#62-a-mirror-write-nudges-its-sdls-backbone--debounced-locked)); the next timer tick is the backstop | — (it just flows sooner) |
+| **F9** | **No `origin` at all** — a tracking repo (typically a freshly `git init`ed company storage) has no remote, so it commits forever and **never pushes**; the cycle "succeeds" every time | the cycle checks for an `origin` remote before pushing | none is possible — **there is nowhere to push** — so the only correct response is to **say so** (§6.2); once a remote exists, §6 delivers everything that piled up | **standing fault** on the storage's row + a WARN naming the storage |
+| **F10** | **Two uncoordinated writers on one working copy** — the pin/device cycle takes a per-storage lock while a second path (ownership assertion) runs its own git chain over the same index | the failure is a corrupted index / lost write, not an error message | **one lock per storage** covers *every* git operation against that working copy (§6.3) | index/commit errors on the storage, if it happens at all |
 
-The load-bearing insight: **F1, F2, and F3 are the ones that fail *silently*** — they produce no error,
-no toast, no conflict; the flow just quietly stops. They are exactly the incident (§8), and §3/§4/§6 are
-the locked fixes.
+The load-bearing insight: **F1, F2, F3, and F9 are the ones that fail *silently*** — they produce no error,
+no toast, no conflict; the flow just quietly stops. F1–F3 are exactly the incident (§8), and §3/§4/§6 are
+the locked fixes; **F9 is the same shape one layer down** — not "the trigger stopped firing" but "the cycle
+kept firing and had nowhere to send anything" — and §6.2 is its fix.
 
 ---
 
@@ -229,6 +232,52 @@ what this spec locks is how it fits the resilience contract:
 The debounced nudge, and the storage-resolution trap it avoids, are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` / `flushArtifactSync()` (debounce + coalesce per storage; `storageIdForPath()` resolves by root prefix and returns null for a working-repo path), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (announces `dst`, the SDL-side destination).
 
+### 6.2 A repo with no `origin` — committing forever, reaching nobody (LOCKED)
+
+**F9** is §1's guarantee violated in its purest form: a mechanism that runs perfectly, forever, and moves
+nothing. The cycle committed, found no remote, **returned with no problem set and nothing logged**, and its
+result was **indistinguishable from a healthy repo with nothing to do**. The authority is
+[storage_company.mdx §11.2](./storage_company.mdx#112-a-repo-that-cannot-push-must-say-so-locked); the
+engine's half is [git_backbone.mdx §4.3.2](./git_backbone.mdx#432-a-repo-with-no-origin-is-a-loud-standing-fault-locked).
+What this spec locks is where it sits in the resilience contract:
+
+* **It is the most likely fault in the newest code path.** Creating a company storage `git init`s a
+  directory ([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked)),
+  so **every** newly created company storage is born in this state. A failure mode that is the *default*
+  state of a brand-new object must be loud, not inferred.
+* **Say it once per storage, and keep saying it.** A **standing** fault on the storage's row plus a WARN
+  line naming the storage — not a one-shot toast that scrolls away. Wording:
+  *"Large File Bridge is tracking this company locally, but it has no remote — nothing is reaching your
+  other computers."* The fix is one click: add a remote.
+* **Committed-but-unpushed is a state, not an absence.** It is reported as such, and the moment a remote
+  exists the **always-push-when-ahead** rule (§6) delivers the whole backlog on the next cycle — nothing
+  that accumulated is lost.
+* **Every silent null becomes loud.** This is the same discipline as §1: a backing read that fails, a
+  backbone that will not resolve, a push that never happened — each gets a log line naming the storage and
+  the reason. **Silence must mean success.**
+
+Setting the no-origin problem instead of returning silently is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `hasOrigin()` branch, which now sets `result.problem` and logs a WARN before returning), surfaced onto the storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)`.
+
+### 6.3 One lock per storage — every git operation, no exceptions (LOCKED)
+
+**Two locks are not a lock.** The company path had the pin/device cycle's per-storage lock **and** a
+second, uncoordinated chain used when writing `owner_map.yaml` — two writers able to touch one working
+tree and one git index at the same time (**F10**). The rule, owned by
+[storage_company.mdx §11.3](./storage_company.mdx#113-one-repo-one-lock-locked):
+
+* **Every git operation against a storage's working copy takes the same per-storage lock** — the pin pass,
+  the 10-minute device write-back, the debounced post-mirror nudge (§6.1), the watchdog's in-process run
+  (§3), and the **ownership assertion**. One storage, one lock, one writer at a time.
+* **The lock is the storage, not the caller.** Any new code path that opens a working copy must acquire it;
+  a path that "only appends one line" is exactly the kind of writer that corrupts an index mid-merge.
+* **It composes with, and does not replace, the deeper contract.** [storage_personal.mdx §25.3](./storage_personal.mdx#253-the-cross-process-lock-changed--fixes-v1f)
+  raises this to a **cross-process** file lock with a stale takeover; the rule here is the in-process floor
+  that must hold in every build.
+
+Serializing every git operation per storage behind one lock is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock(id, fn)`, taken by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit()` / `ensureDeviceRegistered()` / `syncStorageText()` and by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` (whose `withCompanyGitLock` is now an alias of the same lock, not a second one).
+
 ---
 
 ## 7. Staleness surfacing — an overdue worker is visible (LOCKED)
@@ -322,6 +371,18 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
 8. **Nothing fails silent.** An unrecoverable merge conflict, an auth failure, or a down IPFS node
    becomes a **surfaced problem** on the storage/worker while the rest of the flow keeps moving — never a
    swallowed error (§2, §5).
+9. **A repo with no `origin` is a standing, loud fault** (**F9**, §6.2), never mistaken for a healthy repo
+   with nothing to do: committed-but-unpushed is a reported state on the storage's row and in the log, the
+   fix is one click, and once a remote exists §6's ahead-count push delivers the whole backlog. Every
+   newly created company storage is born in this state, so it must be **announced**, never inferred.
+10. **One lock per storage covers every git operation** against its working copy (**F10**, §6.3) — the pin
+    pass, the device write-back, the post-mirror nudge, the watchdog's in-process run, and the **ownership
+    assertion** all take the same lock. A second, uncoordinated chain over the same index is a defect.
+11. **A merge conflict no longer freezes a storage.** The abort-and-surface path (§5) is the **last resort**
+    after the per-file resolution ladder ([git_backbone.mdx §4.3.1](./git_backbone.mdx#431-the-per-file-resolution-ladder--a-conflict-is-always-resolved-locked)),
+    and a rejected push is retried **three times with backoff**, each attempt re-pulling first and never
+    forcing ([git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-budget--three-attempts-with-backoff-locked)) —
+    superseding AC 5's "re-pushes once".
 
 <!--
   AUTHORITATIVE spec for BACKBONE RESILIENCE — keeping the cross-computer data flow ALIVE, not just correct
@@ -364,4 +425,24 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
   storage and the nudge fires. The trap is stated in the past/conditional and the warning is deliberately kept,
   because prefix resolution's failure mode is a SILENT no-op (F8): any new caller must be handed a path under
   the storage root it means.
+
+  ADDED for storage_company.mdx §11 (that spec is the authority — link, don't restate). TWO new named failure
+  modes in the §2 taxonomy: F9 = NO ORIGIN AT ALL (a git init'ed company storage commits forever and never
+  pushes; the cycle "succeeds" every time, returning with no problem set and nothing logged — the same shape
+  as F1/F2/F3 one layer down: not "the trigger stopped" but "the cycle kept firing and had nowhere to send
+  anything"). NO recovery is possible — there is nowhere to push — so the ONLY correct response is to SAY so.
+  F10 = TWO UNCOORDINATED WRITERS on one working copy (the pin/device per-storage lock plus a separate chain
+  for owner_map.yaml); its failure is a corrupted index / lost write, not an error message. NEW §6.2 (LOCKED)
+  the no-origin fault: it is the DEFAULT state of every newly created company storage (§10.3 there git init's
+  the directory), so it must be announced not inferred; standing fault on the storage row + a WARN naming the
+  storage, one-click "add a remote"; committed-but-unpushed is a STATE and §6's always-push-when-ahead
+  delivers the whole backlog the moment a remote exists; "silence must mean success". NEW §6.3 (LOCKED) ONE
+  LOCK PER STORAGE — two locks are not a lock; every git operation (pin pass, device write-back, post-mirror
+  nudge, watchdog in-process run, ownership assertion) takes withStorageGitLock; the lock is keyed to the
+  STORAGE, not the caller, and it is the in-process FLOOR under storage_personal.mdx §25.3's cross-process
+  file lock, not a replacement for it. AC 9/10/11 added (11 supersedes AC 5's "re-pushes once" — three
+  attempts with backoff now, per git_backbone §6.3, and the merge conflict abort is now the LAST resort after
+  git_backbone §4.3.1's per-file ladder). Code: git.service commitAndPush() hasOrigin branch; git-lock.ts
+  withStorageGitLock ← pin.service pinStorageUnit/ensureDeviceRegistered/syncStorageText +
+  owner-propagation.service (withCompanyGitLock is now an ALIAS of the same lock).
 -->

@@ -141,7 +141,7 @@ the user ever hand-resolving a conflict in the normal case. Three things make th
 ### 4.1 Self-owned files rarely collide
 
 The SDL is deliberately structured so that concurrent edits land in **different files** (the trust rule
-of [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule),
+of [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation--the-load-bearing-rule),
 [devices.mdx §2.1](./devices.mdx#21-a-device-file-is-self-owned-trust)):
 
 * A computer **writes only its own** `devices/<device>.yaml`. Two computers editing the registry at the
@@ -251,13 +251,73 @@ Ensuring the tracking text is committable on every backbone commit (strip any ig
 
 * LFB merges with git's default **ort** recursive strategy (`git merge --no-edit`), which resolves the
   overwhelming majority of real-world cases (including renames) on its own.
-* If — despite §4.1/§4.2 — git reports a **genuine conflict** it cannot auto-resolve, LFB does **not**
+* ~~If — despite §4.1/§4.2 — git reports a **genuine conflict** it cannot auto-resolve, LFB does **not**
   guess and does **not** clobber. It **aborts the merge** (`git merge --abort`, leaving the working copy
   clean), records the conflicted paths, and **surfaces them in the UI** as a backbone problem on that
-  storage, so the user can resolve it with their own Git tools. Reconciliation of *content* claims (a
-  stale `pinned_by`, a superseded revision) still follows the SDL trust rules
-  ([sync_list.mdx §5.3](./sync_list.mdx#53-conflict-resolution)); this fallback is only for the rare
-  textual conflict git itself declines.
+  storage, so the user can resolve it with their own Git tools.~~ **SUPERSEDED by §4.3.1** — abort-and-surface
+  is now the **last resort**, reached only after the per-file resolution ladder has been applied to every
+  conflicted path and something is genuinely left over. It is no longer the *first* thing that happens to a
+  conflicted merge, and it is no longer allowed to freeze the whole storage.
+* Reconciliation of *content* claims (a stale `pinned_by`, a superseded revision) still follows the SDL
+  trust rules ([sync_list.mdx §5.3](./sync_list.mdx#53-conflicts-resolve-by-revision-then-content-then-time)); the textual fallback below is
+  only for a conflict git itself declines **and** LFB has no rule for.
+
+#### 4.3.1 The per-file resolution ladder — a conflict is always resolved (LOCKED)
+
+The authority for **why** is [storage_company.mdx §11.1](./storage_company.mdx#111-a-conflict-is-always-resolved-never-surfaced-as-homework-locked)
+— *waiting for the customer to resolve a conflict means it never gets resolved.* A tracking repo stuck
+pending a human has stopped syncing. This section is the **engine's** half: what this backbone does with a
+conflicted merge, file by file.
+
+> **What the old behavior cost.** One unresolvable path aborted the merge, and `commitAndPush()` then
+> refused to run, so a **single** conflicted file froze that storage's **entire** backbone — nothing
+> merged, nothing committed, nothing pushed, every cycle repeating the same abort until a human ran git by
+> hand. Worse, the only auto-resolution that existed applied **only when every conflicted path was a
+> `repo_storage.yaml`**, so a lone sidecar in the same merge took the resolvable files down with it. The
+> mirrored `repos/<repoUid>/` payload (§4.2) made mixed conflicts the common case rather than the rare one.
+
+**Every path is resolved by what the file *is*, never by what else is in the same merge.** The four
+resolutions, matching [storage_company.mdx §11.1](./storage_company.mdx#111-a-conflict-is-always-resolved-never-surfaced-as-homework-locked)'s
+table one-for-one:
+
+| Resolution | Applies to | What LFB does |
+| --- | --- | --- |
+| **`regenerate`** | `repo_storage.yaml` (any depth), `files.yaml` | Machine-generated caches whose authoritative copy is Local Storage — **drop the path from the merge**; the next pass rebuilds it. |
+| **`ours`** | `devices/<device>.yaml` | Self-owned (§4.1) — **keep this computer's copy**; other devices' files are different paths and are never touched. |
+| **`union`** | `manifest.yaml`, `decisions.yaml`, `owner_map.yaml`, `LargeFilesBridge_SyncList.yaml`, `files/<rel>.yaml` sidecars, `history/<device>.txt` | Append-only lists. Reaching a conflict at all means the `merge=union` attribute was **not** in the tree when the merge ran (a fresh clone, a mid-migration repo), so LFB does the union **by hand** — strip the markers, keep **both** bodies, dedupe identical lines. A superset is always safe; losing a line never is. |
+| **`null`** | anything with no rule | **Quarantined**, named, and surfaced — never a reason to stop the backbone. |
+
+* **Per file, not per merge.** A mixed conflict resolves the files it can and escalates only the ones it
+  genuinely cannot. Resolving nine of ten paths and finishing the merge is strictly better than abandoning
+  all ten.
+* **Finish the merge when nothing is left over.** With every conflicted path resolved, LFB commits the
+  merge itself (`LFB: auto-resolved N merge conflict(s)`) and the cycle continues into commit + push. Only
+  a **non-empty** unresolved list falls through to `merge --abort` + surface (§4.3), and even then every
+  *other* file in the repo keeps syncing on the next cycle.
+* **Never destructive.** Resolution only unions, regenerates, or picks a side and records it. No
+  `reset --hard`, no `clean`, no force-push (§1) — the one thing ever discarded is a cache this computer
+  can rebuild from Local Storage.
+
+Classifying a conflicted path and applying its resolution is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolutionFor(path)` (the `regenerate` / `ours` / `union` / `null` classifier) and `GitBackbone.resolveConflicts()` (per-path application, returning `{ resolved, unresolved }`), with the by-hand union in `GitBackbone.unionMergeFile()`; the attribute patterns that make most of this unnecessary in the first place are `UNION_MERGE_PATHS` (§4.2).
+
+#### 4.3.2 A repo with no `origin` is a loud, standing fault (LOCKED)
+
+The counterpart to "never fail silent". When a Git-backed storage has **no `origin`** — the normal state of
+a freshly `git init`ed company storage ([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked))
+— the cycle used to commit, return with **no problem set and nothing logged**, and look **exactly like a
+healthy repo with nothing to do**. The repo then accumulated local commits forever while the user believed
+their computers were in sync.
+
+* **Committed-but-unpushed is a first-class reported state**, not an absence. The cycle sets a problem and
+  writes a WARN line naming the storage.
+* **The user-facing wording is plain:** *"Large File Bridge is tracking this company locally, but it has no
+  remote — nothing is reaching your other computers."* The fix is one click: add a remote (§3).
+* **It is standing, not one-shot.** The fault persists on the storage's row until a remote exists; once one
+  does, the always-push-when-ahead rule (§6.1) delivers everything that piled up.
+
+Setting the no-origin problem (instead of returning silently) after a local commit is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `hasOrigin()` branch that now sets `result.problem` and logs a WARN).
 
 Performing the automatic merge (ort strategy, `--no-edit`), writing the `merge=union` `.gitattributes` when the backbone is enabled, and the abort-and-surface fallback on an unresolvable conflict, are handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `merge()` (calls `git.merge(['--no-edit'])`, catches a conflict → `git.merge(['--abort'])` and returns a `GitConflict` the pass records) and `ensureMergeAttributes(dir)` (writes `.gitattributes`). The surfaced problem is written into the storage's `status.yaml` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)`.
@@ -308,8 +368,9 @@ order, wrapped around the storage's normal reconcile + IPFS byte work:
    shared list this device appended to, and commit if anything changed. Nothing to commit → no empty
    commit.
 6. **`git push`** — send this device's commit up. On a **non-fast-forward reject** (another computer
-   pushed between our fetch and our push), LFB **re-fetches, re-merges (§4), and re-pushes once** — the
-   standard pull-then-push retry — rather than force-pushing.
+   pushed between our fetch and our push), LFB **re-fetches, re-merges (§4), and re-pushes** — the
+   standard pull-then-push retry — rather than force-pushing. ~~once~~ **SUPERSEDED by §6.3: the budget is
+   three attempts with backoff.**
 
 The cycle is **idempotent** and safe to run every 15 minutes: with nothing changed on either side it
 fetches, finds nothing to merge, stages nothing, and pushes nothing.
@@ -380,6 +441,30 @@ durable artifacts already use. Rule owned by
 Announcing a mirror write to its SDL so the backbone commits + pushes it on a debounce is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (resolves the storage by root prefix via `storageIdForPath()`, which is why it is handed the SDL-side destination), invoked from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (passes `dst`, not the repo root).
 
+### 6.3 The push retry budget — three attempts with backoff (LOCKED)
+
+Step 6's retry is **three attempts, not one**. A single retry loses to any peer that pushes twice while we
+are working — and on a **shared company repo with several members** that is an ordinary Tuesday, not an
+edge case ([storage_company.mdx §11.4](./storage_company.mdx#114-push-retries)). It is also exactly what
+[storage_personal.mdx §17.4](./storage_personal.mdx#174-stage-4--push-changed) already asked for; that rule
+is now **built**, and this section is where the engine states it.
+
+* **Backoff `0s / 2s / 8s`.** The first attempt is immediate; a peer's push usually lands within seconds,
+  so a short then longer wait costs nothing when it works and buys the race when it does not.
+* **Every retry re-pulls first**, so we are always pushing on top of the newest remote state — running the
+  full §4 merge including §4.3.1's per-file resolution. If that re-pull leaves something genuinely
+  unresolvable, LFB **stops and surfaces** rather than pushing blindly.
+* **Never a force-push**, at any attempt (§1).
+* **Log the cause of every rejection.** The error was previously captured and never read, so an **auth
+  failure** and a routine **non-fast-forward race** were indistinguishable in the log — and if a later
+  retry succeeded, the fact that anything went wrong vanished entirely. Each attempt now logs its
+  classification and its attempt number; a later success **clears** the earlier attempt's problem.
+* **Exhausting the budget is not data loss.** The commit stays local, the fault is reported, and the
+  always-push-when-ahead rule (§6.1) sends it on the next cycle.
+
+The three-attempt push budget with backoff, its per-attempt re-pull, and its per-attempt logging are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `BACKOFF_MS = [0, 2000, 8000]` loop, each iteration calling `GitBackbone.pull()` before the next attempt).
+
 ---
 
 ## 7. Compliance boundary — the charter's no-relay posture, in Git terms (LOCKED)
@@ -444,6 +529,20 @@ Enforcing that Git operations only ever target a user-configured storage backbon
 9. **A mirror write nudges its SDL's backbone on a debounce** rather than waiting for the next timer tick;
    the nudge coalesces to one commit + push per storage, runs the ordinary §6 cycle, and resolves the SDL
    by **ownership** (a working-repo path prefix resolves to nothing) — §6.2.
+10. **Every conflicted path has an automatic resolution, applied PER FILE** (§4.3.1, authority
+    [storage_company.mdx §11.1](./storage_company.mdx#111-a-conflict-is-always-resolved-never-surfaced-as-homework-locked)):
+    **regenerate** for caches (`repo_storage.yaml`, `files.yaml`), **ours** for `devices/<self>.yaml`,
+    **union** for append-only lists (manifest / decisions / owner_map / SyncList / sidecars / history), and
+    **quarantine** for anything with no rule. A conflict in one file **never blocks** another; with nothing
+    left over the merge is **finished and committed**, and `merge --abort` + surface (§4.3) is the **last
+    resort**, not the first response — one unresolvable file must never freeze a storage's whole backbone.
+11. **A Git-backed storage with no `origin` reports a loud, standing fault** and is never mistaken for a
+    healthy repo with nothing to do (§4.3.2): committed-but-unpushed is a **reported state**, named on the
+    storage's row and in the log, with "add a remote" as the one-click fix.
+12. **A rejected push is retried three times with backoff** (`0s / 2s / 8s`), each attempt **re-pulling
+    first** and **never** force-pushing (§6.3); every rejection's **cause is logged** with its attempt
+    number, a later success clears the earlier problem, and exhausting the budget leaves the commit local
+    for §6.1's ahead-count push on the next cycle.
 
 <!--
   AUTHORITATIVE spec for LFB's GIT BACKBONE ENGINE. Turning on a storage's Git backbone (storage_settings
@@ -502,4 +601,27 @@ Enforcing that Git operations only ever target a user-configured storage backbon
   working-repo root, so the root-prefix lookup resolves correctly. The trap is stated in the past tense and the
   warning is kept, because prefix resolution's failure mode is a SILENT no-op: never hand noteArtifactWritten()
   a path outside the storage you mean.
+
+  ADDED for storage_company.mdx §11 (THAT spec is the authority for WHY — link, don't restate; this file owns
+  the ENGINE half). §4.3's abort-and-surface is now marked SUPERSEDED and demoted to the LAST resort. NEW
+  §4.3.1 THE PER-FILE RESOLUTION LADDER (LOCKED): regenerate (repo_storage.yaml at any depth, files.yaml) /
+  ours (devices/<self>.yaml) / union (manifest, decisions, owner_map, SyncList, files/<rel>.yaml sidecars,
+  history/<device>.txt — done BY HAND when the .gitattributes wasn't in the tree at merge time) / null →
+  quarantine. Per FILE, never per merge — the old code auto-resolved repo_storage.yaml ONLY when EVERY
+  conflicted path was one, so a lone sidecar took the resolvable files down with it, and one unresolvable
+  path froze the storage's ENTIRE backbone (nothing merged/committed/pushed until a human ran git). With
+  nothing left over the merge is FINISHED and committed ("LFB: auto-resolved N merge conflict(s)"). Nothing
+  destructive: the only thing ever discarded is a cache rebuildable from Local Storage. NEW §4.3.2 THE
+  NO-ORIGIN FAULT (LOCKED): a repo with no origin used to commit, return with NO problem and NO log line, and
+  be INDISTINGUISHABLE from a healthy repo with nothing to do — the normal state of a freshly git init'ed
+  company storage (§10.3 there), so it could pile up local commits forever while the user believed they were
+  in sync. Now a standing, loud fault with one-click "add a remote". NEW §6.3 THE PUSH RETRY BUDGET (LOCKED):
+  THREE attempts with 0s/2s/8s backoff (§6 step 6's "once" marked superseded) — a single retry loses to any
+  peer that pushes twice, ordinary on a shared company repo; each retry RE-PULLS first (full §4 merge incl.
+  §4.3.1) and stops rather than pushing blindly if something unresolvable remains; every rejection's cause is
+  LOGGED with its attempt number (it used to be captured and never read, so auth failure and a routine non-ff
+  race looked identical), a later success clears the earlier problem, and exhausting the budget just leaves
+  the commit for §6.1's ahead-count push. Reconciles storage_personal.mdx §17.4 item 3, which already asked
+  for 3 retries with backoff — now BUILT. AC 10/11/12 added. Code: git.service resolutionFor() /
+  GitBackbone.resolveConflicts() / unionMergeFile() / commitAndPush() (hasOrigin branch + BACKOFF_MS loop).
 -->

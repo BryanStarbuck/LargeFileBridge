@@ -658,6 +658,11 @@ The test is **local, cheap, and decisive**:
 * **Your own account is Personal, not a company.** An org listed in `personal_accounts`
   ([settings.mdx](./settings.mdx)) resolves to **Personal** and is never proposed as a company — that is what
   keeps `github.com/<you>/<your-repo>` out of the company list.
+* **Match the identity case-insensitively (LOCKED).** `git log --author=` is a **case-sensitive regex**. A
+  configured `user.email` reads back lowercased while commits record the casing the user typed
+  (`bryan@…` vs `Bryan@…`), so a case-sensitive match answered "no" for the user's OWN repos and silently
+  cut a correct 3-org result to 1. A membership test that fails closed on a capital letter is worse than no
+  test, because its answer looks like a considered one.
 * **The test is a PROPOSAL filter, never a lock.** The user can add any org as a company by hand, and can
   dismiss a proposed one. A heuristic decides what to *offer*; the user decides what *exists*.
 * **Not-yet-committed is not never.** An org that fails the test today passes the first time the user commits
@@ -805,10 +810,21 @@ A developer's laptop holds repos from several places at once:
 | Org in the remote | Repos on disk | Do they commit there? | Outcome |
 | --- | --- | --- | --- |
 | `ACT3ai` | 102 | yes | **Company** — adopts the existing `act3_large_files_bridge` |
-| `stoke-gh` | 2 | yes | **Company** — new storage created |
 | `trykimu` | 2 | yes | **Company** — new storage created |
-| `BryanStarbuck` | 28 | yes | **Personal** — it is the user's own account |
+| `BryanStarbuck` | 28 | yes | **Personal** — once listed in `personal_accounts`; a **company** until then |
 | `KDE`, `OpenShot`, `xai-org`, `twitter`, … (28 orgs) | ~40 | no — clones only | **Ignored**, and the count is reported |
+
+Two details this measured run makes concrete, both worth stating because they are the cases a tidy example
+hides:
+
+* **Personal is a CONFIGURED fact, not an inferred one.** `BryanStarbuck` is the user's own account, but LFB
+  only knows that because `personal_accounts` says so ([settings.mdx](./settings.mdx)). With that list empty
+  the org qualifies like any other and is proposed as a company — correctly, since an org you commit to is
+  indistinguishable from a company until you say otherwise. The proposal is where the user says otherwise.
+* **The membership test is about COMMITS, not intent.** An org can be one the user thinks of as theirs and
+  still not qualify, because no commit of theirs is in the local history of any of its repos on this machine
+  (a fresh clone of a repo they only read). That is the test doing its job, and the fix is the same one
+  offered for every skipped org: add it by hand.
 
 ### 12.2 What must happen
 

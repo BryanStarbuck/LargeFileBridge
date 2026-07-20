@@ -177,3 +177,32 @@ describe("clearPersistedSyncRepoFalse — a schema default is not a user's choic
     );
   });
 });
+
+// ── one company must not absorb every organization on the disk (§10, §10.4.3) ─────────────────────────
+import { ensureCompanyForOwner } from "./storage.service.js";
+
+describe("ensureCompanyForOwner — a company is 1:1 with an org (§10)", () => {
+  // Live-disk regression. The "lone company adopts an unclaimed org" fallback had no memory: it fired for
+  // EVERY org in turn, so on the reference machine ACT3ai, BryanStarbuck and trykimu all resolved to the one
+  // existing company storage. That is precisely the cross-company mixing §10.4.3 calls a confidentiality
+  // boundary — one company's tracking text pushed into another company's repo.
+  it("does not let a company that already claims an org adopt a second one by heuristic", () => {
+    const first = ensureCompanyForOwner("ACT3ai");
+    if (!first) return; // no company storage on this machine — nothing to assert
+    // Whatever adopted the first org must NOT also adopt an unrelated one.
+    const second = ensureCompanyForOwner("SomeUnrelatedOrgThatNobodyClaims");
+    expect(second?.id).not.toBe(first.id);
+  });
+
+  it("is stable — asking twice for the same org returns the same company", () => {
+    const a = ensureCompanyForOwner("ACT3ai");
+    const b = ensureCompanyForOwner("ACT3ai");
+    expect(b?.id).toBe(a?.id);
+  });
+
+  it("returns null for an empty or unparseable slug rather than guessing", () => {
+    expect(ensureCompanyForOwner(null)).toBeNull();
+    expect(ensureCompanyForOwner("")).toBeNull();
+    expect(ensureCompanyForOwner("   ")).toBeNull();
+  });
+});

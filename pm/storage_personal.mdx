@@ -689,6 +689,38 @@ else**. A working repo NEVER gets the Part II engine — it is governed by
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
 `usesLfbridgeDir(kind)` / `trackingBaseDir(root, kind)`.
 
+#### 16.1.1 Both repos are governed autonomously — the company case is not a lesser case (LOCKED)
+
+§16.1 already puts a **company sync repo** in Part II's scope. This subsection makes explicit what that
+means, because the company repo is where the rules bite hardest and it is easy to read Part II as a
+Personal-only document.
+
+* **The autonomy rules apply to BOTH, identically.** Everything
+  [storage_company.mdx §11](./storage_company.mdx#11-the-company-tracking-repo-governs-itself-locked) locks —
+  fetch / merge / commit / push **without ever waiting on the user**, per-file conflict resolution, the
+  no-origin fault, one lock per storage, the three-attempt push — is a rule about a **dedicated LFB file
+  repo**, and the Personal SDL and a company sync repo are the **same kind of object**. Neither gets a
+  weaker engine.
+* **The licence is the same licence.** §16.1's argument is that in a dedicated file repo LFB is effectively
+  the only author, so a headless merge policy (§23) is legitimate. That argument does not mention Personal;
+  it turns entirely on the **kind**. A company sync repo the user's team created *for Large File Bridge* is
+  exactly as much LFB's to drive as the Personal one.
+* **The company case is the harder one, not the softer one.** A Personal SDL has one author across a
+  handful of the user's own machines. A company sync repo has **several members** pushing, and it carries
+  the whole `repos/<repoUid>/` mirror rather than a device file — so conflicts and push races that are
+  theoretical for Personal are routine there. That is *why* the ladder and the retry budget exist, not a
+  reason to exempt it.
+* **The confidentiality boundary is a company-only addition.** One thing is genuinely extra for companies:
+  each org's tracking never enters another org's repo
+  ([storage_company.mdx §10.4](./storage_company.mdx#104-what-the-linkage-buys-locked)). Personal has no
+  equivalent because there is only one Personal.
+* **`owner_map.yaml` remains the single consent-gated exception** (§22.8) — the assertion converges
+  automatically like every other append-log, but its **effect** never applies on another member's machine
+  without a human. Autonomy is about *git*, never about silently re-mapping someone's repos.
+
+Keying the engine to a dedicated LFB file repo — Personal SDL or company sync repo alike — is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `usesLfbridgeDir(kind)` / `trackingBaseDir(root, kind)`, with the per-storage serialization in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock()` and the per-file conflict resolution in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolutionFor()` / `GitBackbone.resolveConflicts()`.
+
 ### 16.2 The v1 audit — what is actually true today (evidence, 2026-07-16)
 
 Everything here was **verified against the shipped code and the live Personal repo**, not inferred. It is
@@ -973,6 +1005,31 @@ allowed to be a no-op — and on a healthy single-writer machine it always is.
    * **Never `--force`, never `--force-with-lease`.** Non-negotiable (§23.0).
 4. **Push when ahead even with nothing committed** (git.service.ts:506-509, BUILT — correct and important:
    it is what heals a previous pass that committed but failed to push).
+
+#### 17.4.3 The retry rule is now BUILT — and it is the same rule for company repos (LOCKED)
+
+Item 3's three changes above were written as **CHANGED** against v1. They are now **BUILT**, and the engine
+spec states them: [git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-budget--three-attempts-with-backoff-locked).
+
+* **Three attempts, `0s / 2s / 8s`.** Exactly the budget asked for here. Each attempt **re-pulls first**, so
+  every retry pushes on top of the newest remote state; if that re-pull leaves something genuinely
+  unresolvable, the cycle **stops and surfaces** rather than pushing blindly.
+* **The original error is logged**, with its classification and its attempt number — closing v1(g), where
+  `e` was discarded and an auth failure was indistinguishable in the log from a routine non-fast-forward
+  race. A later success **clears** the earlier attempt's problem.
+* **Never `--force`, at any attempt.**
+* **Why three, stated once:** a single retry loses to any peer that pushes twice while we are working. On
+  the **Personal** SDL that is rare; on a **company sync repo** with several members it is an ordinary
+  Tuesday ([storage_company.mdx §11.4](./storage_company.mdx#114-push-retries)). §16.1.1 is why the same
+  budget serves both.
+* **Exhausting the budget is not loss.** The commit stays local, the fault is reported, and item 4's
+  push-when-ahead sends it on the next pass. A repo with **no `origin`** at all is a different, louder case
+  ([git_backbone.mdx §4.3.2](./git_backbone.mdx#432-a-repo-with-no-origin-is-a-loud-standing-fault-locked),
+  [backbone_resilience.mdx §6.2](./backbone_resilience.mdx#62-a-repo-with-no-origin--committing-forever-reaching-nobody-locked)) —
+  it is a **standing fault**, not a retry.
+
+The three-attempt push budget, its per-attempt re-pull, and its per-attempt error logging are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `BACKOFF_MS = [0, 2000, 8000]` loop, each iteration calling `GitBackbone.pull()`), with the honest commit message of item 2 in the same file's `composeCommitMessage()`.
 
 ---
 
@@ -1843,6 +1900,25 @@ storage forever (invariant 2, §16.3).
     user's two real computers (different minted ids, both advancing), i.e. the registry working as specified
     (§4.1/§4.3). An earlier draft listed it here as an orphan-from-rename; that was a misreading of a
     filename, corrected in v1(i).
+35. **The engine is kind-scoped, not Personal-scoped** (§16.1.1): every autonomy rule in
+    [storage_company.mdx §11](./storage_company.mdx#11-the-company-tracking-repo-governs-itself-locked) —
+    drive git without ever waiting on the user, resolve conflicts **per file**, report a missing `origin`
+    as a standing fault, **one lock per storage**, **three** push attempts with backoff — applies
+    **identically** to the Personal SDL and to a **company sync repo**. The company case is the *harder*
+    one (several members pushing, the whole `repos/<repoUid>/` mirror riding along), never the exempt one.
+    The only company-only addition is the **confidentiality boundary** (one org's tracking never enters
+    another org's repo); `owner_map.yaml` remains the **single** consent-gated exception (§22.8) — git
+    converges automatically, but the ownership **effect** never applies without a human.
+36. **Item 3 of §17.4 is BUILT** (§17.4.3): the push is retried **three times with backoff (0s / 2s / 8s)**,
+    each attempt **re-pulling first**, the original error **logged** with its classification and attempt
+    number (closing v1(g)), and **never** `--force` / `--force-with-lease`. Exhausting the budget leaves the
+    commit local for item 4's push-when-ahead; a repo with **no `origin`** is not a retry case at all but a
+    **standing fault** (AC 37).
+37. **No `origin` is a loud, standing fault, not a quiet success** — the cycle must not commit locally and
+    return as if healthy ([git_backbone.mdx §4.3.2](./git_backbone.mdx#432-a-repo-with-no-origin-is-a-loud-standing-fault-locked),
+    [backbone_resilience.mdx §6.2](./backbone_resilience.mdx#62-a-repo-with-no-origin--committing-forever-reaching-nobody-locked)).
+    This is AC 31's "no silent nulls" applied to the push path, and it is the **birth state of every newly
+    created company storage**, so it must be announced rather than inferred.
 
 <!--
   PART II = THE SYNCHRONIZATION ENGINE v2 (§16-§26). The shipped code is v1; every v1 claim below is
@@ -2054,4 +2130,24 @@ storage forever (invariant 2, §16.3).
   media still moves over IPFS for decided files only. New AC 12b. Code: getStateSyncRepo +
   getGitBackboneRemote (storage-settings.service), resolveOwnerDedicatedRepo (artifact-placement.service),
   mirrorToSyncRepo (tracking-sync.service).
+
+  ADDED for storage_company.mdx §11 (that spec is the authority — link, don't restate). NEW §16.1.1 (LOCKED)
+  BOTH REPOS ARE GOVERNED AUTONOMOUSLY: §16.1 already put a company sync repo in Part II's scope, but Part II
+  reads as a Personal document, so this states plainly that every §11 autonomy rule (drive git without waiting
+  on the user, per-file conflict resolution, the no-origin fault, one lock per storage, three push attempts)
+  applies IDENTICALLY to the Personal SDL and a company sync repo — the §16.1 licence turns entirely on the
+  KIND (dedicated LFB file repo, LFB effectively sole author), never on which one it is. The company case is
+  the HARDER one (several members pushing; the whole repos/<repoUid>/ mirror rides along, not just a device
+  file), which is WHY the ladder and the retry budget exist. Company-only addition = the CONFIDENTIALITY
+  BOUNDARY (§10.4 there): one org's tracking never enters another org's repo. owner_map.yaml stays the SINGLE
+  consent-gated exception (§22.8) — git converges automatically, the ownership EFFECT never applies without a
+  human; autonomy is about git, never about silently re-mapping someone's repos. NEW §17.4.3 RECONCILES item
+  3's CHANGED retry rule with what is now BUILT: 3 attempts, 0s/2s/8s, each RE-PULLING first (stopping and
+  surfacing rather than pushing blindly if the re-pull leaves something unresolvable), the original error
+  LOGGED with classification + attempt number (closes v1(g)), never --force; three rather than one because a
+  single retry loses to any peer that pushes twice — rare on Personal, an ordinary Tuesday on a shared company
+  repo. Exhausting the budget is NOT loss (item 4's push-when-ahead sends it); NO ORIGIN is a different, louder
+  case entirely — a STANDING FAULT, not a retry. New AC 35/36/37. Code: git.service commitAndPush() BACKOFF_MS
+  loop + composeCommitMessage(), git-lock.ts withStorageGitLock, git.service resolutionFor/resolveConflicts,
+  storage-type.service usesLfbridgeDir/trackingBaseDir.
 -->

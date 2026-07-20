@@ -250,6 +250,30 @@ the user can change it.
   the root itself (the last resort being a `.lfbridge/` in the media's own directory, only ever inside a
   working repo).
 
+#### 4.1.1 "No remote yet" is a fault this page shows, and fixes (LOCKED)
+
+A brand-new company storage is created by `git init`
+([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked)),
+so **it has no `origin`**. Large File Bridge can commit into it locally, but **nothing travels** — and the
+backbone's cycle used to look identical to a healthy repo with nothing to do
+([storage_company.mdx §11.2](./storage_company.mdx#112-a-repo-that-cannot-push-must-say-so-locked)). This
+page is where the user sees it and where the one-click fix lives.
+
+* **The remote field carries a standing fault, not a placeholder.** When this storage's backbone repo has
+  no `origin`, the field shows an inline warning rather than an empty box:
+  *"Large File Bridge is tracking this company locally, but it has no remote — nothing is reaching your
+  other computers."* The same fault appears on the storage's row in the
+  [Storages tab](./storages.mdx#2-the-storages-left-bar-tab) and in the log
+  ([backbone_resilience.mdx §6.2](./backbone_resilience.mdx#62-a-repo-with-no-origin--committing-forever-reaching-nobody-locked)).
+* **The fix is this field.** Supplying either remote shape (§4.1 — a local path or an HTTP(S) URL) clears
+  it, and the **always-push-when-ahead** rule ([git_backbone.mdx §6.1](./git_backbone.mdx#61-always-push-when-the-branch-is-ahead--deliver-stranded--foreign-commits-locked-learned-from-a-defect))
+  delivers everything that accumulated while there was nowhere to push. Nothing that piled up is lost.
+* **It is standing, not one-shot.** It persists until a remote exists — a toast that scrolls away would
+  reproduce exactly the silence this rule exists to end.
+* **It is not an error state for the storage.** Local tracking, scanning, analysis, and IPFS pinning all
+  keep working; only **travel** is blocked. The wording says what is not happening, not that something
+  broke.
+
 ### 4.2 Google Drive location
 
 * **What.** A clone of the storage inside a connected **Google Drive** ([google_drive.mdx](./google_drive.mdx)) —
@@ -553,6 +577,40 @@ Resolving membership from the remote-derived owner (with the manual override tak
 
 ---
 
+## 4d. New company storages — the proposal surface and the parent directory (LOCKED)
+
+Everything above configures **one existing** storage. This section covers the one setting that governs
+storages that **do not exist yet**: where a newly created company storage is put. The model it serves —
+a company storage is 1:1 with a forge **organization**, qualified by the authored-commit membership test —
+is owned by [storage_company.mdx §10](./storage_company.mdx#10-a-company-is-a-forge-organization-locked)
+and [repo_company_mapping.mdx §3.2](./repo_company_mapping.mdx#32-which-orgs-are-actually-yours--the-authored-commit-membership-test-locked).
+
+* **The proposal list lives on the Storages page, not here.** Qualifying orgs are proposed with their repo
+  counts and created in one click from
+  [storages.mdx §2.2](./storages.mdx#22-organizations-found-in-your-repos--proposed-company-storages-locked) —
+  that is a **cross-storage** decision, so it belongs to the page that lists all storages, not to any one
+  storage's settings. Per-storage settings own what happens **after** a storage exists: its display name
+  (§4.1, [storage_company.mdx §6](./storage_company.mdx#6-the-friendly-display-name)), its remote (§4.1.1),
+  its `owner_slugs` bindings, and its Owned repos (§4c).
+* **The parent directory is a SETTING, not a hardcoded path.** Creating a company storage makes
+  `<parent>/<org-slug>_large_files_bridge/` on disk. The product ships to people whose repos are **not**
+  under `~/BGit/Bryan_git`, so the parent is configurable rather than baked into the source.
+* **Its default is derived, so the common case needs no configuration.** Unset means *"derive it"* — the
+  directory where the user's existing `*_large_files_bridge` storages already live. The UI shows the
+  **effective** value with a hint saying whether it was **configured** or **derived**, never an empty box
+  (the same derived-value grammar as §4b.1's auto-adopted sync repo).
+* **Changing it is forward-looking only.** It affects **where the next** storage is created; it never moves
+  or re-roots a storage that already exists. Existing storages are found by discovery wherever they are.
+* **Adoption comes before creation.** An org already claimed by an existing company storage is **adopted**,
+  so the parent directory is irrelevant for it — no second directory is ever made beside a storage that
+  already serves that org
+  ([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked)).
+
+Resolving the parent directory (the setting, else the derivation from where existing storages live) and creating a company storage under it are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `storagesParentDir()` (returns `{ dir, configured }`) and `createCompanyStorage(org)` (mkdir + `git init` + a descriptor carrying `type: company`, `company_name`, and `owner_slugs: ["<org>"]`), over the app-config key `storages.parent_dir` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts`.
+
+---
+
 ## 5. Persistence — the machine-local per-storage config
 
 Everything on this page (except the canonical `clones` paths, which go to `storage.yaml`) writes to a
@@ -811,6 +869,22 @@ The page is a single scrollable settings form (no table beneath it, so it does n
     **which sync repo** the repo's Category-B tracking mirrors to (§4c.2). The section is **hidden** for
     `repo`, `local`, and `community` storages. Read via `getOwnedRepos(storageId)` in
     `storage-settings.service.ts`, rendered by `StorageSettingsPage.tsx`.
+12. **"No remote yet" is surfaced here as a standing fault, and fixed here** (§4.1.1): a `git init`ed company
+    storage has **no `origin`**, so it commits locally and **nothing travels** — a state the backbone must
+    never report as healthy
+    ([storage_company.mdx §11.2](./storage_company.mdx#112-a-repo-that-cannot-push-must-say-so-locked)). The
+    remote field shows the warning until a remote is supplied; supplying either remote shape clears it and
+    the **always-push-when-ahead** rule delivers the accumulated backlog. Local tracking, analysis, and IPFS
+    pinning are unaffected — only **travel** is blocked, and the wording says so.
+13. **The storages parent directory is a setting, with a derived default** (§4d): a new company storage is
+    created at **`<parent>/<org-slug>_large_files_bridge/`**, and `<parent>` is **configurable**, never
+    hardcoded to one person's layout. Unset means *derive it* — where the user's existing
+    `*_large_files_bridge` storages already live — and the UI shows the **effective** value labeled
+    **configured** or **derived**, never blank. Changing it affects only **where the next** storage is
+    created. The **proposal list itself lives on the Storages page**
+    ([storages.mdx §2.2](./storages.mdx#22-organizations-found-in-your-repos--proposed-company-storages-locked)),
+    because choosing which companies exist is a cross-storage decision; **adoption precedes creation**, so an
+    org already claimed by an existing storage never produces a second directory.
 
 <!--
   Per-STORAGE settings page (the storage counterpart of repo_settings.mdx). Opened from ONE storage:
@@ -901,5 +975,25 @@ The page is a single scrollable settings form (no table beneath it, so it does n
   New AC 9c. Code: getStateSyncRepo + getGitBackboneRemote + getOwnedRepos/ownerMatchesCompany
   (storage-settings.service), resolveOwnerDedicatedRepo (artifact-placement.service), deriveOwnerForRemote
   (git.service), StorageSettingsPage.tsx (the derived-value field).
+
+  ADDED for storage_company.mdx §10/§11 (that spec is the authority — link, don't restate). NEW §4.1.1 (LOCKED)
+  "NO REMOTE YET" IS A FAULT THIS PAGE SHOWS AND FIXES: creating a company storage git init's it, so EVERY new
+  company storage is born with no origin — it commits locally and nothing travels, and the backbone's cycle
+  used to be INDISTINGUISHABLE from a healthy repo with nothing to do (§11.2 there). The remote field carries a
+  STANDING inline warning (same wording as the storage row + the log, backbone_resilience §6.2), not a
+  placeholder and not a toast that scrolls away; supplying either §4.1 remote shape clears it and
+  always-push-when-ahead (git_backbone §6.1) delivers the whole backlog — nothing accumulated is lost. It is
+  NOT an error state: local tracking/scan/analysis/IPFS all keep working, only TRAVEL is blocked, and the
+  wording says what is not happening rather than that something broke. NEW §4d (LOCKED) NEW COMPANY STORAGES —
+  the one setting governing storages that DON'T EXIST YET. The PROPOSAL LIST deliberately lives on the Storages
+  page (storages.mdx §2.2), because choosing which companies exist is a CROSS-storage decision; per-storage
+  settings own what happens after one exists (display name, remote, owner_slugs, Owned repos). The PARENT
+  DIRECTORY is a SETTING (app config storages.parent_dir), not a hardcoded path — the product ships to people
+  whose repos are not under ~/BGit/Bryan_git; null = DERIVE from where existing *_large_files_bridge storages
+  live, and the UI shows the EFFECTIVE value labeled configured-vs-derived (same derived-value grammar as
+  §4b.1), never blank. Changing it is forward-looking only (never moves an existing storage). ADOPTION PRECEDES
+  CREATION, so a claimed org never yields a second directory. New AC 12 + 13. Code: company-discovery.service
+  storagesParentDir() / createCompanyStorage(); shared/schemas.ts storages.parent_dir; git.service
+  commitAndPush() hasOrigin branch (the fault this page renders).
 -->
 

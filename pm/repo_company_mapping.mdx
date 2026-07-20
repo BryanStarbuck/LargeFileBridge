@@ -116,6 +116,33 @@ export function parseRemoteOwner(remoteUrl: string | null): RemoteOwnerParse { /
 Parsing host/owner/repo out of the remote URL (all URL shapes, no networking) is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner(remoteUrl)`, built beside the existing `classifyRemote()` / `classifyRemoteVisibility()` (which share the same forge-host regex).
 
+### 2.1 The org level IS the company — a company storage is 1:1 with an organization (LOCKED)
+
+The `owner` segment this parser extracts is not merely an *input to a guess*; it **is the company**. The
+authority is [storage_company.mdx §10](./storage_company.mdx#10-a-company-is-a-forge-organization-locked);
+what it means **here** is that the mapping this spec defines is a **grouping**, not an inference:
+
+* **A company storage is one-to-one with a forge organization.** The org is a level in every repo's remote
+  URL — `https://github.com/`**`ACT3ai`**`/charlie-kirk.git` — so **the repos already declare which company
+  they belong to.** Large File Bridge does not ask the user to draw that map; it reads it off the disk.
+* **Grouping needs no new scan and no network.** LFB already records each discovered repo's `origin`, so
+  grouping by org is a fold over data it has: parse (§2) → `host / owner / repo`, group by `owner`. It
+  **never** calls a forge API to ask who owns what
+  ([external_tools_policy.mdx](./external_tools_policy.mdx),
+  [storage_company.mdx §10.1](./storage_company.mdx#101-finding-the-organizations)) — and §3.1's honest
+  limitation is precisely the price of that, deliberately paid.
+* **A repo whose remote does not parse belongs to no org**, and therefore to **Personal** (§3 cases 1/4/5).
+  It is not a company candidate at all.
+* **Multi-company works without configuration.** Three orgs across the user's repos mean **three
+  companies**, each with its own storage, each knowing exactly which repos are its own — and each repo
+  resolving to **exactly one** of them
+  ([storage_company.mdx §10.4](./storage_company.mdx#104-what-the-linkage-buys-locked)). That last point is
+  a **confidentiality boundary**, not just tidiness: one company's tracking text is never pushed into
+  another company's repo, and the org in the URL is what enforces it.
+
+Grouping the discovered repos by their remote's org (offline, off `.git/config`) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (and its pure core `buildCandidates()`), over the parse from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner()`.
+
 ---
 
 ## 3. The heuristic — which parse becomes a company (LOCKED)
@@ -155,6 +182,54 @@ resolve this over the network** (the charter is local-first / no-phone-home). So
   and the left-bar group carries a subtle *(auto-detected)* affordance so the user knows it is a guess, not a fact.
 
 This is a documented, accepted trade-off — **not** a defect. Do not "fix" it by adding a forge API call.
+
+### 3.2 Which orgs are actually YOURS — the authored-commit membership test (LOCKED)
+
+§3 case 3 says a known-forge org that is not a personal account **derives** a company. That is the right
+rule for **mapping an existing repo**, and the wrong rule for **deciding which companies exist**. The
+authority is [storage_company.mdx §10.2](./storage_company.mdx#102-which-organizations-are-actually-yours-locked);
+this section is where the mapping spec absorbs it.
+
+> **Why this is not theoretical.** A real developer machine is full of clones of **other people's**
+> projects. Measured on the machine this rule was written against: **32 distinct orgs**, of which **28 were
+> clones** — `KDE`, `OpenShot`, `xai-org`, `twitter`, `mltframework`, `NatronGitHub`, … A naive
+> one-company-per-org rule would have created **31 unwanted storages** and 31 Storages entries for
+> organizations the user has no membership in. §3's heuristic is conservative toward Personal for a *single
+> repo*; across a whole disk it is not conservative enough.
+
+The test is **local, cheap, and decisive**:
+
+> **An org becomes a company only when the user's own git identity has authored at least one commit in one
+> of that org's repos on this computer.**
+
+* **Cloning is passive; committing is membership.** `git log --author=<your email>` answers it from the
+  local object store — no network, no credentials, no forge API (§3.1's rule holds here too). On the
+  measured machine it cut **32 orgs to 4**, and all 4 were correct.
+* **Your own account is Personal, not a company.** An org matching the **personal-accounts list** (§4)
+  resolves to **Personal** and is **never proposed** as a company — that is exactly what keeps
+  `github.com/<you>/<your-repo>` out of the company list, and it is the same list §3 case 2 already
+  consults.
+* **Match the identity case-insensitively (LOCKED).** `git log --author=` is a **case-sensitive regex**,
+  and a configured `user.email` reads back lowercased while commits record whatever casing the user typed —
+  so a case-sensitive match answers "no" for the user's **own** repos. **A membership test that fails
+  closed on a capital letter is worse than no test**, because its answer looks considered. Same rule as
+  §4's case-insensitive `owner` match.
+* **It is a PROPOSAL filter, never a lock.** The user can add any org as a company by hand and can dismiss
+  a proposed one. A heuristic decides what to **offer**; the user decides what **exists** — the same
+  discipline as §5 ("the user always wins").
+* **Not-yet-committed is not never.** An org that fails the test today passes the first time the user
+  authors a commit in one of its repos. Nothing has to be re-scanned by hand.
+* **Say the number.** What the filter excluded is **reported**, with a way to see it — *"28 organizations
+  you've only cloned from were ignored"*. A silent filter and a bug look identical
+  ([warnings.mdx](./warnings.mdx)); surfaced in
+  [storages.mdx §2.2](./storages.mdx#22-organizations-found-in-your-repos--proposed-company-storages-locked).
+* **This does not change §3.** A repo whose org **is** a company still maps to it by §3 case 3. §3.2 only
+  governs which orgs get **promoted to a company storage** in the first place; an org that fails the test
+  simply has no company for its repos to map to, so they fall to **Personal** — the default (§1), and a
+  correctable one.
+
+Applying the authored-commit membership test and the personal-account exclusion when proposing companies is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (groups by org, then filters by the authored-commit test and `personal_accounts`), with the pure, testable core in `buildCandidates(repos, opts)`; the personal-account match itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `isPersonalAccount()`.
 
 ---
 
@@ -279,6 +354,23 @@ An auto-derived company from an org (case 3) is a **lightweight** entry: it exis
 renamed. It becomes a *full* company storage (mapped source directories, a sync repo, an allow-list) only if
 the user configures those in [storage_company.mdx](./storage_company.mdx) — a repo-group company and a
 media-pile company are the same storage kind at different levels of configuration.
+
+**But "auto-create" never means "silently make a directory."** Creating a company storage makes a **real
+directory** on the user's disk and runs **`git init`** in it, so the sweep that turns *discovered orgs* into
+*company storages* is **proposed and one-click confirmed**, never done behind the user's back
+([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked),
+surfaced in [storages.mdx §2.2](./storages.mdx#22-organizations-found-in-your-repos--proposed-company-storages-locked)).
+Three rules follow, and none of them changes the mapping above:
+
+* **Adopt before you create.** An org already **claimed** by an existing company storage — an explicit
+  `company.owner_slugs` entry, or a normalized name match (§6.1) — is **adopted**, never duplicated. This
+  is how `act3_large_files_bridge` serves the org `ACT3ai` instead of a second `act3ai_large_files_bridge`
+  appearing beside it.
+* **A dismissed org stays dismissed**, remembered per org so the same proposal does not return on the next
+  scan; it is undoable from the company's settings.
+* **The parent directory is a setting**, defaulting to wherever the user's existing `*_large_files_bridge`
+  storages already live — never hardcoded to one person's layout
+  ([storage_settings.mdx §4d](./storage_settings.mdx#4d-new-company-storages--the-proposal-surface-and-the-parent-directory-locked)).
 
 Ensuring (creating-if-absent) the company storage for a derived/assigned owner slug is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (returns the company id; creates the `storage.yaml` via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()` as a company row.
@@ -478,6 +570,26 @@ Resolving the owning storage from the repo's remote before any containment test,
    auto-adopted**, and the additive mirror **defaults ON** (the per-repo toggle in
    [repo_settings.mdx §2.9.1](./repo_settings.mdx#291-the-default-is-on--this-toggle-is-an-opt-out-locked) is
    an **opt-out**) — superseding AC 8's and §7.2's "default OFF". No bytes move; grouping (§7.1) is unchanged.
+3b. **A company storage is 1:1 with a forge ORGANIZATION** (§2.1, authority
+   [storage_company.mdx §10](./storage_company.mdx#10-a-company-is-a-forge-organization-locked)): the org is a
+   level in every repo's remote URL, so repos **already declare** their company. Grouping by org is an
+   **offline fold** over remotes LFB has already recorded — **no forge API call, ever** — and each repo
+   resolves to **exactly one** company, which is a **confidentiality boundary** (one company's tracking text
+   never enters another's repo), not merely tidiness.
+3c. **An org qualifies as a company only by the authored-commit membership test** (§3.2, authority
+   [storage_company.mdx §10.2](./storage_company.mdx#102-which-organizations-are-actually-yours-locked)): the
+   user's own git identity must have authored **at least one commit** in one of that org's repos on this
+   computer. Measured evidence: **32 orgs → 4**, because **28** were clones of other people's projects
+   (`KDE`, `OpenShot`, `xai-org`, `twitter`, …) that a naive one-per-org rule would have turned into **31
+   unwanted storages**. An org in **`personal_accounts`** resolves to **Personal** and is **never proposed**.
+   The test is a **proposal filter, never a lock** — the user may add any org by hand or dismiss a proposed
+   one — an org that fails today **passes** the first time the user commits to one of its repos, and **what
+   was skipped is counted and visible** (a silent filter and a bug look identical).
+5b. **Creating a company storage is PROPOSED, never silent** (§6): it makes a real directory and runs
+   `git init`, so it takes a one-click confirmation. An org already **claimed** by an existing company
+   storage is **ADOPTED, never duplicated** (`ACT3ai` adopts `act3_large_files_bridge`), a **dismissed** org
+   stays dismissed, and the **parent directory is a setting**, not a hardcoded path
+   ([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked)).
 9. All **non-default / edge cases** (§8) resolve as tabled — SSH↔HTTPS stable, origin-only, one owner per repo
    (submodules included), renamed/moved org re-derives auto owners — and the **error cases** (§9) fail safe toward
    Personal, never delete a user-touched company, and surface (never swallow) creation failures.
@@ -536,4 +648,28 @@ Resolving the owning storage from the repo's remote before any containment test,
   recordOwnerSlug(). The gap is narrowed to the real one: deriveOwnerForRemote() in git.service.ts still returns
   companyId: null, so the owner block the rest of the product reads is not joined to a company storage row and
   each consumer must call ensureCompanyForOwner() itself. AC 8b updated to match.
+
+  ADDED for storage_company.mdx §10 (that spec is the authority — link, don't restate). NEW §2.1 (LOCKED) THE
+  ORG LEVEL *IS* THE COMPANY: a company storage is 1:1 with a forge ORGANIZATION, which is a level in every
+  repo's remote URL, so the repos ALREADY DECLARE their company — LFB reads the map off the disk instead of
+  asking the user to draw it. Grouping by org is an OFFLINE fold over the origins LFB already records (no new
+  scan, no forge API — §3.1's honest limitation is the deliberate price of that). Unparseable remote → no org
+  → Personal. Three orgs = three companies with NO configuration, each repo under exactly ONE — a
+  CONFIDENTIALITY BOUNDARY (§10.4 there), not tidiness. NEW §3.2 (LOCKED) THE AUTHORED-COMMIT MEMBERSHIP TEST:
+  §3 case 3 is right for MAPPING an existing repo and wrong for deciding WHICH COMPANIES EXIST. Measured on a
+  real machine: 32 distinct orgs, 28 of them clones of other people's projects (KDE, OpenShot, xai-org,
+  twitter, mltframework, NatronGitHub…) — a naive one-per-org rule would have made 31 unwanted storages. Test
+  = the user's own git identity authored ≥1 commit in one of that org's repos on THIS computer (git log
+  --author, local object store, no network); cut 32 → 4, all 4 correct. Cloning is passive, committing is
+  membership. personal_accounts orgs → Personal, NEVER proposed (same list §3 case 2 already uses). It is a
+  PROPOSAL filter, not a lock (add by hand / dismiss); not-yet-committed is not never (it passes on the first
+  commit); and the skipped count is REPORTED because a silent filter and a bug look identical. §3.2 does not
+  change §3 — an org that fails simply has no company for its repos to map to, so they fall to Personal.
+  §6 gains the "auto-create never means silently make a directory" paragraph: creation makes a real dir +
+  git init, so it is PROPOSED and one-click confirmed; ADOPT before you create (ACT3ai adopts
+  act3_large_files_bridge via owner_slugs / normalized match — never a duplicate beside it); a dismissed org
+  stays dismissed; the parent dir is a SETTING (storage_settings §4d), not a hardcoded path. New AC 3b/3c/5b.
+  Code: company-discovery.service discoverOrganizations() + its pure core buildCandidates() + storagesParentDir()
+  + createCompanyStorage(); git.service parseRemoteOwner()/isPersonalAccount(); storage.service
+  ensureCompanyForOwner(). Surfaced in storages.mdx §2.2.
 -->

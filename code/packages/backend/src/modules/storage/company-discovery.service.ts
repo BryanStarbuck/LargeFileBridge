@@ -167,9 +167,14 @@ async function authoredHere(repoPath: string, globals: readonly string[]): Promi
   if (emails.size === 0) return false; // no identity at all ⇒ nothing here can be "yours"
   const pattern = [...emails].map(escapeForRegex).join("|");
   try {
+    // `-i` is LOAD-BEARING, not tidiness. `--author` is a case-SENSITIVE regex by default, while git
+    // records the email exactly as it was configured — `Bryan@thestarbucks.com`. Measured on the real
+    // machine: without `-i` the test found ONE of the four orgs the user actually commits to, because the
+    // configured identity reads back lowercased and every commit carries a capital B. A membership test
+    // that silently answers "no" for your own repos loses the entire feature (§10.2).
     const { stdout } = await run(
       "git",
-      ["log", "--all", "-E", `--author=${pattern}`, "-n", "1", "--format=%H"],
+      ["log", "--all", "-i", "-E", `--author=${pattern}`, "-n", "1", "--format=%H"],
       { cwd: repoPath, timeout: GIT_TIMEOUT_MS },
     );
     return stdout.trim().length > 0;

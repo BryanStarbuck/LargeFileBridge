@@ -123,6 +123,49 @@ The Type column's `filterOptions` (`personal` / `company` / `community`) exist t
 Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
 
+### 2.2 Organizations found in your repos — proposed company storages (LOCKED)
+
+Company storages are not only *discovered on disk* — they are also **proposed from the user's own repos**.
+A company storage is **1:1 with a forge organization**, and the org is a level in every repo's git remote
+URL, so the repos already say which companies exist
+([storage_company.mdx §10](./storage_company.mdx#10-a-company-is-a-forge-organization-locked),
+[repo_company_mapping.mdx §2.1](./repo_company_mapping.mdx#21-the-org-level-is-the-company--a-company-storage-is-11-with-an-organization-locked)).
+The Storages page is where that proposal surfaces, because *"which companies do I have?"* is a
+**cross-storage** question — no single storage's settings page can answer it.
+
+**A proposal panel sits above the Storages table.** It appears only when there is something to say: at
+least one qualifying, unclaimed, undismissed org, **or** a non-zero skipped count.
+
+* **One row per qualifying org**, carrying the **org name**, its **repo count**, the **directory that would
+  be created**, and a **checkbox**. A single **Create company storages** button makes all the checked ones
+  at once.
+* **Nothing touches the disk until that click.** Creation makes a real directory and runs `git init`, which
+  is exactly what the charter says Large File Bridge surfaces and offers rather than doing on its own.
+  Unchecking a row before creating means **no directory is ever made** for it
+  ([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked)).
+* **A per-row dismiss** removes an org from the proposal permanently — remembered per org, so it does not
+  return on the next scan, and undoable from company settings.
+* **Already-claimed orgs are shown as ADOPTED, not proposed.** An org an existing company storage claims
+  (via `company.owner_slugs`, or a normalized name match) is adopted and the binding is written back —
+  never duplicated into a second storage beside the first.
+* **The skipped-clones count is stated, never implied.** Orgs that failed the **authored-commit membership
+  test** ([repo_company_mapping.mdx §3.2](./repo_company_mapping.mdx#32-which-orgs-are-actually-yours--the-authored-commit-membership-test-locked))
+  are reported as a count with a way to see them: *"28 organizations you've only cloned from were ignored —
+  you have not committed to any of them on this computer."* Expanding lists each org with its repo count.
+  **A silent filter and a bug look identical** ([warnings.mdx](./warnings.mdx)); on the machine this was
+  measured against the filter removed **28 of 32** orgs, so it is far too consequential to leave unsaid.
+* **Created storages join the table by the ordinary rules.** A newly created company appears as a normal
+  `type: company` row (§2, §2.1) — the proposal panel is a *creation* affordance, not a second listing.
+  Each one is born with **no git remote**, so it immediately carries the *"no remote — nothing is reaching
+  your other computers"* fault until the user supplies one
+  ([storage_settings.mdx §4.1.1](./storage_settings.mdx#411-no-remote-yet-is-a-fault-this-page-shows-and-fixes-locked)).
+* **The parent directory is a setting**, shown in the panel with whether it was **configured** or
+  **derived** from where existing `*_large_files_bridge` storages live
+  ([storage_settings.mdx §4d](./storage_settings.mdx#4d-new-company-storages--the-proposal-surface-and-the-parent-directory-locked)).
+
+Discovering the organizations, applying the membership test, and creating the checked ones are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (proposals + adopted + `skipped` / `skippedCount` + `parentDir` / `parentDirIsConfigured`), `createCompanyStorages(orgs)`, and `setOrganizationDismissed(org)`, exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/organizations` / `POST /api/storages/companies` and rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `OrganizationProposals`.
+
 ---
 
 ## 3. `storage.yaml` — the per-storage descriptor (LOCKED shape)
@@ -708,6 +751,20 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
     applicability (Transcribe → audio/video, AI Description → image/video, OCR → image/video/PDF). The three
     render through the shared three-state `StatusActionIcon`, with an icon-only header and hover filling the
     left-bar hover-info panel, each in its unique done color (§7.2).
+4a. **The Storages page proposes company storages from the user's own repos** (§2.2): a company storage is
+    **1:1 with a forge organization**, read offline from each repo's remote, so a panel above the table lists
+    every **qualifying** org with its **repo count** and the **directory that would be created**, each with a
+    checkbox and a single **Create company storages** button. **Nothing touches the disk until that click** —
+    creation makes a real directory and runs `git init`. A per-row **dismiss** is remembered; an org already
+    **claimed** by an existing storage is shown as **adopted**, never duplicated; and each newly created
+    company immediately carries the **"no remote yet"** fault
+    ([storage_settings.mdx §4.1.1](./storage_settings.mdx#411-no-remote-yet-is-a-fault-this-page-shows-and-fixes-locked)).
+    The **parent directory is a setting**, displayed as configured-or-derived.
+4b. **The skipped-clones count is stated, never implied** (§2.2): orgs that fail the **authored-commit
+    membership test** ([repo_company_mapping.mdx §3.2](./repo_company_mapping.mdx#32-which-orgs-are-actually-yours--the-authored-commit-membership-test-locked))
+    are reported as a **count** with a way to see the list — *"28 organizations you've only cloned from were
+    ignored"* — because **a silent filter and a bug look identical**. On the measured machine the filter
+    removed **28 of 32** orgs, so the number is load-bearing, not decoration.
 10. The Storages-page payload gains a per-storage **`stateSyncRepo`** descriptor (§10) — `configured`,
     `root`, `ownedRepoCount`, `remote` — non-null only for **company** and **Personal** storages, `null`
     for `local` and `community`; it extends `StorageRow` / `StoragesPageData` and is populated by
@@ -775,5 +832,24 @@ Populating the per-storage `stateSyncRepo` descriptor when it splits the page in
   Acceptance §8–§10 updated (+ §9a for the two facets, + §9b for the icon columns). Sibling detail specs: storage_local, storage_repo, storage_personal,
   storage_company, storage_community; cross-links artifact_placement_policy, repo_tracking_scheme,
   repo_company_mapping, placement_radios, repo_settings.
+
+  ADDED for storage_company.mdx §10 (that spec is the authority — link, don't restate). NEW §2.2 (LOCKED)
+  ORGANIZATIONS FOUND IN YOUR REPOS: company storages are not only DISCOVERED on disk, they are PROPOSED from
+  the user's own repos, because a company storage is 1:1 with a forge ORGANIZATION read offline off each repo's
+  remote. The panel lives on the STORAGES page on purpose — "which companies do I have?" is a CROSS-storage
+  question no single storage's settings page can answer. One row per qualifying org (name + repo count + the
+  directory that would be created + checkbox), one "Create company storages" button, and NOTHING touches the
+  disk until that click (creation makes a real dir and runs git init — surface and offer, never act unasked).
+  Per-row DISMISS remembered per org and undoable; an org already CLAIMED by an existing storage is shown as
+  ADOPTED (owner_slugs / normalized match) and never duplicated; created storages join the table as ordinary
+  type: company rows and are born with NO remote, so each immediately carries the "no remote — nothing is
+  reaching your other computers" fault (storage_settings §4.1.1); the parent dir is a SETTING shown as
+  configured-vs-derived (storage_settings §4d). THE SKIPPED-CLONES COUNT IS STATED, NEVER IMPLIED: orgs that
+  fail repo_company_mapping §3.2's authored-commit membership test are reported as a count with an expandable
+  list ("28 organizations you've only cloned from were ignored") — a silent filter and a bug look identical,
+  and on the measured machine the filter removed 28 of 32 orgs, so the number is load-bearing. New AC 4a + 4b.
+  Code: company-discovery.service discoverOrganizations()/createCompanyStorages()/setOrganizationDismissed();
+  storage.router GET /api/storages/organizations + POST /api/storages/companies; StoragesPage.tsx
+  OrganizationProposals.
 -->
 
