@@ -14,7 +14,8 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill } from "../../components/Pill.js";
-import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
+import { EntityKebab, ActionsMore, type Action } from "../../components/menu/EntityMenu.js";
+import { useRepoActions } from "../../components/menu/RowKebabs.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
 import type { ActionScope } from "../../lib/pageActions.js";
@@ -314,6 +315,21 @@ export function OneRepoPage() {
     { id: "pin-now", label: "Pin now", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: () => pinNow.mutate(undefined) },
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
+
+  // The page's "More ⌄" ENTITY menu (menus.mdx §4/§5.1, one_repo.mdx §3.1). It was specified but never
+  // mounted — the header only ever had tabs + gear + primary — so every repo-entity action (including
+  // Export Debug Information, debug.mdx §2.2) was unreachable from this page. It carries the SAME §5.1
+  // catalog as the repos-table row ⋮, minus "Open repo" (you are already here).
+  const debugTarget = useQuery({ queryKey: ["debugTarget"], queryFn: api.debugExportTarget });
+  const repoMoreActions = useRepoActions(
+    {
+      repoId,
+      name: detail?.name ?? "",
+      path: detail?.path ?? "",
+      pinned: detail?.pinned ?? false,
+    },
+    { omit: ["open"], debugPath: debugTarget.data ? (debugTarget.data.path ?? null) : undefined },
+  );
 
   const columns: LfbColumn<FileRow>[] = [
     // ── The five leading icon control columns (tables.mdx icon-columns). Immediately right of the row
@@ -632,6 +648,8 @@ export function OneRepoPage() {
                 <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
               </button>
             ) : null}
+            {/* The entity "More ⌄" menu (menus.mdx §4.1): the word More + a chevron — no ⋮, no border. */}
+            <ActionsMore actions={repoMoreActions} />
           </>
         }
       />

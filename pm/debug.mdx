@@ -1,0 +1,828 @@
+---
+title: LargeFileBridge — Export Debug Information (the debug.yaml state dump)
+description: The power-user "save a debug file" capability. One button in Settings (bottom, power section) and one item in the View-one-repo More ⌄ menu both run the SAME export, which writes a single per-computer YAML — <personal storage repo>/debug/<computer>/debug.yaml — containing, for EVERY metric the product shows, the exact list of files behind that number, with full paths, sizes, hashes, CIDs, fingerprints and decisions. The file is committed and travels over the git backbone, so two of the user's computers each publish their own debug.yaml and a later Claude Code session can diff the two and explain WHY a file that exists on computer 1 never arrived on computer 2. Requires a connected personal storage repo; there is no fallback location. Sibling of debugging.mdx (the operator's log playbook), transactions_log.mdx (the work ledger), storage_personal.mdx (the personal SDL), devices.mdx (the computer identity), one_repo.mdx / task_tabs.mdx (the metrics whose file lists this dumps), and menus.mdx §4/§5.1 (the More ⌄ menu this item joins).
+status: proposed
+owner: engineering
+scope: code/packages/backend, code/packages/frontend
+---
+
+# Export Debug Information — `debug.yaml`
+
+> *"We're often doing synchronization between two computers. They might both have a set of files —
+> set A — and that's the ones they share, and that's not a problem. Computer one might have set B
+> that's not on the other computer, and that's becoming a problem. Computer two might have a set of
+> files, set C, and computer one is having a problem seeing those. The goal is that when you press
+> this button, it saves the debug info in that YAML file … so we can let a Claude Code later go
+> debug these two files."* — the product owner, 2026-07-20
+
+This spec owns **one new artifact** — `debug.yaml` — and **two buttons** that produce it.
+
+It is the **third** member of LFBridge's debuggability family, and the division of labour is strict:
+
+| Spec | Artifact | Answers | Time axis |
+| --- | --- | --- | --- |
+| [debugging.mdx](./debugging.mdx) | `log.log` / `error.err` / `launcher.log` | *What did the code **say**? What **broke**?* | a stream of the past |
+| [transactions_log.mdx](./transactions_log.mdx) | `transactions.log` | *What work did the app **do**?* | a stream of the past |
+| **this file** | **`debug.yaml`** | ***What does this computer BELIEVE, right now, about every file?*** | **a snapshot of the present** |
+
+The first two are **logs** — append-only, local-only, per-process, and they never leave the machine.
+`debug.yaml` is the opposite of all four of those things: it is a **state snapshot**, **replaced whole**
+each run, **committed to git**, and **deliberately travels to the user's other computers**. That last
+property is the entire point. A log can only ever tell you about **one** computer, and the bug we are
+chasing — *"why did this file never arrive?"* — **does not exist on one computer**. It exists **between
+two**, and it is invisible from either side alone.
+
+---
+
+## 1. The problem this exists to solve — the A/B/C divergence
+
+Two computers, both running Large File Bridge, both pointed at the same repos, both pinning to IPFS.
+Partition every file across the pair:
+
+```
+        computer 1                                    computer 2
+   ┌──────────────────────┐                    ┌──────────────────────┐
+   │                      │                    │                      │
+   │    set B             │      set A         │            set C     │
+   │  (only here)         │  (on both — fine)  │        (only here)   │
+   │                      │                    │                      │
+   └──────────────────────┘                    └──────────────────────┘
+         ▲                                              ▲
+         │ computer 2 can't get these                   │ computer 1 can't see these
+```
+
+* **Set A — on both computers.** Working as designed. Not interesting, and it is the *majority* of
+  files, which is exactly why the problem hides: every dashboard looks mostly green.
+* **Set B — only on computer 1.** Computer 2 is *supposed* to pull these down and doesn't. Something in
+  the chain — the decision, the manifest, the CID, the pin, the peer list, the git backbone — broke.
+* **Set C — only on computer 2.** Symmetric, and typically a *different* root cause, which is why
+  fixing "the sync bug" once never fixes both.
+
+**Why neither machine can diagnose this alone.** Ask computer 1 *"is anything missing?"* and it answers
+honestly: **no**. Every file it knows about, it has. Set C is not "missing" to computer 1 — set C is
+**unknown** to computer 1. Absence of a row is indistinguishable from absence of a file. The missing
+information is not *on* either computer; it is the **difference between two computers' beliefs**, and no
+process that runs on one machine can compute it.
+
+So we do the only thing that works: **each computer writes down everything it believes, into a file
+named after itself, and ships that file to the other one over the git backbone we already run.** Then a
+later session — a human at 3am, or a Claude Code invocation — opens **both** files and computes the
+difference offline, with no live process, no network, and no access to either machine.
+
+`debug.yaml` is that written-down belief.
+
+### 1.1 The design consequence: it must be COMPLETE, not summarized
+
+A count is worthless here. "Pull down: 6" on computer 2 and "Not backed up: 6" on computer 1 tells you
+nothing — you cannot tell whether they are **the same six files**. This is the whole reason the artifact
+exists, and it produces the spec's hardest rule:
+
+> **Every metric the product displays as a number MUST appear in `debug.yaml` as the full LIST of files
+> behind that number — never as the number alone.** ([§5](#5-the-metrics-block--every-number-becomes-a-list-locked))
+
+Counts are still written (§4.4) because they make the file skimmable, but they are a **convenience
+derived from the lists**, never a substitute for them, and a count that disagrees with its list's length
+is a **defect** (§13, AC-9).
+
+---
+
+## 2. The two invocation surfaces (LOCKED)
+
+There are exactly **two** places the export can be started, they are the **same operation** with the
+**same output path**, and they differ **only in scope** (§6).
+
+### 2.1 Settings → the power section at the bottom of the page
+
+The Settings page ([settings.mdx §4](./settings.mdx#4-the-rest-of-the-global-settings-surface)) grows a
+final section, **placed last, below every other section**, titled **Power tools**. It is last on purpose:
+it is a **diagnostics** surface, not a preference, and nothing above it should be pushed down the page by
+it.
+
+```
+ ┌── Power tools ────────────────────────────────────────────────────────────┐
+ │                                                                           │
+ │  Export debug information                                                 │
+ │  Writes everything Large File Bridge believes about this computer's files │
+ │  to a YAML file in your personal repo, so it can be compared against your │
+ │  other computers.                                                         │
+ │                                                                           │
+ │     → ~/BGit/Bryan_git/personal_large_files_bridge/debug/bryan-mac-pro/    │
+ │       debug.yaml                                                          │
+ │                                                                           │
+ │  Last exported: 2026-07-20 14:04 · 1,284 files across 37 repos            │
+ │                                                                           │
+ │  [ Export debug information ]                                             │
+ └───────────────────────────────────────────────────────────────────────────┘
+```
+
+* The **resolved destination path is shown before the click**, not after. The user must be able to see
+  *where this is going to land* without running it — this is a file that gets **committed and pushed**,
+  and a surprise write into a git repo is never acceptable.
+* **Scope: the whole computer** — every repo and every storage LFBridge knows about (§6.1).
+* The button is **disabled with an explanation** when no personal storage repo is connected (§3).
+* On success: a toast naming the counts and the path, per §9.3.
+
+Per the charter's naming rule, all of this user-facing copy spells out **"Large File Bridge"** in full —
+never `LFB`, never `LFBridge`. Those abbreviations are legal only in paths, keys and code.
+
+### 2.2 View-one-repo → the More ⌄ menu
+
+On the [View-one-repo](./one_repo.mdx) page the item **Export Debug Information** joins the repo entity
+catalog ([menus.mdx §5.1](./menus.mdx#51-repo)) in the **Work** group, directly after **Rescan**:
+
+```
+                              ┌─────────────────────────────────────────┐
+                              │  Open in File System                    │
+                              │  View pinned on IPFS                    │
+                              ├─────────────────────────────────────────┤
+                              │  Rescan                                 │
+                              │  Export Debug Information          ⌥    │  ← new, Work group
+                              │  Pin now                                │
+                              │  Git ignore                             │
+                              ├─────────────────────────────────────────┤
+                              │  Toggle Pinned                          │
+                              │  Repo settings…                         │
+                              ├─────────────────────────────────────────┤
+                              │  Copy path                              │
+                              ├─────────────────────────────────────────┤
+                              │  Remove repo (unregister)          ⚠    │
+                              └─────────────────────────────────────────┘
+```
+
+* **Scope: this repo only** (§6.2). Same file, same path, `scope.kind: repo`.
+* It is **not** destructive, so it takes **no confirm dialog** — it writes one file into a directory that
+  exists for exactly this purpose and overwrites only the previous export.
+* It is **not** a page action, so it does **not** join the blue action-links row
+  ([page_actions.mdx §0](./page_actions.mdx)): that row operates on the page's **files**, and this
+  operates on the page's **repo entity**. That distinction is the whole basis of menus.mdx's
+  three-surface split and this item respects it.
+
+#### 2.2.1 The One-repo page has no More ⌄ menu today — this spec adds it
+
+**Finding (2026-07-20).** [one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)
+already specifies a **More ⌄** entity menu on this page carrying the repo catalog, and
+[menus.mdx §5.1](./menus.mdx#51-repo)'s code pointer claims `RepoKebab` serves "Repo row / One-repo page".
+**Neither is true in the shipped code.** `RepoKebab` is mounted **only** on the Repos *list* page; the
+View-one-repo header renders `TaskTabs` + a settings gear + the smart primary and **nothing else**. The
+only `⋮` on the page is the per-**row** file kebab.
+
+So the menu item specified in §2.2 has **no menu to live in**. This spec therefore also delivers the
+missing surface — it is a prerequisite, not a bonus:
+
+1. A new trigger **`ActionsMore`** — the **More ⌄** presentation
+   ([menus.mdx §4.1](./menus.mdx): the word *More* plus a down chevron, **no** `⋮` glyph, **no** border)
+   over a **prebuilt** action list, exactly as `ActionsKebab` is the `⋮` presentation over a prebuilt
+   list. `EntityMore` already exists but resolves its catalog from a **path** via an async fetch; a repo
+   page holds a `RepoDetail` and builds its catalog synchronously, so the two cannot share a trigger.
+2. That trigger mounted in the View-one-repo header, carrying the §5.1 repo catalog **minus** *Open repo*
+   (you are already here) **plus** *Export Debug Information*.
+
+This closes a real spec-vs-code drift ([spec-ahead-of-code backlog](./to_fix.mdx)) rather than papering
+over it with a second, differently-shaped affordance.
+
+### 2.3 Both surfaces are the same operation (LOCKED)
+
+One service function, one route, one output path, one schema. The **only** difference the two entry
+points may produce in the artifact is the value of `scope:` (§4.3) and, consequently, which files appear
+in the metric lists. Any future divergence — a different filename, a different field set, a "lite"
+version — is a **defect**: the two files would no longer be comparable, and comparability is the product.
+
+---
+
+## 3. Precondition — a connected personal storage repo (LOCKED)
+
+**The export requires a personal storage repo and has no fallback.**
+
+The destination (§4.1) lives inside the **personal SDL**
+([storage_personal.mdx](./storage_personal.mdx)) — canonically
+`~/BGit/Bryan_git/personal_large_files_bridge/`. That directory is not merely a place to put a file: it is
+a **git repo that is already synced between the user's computers by the git backbone**
+([git_backbone.mdx](./git_backbone.mdx)). Writing there is what makes the artifact **travel**, which is
+what makes it **useful** (§1). A `debug.yaml` that stays on one machine answers nothing.
+
+Therefore:
+
+* **If a personal storage repo is connected** → export runs.
+* **If it is not** → the export is **refused**, loudly and specifically. There is **no** fallback to the
+  state root, **no** fallback to `/tmp`, **no** "download it to your browser instead". Each of those
+  would produce a file that cannot reach the other computer, i.e. a file that silently fails at the one
+  job it has.
+
+| Surface | Behavior with no personal repo |
+| --- | --- |
+| **Settings** | The button renders **disabled**, with the reason inline beneath it: *"Connect your personal storage repo first — Large File Bridge saves the debug file there so your other computers can read it."* and a link to [Storages → Personal](./storage_personal.mdx). |
+| **More ⌄ menu** | The item renders **disabled** with the same reason as its native `title` tooltip (`Action.disabled` + `Action.title` — the existing menu idiom for *why* something is greyed). |
+| **API** | `POST` returns `ok: false` with a stable machine-readable `error` string, never a 500. |
+
+Resolution is a single lookup — `getStorageRow("personal")` — and **"connected" means that row resolves and
+its root exists on disk.**
+
+**It explicitly does NOT mean `initialized`.** An earlier draft of this spec required that flag, on the
+reasoning that a *detected-but-not-adopted* candidate should not be written into. **Testing on a real
+machine (2026-07-20) proved that wrong and the gate was relaxed.** `initialized` only reports whether a
+`storage.yaml` **descriptor** has been written, and a live personal SDL — one that is already holding
+`devices/*.yaml`, `files.yaml` and committed artifacts, i.e. one the app has been using for months — can
+legitimately have **no descriptor at all**. Requiring it refused a **working** setup. The gate here is now
+the **same one the rest of the product already uses** for exactly this decision:
+`artifact-placement.service.ts` routes durable artifacts on `page.personal !== null`, nothing more. Two
+different answers to "is personal storage connected?" inside one app is itself a defect; this spec adopts
+the product's existing answer rather than inventing a stricter second one.
+
+The personal storage row this precondition resolves is read in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `getStorageRow("personal")` (`findRowById` → `discoverRows`)
+
+### 3.1 Why the personal repo and never a company repo
+
+Debug output describes **this human's machine**: absolute home-directory paths, repo names, device
+hostnames, file names. That is **personal-shaped data**, and the personal SDL is the storage whose whole
+premise is *"my own computers, my own eyes"*
+([storage_personal.mdx §1](./storage_personal.mdx)). A company SDL is **shared with colleagues**
+([storage_company.mdx](./storage_company.mdx)), and quietly committing one employee's full local filesystem
+inventory into a shared repo is a privacy failure even though every individual field is innocuous. The
+destination is **the personal repo, always** — even when the export's *scope* covers company-owned repos
+(§6.1). Scope and destination are independent, and only the destination carries the privacy weight.
+
+---
+
+## 4. Where the file lands, and its envelope
+
+### 4.1 The path contract (LOCKED)
+
+```
+<personal storage repo root>/debug/<computer>/debug.yaml
+```
+
+Concretely, on the Mac Pro:
+
+```
+~/BGit/Bryan_git/personal_large_files_bridge/debug/bryan-mac-pro/debug.yaml
+```
+
+Three rules, each load-bearing:
+
+1. **`debug/` sits at the personal repo's ROOT — never under `.lfbridge/`.** This follows the storage-kind
+   rule locked in [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx): `.lfbridge/` exists
+   only inside a **working git repo** where Large File Bridge is a *guest* and must quarantine itself. A
+   personal SDL is a **dedicated** file repo — it exists solely to hold this app's data — so its **root is
+   the tracking area** and metadata hangs directly off it, exactly as `devices/` and `files.yaml` already
+   do. Never join `LFBRIDGE_DIR` to reach this path; the presence of `.git/` in the SDL must not tempt any
+   code into the guest branch.
+2. **`<computer>` is the device slug — the SAME string as `devices/<computer>.yaml`.** Not the hostname,
+   not the username, not a UUID: the canonical device label from
+   [devices.mdx §1](./devices.mdx), e.g. `bryan-mac-pro`, `bryanstarbuck-macbook-pro`. Reusing that exact
+   slug is what lets a reader **join** `debug/bryan-mac-pro/debug.yaml` against
+   `devices/bryan-mac-pro.yaml` (chip, RAM, IPFS peer id, schedule) with no mapping table — and it is what
+   makes `pinned_by: [bryan-mac-pro]` inside a manifest resolve to a debug file by string equality.
+3. **The per-computer directory is what prevents conflicts.** Two computers writing
+   `debug/<computer>/debug.yaml` **never touch the same path**, so the git backbone merges them with
+   **zero possibility of a conflict** — each machine only ever writes its own subtree. A single shared
+   `debug.yaml` at the root would conflict on **every single export**, forever, and the whole mechanism
+   would collapse into merge-resolution noise.
+
+The device label written into the path is the same one every manifest's `pinned_by` carries, resolved in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `computerLabel()`
+
+The storage-kind branch that keeps this path off `.lfbridge/` is decided in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `usesLfbridgeDir()` / `trackingBaseDir()`
+
+### 4.2 Replaced whole, every run (LOCKED)
+
+Each export **replaces** `debug.yaml` in its entirety. It is a **snapshot**, not a journal — there is no
+append, no merge, no history inside the file. If you want history, git already has it: every export lands
+as a commit and `git log -p debug/bryan-mac-pro/debug.yaml` is the timeline, for free, with authorship and
+timestamps we did not have to invent.
+
+The write is **atomic** (temp file + rename), so a reader — including a git commit racing the write —
+never observes a half-written document.
+
+Atomic YAML writes reuse the existing store helper in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml()`
+
+### 4.3 The envelope — everything above `metrics:`
+
+```yaml
+schema_version: 1
+generated_at: 2026-07-20T21:04:11.882Z      # ISO-8601 UTC, always UTC, never local time
+generated_by: debug-export.service.ts        # the code that produced it (§12)
+app_version: "0.9.3"                         # so a reader can spot two computers on different builds
+
+computer:
+  name: bryan-mac-pro                        # the device slug — matches devices/<name>.yaml AND the path
+  hostname: Bryans-Mac-Pro-2024.local
+  platform: darwin
+  username: bryan
+  home_dir: /Users/bryan                     # THE PATH-REWRITE KEY (§4.5) — load-bearing, not cosmetic
+  ipfs_peer_id: 12D3KooWFHk42L3xE7…          # joins this file to peer lists in the other computer's dump
+  app_uptime_s: 41255
+
+scope:
+  kind: computer                             # computer (Settings, §6.1) | repo (More ⌄ menu, §6.2)
+  repo_id: null                              # set when kind == repo
+  repo_name: null
+  repo_root: null
+  units: 37                                  # how many repos/storages were walked
+  invoked_from: settings                     # settings | one_repo_more_menu  — provenance of THIS run
+
+environment:
+  ipfs: { reachable: true, version: "0.42.0", pin_count: 8214 }
+  git_backbone: { enabled: true, last_push_at: 2026-07-20T20:58:02Z, ahead: 0, behind: 0 }
+  scan: { last_scan_at: 2026-07-20T18:12:00Z, stale: false }
+  queue: { pending: 0, running: 0 }
+```
+
+The `environment:` block earns its place by pre-empting the **four questions that are asked first** in
+every real sync investigation, and that are otherwise a separate round-trip to the user: *was IPFS even
+up? is the backbone pushing? when was the last scan? was work still in flight?* A `debug.yaml` produced
+while IPFS was down describes a **momentarily blind** computer, and a reader who does not know that will
+misdiagnose every single row in it.
+
+### 4.4 Counts — a convenience, never the payload
+
+```yaml
+counts:                     # EVERY key here MUST equal the length of the same-named list under metrics:
+  add_to_ipfs: 0
+  git_ignore: 74
+  pull_down: 6
+  not_backed_up: 78
+  …
+```
+
+Present so a human can skim the head of the file and so a slug/summary can be rendered without parsing a
+possibly-enormous `metrics:` block — the same reasoning as `totals:` in
+[to_do_batches.mdx §3.1](./to_do_batches.mdx#31-totals-is-what-the-slug-reads). **A count that disagrees
+with its list's length is a defect** (AC-9), because the moment they can disagree, a reader has to decide
+which to trust, and the file stops being evidence.
+
+### 4.5 The absolute-path trap, and the key that defuses it (LOCKED)
+
+The product owner asked for **full file paths**, and full paths are what we write. But full paths are the
+**one field that cannot be compared directly across computers**:
+
+```
+computer 1:  /Users/bryan/BGit/Bryan_git/charlie-kirk/videos/clip.mp4
+computer 2:  /Users/bryanstarbuck/BGit/Bryan_git/charlie-kirk/videos/clip.mp4
+```
+
+That is **one file**, and a naive diff calls it **two**, producing a report where set B and set C are each
+inflated by the whole of set A — the exact opposite of the answer. So **every file entry carries three
+identity fields, not one**:
+
+| Field | Example | Comparable across computers? | Job |
+| --- | --- | --- | --- |
+| `path` | `/Users/bryan/BGit/…/clip.mp4` | ❌ **no** | what the human pastes into a terminal **on that machine** |
+| `repo` + `rel` | `charlie-kirk` + `videos/clip.mp4` | ✅ **yes** | **the join key** — how a reader matches rows across two dumps |
+| `cid` / `sha256` | `bafy…` | ✅ **yes** (content identity) | catches the same bytes at a **different** path |
+
+`computer.home_dir` in the envelope (§4.3) is recorded precisely so a reader can mechanically rewrite one
+computer's paths into the other's when a human wants to eyeball them side by side. **The join is
+`repo` + `rel`. Never `path`.** This is stated again in the reader's playbook (§11) because it is the one
+mistake that quietly ruins the analysis.
+
+---
+
+## 5. The `metrics:` block — every number becomes a list (LOCKED)
+
+### 5.1 The depth contract, exactly as specified
+
+```yaml
+metrics:                                          # ← level 1  (the block)
+  pull_down:                                      # ← level 2  (the METRIC — always a YAML array)
+    - path: /Users/bryan/BGit/…/rally_4k.mov      # ← level 3  (one ARRAY ENTRY = one file)
+      repo: charlie-kirk                          # ← level 4  (the entry's PROPERTIES)
+      rel: videos/rally_4k.mov
+      size_bytes: 812000000
+      cid: bafybeib24jh4f6…
+      sha256: 9f2c…
+      decision: sync
+      peers: [bryanstarbuck-macbook-pro]
+    - path: /Users/bryan/BGit/…/press_conf.mov
+      repo: charlie-kirk
+      rel: videos/press_conf.mov
+      …
+  not_backed_up: []                               # present-and-empty, NEVER omitted (§5.3)
+  transcribable:
+    - path: …
+```
+
+Four rules:
+
+1. **Level 2 is the metric.** One key per metric, and its value is **always a sequence**.
+2. **Level 3 is one array entry per file.**
+3. **Level 4 is that file's properties**, `path` first (§7).
+4. **The block is FLAT across repos.** Even a whole-computer export keeps `metrics:` one level deep and
+   puts the repo on each **entry** (`repo:`), rather than nesting `metrics:` under a `units:` tree. Two
+   reasons, and the second is decisive: it keeps the depth contract literally true at every scope, and it
+   makes the two-computer diff a **single flat list comparison per metric** instead of a tree walk that
+   has to first reconcile which repos each computer knows about. (Per-repo *counts* still exist — see
+   `units:` in §8 — but no file list is ever nested.)
+
+### 5.2 The metric catalog (LOCKED)
+
+Every metric the product renders as a tile, panel, or column gets a list. The keys are `snake_case`
+renderings of the `TaskMetrics` / `MetricId` names, so a reader can map a key back to the tile they
+clicked with no lookup table.
+
+| `metrics:` key | The tile / number it explains | Source of the list |
+| --- | --- | --- |
+| `add_to_ipfs` | **Add to IPFS** (`taskMetrics.undecided`) | rows with `decision === "undecided" && !pinnedForeign` |
+| `git_ignore` | **Git Ignore** tile (client predicate) | `!gitignore && !gitignoreLocked && !analysisOnly && presence !== "remote-only"` |
+| `big_not_ignored` | the backend nudge count | `!gitignore && sizeBytes >= checked_in_threshold_bytes` |
+| `pull_down` | **Pull down** (`missingPinned.length`) | `missingPinnedFromPeers(repoRoot)` |
+| `not_backed_up` | **Not backed up** | `decision === "sync" && cid != null && no peer other than self` |
+| `pending` | **Pending** | `decision === "sync" && transfer === "pending"` |
+| `compressible_videos` | **Compressible videos** | `compress === "could"` ∧ kind video |
+| `compressible_images` | **Compressible images** | `compress === "could"` ∧ kind image |
+| `already_compressed` | **Already compressed** | `compress === "done"` |
+| `transcribable` / `transcribed` | **Transcribable** / done | `transcribe === "could"` / `"done"` |
+| `describable` / `described` | **AI Describable** / done | `describe === "could"` / `"done"` |
+| `ocrable` / `ocred` | **OCRable** / done | `ocr === "could"` / `"done"` |
+| `pinned_foreign` | the foreign-pin bucket (`RepoCounts.pinnedForeign`) | `pinnedForeign === true` |
+| `remote_only` | rows composed from a peer's manifest | `presence === "remote-only"` |
+| `never_ipfs` | sticky *Never IPFS* flags | `neverIpfs === true` |
+
+The last three are **not tiles** — they are included because each is a *direct* explanation for a file
+being absent, and a reader chasing set B or set C will reach for them immediately. `remote_only`, in
+particular, **is set C as seen from the other side**: it is this computer saying *"I know this file exists
+somewhere else and I do not have it."*
+
+### 5.3 Empty lists are written, never omitted (LOCKED)
+
+A metric with no files is emitted as `metric_name: []`. It is **never** dropped and **never** `null`.
+
+This is not tidiness. A reader diffing two files must distinguish:
+
+* **`pull_down: []`** — *"I computed this, and the answer is genuinely zero."*
+* **key absent** — *"this build did not compute this at all"* (an older `schema_version`, a metric added
+  later, an export that errored partway).
+
+Collapse those two and every conclusion drawn from a zero becomes unsound. The same reasoning is already
+locked for OCR's empty-text-is-success rule ([ocr.mdx §2.3](./ocr.mdx)) and for the honest-no-op rule in
+[pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect).
+
+### 5.4 A file appears in as many metrics as it qualifies for
+
+The lists are **views**, not a partition. One `.mov` may legitimately appear under `add_to_ipfs`,
+`compressible_videos`, `transcribable`, `describable` and `ocrable` simultaneously — that is five separate
+true statements about one file. Any de-duplication across metrics would break the invariant that
+`counts.<metric> === metrics.<metric>.length` (§4.4) and destroy the tile↔list correspondence that is the
+file's contract.
+
+### 5.5 The predicates MUST be the product's own, not a re-implementation (LOCKED)
+
+The export's job is to explain **the numbers the user is looking at**. If the export computes
+`transcribable` even slightly differently from the tile, then the file — the artifact whose entire purpose
+is to be trusted evidence — **lies**, and it lies in the most expensive possible way: plausibly.
+
+So the export **calls the product's own composition path** (`computeRepoDetail`, which already runs
+`composeFileRows` + `computeTaskMetrics`) and buckets **those exact rows**, reusing the identical
+predicates including their **order-dependent early exits**:
+
+* `analysisOnly` rows are counted for the three analysis metrics and then **skipped** for everything else.
+* `remote-only` rows contribute `undecided` and are then **skipped**.
+
+Getting either `continue` wrong produces a file whose lists disagree with the tiles — a defect (AC-10).
+
+The single composition path the export must bucket, rather than re-derive, is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` / `computeTaskMetrics()`
+
+The pull-down list, which is the one metric whose files are **not on this disk**, comes from a peer manifest in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`
+
+---
+
+## 6. Scope — computer-wide vs one repo
+
+### 6.1 `kind: computer` — the Settings button
+
+Walks **every repo LFBridge has registered**, in the same order the Repos list shows them, and appends
+every repo's buckets into the flat `metrics:` lists. `units:` (§8) carries the per-repo counts.
+
+This is the export you want when the question is *"which of my files are out of sync?"* — i.e. the normal
+case, since a user rarely knows in advance **which** repo lost the file.
+
+### 6.2 `kind: repo` — the More ⌄ menu item
+
+Exactly one repo. Identical schema, identical path, `scope.repo_id` / `repo_name` / `repo_root` populated,
+`units:` a single row.
+
+This is the export you want when the question is *"why is **this** repo behaving differently on my two
+computers?"* — you are standing on the repo page looking at a metric that disagrees with the other machine,
+and you want the file list behind **that** tile, right now, without a multi-minute whole-computer walk.
+
+### 6.3 The two scopes overwrite each other — and that is correct (LOCKED)
+
+Both write `debug/<computer>/debug.yaml`. A repo-scoped export **replaces** a previous computer-wide one.
+
+We considered `debug.yaml` + `debug-<repo>.yaml` and rejected it. The reader's job (§11) is *"open both
+computers' files and diff them"*; the instant there is more than one file per computer, the reader must
+first work out **which pairs are comparable**, and a mismatched pair (computer 1's whole-computer dump vs
+computer 2's single-repo dump) yields a set-B/set-C answer that is **confidently wrong** — every repo
+missing from the narrow dump looks like divergence. `scope:` is recorded in the envelope precisely so a
+reader can **detect** a mismatched pair and refuse (§11.1). One file per computer. Always.
+
+---
+
+## 7. The per-file property catalog (level 4)
+
+Ordered so the two fields a human reads first (`path`, then `size_bytes`) come first, and the provenance
+fields trail.
+
+| Property | Type | Meaning / why it is here |
+| --- | --- | --- |
+| `path` | string | **Absolute** path on this computer. The thing you paste into a terminal. Not comparable across machines (§4.5). |
+| `repo` | string | Repo folder key. **Half the join key.** |
+| `rel` | string | Repo-relative path. **The other half.** This is what you diff. |
+| `size_bytes` | int | Bytes on disk (or from the manifest for a `remote-only`/`pull_down` row). A size mismatch at equal `rel` = a **content divergence**, a completely different bug from an absence. |
+| `cid` | string \| null | The canonical **CIDv1** ([knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx)). `null` = never added to IPFS — which for a `sync`-decision file is *itself the finding*. |
+| `sha256` | string \| null | Exact content hash from the manifest. Survives path changes; the tiebreaker when `cid`s differ. |
+| `fingerprint` | string \| null | The cheap `files.yaml` fingerprint (size + mtime + first/last 64 KiB). Fast, local, **not** a content hash — never treat a match as proof of identity. |
+| `perceptual` | map \| null | `{ algo, value }` from the sidecar (PDQ/vPDQ, [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)) — matches the **same content** across a re-compress or a format conversion, which is exactly how a "missing" file is often found hiding under a different CID. |
+| `decision` | enum | `sync` \| `ignore` \| `undecided` — the FROZEN wire values ([decisions.mdx](./decisions.mdx)). |
+| `decided_by` / `decided_at` | string \| null | Ledger provenance. Answers *"did this computer ever actually agree to sync it?"* |
+| `gitignore` | bool | Read from **git itself** (`git check-ignore`), never folded from the ledger — the rule locked in [decisions.mdx §1.1](./decisions.mdx). |
+| `gitignore_rule` | map \| null | `{source, line, pattern}` — names the rule when a pattern (not our anchored line) owns the file. |
+| `transfer` | enum | `pinned` \| `pending` \| … — this computer's transfer state. |
+| `peers` | string[] | Device labels that claim a pin, from the merged manifest. **`peers` on one computer vs presence on the other is the single most diagnostic comparison in the file.** |
+| `pinned_here` | bool \| null | Live pinset membership on **this** node. `null` = not verified (IPFS was down) — and `null` must never be read as `false`. |
+| `pinned_foreign` | bool | Bytes pinned here under a CID discovered **outside** Large File Bridge. |
+| `presence` | enum | `local` \| `remote-only`. |
+| `added_by_device` | string \| null | For a remote-only/pull-down row, the peer that has the bytes. |
+| `analysis_only` | bool | Admitted by scan rule 5 — sub-threshold media, never payload ([scan.mdx §4.1](./scan.mdx)). Explains "why isn't this syncing?" in one field. |
+| `never_ipfs` | bool | Sticky refusal ([decisions.mdx §17](./decisions.mdx)). |
+| `tasks` | map | `{compress, transcribe, describe, ocr}`, each `could`\|`done`\|`na`. |
+| `changed_at` | string | Last observed mtime (ISO). |
+
+### 7.1 Null is written; a missing key is not (LOCKED)
+
+Same reasoning as §5.3, one level down. `cid: null` means *"I looked and there is none."* An absent `cid`
+key means *"this build did not record CIDs."* Those are different findings and the file must never blur
+them.
+
+### 7.2 What is deliberately NOT in the file (LOCKED)
+
+**No secrets, ever.** Specifically excluded: AI provider API keys and any resolved credential
+([ai_credentials.mdx](./ai_credentials.mdx)), OAuth/session tokens
+([authentication.mdx](./authentication.mdx)), the auth session secret, allow-list emails beyond the
+already-public `decided_by` attribution, and **file contents** — no transcript text, no AI description
+text, no OCR text. This file is **committed and pushed**; anything in it is in git history permanently and
+irrevocably. The entries record that an artifact **exists**, never what it **says**.
+
+**No network egress.** The export reads local state and writes a local file. It calls no external service
+and phones nowhere home — the same hard local-only requirement the perceptual-fingerprint work carries
+([CLAUDE.md](../CLAUDE.md), [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)).
+
+---
+
+## 8. `units:` — the per-repo summary (counts only)
+
+```yaml
+units:
+  - repo: charlie-kirk
+    root: /Users/bryan/BGit/Bryan_git/charlie-kirk
+    remote: https://github.com/ACT3ai/charlie-kirk.git      # THE cross-computer repo identity
+    owner: { kind: personal, company_id: null }
+    storage_kind: repo
+    pinned: true
+    last_scan_at: 2026-07-20T18:12:00Z
+    last_pin_at: 2026-07-20T20:11:00Z
+    peer_count: 1
+    file_rows: 252
+    counts: { add_to_ipfs: 0, git_ignore: 74, pull_down: 0, not_backed_up: 78, … }
+```
+
+`remote:` is the field that matters most here. Repo **folder names can differ** between computers; the
+**git remote cannot** — it is the same identity assertion the owner-propagation work already keys on
+([repo_owner_propagation.mdx](./repo_owner_propagation.mdx), keyed on git remote, not `repoKey`). When two
+computers' `units:` blocks disagree about folder names, `remote:` is what proves they are the same repo.
+
+`file_rows` vs the sum of the counts is itself a signal: a repo with 252 rows on one computer and 9 on the
+other has a **scan** problem, not a **sync** problem — and that distinction, visible in one line, redirects
+the entire investigation.
+
+**No file lists live here** (§5.1 rule 4). Counts only.
+
+---
+
+## 9. Behavior when invoked — the run, step by step
+
+1. **Resolve the destination.** `getStorageRow("personal")` → root; refuse per §3 if absent/uninitialized.
+2. **Resolve the computer.** `computerLabel()` → the device slug; `mkdir -p <root>/debug/<slug>/`.
+3. **Snapshot the environment** (§4.3): one cheap IPFS health read, backbone state, scan staleness, queue
+   depth. **Cheap reads only** — never a pin-set re-hash, never `contentPinnedCid` (§10).
+4. **Enumerate the units in scope** (§6): every registered repo, or the one repo.
+5. **Per unit**, call the product's own `computeRepoDetail(folder, health, pinset)`, then
+   `missingPinnedFromPeers(root)` for `pull_down`.
+6. **Bucket the rows** into the §5.2 metric lists using the product's own predicates and their
+   order-dependent early exits (§5.5).
+7. **Enrich each entry** (§7): join the merged manifest for `sha256`/`peers`, the `files.yaml` index for
+   `fingerprint`, the per-file sidecar for `perceptual`, the foreign-pin index for `pinned_foreign`.
+8. **Assemble** envelope + `counts` + `units` + `metrics`.
+9. **Write atomically** to `<root>/debug/<slug>/debug.yaml` (§4.2).
+10. **Signal the backbone** that a durable artifact was written, so the file is **committed and pushed**
+    rather than riding as a stowaway on some unrelated commit (§10.1).
+11. **Return** counts + resolved path to the caller for the toast (§9.3).
+
+### 9.1 It is a read-only operation on user data (LOCKED)
+
+The export **never** changes a decision, **never** writes a `.gitignore` line, **never** pins, unpins,
+compresses, transcribes or deletes anything. It reads state and writes exactly one file, into a directory
+that exists for exactly that purpose. It is safe to run at any time, including mid-batch, and running it
+twice in a row is indistinguishable from running it once.
+
+### 9.2 It is synchronous and it is not a queue job
+
+Unlike compress/transcribe/describe/OCR, this does **not** enter the job queue
+([job_queue.mdx](./job_queue.mdx)) and does **not** appear in the progress dock. It is a **read of state
+the app already holds**, and its cost is dominated by reads the one-repo page performs on every
+navigation. A whole-computer export over ~37 repos is a **seconds** operation, not a minutes one.
+
+**But it must not block the event loop.** Per the rule burned in by the fit-media incident
+([performance.mdx P-27](./performance.mdx)): no `spawnSync`, no `readFileSync` over large trees, no
+synchronous recursive walks on the request path. The unit loop `await`s between units so the server stays
+responsive throughout.
+
+### 9.3 The result the user sees
+
+One toast, naming **what** and **where** — never a bare "Done":
+
+> **Debug information exported** — 1,284 files across 37 repos →
+> `~/BGit/Bryan_git/personal_large_files_bridge/debug/bryan-mac-pro/debug.yaml`
+
+This obeys the never-a-silent-no-op rule
+([pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)):
+if the export covered **zero** files it says so, plainly, because "0 files" is a finding — it usually means
+the scan never ran — and hiding it behind a cheerful success message wastes the user's next hour.
+
+### 9.4 Errors are surfaced, and a partial file is never left behind
+
+If a unit fails mid-walk, that unit is recorded in an `errors:` list in the envelope with its repo and the
+message, the remaining units continue, and the file is still written. **A partial export that says which
+part is missing is vastly more useful than no export** — but it must **say so**, so a reader never mistakes
+a truncated dump for evidence of absence. If the *write itself* fails, the atomic rename means the previous
+`debug.yaml` survives untouched, and the toast reports the failure.
+
+---
+
+## 10. Cost, limits, and the reads we refuse to do
+
+| Read | Cost | Allowed? |
+| --- | --- | --- |
+| `computeRepoDetail` per repo | the same read the one-repo page already does | ✅ |
+| merged manifest per repo | one YAML parse per repo, cached | ✅ |
+| `files.yaml` index | mtime-cached ([`readStorageIndex`](./repo_tracking_scheme.mdx)) | ✅ |
+| per-file sidecar | one small YAML per file **that has one** | ✅ (miss = `null`, never a stat storm) |
+| `canonicalPinnedSet()` | **one** call per export, shared across every unit | ✅ |
+| `contentPinnedCid(absPath)` | **re-hashes the file's bytes** | ❌ **never** |
+| a fresh full content hash per file | minutes-to-hours on a media repo | ❌ **never** |
+| `git check-ignore` per path | ~1.3 s / 5,000 paths — already batched per repo | ✅ (batched only) |
+
+The refusals are the point. `contentPinnedCid` is explicitly documented as expensive and
+never-on-a-read-path; an export that re-hashed every file would take **hours** on a video repo, and a
+debugging tool nobody is willing to run is worth nothing. **`debug.yaml` reports what the app already
+believes** — its value is precisely that it is a cheap, faithful snapshot of belief, and re-deriving truth
+would make it a *different* (and slower, and disagreeing) tool.
+
+**No cap on list length.** If a repo has 5,000 transcribable files, all 5,000 are written. A truncated list
+would silently misreport set B/set C — and per
+[performance.mdx](./performance.mdx)'s no-silent-caps rule, any bound we ever add must be **logged in the
+file itself**, not applied quietly.
+
+### 10.1 Committing and travelling (LOCKED)
+
+The artifact is worthless until it reaches the other computer, so the export **explicitly** notifies the
+backbone that a durable artifact was written. It must **not** rely on riding along with some unrelated
+commit — that exact stowaway pattern was a real defect
+([backbone_resilience.mdx](./backbone_resilience.mdx)): artifacts appeared to be "checked in" only because
+they happened to be swept up by the device worker's periodic `devices/*.yaml` commit, and when that worker
+was quiet they were never committed at all.
+
+The commit message names the artifact, e.g. `debug: bryan-mac-pro state export`, so `git log` reads as a
+timeline of exports.
+
+The artifact-written signal the export must fire is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()`
+
+---
+
+## 11. The reader's playbook — diffing two computers
+
+This is the section the future Claude Code session (or human) reads. Both files are plain YAML on disk;
+**no running app is required on either machine.**
+
+```
+personal_large_files_bridge/
+└── debug/
+    ├── bryan-mac-pro/debug.yaml               ← computer 1
+    └── bryanstarbuck-macbook-pro/debug.yaml   ← computer 2
+```
+
+### 11.0 Compute A, B and C
+
+1. **Key every entry** by `repo` + `rel` — **never** `path` (§4.5).
+2. **Set A** = keys present on both. Ignore them *unless* `size_bytes`, `cid` or `sha256` differ at the
+   same key — that is a **content divergence**, not an absence, and it is a different bug.
+3. **Set B** = keys on computer 1 only. **Set C** = keys on computer 2 only.
+4. For each B/C member, walk the chain **in order** and stop at the first broken link:
+
+| Question | Field that answers it | What a "no" means |
+| --- | --- | --- |
+| Did computer 1 decide to sync it? | `decision` | `undecided`/`ignore` → **not a bug**; the user never asked for it |
+| Was it forbidden? | `never_ipfs`, `analysis_only` | either → correctly excluded, working as designed |
+| Was it ever added to IPFS? | `cid` | `null` → the **pin** step never ran; look at the pin pass, not the network |
+| Does computer 1 actually hold the pin? | `pinned_here` | `false` → it *claims* to sync a file it does not have (`null` = IPFS was down; not the same thing) |
+| Does computer 2 know it exists? | is the key in computer 2's `remote_only` / `pull_down`? | **present** → the manifest travelled and the **fetch** failed; **absent** → the **manifest** never travelled — a git-backbone problem, not an IPFS one |
+| Do the peer lists agree? | `peers` on both sides | disagreement → manifest merge / device-label mismatch |
+| Is it even the same repo? | `units[].remote` | different remotes → the repos were never the same repo |
+
+That fifth row is the fork in the road, and it is the reason both computers must export. *"Computer 2 has
+never heard of this file"* and *"computer 2 knows about it and cannot get the bytes"* look **identical**
+from computer 1 and have **nothing** in common as bugs — one is git, one is IPFS.
+
+### 11.1 Check the envelopes BEFORE trusting the diff
+
+* **`scope.kind` must match on both sides.** A computer-wide dump vs a repo-scoped dump makes every
+  unmentioned repo look like divergence. **Refuse the comparison and say why** (§6.3).
+* **`generated_at` should be close.** Dumps days apart describe two different worlds; real work happened in
+  between and half the "divergence" is just elapsed time.
+* **`environment.ipfs.reachable: false` on either side invalidates every `pinned_here`** in that file — the
+  computer was blind when it wrote them.
+* **`environment.scan.stale: true` means the file lists themselves may be old** — the tiles were stale when
+  they were dumped.
+* **`app_version` mismatch** may explain a missing metric key rather than a missing file (§5.3).
+
+### 11.2 One-line starting points
+
+```bash
+# Which repos does one computer know about that the other doesn't?
+diff <(yq '.units[].remote' debug/bryan-mac-pro/debug.yaml | sort) \
+     <(yq '.units[].remote' debug/bryanstarbuck-macbook-pro/debug.yaml | sort)
+
+# Set B for the pull-down metric, keyed correctly (repo + rel, never path):
+diff <(yq -r '.metrics.pull_down[] | .repo + "/" + .rel' debug/bryan-mac-pro/debug.yaml | sort) \
+     <(yq -r '.metrics.pull_down[] | .repo + "/" + .rel' debug/bryanstarbuck-macbook-pro/debug.yaml | sort)
+
+# Files computer 1 says it syncs but does not actually hold:
+yq '.metrics.not_backed_up[] | select(.pinned_here == false) | .path' debug/bryan-mac-pro/debug.yaml
+```
+
+---
+
+## 12. Where the code lives (LOCKED)
+
+A dedicated module — this is a first-class capability, **not** a script, **not** a one-off, and per the
+product owner it is a place we expect to **keep growing** what we record over time.
+
+| Concern | File | Key symbols |
+| --- | --- | --- |
+| **The export engine** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` | `exportDebugInfo(opts)` · `resolveDebugTarget()` · `buildDebugDocument()` · `bucketMetrics()` · `enrichEntry()` |
+| **The HTTP surface** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug.router.ts` | `POST /api/debug/export` · `GET /api/debug/export/target` |
+| **Shared types** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` | `DebugExportTarget` · `DebugExportResult` |
+| **API client** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` | `api.debugExportTarget()` · `api.debugExport(scope)` |
+| **Settings surface** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` | the **Power tools** section (§2.1) |
+| **More ⌄ trigger** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` | `ActionsMore` (§2.2.1) |
+| **Repo catalog + mount** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` incl. `export-debug` |
+
+**Growth policy.** New fields are **added**, never renamed or repurposed, and `schema_version` bumps when a
+reader would need to behave differently. A reader that meets an unknown key must ignore it; a reader that
+meets a **missing** key must treat it as *"this build did not compute it"* (§5.3) — never as zero. Two
+computers on different app versions is the normal case, not the exception, and the schema must degrade
+into a still-useful comparison rather than a wrong one.
+
+---
+
+## 13. Acceptance criteria
+
+* **AC-1** — A **Power tools** section is the **last** section on Settings, showing the **resolved
+  destination path** and the last-export summary **before** any click.
+* **AC-2** — **Export Debug Information** appears in the View-one-repo **More ⌄** menu, in the **Work**
+  group, after **Rescan**.
+* **AC-3** — The View-one-repo page **has** a More ⌄ menu (the word *More* + chevron, no `⋮`, no border)
+  carrying the §5.1 repo catalog minus *Open repo* — closing the §2.2.1 drift.
+* **AC-4** — With no personal storage repo connected, **both** surfaces render **disabled with a reason**,
+  and the API returns `ok: false` with a stable error — **never** a fallback write to another location.
+* **AC-5** — The file lands at exactly `<personal repo>/debug/<computer>/debug.yaml`, where `<computer>` is
+  byte-identical to the `devices/<name>.yaml` slug, and **never** under `.lfbridge/`.
+* **AC-6** — Two computers exporting concurrently produce **zero** git conflicts.
+* **AC-7** — For **every** metric in the §5.2 catalog, `metrics.<key>` exists as an array — **`[]` when
+  empty, never omitted, never null**.
+* **AC-8** — Every array entry carries at minimum `path`, `repo`, `rel`, `size_bytes`, `cid`, `decision`;
+  `path` is **absolute**.
+* **AC-9** — For every metric, `counts.<key> === metrics.<key>.length`.
+* **AC-10** — For a repo-scoped export, each `metrics.<key>.length` **equals the number rendered on that
+  repo's corresponding tile** at the same moment — including the `analysisOnly` and `remote-only` early
+  exits.
+* **AC-11** — Running the export twice with no intervening change produces an **identical** document except
+  `generated_at` (and the environment's uptime/timestamps) — it is a pure function of state.
+* **AC-12** — The export **never** mutates a decision, `.gitignore`, a pin, or any media file.
+* **AC-13** — No API key, token, session secret, transcript, AI description, or OCR text appears anywhere
+  in the file (§7.2), verified by grep.
+* **AC-14** — A whole-computer export over ~37 repos completes in **seconds**, performs **no**
+  `contentPinnedCid` / full-content-hash call, and never blocks the event loop.
+* **AC-15** — A failing unit lands in `errors:` and the export still writes; a failing **write** leaves the
+  previous `debug.yaml` intact.
+* **AC-16** — The written file is **committed and pushed** by the backbone as a **named** commit — not as a
+  stowaway on an unrelated one.
+* **AC-17** — The toast names the file count, the repo count, and the resolved path; a zero-file export
+  says **zero**.
+* **AC-18** — Given two real `debug.yaml` files, a reader following §11 can partition A/B/C keyed on
+  `repo`+`rel` and reach the git-vs-IPFS fork (§11.0, row 5) with no access to either machine.
