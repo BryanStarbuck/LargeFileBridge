@@ -150,3 +150,30 @@ describe("remoteOnlyRows — the laptop sees the Tower's file (§8.5)", () => {
     expect(remoteOnlyRows(cfg, manifest([entry]), [], root, LAPTOP)).toHaveLength(0);
   });
 });
+
+// ── the persisted default that would have kept the feature off for every existing repo ───────────────
+import { clearPersistedSyncRepoFalse } from "../../config/migrate-sync-repo-default.js";
+
+describe("clearPersistedSyncRepoFalse — a schema default is not a user's choice (§8.4.2)", () => {
+  it("drops an `enabled: false` the old default persisted", () => {
+    // 178 repo configs on the reference machine carried this line. Left in place, every one of them reads
+    // as an explicit opt-out and nothing ever mirrors.
+    const before = "pinned: true\nsync_repo:\n  enabled: false\nowner_override: null\n";
+    expect(clearPersistedSyncRepoFalse(before)).toBe("pinned: true\nsync_repo:\nowner_override: null\n");
+  });
+
+  it("leaves an explicit `true` alone and reports no change", () => {
+    expect(clearPersistedSyncRepoFalse("sync_repo:\n  enabled: true\n")).toBeNull();
+  });
+
+  it("is a no-op when there is no sync_repo block", () => {
+    expect(clearPersistedSyncRepoFalse("pinned: true\nbookmarked: false\n")).toBeNull();
+  });
+
+  it("touches nothing outside the sync_repo block — including an `enabled: false` elsewhere", () => {
+    const yaml = "big_file_override:\n  enabled: false\n  value: 100\nsync_repo:\n  enabled: false\npinned: true\n";
+    expect(clearPersistedSyncRepoFalse(yaml)).toBe(
+      "big_file_override:\n  enabled: false\n  value: 100\nsync_repo:\npinned: true\n",
+    );
+  });
+});

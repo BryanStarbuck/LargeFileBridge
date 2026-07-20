@@ -361,7 +361,7 @@ export function OneRepoPage() {
             disabled={ipfsDown || (blockedByNeverIpfs && !remoteOnly)}
             title={
               remoteOnly
-                ? `${onDevice} — not on this computer yet. Click to pull it down over IPFS.`
+                ? `${onDevice} Click to pull it down over IPFS.`
                 : blockedByNeverIpfs
                   ? "Add to IPFS is blocked by Never-IPFS"
                   : foreignPinned

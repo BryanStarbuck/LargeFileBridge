@@ -80,7 +80,10 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
   const missing = detail.missingPinned ?? [];
   if (missing.length === 0) return null;
   const n = missing.length;
-  const device = missing[0]?.addedByDevice ?? "another computer";
+  // The peer's nice name from the travelling device registry. When there is no usable label the sentence
+  // degrades to the SAME words every other peer-attributed surface uses — "another of your computers" —
+  // never a raw id or a PeerID (devices.mdx §6.9).
+  const device = missing[0]?.addedByDevice ?? "another of your computers";
   const headline = `${n} file${n === 1 ? " is" : "s are"} pinned on another of your computers but not here yet`;
   const sub = `${device} pinned ${n === 1 ? "it" : "them"} — pull ${n === 1 ? "it" : "them"} down so this computer is a real second copy.`;
   return {
@@ -117,7 +120,7 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
           label: mf.name,
           name: mf.name,
           sizeText: formatBytes(mf.sizeBytes),
-          pathText: `${dir || "(repo root)"} · added by ${mf.addedByDevice ?? "another computer"}`,
+          pathText: `${dir || "(repo root)"} · added by ${mf.addedByDevice ?? "another of your computers"}`,
         };
       }),
       targetNoun: "file",

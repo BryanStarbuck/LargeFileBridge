@@ -363,6 +363,14 @@ This **supersedes §7's "Default: OFF"** for the case where a sync repo can be r
   withholding it from the user's *own* SDL — the same SDL that is already committing and pushing this
   computer's device fingerprint. A default that has to be found and switched on before anything works is a
   bug wearing a setting's clothes.
+* **Flipping the default is not enough on its own — the old default was PERSISTED.** The field used to carry
+  a schema-level `false`, and because a unit's config is rewritten whole on every update, that `false` was
+  written to disk for **every** repo (178 of them on the machine this was traced on). Simply making the field
+  optional would have left every existing repo reading as an explicit opt-out, so the feature would have
+  worked **only on a fresh install** — the most deceptive possible outcome. A **one-time migration clears a
+  persisted `false`**, because a value the user was never shown and never chose is a default, not a decision.
+  An explicit `true` is left untouched, and a user who really wants the mirror off can turn it off after the
+  migration has run once.
 * **Nothing about bytes changes.** This decides where *tracking text* travels. Media bytes still move only
   over IPFS, only for files the user decided to sync ([decisions.mdx](./decisions.mdx)).
 
