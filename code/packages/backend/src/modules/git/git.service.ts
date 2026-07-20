@@ -674,6 +674,9 @@ export function composeCommitMessage(staged: {
     else if (p.endsWith(".ai_description_rejected")) bump("AI refusals");
     else if (p.endsWith(".transcription")) bump("transcripts");
     else if (p.endsWith(".ocr")) bump("OCR texts");
+    // A debug export is a named, user-initiated checkpoint — `git log -- debug/` should read as a
+    // TIMELINE of exports, not as "1 other files" (debug.mdx §4.2/§10.1).
+    else if (p.startsWith("debug/") || p.includes("/debug/")) bump("debug export");
     else if (p.startsWith("devices/") || p.includes("/devices/")) bump("device state");
     else if (p.endsWith("manifest.yaml")) bump("manifest");
     else if (p.endsWith("decisions.yaml")) bump("decisions");
@@ -687,7 +690,9 @@ export function composeCommitMessage(staged: {
   const order = (k: string): number => (k === "device state" ? 1 : 0);
   const parts = [...counts.entries()]
     .sort((a, b) => order(a[0]) - order(b[0]) || b[1] - a[1])
-    .map(([k, n]) => (k === "device state" || k === "manifest" || k === "tracking" ? k : `${n} ${k}`));
+    .map(([k, n]) =>
+      k === "device state" || k === "manifest" || k === "tracking" || k === "debug export" ? k : `${n} ${k}`,
+    );
 
   return `LFB: ${parts.join(", ")}`;
 }

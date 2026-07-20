@@ -180,6 +180,15 @@ missing surface — it is a prerequisite, not a bonus:
 This closes a real spec-vs-code drift ([spec-ahead-of-code backlog](./to_fix.mdx)) rather than papering
 over it with a second, differently-shaped affordance.
 
+### 2.2.2 It therefore also appears on the repos-table row ⋮ — by rule, not by accident
+
+[menus.mdx §5](./menus.mdx#5-the-per-entity-action-catalogs-locked) opens by locking that each catalog is
+*"used **verbatim** by that entity's row kebab **and** its page more-menu."* The repo catalog is built
+**once** and both triggers render it, so adding **Export Debug Information** to the catalog necessarily
+puts it on the **Repos list row ⋮** as well. That is correct and intended: a user who spots a suspicious
+repo in the list can export it without navigating into it first. It behaves identically there —
+repo-scoped (§6.2), same path, same schema.
+
 ### 2.3 Both surfaces are the same operation (LOCKED)
 
 One service function, one route, one output path, one schema. The **only** difference the two entry
@@ -634,7 +643,12 @@ twice in a row is indistinguishable from running it once.
 Unlike compress/transcribe/describe/OCR, this does **not** enter the job queue
 ([job_queue.mdx](./job_queue.mdx)) and does **not** appear in the progress dock. It is a **read of state
 the app already holds**, and its cost is dominated by reads the one-repo page performs on every
-navigation. A whole-computer export over ~37 repos is a **seconds** operation, not a minutes one.
+navigation.
+
+**Measured, 2026-07-20, on the Mac Pro:** a whole-computer export over **178 repos / 65,372 metric
+entries** completes in **38.5 s** with **zero** unit errors. A repo-scoped export is well under a second.
+Those are the real numbers this spec commits to — see §10.2 for the one read that had to be taken off the
+default path to get there.
 
 **But it must not block the event loop.** Per the rule burned in by the fit-media incident
 ([performance.mdx P-27](./performance.mdx)): no `spawnSync`, no `readFileSync` over large trees, no
@@ -670,7 +684,7 @@ a truncated dump for evidence of absence. If the *write itself* fails, the atomi
 | `computeRepoDetail` per repo | the same read the one-repo page already does | ✅ |
 | merged manifest per repo | one YAML parse per repo, cached | ✅ |
 | `files.yaml` index | mtime-cached ([`readStorageIndex`](./repo_tracking_scheme.mdx)) | ✅ |
-| per-file sidecar | one small YAML per file **that has one** | ✅ (miss = `null`, never a stat storm) |
+| per-file sidecar (`readSidecar`) | **~28 ms per file** — see §10.2 | ⚠️ **opt-in only** (`deep: true`) |
 | `canonicalPinnedSet()` | **one** call per export, shared across every unit | ✅ |
 | `contentPinnedCid(absPath)` | **re-hashes the file's bytes** | ❌ **never** |
 | a fresh full content hash per file | minutes-to-hours on a media repo | ❌ **never** |
@@ -703,6 +717,42 @@ The artifact-written signal the export must fire is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()`
 
 ---
+
+### 10.2 The perceptual fingerprint is opt-in — it cost 97% of the run (LOCKED, measured)
+
+The first working build read the per-file YAML sidecar for **every** row, to fill `perceptual` (§7). A
+profile over **25 repos / 3,850 rows** settled it:
+
+| Stage | Time |
+| --- | --- |
+| **`readSidecar` (per file)** | **109,380 ms** |
+| `computeRepoDetail` | 2,168 ms |
+| `missingPinnedFromPeers` | 616 ms |
+| `getRepoManifest` | 15 ms |
+| `readStorageIndex` | 1 ms |
+| **total** | **112,190 ms** |
+
+**One read was 97.5% of the entire export** — ~28 ms per file — while everything else together came to
+2.8 s. Extrapolated to this machine's 178 repos that is well over an hour, and the first full run was
+killed at a 7-minute timeout. With sidecars off, the same full export takes **38.5 s**.
+
+So per-file sidecar reads are **OFF by default** and reachable only via an explicit **`deep: true`** on the
+API. The cheap `files.yaml` fingerprint (§7) still answers *"has this file changed?"* for free; only the
+**perceptual** hash is lost, and paying two orders of magnitude for it by default would produce a
+diagnostic tool nobody is willing to run — which is worth nothing.
+
+**The honesty requirement:** when `deep` is false, `scope.deep: false` is written into the envelope, because
+`perceptual: null` on every entry then means *"not read"*, **not** *"no fingerprint exists"*. That is
+exactly the §5.3 distinction one level down, and a reader must not conclude absence from a shallow dump.
+
+### 10.3 The file is big, and that is the deliberate trade
+
+The measured whole-computer export is **~21 MB** of YAML, and it is **committed** (§10.1). That is the
+direct, accepted cost of §1.1's completeness rule: a summarized file would be small and useless. Two things
+keep it sane — the per-computer path means each machine rewrites **only its own** file (§4.1 rule 3), and
+YAML text deltas compress well in git. **A user who wants a small artifact should use the repo-scoped
+export** (§6.2), which is the right tool for a narrow question anyway. We do **not** silently cap, sample,
+or truncate to shrink it (§10, no-silent-caps).
 
 ## 11. The reader's playbook — diffing two computers
 
@@ -780,7 +830,9 @@ product owner it is a place we expect to **keep growing** what we record over ti
 | **API client** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` | `api.debugExportTarget()` · `api.debugExport(scope)` |
 | **Settings surface** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` | the **Power tools** section (§2.1) |
 | **More ⌄ trigger** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` | `ActionsMore` (§2.2.1) |
-| **Repo catalog + mount** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` incl. `export-debug` |
+| **Repo catalog (shared)** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` | `useRepoActions()` — the §5.1 catalog both triggers render (§2.2.2); `RepoKebab` is now a thin wrapper |
+| **More ⌄ mount** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` + `<ActionsMore>` in the header |
+| **Commit naming** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` | `composeCommitMessage()` — the `debug/` → `"debug export"` classifier (§10.1) |
 
 **Growth policy.** New fields are **added**, never renamed or repurposed, and `schema_version` bumps when a
 reader would need to behave differently. A reader that meets an unknown key must ignore it; a reader that
@@ -811,17 +863,25 @@ into a still-useful comparison rather than a wrong one.
 * **AC-10** — For a repo-scoped export, each `metrics.<key>.length` **equals the number rendered on that
   repo's corresponding tile** at the same moment — including the `analysisOnly` and `remote-only` early
   exits.
+* **AC-11a** — With `deep: false` (the default), `scope.deep: false` is written, so a reader can tell
+  "not read" from "no perceptual fingerprint exists" (§10.2).
 * **AC-11** — Running the export twice with no intervening change produces an **identical** document except
   `generated_at` (and the environment's uptime/timestamps) — it is a pure function of state.
 * **AC-12** — The export **never** mutates a decision, `.gitignore`, a pin, or any media file.
 * **AC-13** — No API key, token, session secret, transcript, AI description, or OCR text appears anywhere
   in the file (§7.2), verified by grep.
-* **AC-14** — A whole-computer export over ~37 repos completes in **seconds**, performs **no**
-  `contentPinnedCid` / full-content-hash call, and never blocks the event loop.
+* **AC-14** — A whole-computer export over this machine's **178 repos** completes in **under 60 s**
+  (measured 38.5 s, 65,372 entries, 0 unit errors), performs **no** `contentPinnedCid` /
+  full-content-hash call, does **no** per-file sidecar read unless `deep: true`, and never blocks the
+  event loop.
 * **AC-15** — A failing unit lands in `errors:` and the export still writes; a failing **write** leaves the
   previous `debug.yaml` intact.
 * **AC-16** — The written file is **committed and pushed** by the backbone as a **named** commit — not as a
-  stowaway on an unrelated one.
+  stowaway on an unrelated one. Verified 2026-07-20: `LFB: debug export, device state`. The export
+  **flushes** the artifact-sync debounce rather than waiting it out, because the toast has already told the
+  user the file is on its way.
+* **AC-16a** — A repo-scoped export resolves its folder by **direct lookup** (`folderForRepoId`), never by
+  scanning every registered repo — a one-repo export must not pay the whole-computer cost.
 * **AC-17** — The toast names the file count, the repo count, and the resolved path; a zero-file export
   says **zero**.
 * **AC-18** — Given two real `debug.yaml` files, a reader following §11 can partition A/B/C keyed on

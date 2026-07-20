@@ -20,7 +20,7 @@ import type { DebugExportResult, DebugExportTarget, FileRow, Manifest, ManifestF
 import { log } from "../../shared/logging.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
 import { writeYaml } from "../../shared/store/yaml-store.js";
-import { computeRepoDetail, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote } from "../store-model/units.service.js";
+import { computeRepoDetail, folderForRepoId, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote } from "../store-model/units.service.js";
 import { computerLabel, getAppConfig } from "../store-model/config.service.js";
 import { getStorageRow } from "../storage/storage.service.js";
 import { trackingBaseDir } from "../storage/storage-type.service.js";
@@ -28,7 +28,7 @@ import { readStorageIndex } from "../storage/tracking.service.js";
 import { readSidecar } from "../storage/file-sidecar.service.js";
 import { readRepoTrackingManifest } from "../pin/manifest.service.js";
 import { missingPinnedFromPeers } from "../pin/pin.service.js";
-import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
+import { noteArtifactWritten, flushArtifactSync } from "../pin/sync-trigger.service.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { openRepo } from "../git/git.service.js";
@@ -167,6 +167,11 @@ export async function exportDebugInfo(opts: ExportDebugOptions): Promise<DebugEx
   // than hoping it rides along on some unrelated commit (the stowaway defect, backbone_resilience.mdx).
   try {
     noteArtifactWritten(target.path, "debug");
+    // …and flush the debounce NOW rather than waiting it out. This is the same exemption the batch
+    // completion hook takes (sync-trigger.service.ts `flushArtifactSync`): a one-shot, user-initiated
+    // export is "a natural checkpoint and the user is watching for it" — the toast has just named the
+    // path, so the file must be on its way to the other computer, not sitting on a timer.
+    flushArtifactSync();
   } catch (e) {
     log.warn("debug", `debug export written but backbone notify failed: ${(e as Error).message}`);
   }
@@ -191,7 +196,9 @@ export async function exportDebugInfo(opts: ExportDebugOptions): Promise<DebugEx
 function foldersInScope(opts: ExportDebugOptions): string[] {
   if (opts.scope === "repo") {
     if (!opts.repoId) throw new Error("repoId is required for a repo-scoped debug export");
-    const folder = listRepoFolders().find((f) => computeRepoIdSafe(f) === opts.repoId) ?? null;
+    // Direct lookup. An earlier version scanned every folder calling computeRepoDetail until the ids
+    // matched — which made a ONE-repo export pay the whole-computer cost (measured 5.1 s for 303 files).
+    const folder = folderForRepoId(opts.repoId);
     if (!folder) throw new Error(`unknown repo ${opts.repoId}`);
     return [folder];
   }
