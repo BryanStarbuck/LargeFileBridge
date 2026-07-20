@@ -564,8 +564,6 @@ export function OneRepoPage() {
       })
     : [];
 
-  const c = detail?.counts;
-
   // The header primary (one_repo.mdx §3.1). A scan that's overdue (or never run) takes precedence — you
   // can't trust the metrics until the repo is re-scanned, so the button becomes "Scan now". Otherwise it
   // is "View recommendation ›", opening the single most important pending metric's educate-and-fix popup
@@ -650,28 +648,8 @@ export function OneRepoPage() {
         />
       )}
 
-      {/* Summary counts — the compact IPFS-decision readout (the richer per-task view is the strip above). */}
-      {c && (
-        <div className="mb-1 text-sm text-black/70">
-          {c.pinned + c.pending} Pin ·{" "}
-          <span className={c.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{c.undecided} Undecided</span> ·{" "}
-          {c.ignored} Ignore
-          {/* Undecided-but-already-pinned (green state, one_repo.mdx §4.9; "pinned" = pinned on THIS
-              computer by ANY local software — ipfs.mdx §1.1) — split out of Undecided so the app never
-              asks to pin a file whose bytes are already pinned on this node. */}
-          {c.pinnedForeign > 0 && (
-            <>
-              {" "}·{" "}
-              <span
-                className="text-green-700"
-                title="Already pinned on this computer's IPFS node by other IPFS software — which is fine. Large File Bridge just isn't managing their sync yet."
-              >
-                {c.pinnedForeign} Pinned locally
-              </span>
-            </>
-          )}
-        </div>
-      )}
+      {/* The old compact "N Pin · N Undecided · N Ignore · N Pinned locally" readout lived here. Removed —
+          the metrics strip above is this page's decision readout (task_tabs.mdx §2). */}
 
       <DataTable
         // Keyed by tab so switching re-applies the tab's default sort (task_tabs.mdx §7).
