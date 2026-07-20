@@ -97,6 +97,13 @@ export interface ExportDebugOptions {
   repoId?: string;
   /** Provenance of THIS run, recorded in the envelope. */
   invokedFrom: "settings" | "one_repo_more_menu";
+  /**
+   * Read the per-file YAML sidecars too, adding the PERCEPTUAL fingerprint (§7). OFF by default and
+   * deliberately so: measured at ~28 ms per file, it is ~97% of the export's total cost (§10.2). Turn it
+   * on only for a narrow, repo-scoped investigation where matching the same content across a re-compress
+   * or a format conversion is the actual question.
+   */
+  deep?: boolean;
 }
 
 // ── §3 the precondition: a connected personal storage repo, and NO fallback ───────────────────────────
@@ -234,7 +241,7 @@ async function buildDebugDocument(
   for (const folder of folders) {
     try {
       const before = METRIC_KEYS.reduce<Record<string, number>>((m, k) => ((m[k] = metrics[k].length), m), {});
-      const unit = await exportOneUnit(folder, health, pinset, metrics);
+      const unit = await exportOneUnit(folder, health, pinset, metrics, !!opts.deep);
       unit.counts = METRIC_KEYS.reduce<Record<string, number>>(
         (m, k) => ((m[k] = metrics[k].length - (before[k] ?? 0)), m),
         {},
@@ -265,6 +272,9 @@ async function buildDebugDocument(
       repo_root: repoScoped ? (units[0]?.root ?? null) : null,
       units: folders.length,
       invoked_from: opts.invokedFrom,
+      // false ⇒ `perceptual` is null on EVERY entry because it was not read, NOT because no fingerprint
+      // exists. A reader must not conclude "no perceptual hash" from a shallow dump (§5.3's reasoning).
+      deep: !!opts.deep,
     },
     environment: await environmentBlock(health),
     errors,
@@ -353,6 +363,7 @@ async function exportOneUnit(
   health: Awaited<ReturnType<typeof ipfs.health>>,
   pinset: Set<string> | undefined,
   metrics: Metrics,
+  deep: boolean,
 ): Promise<Record<string, unknown>> {
   // §5.5 — call the product's OWN composition path and bucket THOSE rows. Never re-derive: an export that
   // computes a metric even slightly differently from the tile lies, and lies plausibly.
@@ -360,7 +371,7 @@ async function exportOneUnit(
   const root = repoRootFor(folder);
   const missing = await safeAsync(() => missingPinnedFromPeers(root), []);
 
-  const enrich = makeEnricher(folder, root, detail.name);
+  const enrich = makeEnricher(folder, root, detail.name, deep);
   bucketMetrics(detail.files, metrics, enrich);
 
   // pull_down is the ONE metric whose files are not on this disk at all — it comes from a peer's manifest.
@@ -464,14 +475,24 @@ function isImage(rel: string): boolean {
  * hash, the foreign-pin index for out-of-band pins. Never a fresh content hash, never contentPinnedCid
  * (§10): an export nobody is willing to run is worth nothing.
  */
-function makeEnricher(folder: string, root: string, repoName: string): (f: FileRow) => DebugFileEntry {
+function makeEnricher(
+  folder: string,
+  root: string,
+  repoName: string,
+  deep: boolean,
+): (f: FileRow) => DebugFileEntry {
   const manifest = manifestIndex(folder, root);
   const index = new Map(safe(() => readStorageIndex(root), [])?.map((r) => [r.path, r]) ?? []);
   return (f: FileRow): DebugFileEntry => {
     const abs = path.join(root, f.path);
     const mf = manifest.get(f.path);
     const idx = index.get(f.path);
-    const sc = safe(() => readSidecar(root, f.path), null);
+    // MEASURED 2026-07-20: readSidecar costs ~28 ms per file — 109 s of a 112 s run over 25 repos / 3,850
+    // rows, i.e. 97.5% of the whole export, while every other read together came to 2.8 s. It is therefore
+    // OFF by default and reachable only via `deep` (§10.2). The cheap `files.yaml` fingerprint below covers
+    // the "has this file changed?" question; only the PERCEPTUAL hash is lost, and paying two orders of
+    // magnitude for it by default would make the export something nobody is willing to run.
+    const sc = deep ? safe(() => readSidecar(root, f.path), null) : null;
     const fp = sc?.file?.fingerprint ?? null;
     return {
       path: abs,

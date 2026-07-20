@@ -26,6 +26,9 @@ const ExportBody = z.object({
   scope: z.enum(["computer", "repo"]).default("computer"),
   repoId: z.string().optional(),
   invokedFrom: z.enum(["settings", "one_repo_more_menu"]).default("settings"),
+  // Opt-in per-file sidecar reads (the perceptual fingerprint). ~97% of the export's cost — never the
+  // default, and realistically only ever worth it repo-scoped (debug.mdx §10.2).
+  deep: z.boolean().optional(),
 });
 
 debugRouter.post("/export", async (req, res) => {
