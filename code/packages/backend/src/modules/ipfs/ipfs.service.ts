@@ -279,7 +279,15 @@ export async function contentPinnedCidDetailed(
   absPath: string,
   pinned?: Set<string>,
 ): Promise<{ cid: string; profile: string } | null> {
-  const kept = pinned ?? (await keptCidSet());
+  let kept: Set<string>;
+  try {
+    kept = pinned ?? (await keptCidSet());
+  } catch (e) {
+    // Best-effort probe: an unreadable pinset (pin ls timeout) just means "no foreign pin recognized" —
+    // the caller falls back to a normal add of the same bytes, which is safe (same profile → same CID).
+    log.debug("ipfs", `contentPinnedCid kept-set unavailable: ${(e as Error).message}`);
+    return null;
+  }
   for (const { label, query } of ADD_PROFILES) {
     try {
       const cid = await addOnlyHash(absPath, query);
@@ -355,20 +363,52 @@ export interface Pin {
   type: IpfsPinType;
 }
 
+// `pin/ls` ENUMERATES the whole pinset in one RPC, so its duration scales with pin count (and it can
+// stall behind daemon GC or startup) — the short 15s control-call cap mis-fires once the node holds many
+// pins. Give enumeration its own generous cap, and retry once on an abort before giving up.
+const PIN_LS_TIMEOUT_MS = 120_000;
+
+const isAbortError = (e: unknown): boolean =>
+  (e as Error)?.name === "AbortError" || /abort/i.test((e as Error)?.message ?? "");
+
 /**
  * The local pinset as ground truth (`ipfs pin ls`). Lists only ROOT pins — recursive + direct —
  * and never the indirect blocks kept under a recursive root (ipfs.mdx §1). Metadata only: it names
  * CIDs and their pin type; it opens no file and moves no bytes.
+ *
+ * THROWS when either enumeration fails (after one retry on timeout). It must never swallow a failure
+ * and return a partial/empty list — a timeout masquerading as "no pins" made consumers (pin pass,
+ * scanner, pull prompt) treat everything as pin-lost. Callers degrade to "pinset UNKNOWN", not empty.
  */
 export async function listPins(): Promise<Pin[]> {
   const out = new Map<string, IpfsPinType>();
   for (const type of ["recursive", "direct"] as const) {
-    try {
-      const res = await rpc("pin/ls", { query: { type } });
-      const json = (await res.json()) as { Keys?: Record<string, { Type?: string }> };
-      for (const cid of Object.keys(json.Keys ?? {})) if (!out.has(cid)) out.set(cid, type);
-    } catch (e) {
-      log.warn("ipfs", `pin ls (${type}) failed: ${(e as Error).message}`);
+    const started = Date.now();
+    let done = false;
+    for (let attempt = 1; !done; attempt++) {
+      try {
+        const res = await rpc("pin/ls", { query: { type }, timeoutMs: PIN_LS_TIMEOUT_MS });
+        const json = (await res.json()) as { Keys?: Record<string, { Type?: string }> };
+        for (const cid of Object.keys(json.Keys ?? {})) if (!out.has(cid)) out.set(cid, type);
+        done = true;
+      } catch (e) {
+        const elapsedMs = Date.now() - started;
+        // One retry, only on an abort/timeout (a slow enumeration or a GC pause can clear up); any
+        // other fault (daemon down, RPC error) won't improve on a retry — fail fast.
+        if (isAbortError(e) && attempt === 1) {
+          log.info(
+            "ipfs",
+            `pin ls (${type}) timed out after ${elapsedMs}ms (cap ${PIN_LS_TIMEOUT_MS}ms) — retrying once`,
+          );
+          continue;
+        }
+        log.warn(
+          "ipfs",
+          `pin ls (${type}) failed after ${elapsedMs}ms on attempt ${attempt} ` +
+            `(cap ${PIN_LS_TIMEOUT_MS}ms; ${out.size} pins read from earlier types): ${(e as Error).message}`,
+        );
+        throw new Error(`ipfs pin ls (${type}) failed: ${(e as Error).message}`);
+      }
     }
   }
   return [...out].map(([cid, type]) => ({ cid, type }));

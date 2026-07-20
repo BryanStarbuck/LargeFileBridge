@@ -119,7 +119,24 @@ path remains as a backstop.
   `authCore.enableAutoRefresh()` call after `registerAuthBridge(...)`.
 * The reactive 401 backstop lives in code:
   `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor
-  (`reloadSession()` on 401, one retry).
+  (`reloadSession()` on 401, one retry; the retry first drops the stale `Authorization` header so a
+  failed re-mint can never re-send the expired Bearer that just 401'd).
+
+**Refresh-before-use (never attach a near-expired Bearer).** The proactive timer alone is not enough:
+a tab that slept past expiry fires its first request before the (sleep-paused) timer runs, and the
+SDK's cache reuses a token down to ~10 s of validity — too little once the backend's event loop is
+briefly busy. Both leaked expired Bearers into `error.err` (`"exp" claim timestamp check failed`). So
+the app checks the token's own `exp` at ATTACH time and forces a fresh mint when less than **60 s**
+remain; concurrent requests queue on the SDK's single-flight mint, and a known-expired token is never
+sent (the request goes without a Bearer and the reactive 401 backstop recovers it).
+
+Refresh-before-use attach guard is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `getFreshToken()`
+(consumed by `axios.ts`'s request interceptor and `lib/streamNdjson.ts`).
+
+The backend's verification warning names its caller (method + path, never the query string) so a
+recurring expired-token source is identifiable from the log alone — `identify.ts`'s `catch` in
+`identify()`.
 
 Every `/api` request is attributed to a principal by verifying its Bearer on the in-process HS256 path
 (no JWKS), then re-checking the live allow-list — "identify, don't gate," with route gates layered on

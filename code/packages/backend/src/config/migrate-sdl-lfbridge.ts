@@ -11,8 +11,13 @@
 //   * Runs ONCE at startup, over every discovered SDL storage. Working repos are NEVER touched — their
 //     `.lfbridge/` is current, not legacy.
 //   * MERGE, never clobber. Directories are merged recursively. For a genuine file-vs-file conflict the ROOT
-//     copy WINS, the `.lfbridge/` copy is LEFT IN PLACE, and a WARN names both paths. We never overwrite and
-//     never delete the loser — a wrong guess here would destroy a transcript the user paid for.
+//     copy WINS, the `.lfbridge/` copy is LEFT IN PLACE, and a WARN names both paths — ONCE (persisted in
+//     <stateDir>/migration_conflicts.yaml, re-warned only if the leftover changes), because the migration
+//     re-runs at every boot and an eternal WARN is noise, not information. We never overwrite and never
+//     delete the loser — a wrong guess here would destroy a transcript the user paid for. A duplicate whose
+//     content is IDENTICAL (byte-for-byte, or YAML equal apart from the churned top-level `updated_at`) is
+//     NOT a genuine conflict — there is no loser to protect — so the stale `.lfbridge/` copy is removed and
+//     the migration actually converges.
 //   * `git mv` when the SDL is a git repo with the file tracked, so history follows the move and the rename
 //     lands as a rename; a plain rename otherwise (untracked file, or not a git repo).
 //   * Idempotent: an absent `.lfbridge/` is an immediate no-op, so a re-run costs one stat per SDL. A
@@ -24,10 +29,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
+import { isDeepStrictEqual } from "node:util";
+import { parse, stringify } from "yaml";
 import { listStoragesPage } from "../modules/storage/storage.service.js";
+import { resolveStateDir } from "./state-dir.js";
 import { resolveStorageType, usesLfbridgeDir, LFBRIDGE_DIR, clearStorageTypeCache } from "../modules/storage/storage-type.service.js";
 import { expandHome } from "../modules/fs/badges.js";
 import { log } from "../shared/logging.js";
+import { stableGitBin } from "../modules/git/git-bin.js";
 
 export function migrateSdlLfbridge(): void {
   let migrated = 0;
@@ -81,10 +90,15 @@ export function migrateOne(root: string): number {
 /**
  * Move `src` to `dst`, merging directories recursively. Returns true when anything moved.
  *
- * The three cases:
- *   • `dst` absent          → move it (the common case).
- *   • both are directories  → recurse; merge their contents entry by entry.
- *   • a real conflict       → the ROOT copy wins; leave `src` in place and WARN with both paths.
+ * The four cases:
+ *   • `dst` absent            → move it (the common case).
+ *   • both are directories    → recurse; merge their contents entry by entry.
+ *   • a resolvable duplicate  → the two files carry the SAME content (byte-identical, or YAML equal apart
+ *     from the churned top-level `updated_at` stamp). NOT a genuine conflict (§0.3) — there is no "loser"
+ *     whose data could be lost — so the migration CONVERGES: drop the stale `.lfbridge/` copy.
+ *   • a genuine conflict      → the ROOT copy wins; leave `src` in place and WARN with both paths — but
+ *     only ONCE per file (persisted marker), not on every boot: before this the same WARN re-fired every
+ *     run forever, because the destination existed and the source was deliberately never touched.
  */
 function mergeEntry(root: string, src: string, dst: string, git: boolean): boolean {
   const dstStat = statOrNull(dst);
@@ -100,11 +114,105 @@ function mergeEntry(root: string, src: string, dst: string, git: boolean): boole
     return any;
   }
 
+  if (srcStat?.isFile() && dstStat.isFile() && sameContent(src, srcStat, dst, dstStat)) {
+    try {
+      fs.rmSync(src); // identical content survives at dst — deleting the duplicate destroys nothing
+      log.info("migrate", `duplicate resolved: ${src} was the same content as ${dst} — removed the stale .lfbridge/ copy`);
+      return true;
+    } catch (err) {
+      log.warn("migrate", `could not remove duplicate ${src} (left in place): ${errMsg(err)}`);
+      return false;
+    }
+  }
+
+  warnConflictOnce(src, srcStat, dst);
+  return false;
+}
+
+/** True when the two files are byte-identical, or are YAML documents equal apart from the top-level
+ *  `updated_at` churn stamp (device YAMLs re-stamp it on every write, so the abandoned `.lfbridge/` copy
+ *  differs from the live root copy in that one line only). Any doubt → false (the warn-once path). */
+function sameContent(src: string, srcStat: fs.Stats, dst: string, dstStat: fs.Stats): boolean {
+  try {
+    if (srcStat.size === dstStat.size && sameBytes(src, dst)) return true;
+    if (!/\.ya?ml$/i.test(src)) return false;
+    // Small metadata YAMLs only — never slurp a conflicting media file just to compare it.
+    if (srcStat.size > 1024 * 1024 || dstStat.size > 1024 * 1024) return false;
+    const a = parse(fs.readFileSync(src, "utf8"));
+    const b = parse(fs.readFileSync(dst, "utf8"));
+    if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+    delete (a as Record<string, unknown>).updated_at;
+    delete (b as Record<string, unknown>).updated_at;
+    return isDeepStrictEqual(a, b);
+  } catch {
+    return false;
+  }
+}
+
+/** Chunked byte comparison (call only after sizes matched) — bounded memory even for huge files. */
+function sameBytes(a: string, b: string): boolean {
+  const CHUNK = 64 * 1024;
+  const bufA = Buffer.alloc(CHUNK);
+  const bufB = Buffer.alloc(CHUNK);
+  let fdA = -1;
+  let fdB = -1;
+  try {
+    fdA = fs.openSync(a, "r");
+    fdB = fs.openSync(b, "r");
+    for (;;) {
+      const nA = fs.readSync(fdA, bufA, 0, CHUNK, null);
+      const nB = fs.readSync(fdB, bufB, 0, CHUNK, null);
+      if (nA !== nB) return false;
+      if (nA === 0) return true;
+      if (!bufA.subarray(0, nA).equals(bufB.subarray(0, nB))) return false;
+    }
+  } finally {
+    if (fdA >= 0) fs.closeSync(fdA);
+    if (fdB >= 0) fs.closeSync(fdB);
+  }
+}
+
+// ---- warn-once conflict marker ------------------------------------------------------------------------
+// Genuine conflicts are kept on disk forever (per §0.3 the loser is never deleted), so without a memory the
+// same WARN re-fires on every boot — 680+ occurrences in error.err. The marker lives in Local Storage (the
+// state root — machine-local, never committed, never mirrored), keyed by the abandoned src path with a cheap
+// size+mtime fingerprint: if the leftover file ever CHANGES we warn once more, otherwise we stay quiet.
+
+type ConflictRecord = { dst: string; size: number; mtime_ms: number; first_seen: string };
+type ConflictMarker = { schema_version: 1; conflicts: Record<string, ConflictRecord> };
+
+function conflictMarkerPath(): string {
+  return path.join(resolveStateDir(), "migration_conflicts.yaml");
+}
+
+function warnConflictOnce(src: string, srcStat: fs.Stats | null, dst: string): void {
+  try {
+    const marker = readConflictMarker();
+    const prev = marker.conflicts[src];
+    const size = srcStat?.size ?? -1;
+    const mtimeMs = srcStat?.mtimeMs ?? -1;
+    if (prev && prev.size === size && prev.mtime_ms === mtimeMs) return; // already reported, unchanged → quiet
+    marker.conflicts[src] = { dst, size, mtime_ms: mtimeMs, first_seen: prev?.first_seen ?? new Date().toISOString() };
+    fs.writeFileSync(conflictMarkerPath(), stringify(marker));
+  } catch {
+    /* marker unreadable/unwritable → fall through and warn (never let bookkeeping hide a conflict) */
+  }
   log.warn(
     "migrate",
-    `conflict: ${dst} already exists — keeping it and LEAVING ${src} in place (nothing overwritten, nothing deleted)`,
+    `conflict: ${dst} already exists — keeping it and LEAVING ${src} in place (nothing overwritten, nothing deleted; recorded in ${conflictMarkerPath()} — will not re-warn unless the file changes)`,
   );
-  return false;
+}
+
+function readConflictMarker(): ConflictMarker {
+  try {
+    const parsed = parse(fs.readFileSync(conflictMarkerPath(), "utf8"));
+    if (parsed && typeof parsed === "object" && parsed.conflicts && typeof parsed.conflicts === "object") {
+      return { schema_version: 1, conflicts: parsed.conflicts as Record<string, ConflictRecord> };
+    }
+  } catch {
+    /* absent or corrupt → start fresh */
+  }
+  return { schema_version: 1, conflicts: {} };
 }
 
 function move(root: string, src: string, dst: string, git: boolean): boolean {
@@ -124,7 +232,7 @@ function move(root: string, src: string, dst: string, git: boolean): boolean {
 
 function gitMv(root: string, src: string, dst: string): boolean {
   try {
-    execFileSync("git", ["mv", "-k", path.relative(root, src), path.relative(root, dst)], {
+    execFileSync(stableGitBin(), ["mv", "-k", path.relative(root, src), path.relative(root, dst)], {
       cwd: root,
       stdio: "ignore",
     });

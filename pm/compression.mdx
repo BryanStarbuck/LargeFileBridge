@@ -459,7 +459,8 @@ brew tools transcode to a **new file**, so the flow per file is:
      ([artifact_placement_policy.mdx §3](./artifact_placement_policy.mdx)). It lives in Local Storage
      always; when the sync repo is enabled it also travels there, so every other computer that carries the
      storage learns the file was compressed, from what, and by how much, and never re-compresses it — but
-     it is **never** written into the working repo.
+     it is **never** written into the working repo. It is also the signal that flips the **Compress task
+     status / compressible metrics** to "done" while fresh (§8.4; [task_tabs.mdx §6](./task_tabs.mdx)).
    * a **`compress` event** appended to the file's per-file sidecar under
      `~/T/_large_files_bridge/repos/<repoKey>/files/<relpath>.yaml`
      ([repo_tracking_scheme.mdx §3.2](./repo_tracking_scheme.mdx)) — `before{hash,size}` /
@@ -614,22 +615,33 @@ Local-Storage-only and does not travel in that case, but the in-file marker ride
 cases the extension can't — a **video** (an `.mp4` always *looks* compressible by extension) and a **PNG
 kept as PNG** — on re-runs and on peers.
 
-**The Local-Storage compression record (fast local cache) — future optimization.** The record already
-written today, `~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml`
-(`writeCompressionRecord`, §8), is still **written but not yet read**. Wiring a `readCompressionRecord()`
-into `walkCompressible()` (keyed by relpath +
-[fingerprint](./storage_local.mdx#93-repo-manifests-travel-via-git-the-elegant-part)) would let a bulk run
-**drop known-compressed files from the batch entirely** — skipping even the per-file probe on a same-machine
-re-run — but it is a **speed optimization on top of** the authoritative in-file marker, not a correctness
-requirement. Tracked as a follow-up; the marker above already makes re-runs and peers correct.
+**The Local-Storage compression record — now READ by the Compress status & metrics.** The record written by
+every compress, `~/T/_large_files_bridge/repos/<repoKey>/analysis/<relpath>/compression.yaml`
+(`writeCompressionRecord`, §8), is the marker's **cheap proxy** for the row-status/metrics hot path (reading
+the in-file marker needs an ffprobe/ImageMagick spawn — fine once per compress, unaffordable per table row).
+The Compress task status ([task_tabs.mdx §6](./task_tabs.mdx)) reports **Done** when a **fresh** record
+exists (its compressed size still matches the file's bytes — new bytes at the same path invalidate it), so
+an in-place-compressed video stops counting as "compressible" — and, because the record mirrors through the
+**sync repo**, stops counting on the user's **other computers** too. To close the loop with the mesh-wide
+marker, a **§8.4 marker skip now backfills the record** on the machine that skipped: a file whose marker
+rode in over IPFS converges in that machine's metrics after its first (skipped) compress pass.
+Reading the record into the status verdict is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` —
+`analysisOutputs()` (probes Local Storage, the sync-repo mirror, and legacy tracking-base placements;
+`compressionRecordFresh()` is the staleness gate), consumed by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `compressStatusFor()`.
+Still a follow-up: wiring the record into `walkCompressible()` so a bulk run **drops known-compressed files
+from the batch entirely** — a speed optimization on top of the authoritative in-file marker, not a
+correctness requirement.
 
 Detecting the marker before compressing, and stamping it during the encode, is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
-`isAlreadyCompressed()` / `readMarker()` (ffprobe `format_tags=comment` for video, `magick identify %c` for
-images), consulted at the top of `compressFile()` so a marked file returns `skipped` **before** any
-transcode (covering one-off **and** batched runs); the marker itself is written by `markerPayload()` folded
-into the **ffmpeg** args (`-metadata comment=…`) and the **ImageMagick** args (`-set comment …`) inside
-`imageCommand()`. No new tool is probed in `detectTools()`.
+`readMarker()` (ffprobe `format_tags=comment` for video, `magick identify %c` for images), whose
+`MARKER_PREFIX` test runs inline at the top of `compressFile()` so a marked file returns `skipped` **before**
+any transcode (covering one-off **and** batched runs) — the skip path also **backfills the compression
+record** (see above); the marker itself is written by `markerPayload()` folded into the **ffmpeg** args
+(`-metadata comment=…`) and the **ImageMagick** args (`-set comment …`) inside `imageCommand()`. No new tool
+is probed in `detectTools()`.
 
 ---
 

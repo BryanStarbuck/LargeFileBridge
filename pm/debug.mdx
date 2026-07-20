@@ -125,10 +125,13 @@ it.
 Per the charter's naming rule, all of this user-facing copy spells out **"Large File Bridge"** in full —
 never `LFB`, never `LFBridge`. Those abbreviations are legal only in paths, keys and code.
 
-### 2.2 View-one-repo → the More ⌄ menu
+### 2.2 View-one-repo → the More ▾ menu (in the action-links row)
 
 On the [View-one-repo](./one_repo.mdx) page the item **Export Debug Information** joins the repo entity
-catalog ([menus.mdx §5.1](./menus.mdx#51-repo)) in the **Work** group, directly after **Rescan**:
+catalog ([menus.mdx §5.1](./menus.mdx#51-repo)) in the **Work** group. On that page the repo catalog is
+carried by the **action-links row's** right-pinned **More ▾** — the page's ONE More menu; the header
+carries no separate entity More ⌄ ([one_repo.mdx §3.1](./one_repo.mdx)). On the repos-table row ⋮ the
+item sits directly after **Rescan**:
 
 ```
                               ┌─────────────────────────────────────────┐
@@ -179,6 +182,13 @@ missing surface — it is a prerequisite, not a bonus:
 
 This closes a real spec-vs-code drift ([spec-ahead-of-code backlog](./to_fix.mdx)) rather than papering
 over it with a second, differently-shaped affordance.
+
+**Update (2026-07-20).** The header `ActionsMore` mount described above has since been **folded into the
+action-links row's More ▾** — the one-repo page now has exactly ONE More menu
+([one_repo.mdx §3.1](./one_repo.mdx)). The catalog (including this item) is unchanged; it is passed as
+`PageActions`' `overflow` prop and renders through the same grouped `MenuList`, so `Action.disabled` +
+`Action.title` (§3's greyed-with-reason idiom) carry over intact. `ActionsMore` itself remains in
+`EntityMenu.tsx` as an available trigger but is no longer mounted on this page.
 
 ### 2.2.2 It therefore also appears on the repos-table row ⋮ — by rule, not by accident
 
@@ -439,8 +449,8 @@ clicked with no lookup table.
 | `pull_down` | **Pull down** (`missingPinned.length`) | `missingPinnedFromPeers(repoRoot)` |
 | `not_backed_up` | **Not backed up** | `decision === "sync" && cid != null && no peer other than self` |
 | `pending` | **Pending** | `decision === "sync" && transfer === "pending"` |
-| `compressible_videos` | **Compressible videos** | `compress === "could"` ∧ kind video |
-| `compressible_images` | **Compressible images** | `compress === "could"` ∧ kind image |
+| `compressible_videos` | **Compressible videos** | `compress === "could"` ∧ `compressInfo(name).compressible === "video"` |
+| `compressible_images` | **Compressible images** | `compress === "could"` ∧ `compressInfo(name).compressible === "image"` |
 | `already_compressed` | **Already compressed** | `compress === "done"` |
 | `transcribable` / `transcribed` | **Transcribable** / done | `transcribe === "could"` / `"done"` |
 | `describable` / `described` | **AI Describable** / done | `describe === "could"` / `"done"` |
@@ -497,7 +507,30 @@ The single composition path the export must bucket, rather than re-derive, is in
 The pull-down list, which is the one metric whose files are **not on this disk**, comes from a peer manifest in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`
 
----
+The image-vs-video split of a `compress === "could"` row reuses the product's single compress classifier (never a local extension set) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `bucketMetrics()`, delegating to `compressInfo()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts`
+
+### 5.6 Why `compressible_images` agrees across computers when `compressible_videos` does not
+
+A verified property of the export (charlie-kirk, 2026-07-20: images 14 = 14 with identical rel paths,
+sizes and CIDs on both computers, while videos read 45 vs 70) — and the **diagnostic control group** for
+any cross-computer diff:
+
+* **Classification is a pure function of the filename** (`compressInfo(name)`: extension sets plus the
+  compressed-name mark). It needs no probe, no sidecar, no learned baseline, no per-device state — so
+  two computers can never disagree about *how* a given file classifies. The ONE deliberate exception is
+  the travelling **compression record** ([compression.mdx §8.4](./compression.mdx)), which flips a
+  compressed-in-place file to `done`; it syncs via the sync-repo mirror, so a transient disagreement there
+  means "mirror not pulled yet", and the entry's `compress_reason: compression-record` (§7) names it.
+* **Therefore any divergence in these metrics is a divergence in the ROW SET, never in the rule.**
+  Compressible images are typically small enough to be **checked into git** (`gitignore: false`), so the
+  git backbone itself makes their presence identical on every clone — the lists match file-for-file.
+  Compressible videos are **git-ignored IPFS payload** (`gitignore: true`), so each computer's rows
+  reflect its own local pin/download state; `presence === "remote-only"` rows are excluded from the
+  metric by the §5.5 early exit, and files the other computer never learned about are absent entirely.
+* Reading a diff: images diverging ⇒ suspect the scan/classifier (a real bug). Videos diverging ⇒ first
+  compare `presence`, `peers` and `gitignore` per file — it is almost always distribution, not
+  classification.
 
 ## 6. Scope — computer-wide vs one repo
 
@@ -548,6 +581,7 @@ fields trail.
 | `perceptual` | map \| null | `{ algo, value }` from the sidecar (PDQ/vPDQ, [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx)) — matches the **same content** across a re-compress or a format conversion, which is exactly how a "missing" file is often found hiding under a different CID. |
 | `decision` | enum | `sync` \| `ignore` \| `undecided` — the FROZEN wire values ([decisions.mdx](./decisions.mdx)). |
 | `decided_by` / `decided_at` | string \| null | Ledger provenance. Answers *"did this computer ever actually agree to sync it?"* |
+| `decision_in_ledger` | bool | Does the effective `decision` have a **shared-ledger event** behind it? `false` on a decided row is the cross-computer smoking gun: a frozen-**cache-only** decision is honored on this machine but has **no event that can travel**, so no other computer can ever learn it (the 2026-07-20 "not backed up: 22 / 0" charlie-kirk strand — [decisions.mdx §13](./decisions.mdx)). Derived from folded-ledger provenance in `debug-export.service.ts` `makeEnricher()`. |
 | `gitignore` | bool | Read from **git itself** (`git check-ignore`), never folded from the ledger — the rule locked in [decisions.mdx §1.1](./decisions.mdx). |
 | `gitignore_rule` | map \| null | `{source, line, pattern}` — names the rule when a pattern (not our anchored line) owns the file. |
 | `transfer` | enum | `pinned` \| `pending` \| … — this computer's transfer state. |
@@ -560,6 +594,8 @@ fields trail.
 | `never_ipfs` | bool | Sticky refusal ([decisions.mdx §17](./decisions.mdx)). |
 | `tasks` | map | `{compress, transcribe, describe, ocr}`, each `could`\|`done`\|`na`. |
 | `changed_at` | string | Last observed mtime (ISO). |
+| `compress_reason` | string (compress lists only) | WHY the entry landed in `compressible_videos` / `compressible_images` / `already_compressed`: `image-extension` \| `video-name-mark` \| `video-name-no-mark` \| `compression-record` — the §5.6 "rule vs row-set" question answered per entry, without the code. Emitted in `debug-export.service.ts` `bucketMetrics()`. |
+| `artifacts` | map \| null | **Per-op derived-artifact probe** (rows with any transcribe/describe/ocr state other than `na`; `null` elsewhere). For each op: `{expected_rel, exists, location, committed, pushed}` — the artifact path probed, whether it is on disk, which layout matched (`tracking-base` \| `beside` \| `legacy`), whether it is in the git index, and whether it is present in `origin/<branch>`. This chain is what turns "tower described=158 / laptop described=0" into a mechanical read: the producer shows where exists→committed→pushed breaks; the consumer's `exists: false` names the artifact that never arrived (the 2026-07-20 charlie-kirk strand, [ai_description.mdx §2.4](./ai_description.mdx)). `null` booleans = not derivable (no git / no origin). Two git spawns per unit, never per file. Emitted in `debug-export.service.ts` `makeArtifactProber()` / `artifactGitContext()`. |
 
 ### 7.1 Null is written; a missing key is not (LOCKED)
 
@@ -604,9 +640,26 @@ units:
 ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx), keyed on git remote, not `repoKey`). When two
 computers' `units:` blocks disagree about folder names, `remote:` is what proves they are the same repo.
 
+Each unit (and a repo-scoped `scope:` block) also carries **`repo_uid`** — the machine-independent 12-hex
+hash of the normalized remote — because `repo_id` is sha1(absolute path) and therefore **differs for the
+same repo on each computer** (tower `bad3cd4187d03401` vs laptop `dbd9c2c05564a3fc` for one charlie-kirk).
+A cross-computer diff joins units on `repo_uid` (or `remote`), **never** on `repo_id`.
+Emitting both ids is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `exportOneUnit()` (unit `repo_uid`) and `buildDebugDocument()` (scope `repo_uid`), via `repo-identity.ts` — `repoUidFor()`.
+
 `file_rows` vs the sum of the counts is itself a signal: a repo with 252 rows on one computer and 9 on the
 other has a **scan** problem, not a **sync** problem — and that distinction, visible in one line, redirects
 the entire investigation.
+
+Each unit also carries **`compress_visibility`** — the §5.6 row-set explanation pre-computed, so a reader
+subtracts the two structural gaps instead of suspecting the classifier:
+`remote_only_media_unassessed` (media rows a peer pinned but this machine holds no bytes for — compress is
+`na` by design, [storage_company.mdx §8.5](./storage_company.mdx), so the OTHER computer counts them) and
+`local_media_invisible_to_peers` (local media rows with **no manifest CID** — undecided/never pinned, so
+nothing about them travels and every other computer has **no row at all**; the 45-vs-70 charlie-kirk delta
+was 24 shared + 46 laptop-invisible-to-tower vs 24 + 11 remote-only + 10 tower-invisible-to-laptop).
+Computed per unit in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `compressVisibility()`, from the same composed rows the metrics bucket.
 
 **No file lists live here** (§5.1 rule 4). Counts only.
 
@@ -829,9 +882,9 @@ product owner it is a place we expect to **keep growing** what we record over ti
 | **Shared types** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` | `DebugExportTarget` · `DebugExportResult` |
 | **API client** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` | `api.debugExportTarget()` · `api.debugExport(scope)` |
 | **Settings surface** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` | the **Power tools** section (§2.1) |
-| **More ⌄ trigger** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` | `ActionsMore` (§2.2.1) |
+| **More ▾ trigger** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` | `PageActions` — its `overflow` prop renders the entity catalog under the row's More ▾ (§2.2.1 update) |
 | **Repo catalog (shared)** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` | `useRepoActions()` — the §5.1 catalog both triggers render (§2.2.2); `RepoKebab` is now a thin wrapper |
-| **More ⌄ mount** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` + `<ActionsMore>` in the header |
+| **More ▾ mount** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` passed as `<PageActions overflow={…}>` in the action-links row |
 | **Commit naming** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` | `composeCommitMessage()` — the `debug/` → `"debug export"` classifier (§10.1) |
 
 **Growth policy.** New fields are **added**, never renamed or repurposed, and `schema_version` bumps when a

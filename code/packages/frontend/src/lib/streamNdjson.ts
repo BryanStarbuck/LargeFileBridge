@@ -5,7 +5,7 @@
 // Authorization header — SSE would bypass the allow-list gate. fetch lets us attach the same token
 // (and the session cookie via credentials:"include") AND read the body incrementally. Backpressure
 // and cancellation come free from the reader + the caller's AbortSignal.
-import { authCore } from "../api/authCore.js";
+import { getFreshToken } from "../api/authCore.js";
 import { clientLog } from "./clientLog.js";
 
 export interface NdjsonStreamOptions {
@@ -24,7 +24,9 @@ export async function streamNdjson(
 ): Promise<void> {
   // A missing/failed token is non-fatal (the request may still resolve, or the backend rejects it and
   // we surface that below) — but a swallowed token error is worth a breadcrumb, so log and continue.
-  const token = await authCore.getToken().catch((e) => {
+  // getFreshToken (not raw getToken): a stream (re)connect after a laptop wakes from sleep is exactly
+  // the moment the cached Bearer has silently lapsed — refresh-before-use, never attach a stale token.
+  const token = await getFreshToken().catch((e) => {
     clientLog.warn("streamNdjson.getToken", e);
     return null;
   });

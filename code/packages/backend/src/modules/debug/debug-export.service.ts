@@ -21,15 +21,18 @@ import { log } from "../../shared/logging.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
 import { writeYaml } from "../../shared/store/yaml-store.js";
 import { computeRepoDetail, folderForRepoId, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote } from "../store-model/units.service.js";
+import { repoUidFor } from "../storage/repo-identity.js";
 import { computerLabel, getAppConfig } from "../store-model/config.service.js";
 import { getStorageRow } from "../storage/storage.service.js";
-import { trackingBaseDir } from "../storage/storage-type.service.js";
+import { trackingBaseDir, legacyTrackingBaseDir } from "../storage/storage-type.service.js";
+import { auditArtifactCommittability } from "../storage/artifact-committability.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { readSidecar } from "../storage/file-sidecar.service.js";
 import { readRepoTrackingManifest } from "../pin/manifest.service.js";
 import { missingPinnedFromPeers } from "../pin/pin.service.js";
 import { noteArtifactWritten, flushArtifactSync } from "../pin/sync-trigger.service.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
+import { compressInfo } from "../fs/badges.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { openRepo } from "../git/git.service.js";
 import { queueDepth, workerUtilization } from "../jobqueue/jobqueue.service.js";
@@ -88,6 +91,32 @@ interface DebugFileEntry {
   never_ipfs: boolean;
   tasks: { compress: string; transcribe: string; describe: string; ocr: string };
   changed_at: string | null;
+  /** Does the EFFECTIVE decision have a shared-ledger event behind it? `false` with a decided `decision`
+   *  is the cross-computer smoking gun (the 2026-07-20 "not backed up: 22 / 0" strand): a frozen-cache-only
+   *  decision is honored HERE but has no event that could ever travel, so no other computer can learn it.
+   *  Derived from the folded ledger's provenance (decided_at present ⇔ a ledger event exists). */
+  decision_in_ledger: boolean;
+  /** WHY this entry landed in a compress metric list (present only there): the classifier signal —
+   *  "image-extension" / "video-name-mark" / "video-name-no-mark" / "compression-record" — so a
+   *  cross-computer diff of compressible lists reads its own explanation instead of needing the code. */
+  compress_reason?: string;
+  /** PER-OP derived-artifact probe (transcribe / describe / ocr rows only; null elsewhere). For each op
+   *  this row could/did run, the artifact path we PROBED, whether it EXISTS, which LAYOUT matched
+   *  (tracking-base / beside-media / legacy pre-migration), and whether git CARRIES it (committed =
+   *  in the index, pushed = present in origin/<branch>). This is the field that turns "tower described=158,
+   *  laptop described=0" into a mechanical read: on the producer every row shows exists+committed+pushed
+   *  (or exactly where that chain breaks); on the consumer, exists:false names the artifact that never
+   *  arrived (the 2026-07-20 charlie-kirk strand). null booleans = not derivable (no git / no origin). */
+  artifacts: Record<string, ArtifactProbe> | null;
+}
+
+/** One op's artifact probe (see `artifacts` above). */
+interface ArtifactProbe {
+  expected_rel: string;
+  exists: boolean;
+  location: "tracking-base" | "beside" | "legacy" | null;
+  committed: boolean | null;
+  pushed: boolean | null;
 }
 
 export interface ExportDebugOptions {
@@ -275,6 +304,9 @@ async function buildDebugDocument(
     scope: {
       kind: opts.scope,
       repo_id: repoScoped ? (computeRepoIdSafe(first) ?? null) : null,
+      // The MACHINE-INDEPENDENT identity — join two computers' exports on THIS, never on repo_id (which is
+      // a per-device path hash and differs for the same repo on each machine).
+      repo_uid: repoScoped ? (units[0]?.repo_uid ?? null) : null,
       repo_name: repoScoped ? (units[0]?.repo ?? null) : null,
       repo_root: repoScoped ? (units[0]?.root ?? null) : null,
       units: folders.length,
@@ -378,7 +410,10 @@ async function exportOneUnit(
   const root = repoRootFor(folder);
   const missing = await safeAsync(() => missingPinnedFromPeers(root), []);
 
-  const enrich = makeEnricher(folder, root, detail.name, deep);
+  // ONE git-tracked read + ONE origin-tree read per unit (not per file) so every analysis row can carry
+  // its per-op artifact probe (committed / pushed) — see `DebugFileEntry.artifacts`.
+  const gitCtx = await safeAsync(() => artifactGitContext(root), null);
+  const enrich = makeEnricher(folder, root, detail.name, deep, gitCtx);
   bucketMetrics(detail.files, metrics, enrich);
 
   // pull_down is the ONE metric whose files are not on this disk at all — it comes from a peer's manifest.
@@ -393,13 +428,19 @@ async function exportOneUnit(
     });
   }
 
+  const remote = detail.remote ?? safe(() => readGitRemote(root), null);
   return {
     repo: detail.name,
     repo_id: detail.repoId,
+    // `repo_id` is sha1(absolute path) — DELIBERATELY device-local, so the same repo carries a DIFFERENT
+    // repo_id on each computer and must never be used as a cross-machine join key. `repo_uid` is the
+    // machine-independent identity (sha1 of the normalized remote, repo-identity.ts `repoUidFor`) — the
+    // key the sync-repo mirror `repos/<uid>/` uses, and the one a two-computer diff should join on.
+    repo_uid: safe(() => repoUidFor(remote), null),
     root,
     // Folder NAMES can differ between computers; the git remote cannot. This is what proves two `units:`
     // rows are the same repo (§8).
-    remote: detail.remote ?? safe(() => readGitRemote(root), null),
+    remote,
     owner: detail.owner ?? null,
     pinned: detail.pinned,
     status: detail.status,
@@ -409,7 +450,42 @@ async function exportOneUnit(
     file_rows: detail.files.length,
     task_metrics: detail.taskMetrics ?? null,
     decision_counts: detail.counts,
+    // WHY two computers legitimately report different compressible counts for the SAME repo (the 45-vs-70
+    // charlie-kirk strand, 2026-07-20): compressible only counts rows with LOCAL bytes, and git-ignored
+    // media exists unevenly across machines. This block quantifies the two visibility gaps so the reader
+    // subtracts them instead of suspecting the classifier (which is name+record based and device-agnostic).
+    compress_visibility: compressVisibility(detail.files),
+    // Did the transcripts/AI descriptions/OCR text this repo produced actually make it INTO git — on disk
+    // vs tracked vs blocked-by-.gitignore vs committed-but-unpushed? This is the block that turns "tower
+    // says transcribed=59, laptop says transcribed=1" from an afternoon of forensics into one read:
+    // `59 on disk, 0 tracked, blocked by .gitignore:29:.lfbridge/` (the 2026-07-20 charlie-kirk strand).
+    // null = the repo has no .lfbridge/ yet (nothing to audit). Cheap: one walk + 3 git spawns per unit.
+    artifact_health: await safeAsync(() => auditArtifactCommittability(root), null),
     counts: {},
+  };
+}
+
+/**
+ * The two structural reasons compress metrics diverge between the user's computers, counted per repo:
+ *   • `remote_only_media_unassessed` — media rows another computer pinned but this one holds no bytes for;
+ *     compress is "na" by design (storage_company.mdx §8.5), so the OTHER computer counts them and this one
+ *     never will until they are pulled down.
+ *   • `local_media_invisible_to_peers` — local media rows with NO manifest CID (undecided / never pinned);
+ *     nothing about them travels, so every OTHER computer has no row at all — not even remote-only.
+ * Cheap: one pass over rows already composed. Media = compressInfo kind ≠ null (video/image).
+ */
+function compressVisibility(files: FileRow[]): Record<string, number> {
+  let remoteOnlyMedia = 0;
+  let invisibleLocalMedia = 0;
+  for (const f of files) {
+    if (f.analysisOnly) continue;
+    if (compressInfo(path.basename(f.path)).compressible === null) continue;
+    if (f.presence === "remote-only") remoteOnlyMedia++;
+    else if (f.cid == null) invisibleLocalMedia++;
+  }
+  return {
+    remote_only_media_unassessed: remoteOnlyMedia,
+    local_media_invisible_to_peers: invisibleLocalMedia,
   };
 }
 
@@ -454,9 +530,29 @@ function bucketMetrics(files: FileRow[], metrics: Metrics, enrich: (f: FileRow) 
     if (f.decision === "sync" && f.transfer === "pending") metrics.pending.push(e);
     if (f.decision === "sync" && f.cid != null && !hasOtherPeer(f)) metrics.not_backed_up.push(e);
     if (f.compress === "could") {
-      (isImage(f.path) ? metrics.compressible_images : metrics.compressible_videos).push(e);
+      // Split by the SAME classifier the tile uses (units.service.ts computeTaskMetrics →
+      // badges.ts compressInfo) — a local extension set here would drift the moment compressInfo
+      // learns a new type, breaking the §5.5 lists-match-tiles guarantee.
+      const img = compressInfo(path.basename(f.path)).compressible === "image";
+      (img ? metrics.compressible_images : metrics.compressible_videos).push({
+        ...e,
+        compress_reason: img ? "image-extension" : "video-name-no-mark",
+      });
     }
-    if (f.compress === "done") metrics.already_compressed.push(e);
+    if (f.compress === "done") {
+      // Name the SIGNAL that classified it done: a name-level verdict (extension / compressed-mark), or —
+      // when the name still says "should" — the travelling compression record (compress.mdx §8.2).
+      const ci = compressInfo(path.basename(f.path));
+      metrics.already_compressed.push({
+        ...e,
+        compress_reason:
+          ci.compressState === "done"
+            ? ci.compressible === "image"
+              ? "image-extension"
+              : "video-name-mark"
+            : "compression-record",
+      });
+    }
     if (!f.gitignore && f.sizeBytes >= checkedIn) metrics.big_not_ignored.push(e);
     // The Git Ignore TILE's predicate (client-side, no size test) — kept distinct from big_not_ignored so
     // each list matches the number the user actually sees (task_tabs.mdx §2.5).
@@ -469,10 +565,7 @@ function hasOtherPeer(f: FileRow): boolean {
   return f.peers.some((p) => p !== self);
 }
 
-const IMAGE_EXTS = new Set([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif", ".tif", ".tiff", ".bmp", ".avif"]);
-function isImage(rel: string): boolean {
-  return IMAGE_EXTS.has(path.extname(rel).toLowerCase());
-}
+// (image/video split now delegates to badges.ts compressInfo — see bucketMetrics.)
 
 // ── enrichment (§7) ──────────────────────────────────────────────────────────────────────────────────
 
@@ -487,9 +580,11 @@ function makeEnricher(
   root: string,
   repoName: string,
   deep: boolean,
+  gitCtx: ArtifactGitContext | null = null,
 ): (f: FileRow) => DebugFileEntry {
   const manifest = manifestIndex(folder, root);
   const index = new Map(safe(() => readStorageIndex(root), [])?.map((r) => [r.path, r]) ?? []);
+  const probeArtifacts = makeArtifactProber(root, gitCtx);
   return (f: FileRow): DebugFileEntry => {
     const abs = path.join(root, f.path);
     const mf = manifest.get(f.path);
@@ -534,7 +629,90 @@ function makeEnricher(
         ocr: f.ocr ?? "na",
       },
       changed_at: f.changedAt ?? null,
+      decision_in_ledger: f.decidedAt != null,
+      artifacts: probeArtifacts(f),
     };
+  };
+}
+
+// ── per-op artifact probe (`DebugFileEntry.artifacts`) ───────────────────────────────────────────────
+
+/** Git facts shared by every row of one unit: the set of repo-relative paths in the INDEX (committed) and
+ *  in origin/<branch> (pushed), both scoped to the artifact tree. null members = not derivable. */
+interface ArtifactGitContext {
+  tracked: Set<string> | null;
+  pushed: Set<string> | null;
+}
+
+/** Two spawns per unit: `git ls-files` (committed) and `git ls-tree -r origin/<branch>` (pushed), both
+ *  pathspec-scoped to the quarantine dir. Never throws upward — callers wrap in safeAsync. */
+async function artifactGitContext(root: string): Promise<ArtifactGitContext | null> {
+  if (!fs.existsSync(path.join(root, ".git"))) return null;
+  const git = openRepo(root);
+  const split = (raw: string): Set<string> => new Set(raw.split("\0").filter(Boolean));
+  let tracked: Set<string> | null = null;
+  let pushed: Set<string> | null = null;
+  try {
+    tracked = split(await git.raw(["ls-files", "-z"]));
+  } catch {
+    tracked = null;
+  }
+  try {
+    const branch = (await git.raw(["rev-parse", "--abbrev-ref", "HEAD"])).trim();
+    pushed = split(await git.raw(["ls-tree", "-r", "-z", "--name-only", `origin/${branch}`]));
+  } catch {
+    pushed = null; // no origin / unborn branch — "pushed" is simply not derivable
+  }
+  return { tracked, pushed };
+}
+
+const ARTIFACT_OP_EXTS: Record<string, string> = {
+  transcribe: ".transcription",
+  describe: ".ai_description",
+  ocr: ".ocr",
+};
+
+/**
+ * Build the per-row artifact prober: for each analysis op this row could/did run, probe the artifact in
+ * every layout the reader accepts — the tracking base (default), beside the media, and the legacy
+ * pre-migration base — mirroring tracking.service `analysisOutputs()` exactly, and fold in the unit's git
+ * facts. A few statSyncs per analysis row; non-media rows pay nothing (null).
+ */
+function makeArtifactProber(root: string, gitCtx: ArtifactGitContext | null): (f: FileRow) => Record<string, ArtifactProbe> | null {
+  // Storage-KIND-aware bases (artifact_placement_policy.mdx §0) — resolveStorageType is memoized, so the
+  // two resolvers below cost one descriptor read for the whole unit.
+  const base = safe(() => trackingBaseDir(root), root);
+  const legacy = safe(() => legacyTrackingBaseDir(root), null);
+  const isFileAt = (p: string): boolean => {
+    try {
+      return fs.statSync(p).isFile();
+    } catch {
+      return false;
+    }
+  };
+  return (f: FileRow): Record<string, ArtifactProbe> | null => {
+    const ops = (["transcribe", "describe", "ocr"] as const).filter((op) => (f[op] ?? "na") !== "na");
+    if (ops.length === 0) return null;
+    const out: Record<string, ArtifactProbe> = {};
+    for (const op of ops) {
+      const ext = ARTIFACT_OP_EXTS[op]!;
+      const candidates: Array<[ArtifactProbe["location"], string]> = [
+        ["tracking-base", path.join(base, f.path) + ext],
+        ["beside", path.join(root, f.path) + ext],
+        ...(legacy ? ([["legacy", path.join(legacy, f.path) + ext]] as Array<[ArtifactProbe["location"], string]>) : []),
+      ];
+      const hit = candidates.find(([, p]) => isFileAt(p));
+      const expectedAbs = hit ? hit[1] : candidates[0]![1];
+      const rel = path.relative(root, expectedAbs).split(path.sep).join("/");
+      out[op] = {
+        expected_rel: rel,
+        exists: !!hit,
+        location: hit ? hit[0] : null,
+        committed: gitCtx?.tracked ? gitCtx.tracked.has(rel) : null,
+        pushed: gitCtx?.pushed ? gitCtx.pushed.has(rel) : null,
+      };
+    }
+    return out;
   };
 }
 
@@ -585,6 +763,8 @@ function blankEntry(abs: string, repo: string, rel: string): DebugFileEntry {
     never_ipfs: false,
     tasks: { compress: "na", transcribe: "na", describe: "na", ocr: "na" },
     changed_at: null,
+    decision_in_ledger: false,
+    artifacts: null,
   };
 }
 

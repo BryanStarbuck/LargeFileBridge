@@ -268,15 +268,20 @@ row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
   "{N} files will have their Transcriptions created" toast fire on the popup's **Confirm**
   ([page_actions.mdx §0.1](./page_actions.mdx)), never on the link's click and never as a `window.confirm`.
   Rendered by `PageActions` ([page_actions.mdx §3](./page_actions.mdx)).
-* **The "more" menu** (top-right, next to the header primary) — on a single-entity page it renders as the
-  word **More** plus a **down chevron**, with **no** leading `⋮` glyph and **no** bordered rounded rectangle
-  ([menus.mdx §4.1](./menus.mdx) owns that presentation — this page does not restate it). Because this page
-  **is one repo**, it carries the **repo entity menu**: the same catalog as a Repos-table row's kebab
-  ([menus.mdx §4 / §5.1](./menus.mdx#4-the-entity--more-menu--single-entity-pages)) — Open in File
-  System · View pinned on IPFS · Rescan · Pin now · Git ignore · Toggle Pinned · Repo
-  settings… · Copy path · **Remove repo (unregister)** (destructive, last, never deletes local bytes).
-  *Open repo* is omitted (you are already here). Pin now — no longer the header primary — appears in both
-  the page action-links row and this **More ⌄** menu so the catalog stays complete.
+* **The "more" menu** — this page has exactly **ONE** `More ▾` menu, and it is the **action-links row's**,
+  pinned at the right end of that row ([page_actions.mdx §3.1](./page_actions.mdx)). There is **no**
+  separate header/top-right entity "More ⌄" any more — two More menus on one page read as two different
+  things, and the header slot is reclaimed for the tabs + gear + primary. Because this page **is one
+  repo**, the row's More ▾ **always** carries the **repo entity catalog**: the same items as a Repos-table
+  row's kebab ([menus.mdx §5.1](./menus.mdx)) — Open in File System · View pinned on IPFS · Export Debug
+  Information · Toggle Pinned · Repo settings… · Bookmark · Copy path · **Remove repo (unregister)**
+  (destructive, last, never deletes local bytes) — rendered as the same grouped menu list, with the row's
+  width-overflowed inline links (if any) above them. **Omitted as duplicates, not lost**: *Open repo* (you
+  are already here) and *Rescan · Pin now · the producing trio*, which the action-links row already offers
+  in richer, selection-aware form.
+  The merged menu is handed to the row in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+  (the `useRepoActions(…, { omit })` catalog passed as `PageActions`' `overflow` prop).
 
 The two-row header — the content-sized title that never loses, and the path on its own full-width line — is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader`
@@ -964,8 +969,8 @@ The server-side bumps this page listens for are handled in code:
    its content and capped at **50%** of the row) with the width-measured **tab strip**, the **gear**, and the
    smart header primary in the actions slot (which **shrinks first**); row 2 = the **absolute directory
    path** on its **own full-width row**, **one line, ellipsized, full text in the tooltip** — it never wraps
-   (§3.1). **Pin now is NOT a header button** — it lives in the page action-links row (and the **More ⌄**
-   menu) and still **prioritizes this repo (pinned first) then runs the full pin pass**
+   (§3.1). **Pin now is NOT a header button** — it lives in the page action-links row and still
+   **prioritizes this repo (pinned first) then runs the full pin pass**
    ([pin_process.mdx §2/§3](./pin_process.mdx)), never changes a decision, and is never a silent no-op
    (reports what it actually did).
 2. The **status/settings strip** (§3.3) shows Pin (the one editable per-repo on/off toggle), Status pill,
@@ -1006,10 +1011,11 @@ The server-side bumps this page listens for are handled in code:
    state; the LOCKED transfer-status pill mapping (§4.6) now applies only on the file page and the IPFS pins
    table. An Add-to-IPFS (pin) file with Peers = 0 still renders the **Peers** count red.
 9. Empty / all-decided / loading / node-unreachable states render per §5.
-10. The header carries a top-right **"more" menu**, rendered as the word **More** + a **down chevron** with
-    **no** leading `⋮` glyph and **no** bordered rounded rectangle ([menus.mdx §4.1](./menus.mdx)) = the
-    **repo** entity catalog ([menus.mdx §5.1](./menus.mdx#51-repo)), with *Open repo* omitted and *Pin now*
-    present in it **and** in the action-links row (it is **not** the header primary, §3.1). Each files-table
+10. The page has exactly **ONE "More ▾" menu** — the **action-links row's**, pinned right (§3.1) — and it
+    always carries the **repo** entity catalog ([menus.mdx §5.1](./menus.mdx#51-repo)) beneath any
+    width-overflowed inline links, with *Open repo / Rescan / Pin now / the producing trio* omitted as
+    duplicates of the row's own richer links. The header carries **no** separate entity "More ⌄"
+    (it is tabs + gear + primary only, §3.1). Each files-table
     **data cell is a deep link** per §4.7 (File/Size/Changed →
     View one file; Peers → Peers filtered to the file; CID copies); the row **`⋮` kebab** (and
     right-click) opens the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)) and never navigates,
@@ -1087,10 +1093,12 @@ The server-side bumps this page listens for are handled in code:
   that inversion is what lets the tab strip overflow instead of crushing the name. Row 2 = the absolute
   path on its OWN full-width row, ONE line, ellipsized, tooltip carries the full text. (BUG FIXED: the path
   used to be the subtitle INSIDE row 1's left column beside a shrink-0 actions slot, so it wrapped over
-  several lines while the right half sat empty.) PIN NOW IS NOT A HEADER BUTTON — action-links row + the
-  More menu; the header primary is "View recommendation ›" / "Scan now" / the per-metric verb. The
-  single-entity "more" button renders as the word More + a down chevron, NO ⋮ glyph, NO bordered box
-  (menus.mdx §4.1 owns it). SIX tabs: All · IPFS · Compress · Transcribe · AI descriptions · OCR.
+  several lines while the right half sat empty.) PIN NOW IS NOT A HEADER BUTTON — it is an action-links-row
+  link; the header primary is "View recommendation ›" / "Scan now" / the per-metric verb. ONE More ▾ menu
+  on this page: the ACTION-LINKS ROW's (pinned right), which always carries the repo entity catalog
+  (menus.mdx §5.1, minus Open repo / Rescan / Pin now / the producing trio — the row's own links) under any
+  width-overflowed inline links; the header has NO separate entity "More ⌄" any more.
+  SIX tabs: All · IPFS · Compress · Transcribe · AI descriptions · OCR.
   METRICS STRIP (§3.2, LOCKED): FULL page width, ONE row, NEVER wraps (flex-nowrap + shrink-0 tiles;
   overflow-x scroll is the only escape). The docked hover-info region to the RIGHT is DELETED — its ≥25%
   width reservation was what forced the balanced second row. The explanation now goes to the LEFT-BAR

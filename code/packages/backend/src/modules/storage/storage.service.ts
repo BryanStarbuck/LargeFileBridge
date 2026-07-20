@@ -34,6 +34,7 @@ import { writeSelfDevice } from "./devices.service.js";
 // functions, never at module-eval time — safe under NodeNext ESM, same pattern as the imports above.
 import { ensureRepoStorageDoc } from "./repo-storage.service.js";
 import { log } from "../../shared/logging.js";
+import { stableGitBin } from "../git/git-bin.js";
 
 const STORAGE_YAML = "storage.yaml";
 const CONVENTION_SUFFIX = "_large_files_bridge";
@@ -507,7 +508,7 @@ export async function createPersonalStorage(opts: { dedicatedRepo?: boolean }): 
   const root = path.join(os.homedir(), "BGit", "Bryan_git", `personal${CONVENTION_SUFFIX}`);
   fs.mkdirSync(root, { recursive: true });
   if (opts.dedicatedRepo && !exists(path.join(root, ".git"))) {
-    const r = spawnSync("git", ["init"], { cwd: root, encoding: "utf8" });
+    const r = spawnSync(stableGitBin(), ["init"], { cwd: root, encoding: "utf8" });
     if (r.status === 0) log.info("storage", `git init personal dedicated repo at ${root}`);
     else log.warn("storage", `git init at ${root} failed: ${(r.stderr || r.error?.message || "unknown").trim()}`);
   }
@@ -642,7 +643,7 @@ export function ensureBackingLocations(id: string): void {
     // A dedicated repo gets `git init`ed if it isn't a working tree yet (§6.1). The repo storage's own
     // repo is already one, so this is a no-op there.
     if (isRepo && !exists(path.join(abs, ".git"))) {
-      const r = spawnSync("git", ["init"], { cwd: abs, encoding: "utf8" });
+      const r = spawnSync(stableGitBin(), ["init"], { cwd: abs, encoding: "utf8" });
       if (r.status === 0) log.info("storage", `${id}: git init dedicated repo at ${abs}`);
       else log.warn("storage", `${id}: git init at ${abs} failed: ${(r.stderr || r.error?.message || "unknown").trim()}`);
     }

@@ -53,13 +53,18 @@ export default defineConfig(async () => {
       // this, a version bump (e.g. the React 18→19 upgrade) can leave a stale pre-bump copy resolvable
       // in the store for a moment, and two live React copies means a hook call sees a null dispatcher
       // ("Cannot read properties of null (reading 'useEffect')" inside QueryClientProvider).
-      dedupe: ["react", "react-dom"],
+      // react-query is deduped too because its QueryClient CONTEXT identity must be single: a stale tab
+      // once held @tanstack_react-query.js?v=<old> while a re-optimized module provided
+      // QueryClientProvider from ?v=<new> — two copies, useQueryClient crashed with a null dispatcher.
+      dedupe: ["react", "react-dom", "@tanstack/react-query"],
     },
     optimizeDeps: {
       // Pre-bundle these explicitly so Vite's dep-optimizer always resolves them from one place and
       // re-optimizes them together (same reasoning as the dedupe above) instead of discovering them
-      // piecemeal across different importers.
-      include: ["react", "react-dom", "react-dom/client"],
+      // piecemeal across different importers. @tanstack/react-query is listed for the same reason:
+      // when it was discovered piecemeal, a mid-session re-optimization handed open tabs TWO hashes of
+      // the same dep in one render (see resolve.dedupe note) — pre-including pins it from cold start.
+      include: ["react", "react-dom", "react-dom/client", "@tanstack/react-query"],
     },
     build: {
       rollupOptions: {

@@ -15,6 +15,7 @@ import { mediaKindForName, type CompressionRecord } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
 
 import { trackingBaseDir } from "./storage-type.service.js";
+import { resolveTrackingRoot } from "./tracking-root.service.js";
 
 const ANALYSIS_DIR = "analysis";
 
@@ -58,13 +59,18 @@ export function analyzeFile(root: string, rel: string): string[] {
 }
 
 /**
- * Write the travelling compression record for a file (syncable_data_location.mdx §4.3) into the SDL at
- * `<root>/analysis/<relpath>/compression.yaml` (no `.lfbridge/` — §0). Captures what the file WAS before compression
+ * Write the travelling compression record for a file (compression.mdx §8 step 6) —
+ * `<Local Storage repos/<repoKey>>/analysis/<relpath>/compression.yaml`. It is CATEGORY-B tracking state
+ * (artifact_placement_policy.mdx): Local Storage ALWAYS, never the working repo — matching its two sibling
+ * writes (the files.yaml entry and the per-file sidecar `compress` event, both already Local-Storage) and
+ * travelling to the user's other computers via the sync-repo mirror (tracking-sync.service.ts
+ * `mirrorToSyncRepo`, which copies the whole state dir). Captures what the file WAS before compression
  * (original name/extension + size) and the after (codec/size/ratio/at) so every computer that carries the
  * storage knows the file was compressed, from what, and by how much — without re-deriving anything.
+ * Read back by tracking.service.ts `analysisOutputs` ("compression" signal → the Compress task status).
  */
 export function writeCompressionRecord(root: string, rel: string, record: CompressionRecord): void {
-  const outDir = path.join(trackingBaseDir(root), ANALYSIS_DIR, rel);
+  const outDir = path.join(resolveTrackingRoot(root), ANALYSIS_DIR, rel);
   fs.mkdirSync(outDir, { recursive: true });
   writeYaml(path.join(outDir, "compression.yaml"), {
     source: record.source,

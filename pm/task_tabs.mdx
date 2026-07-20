@@ -72,7 +72,8 @@ This spec builds on the siblings and does not repeat them:
   ([one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)). The tabs sit
   between them, inside the header's **actions slot** — the slot that **shrinks first**, which is precisely
   what makes the overflow chevron (§1.4) fire instead of the repo name being crushed. (**Pin now is not a
-  header button**; it lives in the page action-links row and the **More ⌄** menu.)
+  header button**; it lives in the page action-links row — whose right-pinned **More ▾** is also this
+  page's ONE More menu, [one_repo.mdx §3.1](./one_repo.mdx).)
 * **The absolute path is NOT in this row.** It gets its own full-width row **beneath** the title row, one
   line, ellipsized ([one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)) —
   so the tab strip never shares a line with it and never squeezes it.
@@ -931,6 +932,20 @@ three-state box grammar as §5 with its own "done" color:
 Click: **Could →** offers compression (explicit-click confirm, background job, [compression.mdx](./compression.mdx));
 **Done →** shows the compression record; **Not applicable →** inert. The Compress tab's default sort puts
 the orange "could" rows first, then Size desc.
+
+**How "marker is present" is read without probing the file.** Reading the in-file marker needs an
+ffprobe/ImageMagick spawn — unaffordable per row — so the row status reads its cheap proxy instead: the
+**compression record** (`analysis/<rel>/compression.yaml`, [compression.mdx §8](./compression.mdx) step 6),
+which every compress writes and a [§8.4 marker skip backfills](./compression.mdx). The record is honored
+only while **fresh** (its compressed size still matches the file's bytes), and it travels between the
+user's computers via the sync-repo mirror — so an in-place-compressed video (same filename, which the
+extension heuristic alone would offer forever) flips to **Done** on every machine. Without this signal the
+`compressible videos` count could never converge after a compress.
+The per-row status verdict is computed in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`compressStatusFor()` (name verdict + the shared probe's `"compression"` signal from
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` —
+`analysisOutputs()` / `compressionRecordFresh()`).
 
 The Compress status icon is rendered in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` —

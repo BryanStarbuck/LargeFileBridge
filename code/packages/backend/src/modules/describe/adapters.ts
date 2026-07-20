@@ -173,10 +173,10 @@ export type ProviderFaultKind = "transient" | "permanent" | "account_dead";
 // a key in the LEDGER): §9 governs the ledger, and this never goes there. The API key rides the URL's
 // `?key=`, never the response, so nothing secret can land in the file.
 
-/** The refusing `finishReason`s — the model declining to emit what it generated. These do NOT make the
- *  fault permanent (they are sampled, so they retry — see `classifyProviderFault`); they decide which empty
- *  responses EARN a `.ai_description_rejected` record once every retry has been spent (§2.3). A plain
- *  `STOP` with no text is a blip, not a refusal, and must never be recorded as one. */
+/** The refusing `finishReason`s — the model declining to emit what it generated. A refusal is PERMANENT
+ *  (see `classifyProviderFault` — reversed 2026-07-20; it used to retry): it fails on attempt 1 and EARNS
+ *  its `.ai_description_rejected` record immediately (§2.3). A plain `STOP` with no text is a blip, not a
+ *  refusal, and must never be recorded as one — it stays transient and retries. */
 const REFUSAL_FINISH_REASONS = new Set(["RECITATION", "SAFETY", "PROHIBITED_CONTENT", "BLOCKLIST", "SPII", "IMAGE_SAFETY"]);
 export function isRefusalFinishReason(reason: string | null | undefined): boolean {
   return !!reason && REFUSAL_FINISH_REASONS.has(reason.toUpperCase());
@@ -231,15 +231,19 @@ export function classifyProviderFault(e: unknown): ProviderFaultKind {
   // regex below purely by wording. Structure decides; text is for humans.
   const rejection = rejectionOf(e);
   if (rejection) {
-    // The INPUT was refused BEFORE generation (`promptFeedback.blockReason`). That is a verdict on the file
-    // itself and is deterministic — permanent, fails on attempt 1.
-    if (rejection.blockReason) return "permanent";
-    // An empty candidate carrying a refusing finishReason is an OUTPUT-side filter, and generation is
-    // SAMPLED — so it is a coin toss, not a verdict. MEASURED: one slide, 10 identical calls → 6 described
-    // (7.6k–10.2k chars) and 4 `RECITATION`. Calling it permanent would strand ~60% of a describable file's
-    // chances and write it a rejection record it did not earn; retrying 4× fails all four only ~2.6% of the
-    // time. This is exactly the bias §3.5 states: when ambiguous, prefer TRANSIENT.
-    return "transient";
+    // ANY structured refusal is PERMANENT — the input-side `blockReason` (refused before generation) and
+    // the output-side refusing `finishReason` alike: attempt 1, no retries, straight to the
+    // `.ai_description_rejected` record (§2.3).
+    //
+    // REVERSED 2026-07-20: this branch used to classify an output-side refusal "transient" on the strength
+    // of one measurement (one slide, 10 identical calls → 6 described / 4 `RECITATION` — generation is
+    // sampled, so the filter looked like a coin toss). In production the re-roll did not pay: refusing
+    // files burned all 4 attempts plus backoff and were rejected anyway (2026-07-20 error.err — every
+    // RECITATION file walked attempts 1→4 before earning the same rejection record), hundreds of wasted
+    // provider calls per batch and minutes of delay per file. A refusal now costs ONE call. The record
+    // stays supersedable, and Overwrite (§2.3) is the deliberate way to re-roll a file the sampling may
+    // yet describe.
+    return "permanent";
   }
 
   // A real refusal — an explicit safety verdict. Permanent for this file, but the account is fine.
@@ -276,13 +280,12 @@ export function classifyProviderFault(e: unknown): ProviderFaultKind {
  * STOP`, 1,877 tokens of text. An empty candidate is the provider having a bad moment, so it retries like
  * any other blip.
  *
- * A genuine REFUSAL retries too, and that is the counter-intuitive part (§3.5 — which used to claim the
- * opposite here, that a refusal "stays permanent" and arrives only as an explicit `blockReason`). Both
- * halves were false: Gemini also refuses with an empty candidate carrying nothing but a `finishReason`, and
- * generation is SAMPLED, so an output-side filter is a coin toss, not a verdict — one slide, 10 identical
- * calls, 6 × `STOP` (described) vs 4 × `RECITATION` (empty). Calling that permanent would strand files the
- * next attempt would describe, so a refusing `finishReason` classifies "transient" and only a refusal that
- * SURVIVES every retry becomes the `.ai_description_rejected` verdict (§2.3).
+ * A genuine REFUSAL does NOT retry (reversed 2026-07-20 — it used to). Gemini refuses with an empty
+ * candidate carrying nothing but a refusing `finishReason` (`RECITATION`, `SAFETY`, …), and although
+ * generation is sampled, production showed refusing files burning all 4 attempts plus backoff only to be
+ * rejected anyway. So a structured refusal classifies "permanent": it fails on attempt 1 and writes its
+ * `.ai_description_rejected` immediately (§2.3), which Overwrite can supersede later. The blank `STOP`
+ * empty-200 above stays transient — it carries no refusal evidence.
  *
  * Now a thin read of `classifyProviderFault` so there is exactly ONE place that decides what a fault is.
  */
@@ -373,12 +376,28 @@ function callFailureReason(status: number, e: unknown): string {
 // call — under 1% of a ~22s describe — and it buys back the 27% failure rate and 3x the wall time.
 // Scoped deliberately to provider calls: the IPFS client talks to 127.0.0.1 at low concurrency and is not
 // affected.
-function freshProviderDispatcher(): Agent {
+//
+// A fresh connection removes the POOL stall, but a socket can still die AFTER the handshake (silent drop,
+// dead peer) — and with undici's own timers disabled that stall used to ride all the way to the app
+// deadline: 120–123s burned per attempt, ×4 attempts. So the Agent now carries its own fail-fast clocks,
+// all well UNDER the app deadline, so a stalled socket errors early and the retry — which builds a brand
+// new Agent, so it can never land on the same dead socket — gets a fresh connection while there is still
+// deadline budget left. The AbortController's timeoutForBytes stays as the LAST-RESORT ceiling only.
+function freshProviderDispatcher(timeoutMs: number): Agent {
   return new Agent({
     connections: 1, // this Agent serves exactly ONE request, so its pool can never hand out a used socket
     connectTimeout: 15_000, // a fresh TCP+TLS handshake per call; 10s (undici's default) was tripping on bursts
-    headersTimeout: 0, // OUR AbortController owns the deadline (timeoutForBytes) — one clock, not three
-    bodyTimeout: 0,
+    // Headers wait = upload + the provider's full non-streaming inference (measured p50 ~22s, max ~28s on
+    // the 2026-07-16 batch), so a fixed ~30s would clip real responses. Half the size-scaled app deadline
+    // (60s on the 120s floor, more for big videos) keeps >2x headroom over the measured max while cutting
+    // a stalled socket's cost in half or better. undici holds this timer while the request body is still
+    // being written, so slow uploads don't false-trip it.
+    headersTimeout: Math.floor(timeoutMs / 2),
+    bodyTimeout: 30_000, // gap BETWEEN response-body chunks — once JSON starts flowing, 30s of silence is a dead socket
+    // Moot while every Agent is destroyed in `finally` after one request, but cheap insurance if this
+    // dispatcher is ever shared: never hand out a socket that has sat idle long enough to be dead.
+    keepAliveTimeout: 4_000,
+    keepAliveMaxTimeout: 30_000,
   });
 }
 
@@ -397,7 +416,7 @@ async function postJsonOnce(
 ): Promise<unknown> {
   const ac = new AbortController();
   const t = setTimeout(() => ac.abort(), timeoutMs);
-  const dispatcher = freshProviderDispatcher(); // §3.6 — never reuse a pooled socket for a provider call
+  const dispatcher = freshProviderDispatcher(timeoutMs); // §3.6 — never reuse a pooled socket for a provider call
   // txnBegin/txnEnd by hand rather than txn(): txn()'s failure path would put the thrown error's MESSAGE in
   // `reason=`, and this call's error message carries a 400-char slice of the provider's response body. The
   // ledger must never hold a body (§9), so we END with our own slug instead.
@@ -438,7 +457,21 @@ async function postJsonOnce(
       throw new Error(`provider returned non-JSON: ${text.slice(0, 200)}`);
     }
   } catch (e) {
-    txnEnd(tx, "failed", { status, respBytes, reason: callFailureReason(status, e) });
+    // The Agent's fail-fast clocks surface through fetch as a bare "TypeError: fetch failed" with the real
+    // error hidden in `cause`. Unwrap the two timeout codes so the log names the stall (and the ledger slug
+    // reads "timeout", not "network") — the message keeps "timed out" so the existing transient
+    // classification retries it unchanged, on a brand-new connection.
+    const causeCode = (e as { cause?: { code?: string } })?.cause?.code;
+    const stalled =
+      causeCode === "UND_ERR_HEADERS_TIMEOUT"
+        ? new Error(
+            `provider call timed out after ${Math.round(timeoutMs / 2000)}s waiting for response headers (stalled socket — retry gets a fresh connection)`,
+          )
+        : causeCode === "UND_ERR_BODY_TIMEOUT"
+          ? new Error(`provider call timed out mid-response: 30s with no body data (stalled socket — retry gets a fresh connection)`)
+          : null;
+    txnEnd(tx, "failed", { status, respBytes, reason: callFailureReason(status, stalled ?? e) });
+    if (stalled) throw stalled;
     // Name the real failure. Node's bare "This operation was aborted" told the user nothing about WHY a
     // file was skipped — it is a timeout, and the message should say so, with the deadline it blew.
     if (e instanceof Error && /abort/i.test(`${e.name}: ${e.message}`)) {

@@ -245,8 +245,11 @@ export function resolveArtifactPlacement(input: string): ArtifactPlacement {
   const containing = nearestContainingRoot(abs);
   if (containing) {
     const owner = ownerForRoot(containing);
-    const isGit = exists(path.join(containing, ".git"));
-    return { root: containing, rel: path.relative(containing, abs), gitIgnore: owner === "repo" && isGit, owner, needsSetup: false };
+    // gitIgnore is FALSE for a working repo too: the artifact lands in the COMMITTED `.lfbridge/` area and
+    // must travel with the repo (header comment above + artifact_placement_policy.mdx §0). The old `true`
+    // here described the retired beside-media nudge era — and a `.gitignore` that actually excludes
+    // `.lfbridge/` strands artifacts (repaired by artifact-committability.service.ts).
+    return { root: containing, rel: path.relative(containing, abs), gitIgnore: false, owner, needsSetup: false };
   }
 
   // B. Owning company/personal storage → its dedicated repo (no gitignore), else its own root.

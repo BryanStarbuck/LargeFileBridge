@@ -11,7 +11,7 @@
 // "More ▾" overflow renders ONLY when there are overflow items (default: none — all inline).
 import { forwardRef, useLayoutEffect, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import type { Action } from "./EntityMenu";
+import { MenuList, MenuPortal, type Action, type MenuPos } from "./EntityMenu";
 import { ConfirmDialog } from "../ui/ConfirmDialog";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -25,16 +25,17 @@ export function PageActions({
   actions: Action[];
   selectedCount?: number;
   /**
-   * Optional MANUAL overflow items — when non-empty, the row renders `actions` inline and these under
-   * "More ▾" (the legacy explicit split). When empty (the default), the row is WIDTH-MEASURED (§3.1): it
-   * measures what fits and splits `actions` into an inline set + a right-pinned "More ▾" overflow.
+   * Actions that ALWAYS live under "More ▾" and never render inline — the page's entity catalog
+   * (menus.mdx §5.1: the one-repo page folds its former header "More ⌄" entity menu in here). The row
+   * is still WIDTH-MEASURED (§3.1) over `actions`: whatever doesn't fit inline joins these in the ONE
+   * "More ▾" menu, rendered as the same grouped MenuList the entity menus use.
    */
   overflow?: Action[];
 }) {
   // The pending destructive action awaiting confirmation in the modal.
   const [confirming, setConfirming] = useState<Action | null>(null);
-  const [moreOpen, setMoreOpen] = useState(false);
-  const manualOverflow = overflow.length > 0;
+  // The open "More ▾" menu's anchor position (null = closed) — portaled like every other menu.
+  const [morePos, setMorePos] = useState<MenuPos | null>(null);
 
   const run = async (a: Action) => {
     try {
@@ -65,7 +66,6 @@ export function PageActions({
   const labelsKey = actions.map((a) => `${a.id}:${labelFor(a)}`).join("|");
 
   useLayoutEffect(() => {
-    if (manualOverflow) return;
     const fit = () => {
       const wrap = wrapRef.current;
       const n = actions.length;
@@ -79,7 +79,9 @@ export function PageActions({
         return el ? el.offsetLeft + el.offsetWidth : 0;
       };
       const totalRight = rightEdge(n - 1);
-      if (totalRight <= avail) {
+      // With always-overflow items the "More ▾" chunk renders regardless, so its width must be
+      // reserved even when every inline item would fit on its own.
+      if (totalRight <= avail && overflow.length === 0) {
         setInlineCount(n); // everything fits — no More ▾
         return;
       }
@@ -99,11 +101,13 @@ export function PageActions({
     const ro = new ResizeObserver(fit);
     if (wrapRef.current) ro.observe(wrapRef.current);
     return () => ro.disconnect();
-    // labelsKey captures label changes (selection counts); manualOverflow toggles the whole mode.
-  }, [labelsKey, manualOverflow, actions.length]);
+    // labelsKey captures label changes (selection counts); overflow.length flips the More ▾ reserve.
+  }, [labelsKey, actions.length, overflow.length]);
 
-  const inline = manualOverflow ? actions : actions.slice(0, inlineCount);
-  const overflowItems = manualOverflow ? overflow : actions.slice(inlineCount);
+  const inline = actions.slice(0, inlineCount);
+  // ONE More ▾ menu: the width-overflowed inline actions first, then the always-overflow entity
+  // catalog. Confirm-gated items route through the same modal as their inline twins would.
+  const overflowItems = [...actions.slice(inlineCount), ...overflow];
 
   if (actions.length === 0 && overflow.length === 0) return null;
 
@@ -111,30 +115,28 @@ export function PageActions({
     <>
       <div ref={wrapRef} className="relative w-full">
         {/* Hidden measurement layer — ALL items + a "More ▾" sample, off-screen, same markup as the row. */}
-        {!manualOverflow && (
-          <div
-            aria-hidden
-            className="lfb-actions pointer-events-none invisible absolute left-0 top-0"
-          >
-            {actions.map((a, i) => (
-              <span key={a.id} className="contents">
-                {i > 0 && <span className="sep">·</span>}
-                <ActionLink
-                  ref={(el) => {
-                    segRefs.current[i] = el;
-                  }}
-                  a={a}
-                  label={labelFor(a)}
-                  onActivate={() => {}}
-                />
-              </span>
-            ))}
-            <span className="sep">·</span>
-            <span ref={moreRef} className="inline-flex items-center gap-1 text-[var(--lfb-primary)]">
-              More <ChevronDown className="h-3.5 w-3.5" />
+        <div
+          aria-hidden
+          className="lfb-actions pointer-events-none invisible absolute left-0 top-0"
+        >
+          {actions.map((a, i) => (
+            <span key={a.id} className="contents">
+              {i > 0 && <span className="sep">·</span>}
+              <ActionLink
+                ref={(el) => {
+                  segRefs.current[i] = el;
+                }}
+                a={a}
+                label={labelFor(a)}
+                onActivate={() => {}}
+              />
             </span>
-          </div>
-        )}
+          ))}
+          <span className="sep">·</span>
+          <span ref={moreRef} className="inline-flex items-center gap-1 text-[var(--lfb-primary)]">
+            More <ChevronDown className="h-3.5 w-3.5" />
+          </span>
+        </div>
 
         {/* The visible, single-line row (overflow clipped; the overflow set lives under More ▾). */}
         <div className="lfb-actions overflow-hidden">
@@ -145,44 +147,45 @@ export function PageActions({
             </span>
           ))}
 
-          {/* More ▾ — rendered ONLY when something overflows (§3.1); pinned to the right of the row. */}
+          {/* More ▾ — rendered when something overflows (§3.1) or always-overflow items exist; pinned to
+              the right of the row. The menu is the SAME grouped, portaled MenuList the entity menus use,
+              so group separators, checkmarks, disabled-reasons, and Escape/outside-click all carry over. */}
           {overflowItems.length > 0 && (
             <span className="relative ml-auto">
               <span className="sep">·</span>{" "}
               <button
                 type="button"
                 aria-haspopup="menu"
-                aria-expanded={moreOpen}
-                onClick={() => setMoreOpen((o) => !o)}
+                aria-expanded={!!morePos}
+                onClick={(e) => {
+                  const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                  setMorePos(morePos ? null : { x: r.right - 4, y: r.bottom + 4 });
+                }}
                 className="inline-flex items-center gap-1 whitespace-nowrap text-[var(--lfb-primary)] hover:underline"
               >
                 More <ChevronDown className="h-3.5 w-3.5" />
               </button>
-              {moreOpen && (
-                <div
-                  role="menu"
-                  className="absolute right-0 top-full z-50 mt-1 min-w-[13rem] rounded-md border border-[var(--lfb-border)] bg-white py-1 shadow-lg"
-                >
-                  {overflowItems.map((a) => (
-                    <button
-                      key={a.id}
-                      role="menuitem"
-                      disabled={a.disabled}
-                      onClick={() => {
-                        setMoreOpen(false);
-                        activate(a);
-                      }}
-                      className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm disabled:opacity-40 ${
-                        a.danger || a.confirm ? "text-red-600 hover:bg-red-50" : "text-black hover:bg-slate-100"
-                      }`}
-                    >
-                      <span className="flex h-4 w-4 shrink-0 items-center justify-center text-black/50">
-                        {a.icon}
-                      </span>
-                      <span className="flex-1">{labelFor(a)}</span>
-                    </button>
-                  ))}
-                </div>
+              {morePos && (
+                <MenuPortal pos={morePos} onClose={() => setMorePos(null)}>
+                  <MenuList
+                    // Selection counts show in the menu exactly as they would inline; `activate` keeps the
+                    // confirm-modal gate for destructive offers (a menu item must never skip it).
+                    actions={overflowItems.map((a) => ({
+                      ...a,
+                      label: labelFor(a),
+                      danger: a.danger || !!a.confirm,
+                      onSelect: () => activate(a),
+                    }))}
+                    run={(fn) => async () => {
+                      setMorePos(null);
+                      try {
+                        await fn();
+                      } catch (e) {
+                        clientLog.error("PageActions.action", e);
+                      }
+                    }}
+                  />
+                </MenuPortal>
               )}
             </span>
           )}

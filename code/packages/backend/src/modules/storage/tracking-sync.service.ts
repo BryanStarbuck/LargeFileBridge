@@ -18,6 +18,10 @@ import { repoUidFor } from "./repo-identity.js";
 // without dragging this service (and its storage.service dependency) into an import cycle.
 import { mergeManifests } from "./manifest-merge.js";
 export { mergeManifests } from "./manifest-merge.js";
+// The decision-ledger union merge is a LEAF for the same reason — the ledger, like the manifest, is
+// SHARED state that must union, never last-writer-copy (decisions.mdx §5; the 2026-07-20 "not backed up:
+// 22 here / 0 there" defect where wholesale ledger copies erased events the copy source didn't know).
+import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { bumpTopics } from "../events/state-events.service.js";
@@ -130,7 +134,21 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
   const dst = resolveStateSyncRepo(repoRoot);
   if (!dst) return false;
   try {
+    // The mirror's ledger may hold events THIS machine has not reconciled yet — a peer's push, or (two
+    // clones of one remote share ONE `repos/<repoUid>/` subtree) the other clone's decisions. Capture them
+    // BEFORE the tree copy overwrites the file, then write the UNION back (decisions.mdx §5). Without this
+    // the copy is last-writer-wins and silently erases the other writer's events.
+    const mirrorLedgerFile = path.join(dst, "decisions.yaml");
+    const priorMirrorEvents = parseLedgerBestEffort(readFileOrNull(mirrorLedgerFile));
     copyTree(repoStateDir(repoRoot), dst);
+    if (priorMirrorEvents.length > 0) {
+      try {
+        const localEvents = parseLedgerBestEffort(readFileOrNull(path.join(repoStateDir(repoRoot), "decisions.yaml")));
+        fs.writeFileSync(mirrorLedgerFile, serializeLedger(unionLedgerEvents(localEvents, priorMirrorEvents)), "utf8");
+      } catch (e) {
+        log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
+      }
+    }
     // Announce the write so the owning SDL's git backbone commits + pushes it (storage_company.mdx §8.7).
     // Without this the mirrored text sits in the SDL's working tree until the 10-minute device worker
     // happens by — a decision the user just made would take minutes to reach their other computer, and
@@ -142,6 +160,15 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
   } catch (e) {
     log.warn("storage", `mirrorToSyncRepo(${repoRoot}) failed (path missing/unwritable): ${(e as Error).message}`);
     return false;
+  }
+}
+
+/** Read a file's text, or null when missing/unreadable — the best-effort read both ledger merges use. */
+function readFileOrNull(file: string): string | null {
+  try {
+    return fs.readFileSync(file, "utf8");
+  } catch {
+    return null;
   }
 }
 
@@ -187,8 +214,23 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
       fs.mkdirSync(dst, { recursive: true });
       fs.writeFileSync(localPath, YAML.stringify(merged), "utf8");
     }
-    // 2. everything else — append-only / union-folded shapes tolerate a copy
-    copyTreeExcept(src, dst, new Set(["manifest.yaml"]));
+    // 2. the decision ledger — ALSO a merge, never a copy (decisions.mdx §5). A copy replaces the local
+    // log with whatever the mirror last held; events recorded here but not yet mirrored (or erased from
+    // the mirror by another writer's copy) would vanish, leaving frozen-cache decisions with no ledger
+    // event that could ever travel — the "not backed up: 22 here / 0 there" defect. Union keeps both
+    // sides; foldLedger resolves any conflict deterministically on read.
+    const incomingLedger = path.join(src, "decisions.yaml");
+    if (fs.existsSync(incomingLedger)) {
+      const localLedger = path.join(dst, "decisions.yaml");
+      const merged = unionLedgerEvents(
+        parseLedgerBestEffort(readFileOrNull(localLedger)),
+        parseLedgerBestEffort(readFileOrNull(incomingLedger)),
+      );
+      fs.mkdirSync(dst, { recursive: true });
+      fs.writeFileSync(localLedger, serializeLedger(merged), "utf8");
+    }
+    // 3. everything else — append-only / union-folded shapes tolerate a copy
+    copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml"]));
     return true;
   } catch (e) {
     log.warn("storage", `reconcileFromSyncRepo(${repoRoot}) failed: ${(e as Error).message}`);
@@ -243,6 +285,19 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
           writeRepoManifest(folder, mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath)));
         } catch (e) {
           log.warn("storage", `reconcile: unit manifest fold for ${folder} failed: ${(e as Error).message}`);
+        }
+        // Project the just-merged ledger onto the frozen `decisions:` cache NOW (decisions.mdx §7) — the
+        // pin engine reads that cache, so without this a teammate's arriving "Add to IPFS" sat invisible
+        // until the next scan happened to call reconcile. LAZY import: decisions.service statically
+        // imports this module (mirrorToSyncRepo), so a static import here is a cycle.
+        try {
+          const { reconcile: reconcileDecisions } = await import("./decisions.service.js");
+          const { changed } = await reconcileDecisions(folder);
+          if (changed.length > 0) {
+            log.info("storage", `reconcile: ${changed.length} decision(s) updated from the mirrored ledger for ${folder}`);
+          }
+        } catch (e) {
+          log.warn("storage", `reconcile: decision projection for ${folder} failed: ${(e as Error).message}`);
         }
       } catch (e) {
         log.warn("storage", `reconcileMirroredRepos: repo unit ${folder} skipped: ${(e as Error).message}`);

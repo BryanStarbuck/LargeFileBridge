@@ -143,16 +143,20 @@ export function repairEmptySyncRepoBlock(yaml: string): string | null {
  * fix above (the reference machine: all 178 repo unit configs left with a bare `sync_repo:`, i.e. `null`,
  * which the schema rejects — so every repo unit failed to load and every repo-level feature went dark).
  *
- * It needs its OWN marker: the original migration's marker was already written, so it will never run again
- * and can never repair what it left behind. Idempotent, best-effort, and it never throws — same contract as
- * its siblings. The store also repairs this shape on read (yaml-store.ts `dropEmptyBlocks`); this makes the
- * files themselves correct so nothing downstream — another tool, an older build, a human reading YAML — has
- * to know about the workaround.
+ * NOT marker-gated — this sweep runs on EVERY boot. The first version wrote a one-time marker, and the
+ * damage recurred the same day the marker was written (2026-07-20): with the marker present, the repair that
+ * existed precisely for this shape was locked out and every repo unit went dark again. The sweep is
+ * content-driven and idempotent (a healthy file matches nothing and is never rewritten), and reading ~178
+ * small files at boot is cheap — nothing a marker would save is worth a second outage. The marker file is
+ * still written, but only as a last-swept timestamp for debugging. Best-effort, never throws — same contract
+ * as its siblings. The store also repairs this shape on read (yaml-store.ts `dropEmptyBlocks`) and the
+ * schema itself now maps a null block to its defaults (@lfb/shared schemas.ts `nullAsAbsent`); this pass
+ * makes the files themselves correct so nothing downstream — another tool, an older build, a human reading
+ * YAML — has to know about the workaround.
  */
 export function repairEmptySyncRepoBlocks(stateDir: string): void {
   try {
     const marker = path.join(stateDir, REPAIR_MARKER);
-    if (fs.existsSync(marker)) return; // already run
 
     const reposDir = path.join(stateDir, "pin", "r");
     let repaired = 0;

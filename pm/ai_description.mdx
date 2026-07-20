@@ -273,7 +273,8 @@ reached the user, and the only trace was one line in `error.err` that rotates aw
   description?" stays a pure **file-exists** test for every reader (§2.2's indicator, the viewer, the
   batch preview) instead of every one of them having to parse a YAML to find out — and so a refusal is
   visible in a plain directory listing.
-* **Only a real refusal writes one** — a refusal that **survived every retry** (§3.5), or a blocked input.
+* **Only a real refusal writes one** — a refusing `finishReason` or a blocked input, written on the
+  **first** refusing attempt (§3.5 — a refusal is permanent and is never retried; reversed 2026-07-20).
   A timeout, a dead account, or a retired model **must never** write one: those are a broken *config* or a
   broken *link*, not a verdict about the file, and a retired model would otherwise litter the whole tree
   with rejection records on every file in the batch.
@@ -320,6 +321,23 @@ The extension itself is the single source of truth in code:
 Counting a refusal as `done` rather than `failed` is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTaskInner()` (the `describe` branch).
 Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+
+### 2.4 Cross-computer delivery — a description is not DONE until the other computers can see it (LOCKED)
+
+The 2026-07-20 strand: the tower reported **described = 158, describable = 0**; the laptop reported
+**described = 0, describable = 183** for the *same* repo (charlie-kirk). All 158 descriptions sat exactly
+where §2 places them (`<repo>/.lfbridge/…`), but legacy `.gitignore` lines made them invisible to git, no
+code path had committing them as its purpose, and nothing on the laptop ever pulled the repo — so the
+finished work existed on one disk only while every other computer kept offering to re-bill the provider
+for it. A description in a working repo is therefore DONE only when it is **committed, pushed, and
+pullable**; the healing / scoped-delivery / ff-only-convergence chain that guarantees this is
+[artifact_placement_policy.mdx §1.1.1–§1.1.2](./artifact_placement_policy.mdx) and
+[backbone_resilience.mdx §6.4](./backbone_resilience.mdx).
+
+Delivery is scheduled by the artifact write itself and convergence by page loads in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `maybeConvergeWorkingRepo()` (fired via `sync-trigger.service.ts` `noteArtifactWritten()` and `repos.router.ts` page loads).
+Each debug-export analysis row carries the per-op probe (expected path, exists, layout, committed, pushed) in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `makeArtifactProber()` / `artifactGitContext()` (the `artifacts` field; unit rollup in `artifact_health`).
 
 ---
 
@@ -561,34 +579,28 @@ genuine refusal *"arrives as an explicit `blockReason` / safety verdict, **never
 only *"returned no description"*, so the reason — and Google's `finishMessage` explaining exactly which rule
 fired — was **thrown away**. §2.3 now records all of it.
 
-**A refusing `finishReason` is STILL transient, and this is the counter-intuitive part.** The tempting fix
-is to call it permanent — *the model refused, why ask twice?* **Measured, that is wrong.** Generation is
-**sampled**, so the output-side filter is a coin toss, not a verdict. One slide, **10 identical calls**:
-
-| finishReason | calls | result |
-|---|---|---|
-| `STOP` | **6** | described normally, 7.6k–10.2k chars |
-| `RECITATION` | **4** | empty |
-
-The same bytes, the same prompt, the same model — a **~40% coin toss**. Calling that permanent would strand
-a file that describes 6 times in 10 and brand it with a rejection record it never earned; retrying 4× fails
-all four only ~2.6% of the time. So it **retries**, exactly as [§3.5](#35-a-transient-failure-is-not-a-verdict--bounded-retry-with-backoff-new-locked)'s
-stated bias demands: *when ambiguous, prefer transient*. Verified: the slide above now describes **3/3**
-through the app.
-
-**The one empty response that IS permanent** is `promptFeedback.blockReason` — the **input** refused
-*before* generation. Nothing was sampled, so there is nothing to re-roll.
+**A refusing `finishReason` is PERMANENT** *(reversed 2026-07-20 — this paragraph previously ordered a
+retry)*. Generation is **sampled**, and one measurement argued the output-side filter was a coin toss worth
+re-rolling — one slide, 10 identical calls: 6 × `STOP` (described, 7.6k–10.2k chars), 4 × `RECITATION`
+(empty). **In production the re-roll did not pay.** Refusing files walked attempts 1→4 with full backoff
+and were rejected anyway (2026-07-20 `error.err`: every `RECITATION` file burned all 4 attempts before
+earning the same `.ai_description_rejected`) — hundreds of wasted provider calls per batch and minutes of
+delay per file, for the same verdict. So a structured refusal — output-side refusing `finishReason` and
+input-side `blockReason` alike — now **fails on attempt 1** and writes its `.ai_description_rejected`
+immediately. Nothing is stranded irrecoverably: the record is **supersedable**, and **Overwrite** (§2.3) is
+the deliberate way to re-roll a file the sampling may yet describe.
 
 **The rules (LOCKED):**
 
 1. **Classify on the evidence OBJECT, never on the message prose.** The error names the `finishReason` for
    humans, and `"…(finishReason: PROHIBITED_CONTENT)"` would trip a `/SAFETY|PROHIBITED/` regex **by pure
    wording**. Structure decides; text is for reading.
-2. **A refusing `finishReason` retries** (`RECITATION`, `SAFETY`, `PROHIBITED_CONTENT`, `BLOCKLIST`, `SPII`).
+2. **A refusing `finishReason` is permanent** (`RECITATION`, `SAFETY`, `PROHIBITED_CONTENT`, `BLOCKLIST`,
+   `SPII`, `IMAGE_SAFETY`) — attempt 1, no retries, never counted toward the transient-retry ceiling.
 3. **A blocked INPUT (`blockReason`) is permanent** — attempt 1, no retries.
-4. **Only a refusal that SURVIVES every retry earns a `.ai_description_rejected`** (§2.3). A blank `STOP`
-   never does: recording it would assert a verdict the provider never reached, and would permanently stop
-   re-offering a file that merely had a bad moment.
+4. **A refusal earns its `.ai_description_rejected` on the FIRST refusing attempt** (§2.3). A blank `STOP`
+   never earns one: recording it would assert a verdict the provider never reached, and would permanently
+   stop re-offering a file that merely had a bad moment — the blank empty-200 stays transient and retries.
 
 **What went wrong.** The queue recorded a failure per file and moved on; **nothing retried**. So a
 transient blip permanently marked a file "not described." In one overnight run on the product owner's tree,

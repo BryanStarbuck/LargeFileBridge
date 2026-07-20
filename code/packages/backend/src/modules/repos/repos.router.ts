@@ -29,6 +29,7 @@ import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service
 import { repoUidFor } from "../storage/repo-identity.js";
 import { getStorageRow } from "../storage/storage.service.js";
 import { maybeSyncBackbone } from "../storage/backbone-freshness.service.js";
+import { maybeConvergeWorkingRepo } from "../pin/repo-artifact-sync.service.js";
 import { assertCompanyOwnership, withdrawCompanyOwnership } from "../storage/owner-propagation.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
@@ -130,6 +131,16 @@ reposRouter.get("/", (_req, res) => {
     // response and no-ops when a scan is already running or recent.
     maybeTriggerStaleScan("Repos list loaded");
     const rows: RepoRow[] = listRepoFolders().map(computeRepoRow);
+    // Working-repo convergence (backbone_resilience.mdx §6.4): pull down other computers' finished
+    // `.lfbridge/` artifacts. Cheap per repo (throttled 30 min, gated to artifact-bearing repos),
+    // non-blocking — fired after the rows are computed so it never delays this response.
+    for (const folder of listRepoFolders()) {
+      try {
+        maybeConvergeWorkingRepo(repoRootFor(folder), "Repos list loaded");
+      } catch {
+        /* a freshness trigger must never break the page */
+      }
+    }
     res.json({ ok: true, data: rows });
   } catch (e) {
     log.error("repos", `list failed: ${(e as Error).message}`);
@@ -268,6 +279,11 @@ reposRouter.get("/:repoId", async (req, res) => {
     // flight. Without it the only trigger is a launchd timer, and a launchd job that cannot start fails
     // silently forever.
     maybeSyncBackbone(`One-repo detail loaded (${folder})`);
+    // The THIRD freshness axis (backbone_resilience.mdx §6.4): the WORKING REPO ITSELF. Another computer's
+    // finished transcripts / AI descriptions travel INSIDE this repo's committed `.lfbridge/`, so until
+    // someone pulls the repo they simply do not exist here and every tile re-offers work already done.
+    // Non-blocking, throttled, fetch + ff-only merge, gated to repos where LFB artifacts are in play.
+    maybeConvergeWorkingRepo(repoRootFor(folder), `One-repo detail loaded (${folder})`);
     const detail: RepoDetail = await repoDetailWithPins(folder);
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.

@@ -149,7 +149,16 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
   // block pinned as `Qm…` is not invisible to a `bafy…` manifest CID for the SAME block — `pin ls` is
   // base-sensitive, so a raw string Set silently missed those. Always test membership as
   // `pinset.has(ipfs.canonicalCid(cid))`.
-  const pinset = new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
+  let pinset: Set<string>;
+  try {
+    pinset = new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
+  } catch (e) {
+    // A failed/timed-out `pin ls` must NEVER be read as "nothing is pinned" — an empty pinset here makes
+    // every previously-pinned file look pin-lost and re-uploads the whole unit. Skip this pass instead;
+    // the next scheduled pass retries with a healthy daemon.
+    markUnitError(t, `pin ls failed — skipping pin pass: ${(e as Error).message}`);
+    return counts;
+  }
 
   // Add + pin any new / changed / no-longer-pinned Add-to-IPFS-decided file — IN PARALLEL, bounded by the
   // global limiter (pin_process.mdx §4). Each task owns a distinct path key, so the shared `byPath` /

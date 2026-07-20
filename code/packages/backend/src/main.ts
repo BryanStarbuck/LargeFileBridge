@@ -3,6 +3,7 @@ import express, { type Request, type Response, type NextFunction } from "express
 import helmet from "helmet";
 import cors from "cors";
 import crypto from "node:crypto";
+import type { Server } from "node:http";
 import v8 from "node:v8";
 import { getAppConfig, updateAppConfig } from "./modules/store-model/config.service.js";
 import { buildAuthFrontend, allowedRedirectOrigins } from "./modules/auth/auth-frontend.js";
@@ -172,6 +173,44 @@ async function main(): Promise<void> {
     previousEnded: previousSession.previousEnded,
   });
 
+  // SIGNAL HANDLERS GO HERE — immediately after BOOT, before the migrations — not at the end of main().
+  // Two facts make the placement load-bearing (the 2026-07-20 "42× ended ABNORMALLY" incident):
+  //   * logging.ts self-installs flush-only SIGINT/SIGTERM listeners at import, which DISABLES Node's
+  //     default die-on-signal. So during the whole boot window (migrations + bootstrapState, seconds
+  //     long) a SIGTERM used to do nothing but flush; tsx watch / `just stop` then escalated to SIGKILL
+  //     and no SHUTDOWN marker was ever written — every dev-watch restart that landed in that window
+  //     read as a CRASH at the next boot.
+  //   * shutdown() must EXIT promptly. server.close() alone never completes while an SSE stream
+  //     (/api/events/stream) or a keep-alive socket is open, which is what turned every graceful stop
+  //     into tsx's "Process didn't exit in 5s. Force killing…" SIGKILL. closeAllConnections() plus a
+  //     bounded deadline keeps the exit well inside tsx's 5s and `just stop`'s ~1.2s KILL escalation.
+  // `server` is assigned once app.listen() runs; before that, a signal exits directly (nothing to drain).
+  let server: Server | null = null;
+  let shuttingDown = false;
+  const shutdown = (sig: string) => {
+    if (shuttingDown) return; // TERM,TERM,KILL escalation — the second TERM must not double-run this
+    shuttingDown = true;
+    log.info("main", `${sig} received — stopping filesystem watcher and exiting.`);
+    // SHUTDOWN is the ledger's proof of a DELIBERATE exit, so it may only ever be written from here.
+    // Its ABSENCE before the next BOOT is precisely what tells a reader the process died — which means
+    // the marker's value is entirely in the cases where it does NOT appear. Emit it FIRST and
+    // synchronously, before any async teardown, so nothing can cost us the line.
+    txnShutdown({ signal: sig });
+    stopHeartbeat();
+    stopHeapWatch();
+    stopWatcher(); // idempotent — a no-op when the watcher never started (signal during boot)
+    flushLogs();
+    if (!server) process.exit(0); // still booting — nothing listening, nothing to drain
+    server.close(() => process.exit(0));
+    // Destroy live sockets (SSE, keep-alive) that would otherwise hold close() open forever…
+    server.closeAllConnections?.();
+    // …and a hard deadline in case anything else wedges. unref()'d: it never keeps the process alive,
+    // but it still fires while the event loop runs — the exit is bounded either way.
+    setTimeout(() => process.exit(0), 2000).unref?.();
+  };
+  process.on("SIGINT", () => shutdown("SIGINT"));
+  process.on("SIGTERM", () => shutdown("SIGTERM"));
+
   // Watch the heap climb toward that ceiling and WARN before V8 aborts (memory.mdx P-32). Started before
   // any work is admitted; the timer is unref()'d, so it can never hold the process open.
   startHeapWatch();
@@ -264,7 +303,7 @@ async function main(): Promise<void> {
   // the local network in the default offline posture. Server mode binds all interfaces (override with
   // HOST) because it is meant to be reached remotely — and it fails closed to real sign-in.
   const host = isLocal ? "127.0.0.1" : process.env.HOST || "0.0.0.0";
-  const server = app.listen(port, host, () =>
+  server = app.listen(port, host, () =>
     log.info("main", `LargeFileBridge API listening on ${host}:${port}`),
   );
   // With the single-instance lock held, an EADDRINUSE here means a FOREIGN process owns the port —
@@ -325,20 +364,8 @@ async function main(): Promise<void> {
   // once the app is actually up. It self-silences when idle and is already unref()'d.
   startHeartbeat();
 
-  const shutdown = (sig: string) => {
-    log.info("main", `${sig} received — stopping filesystem watcher and exiting.`);
-    // SHUTDOWN is the ledger's proof of a DELIBERATE exit, so it may only ever be written from here.
-    // Its ABSENCE before the next BOOT is precisely what tells a reader the process died — which means
-    // the marker's value is entirely in the cases where it does NOT appear. Emit it before the async
-    // server.close() so a slow socket drain can't cost us the line (the write is synchronous).
-    txnShutdown({ signal: sig });
-    stopHeartbeat();
-    stopHeapWatch();
-    stopWatcher();
-    server.close(() => process.exit(0));
-  };
-  process.on("SIGINT", () => shutdown("SIGINT"));
-  process.on("SIGTERM", () => shutdown("SIGTERM"));
+  // (SIGINT/SIGTERM shutdown is registered right after txnBoot() above — see the comment there for why
+  // it must NOT live down here at the end of boot.)
 
   // Durable fault trail for the two "the process is going down and nobody caught it" paths. These
   // COMPOSE with logging.ts's installLogShutdownFlush(), which registers its own flush-only

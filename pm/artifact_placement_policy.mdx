@@ -194,6 +194,50 @@ the company `sync_repo` — via the [placement radios](./placement_radios.mdx). 
 gated only by the machine-local **keep-`.lfbridge/`** consent ([storage_settings.mdx §3](./storage_settings.mdx),
 default on).
 
+#### 1.1.1 The committability guard — a gitignored artifact is a stranded artifact (LOCKED)
+
+"Travels with the repo" is only true if the artifact is **committable**. Found live on charlie-kirk
+(2026-07-20): the repo's `.gitignore` had grown `.lfbridge/`, `*.transcription`, and `*.ai_description`
+rules (relics of the retired beside-media era), so every committer — the user's auto-commit, `git add -A` —
+silently skipped the 59 transcripts + 158 AI descriptions the tower had produced. `git status` stayed clean
+and the repo stayed 0-ahead, so nothing looked wrong, while the laptop kept reporting all of that work as
+still to do. The rule: after every artifact write into a working repo's `.lfbridge/`, verify the path is not
+gitignored; if it is, repair by **appending** re-include rules (`!.lfbridge/` + `!.lfbridge/**`) — additive
+only, never deleting a user rule. `.lfbridge/` is LFB's own quarantine directory, so this repair is exempt
+from the "never add a `.gitignore` entry automatically" nudging policy (which governs the user's media). A
+rule outside the repo's own `.gitignore` (e.g. `core.excludesFile`) is never edited — it is reported as an
+ERROR to the durable fault trail instead.
+
+Verifies-and-repairs committability after every artifact write in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts`, `ensureArtifactCommittable()` (hooked from `sync-trigger.service.ts` `noteArtifactWritten()`).
+
+#### 1.1.2 Legacy-line healing, delivery, and convergence — committable is not delivered (LOCKED)
+
+Committability (§1.1.1) makes the artifact *eligible* for git; three more steps make it *arrive* on the
+user's other computers, and each was missing in the 2026-07-20 strand:
+
+* **Healing** — the exact legacy nudge lines LFB's own deleted writers appended to working-repo
+  `.gitignore`s (`.lfbridge/` in any anchored/bare form, `*.transcription`, `*.ai_description`) are
+  REMOVED when found, not merely overridden. Scope is exact-trimmed-line match only; every user-authored
+  rule is preserved byte-for-byte. This is the working-repo twin of the SDL backbone's
+  `ensureSdlCommittable()` healing (git_backbone.mdx §4.2.1).
+  Removes the poison lines in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts`, `repairLegacyArtifactIgnores()` (constant `LEGACY_ARTIFACT_IGNORE_LINES`).
+* **Delivery** — writing an artifact into `<repo>/.lfbridge/` schedules a **pathspec-scoped** commit and
+  push of the quarantine dir only (`git add -- .lfbridge`; commit with explicit pathspec; never `add -A`;
+  one fetch + `--ff-only` + re-push retry; never force). Relying on a foreign auto-committer to sweep the
+  files is the stowaway defect (storage_personal.mdx §18.5.1) by another name.
+  Delivers in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts`, `syncWorkingRepoArtifacts()` (scheduled by `sync-trigger.service.ts` `noteArtifactWritten()` under a `repo:<root>` target with the same debounce/backoff as SDL syncs).
+* **Convergence** — the receiving computer pulls the repo itself: on Repos-list / One-repo page loads, a
+  throttled (30 min) background `git fetch` + `merge --ff-only` runs for tracked repos where LFB
+  artifacts are in play (`.lfbridge/` on disk or the durable-artifact latch). ff-only can never conflict;
+  a diverged branch is logged and left to the user.
+  Converges in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts`, `maybeConvergeWorkingRepo()` / `convergeWorkingRepoFromOrigin()` (fired from `repos.router.ts` GET `/` and GET `/:repoId`).
+
+See also backbone_resilience.mdx §6.4 (the narrowed guest rule these three steps implement).
+
 ### 1.2 Category B — tracking state that never enters the repo
 
 Everything LFB writes as a side effect of scanning and of the user's compression / pin / git-ignore

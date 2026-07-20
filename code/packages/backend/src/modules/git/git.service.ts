@@ -21,6 +21,7 @@ import { storageUnitDir } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
 import { LFBRIDGE_DIR } from "../storage/storage-type.service.js";
+import { stableGitBin } from "./git-bin.js";
 // The remote parser lives in a LEAF module so tracking-root.service.ts can derive a repo's shared identity
 // (repoUid) without importing this heavy module — one parser, no cycle (storage_company.mdx §8.4.1).
 import { parseRemoteOwner } from "../storage/repo-identity.js";
@@ -265,7 +266,7 @@ export function openRepo(workingDir: string): SimpleGit {
   for (const k of ["EDITOR", "VISUAL", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR"]) delete env[k];
   return simpleGit({
     baseDir: workingDir,
-    binary: "git",
+    binary: stableGitBin(), // absolute path — immune to a thin background PATH (git-bin.ts)
     maxConcurrentProcesses: 1,
     config: ["credential.interactive=false"],
   }).env({ ...env, GIT_TERMINAL_PROMPT: "0" });
@@ -766,11 +767,54 @@ export function checkIgnoreVerbose(repoRoot: string, absPaths: string[]): Map<st
   return rules;
 }
 
+/**
+ * `git check-ignore` aborts the WHOLE --stdin batch with this fatal when ANY candidate path lies inside
+ * a submodule (or a nested worktree git sees as a gitlink) — one bad path poisons the batch and the ⊘
+ * Ignore column loses git truth for the entire repo. We parse the offending pathspec + submodule out of
+ * stderr, split the batch at that boundary, and retry: submodule-contained paths are evaluated against
+ * the SUBMODULE's own ignore rules (it is its own git working tree — that IS git truth for a file that
+ * lives there), while the remainder retries against the parent repo. Splits are bounded; a submodule
+ * whose tree can't answer (stale worktree gitlink) conservatively yields "not ignored" so the
+ * bigNotIgnored nudge still surfaces rather than silently hiding files.
+ */
+const SUBMODULE_FATAL_RE = /fatal: Pathspec '(.*)' is in submodule '(.*)'/;
+const MAX_SUBMODULE_SPLITS = 16;
+
+/** Split `absPaths` at the submodule boundary a check-ignore fatal reported. Null = stderr wasn't that fatal. */
+function splitOnSubmoduleFatal(
+  repoRoot: string,
+  absPaths: string[],
+  stderr: string | undefined,
+): { inside: string[]; rest: string[]; subRoot: string } | null {
+  const m = stderr ? SUBMODULE_FATAL_RE.exec(stderr) : null;
+  if (!m) return null;
+  const subRoot = path.join(repoRoot, m[2]);
+  const prefix = subRoot + path.sep;
+  const inside = absPaths.filter((p) => p.startsWith(prefix));
+  const rest = absPaths.filter((p) => !p.startsWith(prefix));
+  // Prefix didn't match anything (symlinked/normalized paths)? Drop at least the exact offending
+  // pathspec so the retry strictly shrinks and can't loop on the same fatal forever.
+  if (inside.length === 0) {
+    const rest2 = absPaths.filter((p) => p !== m[1]);
+    if (rest2.length === absPaths.length) return null; // can't shrink — treat as an ordinary failure
+    return { inside: [m[1]], rest: rest2, subRoot };
+  }
+  return { inside, rest, subRoot };
+}
+
 /** The shared `git check-ignore --stdin` invocation. Returns stdout, or null when it genuinely failed. */
-function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean): string | null {
+function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean, splits = 0): string | null {
+  if (absPaths.length === 0) return "";
+  // A vanished cwd makes spawn fail with the SAME `ENOENT` a missing binary produces — the observed
+  // "spawnSync git ENOENT" storm was a tracked repo whose checkout had been moved/deleted (stale
+  // repoRoot), not a missing git. Say what actually happened instead of spawning into nowhere.
+  if (!fs.existsSync(repoRoot)) {
+    log.warn("git", `check-ignore skipped: repo root no longer exists (moved or deleted?): ${repoRoot}`);
+    return null;
+  }
   const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
   try {
-    return execFileSync("git", args, {
+    return execFileSync(stableGitBin(), args, {
       cwd: repoRoot,
       input: absPaths.join("\n") + "\n",
       encoding: "utf8",
@@ -780,8 +824,19 @@ function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean):
   } catch (e) {
     // check-ignore exits 1 when NONE of the inputs are ignored — expected, not an error. Its stdout
     // still carries whichever inputs WERE ignored (empty on a clean exit-1), so read it off the error.
-    const err = e as { status?: number; stdout?: string | Buffer };
+    const err = e as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     if (err.status === 1 && err.stdout != null) return err.stdout.toString();
+    // Submodule-contained path aborted the batch — split at the boundary and retry both halves.
+    const split =
+      splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, err.stderr?.toString()) : null;
+    if (split) {
+      const insideOut = isGitWorkingTree(split.subRoot)
+        ? runCheckIgnore(split.subRoot, split.inside, verbose, splits + 1)
+        : ""; // no usable submodule tree → conservatively "not ignored"
+      const restOut = runCheckIgnore(repoRoot, split.rest, verbose, splits + 1);
+      if (insideOut === null && restOut === null) return null;
+      return (restOut ?? "") + (insideOut ?? "");
+    }
     log.warn("git", `check-ignore failed in ${repoRoot}: ${(e as Error).message}`);
     return null;
   }
@@ -790,11 +845,23 @@ function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean):
 /** Async twin of `runCheckIgnore` (non-blocking spawn) for request paths that must not stall the event loop
  *  on the git process — the badge-context listing walk on a large/cloud-mounted dir (fs.service /
  *  buildEntityView). Same exit-code contract: exit-1 (none ignored) resolves to its stdout, ≥128 → null. */
-function runCheckIgnoreAsync(repoRoot: string, absPaths: string[], verbose: boolean): Promise<string | null> {
+async function runCheckIgnoreAsync(
+  repoRoot: string,
+  absPaths: string[],
+  verbose: boolean,
+  splits = 0,
+): Promise<string | null> {
+  if (absPaths.length === 0) return "";
+  // Same vanished-cwd guard as the sync twin: spawn reports a nonexistent cwd as `ENOENT`, identical
+  // to a missing git binary. Name the real cause and answer "nothing known to be ignored".
+  if (!fs.existsSync(repoRoot)) {
+    log.warn("git", `check-ignore (async) skipped: repo root no longer exists (moved or deleted?): ${repoRoot}`);
+    return null;
+  }
   const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
-  return new Promise((resolve) => {
+  const res = await new Promise<{ err: Error | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
-      "git",
+      stableGitBin(),
       args,
       {
         cwd: repoRoot,
@@ -802,17 +869,26 @@ function runCheckIgnoreAsync(repoRoot: string, absPaths: string[], verbose: bool
         env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
         maxBuffer: 64 * 1024 * 1024,
       },
-      (err, stdout) => {
-        // On a non-zero exit execFile sets `err` but still hands us the captured `stdout`. Exit-1 means
-        // "none ignored" (stdout carries whichever WERE ignored, empty on a clean 1) — not a failure.
-        if (!err) return resolve(stdout);
-        if ((err as { code?: number }).code === 1) return resolve(stdout ?? "");
-        log.warn("git", `check-ignore (async) failed in ${repoRoot}: ${err.message}`);
-        resolve(null);
-      },
+      (err, stdout, stderr) => resolve({ err, stdout: stdout ?? "", stderr: stderr ?? "" }),
     );
     child.stdin?.end(absPaths.join("\n") + "\n");
   });
+  // On a non-zero exit execFile sets `err` but still hands us the captured `stdout`. Exit-1 means
+  // "none ignored" (stdout carries whichever WERE ignored, empty on a clean 1) — not a failure.
+  if (!res.err) return res.stdout;
+  if ((res.err as { code?: number }).code === 1) return res.stdout;
+  // Submodule-contained path aborted the batch — same split-and-retry as the sync twin.
+  const split = splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, res.stderr) : null;
+  if (split) {
+    const insideOut = isGitWorkingTree(split.subRoot)
+      ? await runCheckIgnoreAsync(split.subRoot, split.inside, verbose, splits + 1)
+      : ""; // no usable submodule tree → conservatively "not ignored"
+    const restOut = await runCheckIgnoreAsync(repoRoot, split.rest, verbose, splits + 1);
+    if (insideOut === null && restOut === null) return null;
+    return (restOut ?? "") + (insideOut ?? "");
+  }
+  log.warn("git", `check-ignore (async) failed in ${repoRoot}: ${res.err.message}`);
+  return null;
 }
 
 /** Async twin of `checkIgnore` — one non-blocking `git check-ignore --stdin` over `absPaths`. */

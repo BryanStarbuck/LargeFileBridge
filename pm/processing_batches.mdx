@@ -154,7 +154,7 @@ mistake costs the user real money or real work.**
 | Outcome | What happened | **Settled?** (advances the bar) | Reads as |
 | --- | --- | --- | --- |
 | **`ok`** | The work ran and the output was written. | ✅ yes | green |
-| **`rejected`** | The provider **considered the file and said no** — a `RECITATION` / `SAFETY` verdict that **survived every retry**, or a blocked input ([ai_description.mdx §2.3](./ai_description.mdx)). A `.ai_description_rejected` record is written. | ✅ yes | **slate/violet, never red** |
+| **`rejected`** | The provider **considered the file and said no** — a `RECITATION` / `SAFETY` verdict or a blocked input, permanent on the **first** refusing attempt ([ai_description.mdx §2.3](./ai_description.mdx)). A `.ai_description_rejected` record is written. | ✅ yes | **slate/violet, never red** |
 | **`failed`** | The work **was attempted and errored** — a dead key, a missing tool, a transcript short of full duration. | ✅ yes | **red** |
 | **`halted`** | **Never attempted.** The circuit opened ([to_fix.mdx §2.4](./to_fix.mdx)) or the user stopped the batch (§6). Costs nothing to re-run. | ✅ yes | **amber, "Not attempted"** |
 | **`running` / pending** | Not settled yet. | ❌ no | spinner / muted |
@@ -189,10 +189,10 @@ to find out what percentage were rejected."*
 
 They are right, and the corpus already proves the scale: on the product owner's own files, **~3% of describe
 calls** come back refused, and a single refusing slide measured a **~40% coin toss** across ten identical
-calls ([ai_description.mdx §3.5](./ai_description.mdx)). Generation is **sampled**, so the output filter is
-a die roll, not a property of the file — which is why the retry policy re-rolls it, and why only a refusal
-that **survives all four attempts** is counted `rejected` here. Anything that would have succeeded on
-attempt two must never reach this counter.
+calls ([ai_description.mdx §3.5](./ai_description.mdx)). A structured refusal is **permanent** (reversed
+2026-07-20 — it used to re-roll ×4; in production the re-roll never paid): it is counted `rejected` on the
+**first** refusing attempt, and **Overwrite** is the deliberate way to re-roll a file. Genuine transients
+(timeouts, 429/5xx, blank empty-200s) still retry and must never reach this counter.
 
 **`rejected` is not a failure and must never render as one.** [ai_description.mdx §2.3](./ai_description.mdx)
 LOCKs this: *"That is an answer, not a breakdown"* — a refusal *"drains green"* and *"is SETTLED — never
@@ -397,7 +397,7 @@ all read the one payload, which is why they can never disagree.
    dropped task lands in `halted`, so the bar never runs backwards or disagrees with the toast.
 4. **The identity holds (§4.1):** `ok + rejected + failed + halted + running + pending === total` at every
    poll; progress = `settled / total`.
-5. **`rejected` is its own bucket (§4.2):** a refusal that **survived every retry** counts `rejected` —
+5. **`rejected` is its own bucket (§4.2):** a provider refusal counts `rejected` on its first attempt —
    **never** `failed` (it must not paint red or feed [to_fix.mdx §2.7](./to_fix.mdx)'s ceiling) and **never**
    folded into `ok` (a batch with 41 undescribed files must not report them as described). It renders
    **slate/violet**, and it **advances** the progress bar because it is settled.
@@ -437,8 +437,8 @@ all read the one payload, which is why they can never disagree.
    §4 FIVE outcomes: ok | rejected | failed | halted | running/pending.
       IDENTITY: ok+rejected+failed+halted+running+pending === total. Progress = settled/total (rejected AND
       failed both ADVANCE the bar — the bar = "how much left", not a quality score).
-   §4.2 *** rejected = the product owner's ask *** — Gemini RECITATION/SAFETY that SURVIVED ALL 4 RETRIES
-      (ai_description §3.5; ~3% of the owner's corpus, one slide = ~40% coin toss). NOT failed (ai_description
+   §4.2 *** rejected = the product owner's ask *** — Gemini RECITATION/SAFETY, permanent on attempt 1
+      (ai_description §3.5, reversed 2026-07-20; ~3% of the owner's corpus). NOT failed (ai_description
       §2.3 LOCKED "an answer, not a breakdown" — would paint red + feed to_fix §2.7's ceiling + halt the rest)
       and NOT ok (41 files silently undescribed reported as described). => THIRD bucket, THIRD column, SLATE.
       Today it's folded into done and nothing aggregates a rate — that's the gap this closes.

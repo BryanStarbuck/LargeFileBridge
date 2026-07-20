@@ -312,7 +312,14 @@ function safeStringify(v: unknown): string {
 }
 
 function write(level: Level, context: string, message: string): void {
-  const line = `[${new Date().toISOString()}] [${level}] [${context}]${contextTag()} ${message}\n`;
+  const header = `[${new Date().toISOString()}] [${level}] [${context}]${contextTag()}`;
+  // EVERY physical line carries the header. A message with embedded newlines — a child process's
+  // stderr folded into an Error message (`Command failed: git check-ignore …\nfatal: Pathspec …`),
+  // a multi-line stack trace — would otherwise land in log.log/error.err as BARE continuation lines
+  // with no timestamp or level, unparseable and unattributable. Re-stamping the same header keeps
+  // multi-line messages readable while making each line greppable on its own.
+  const body = message.replace(/\s+$/, "").split(/\r?\n/).join(`\n${header} `);
+  const line = `${header} ${body}\n`;
   if (ERROR_LEVELS.has(level)) {
     // Durable: synchronous to BOTH files so the fault trail is never lost across a crash/exit.
     errWriter.writeSync(line); // error.err is the complete fault trail

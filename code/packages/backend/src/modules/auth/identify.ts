@@ -68,7 +68,9 @@ export async function identify(req: Request, _res: Response, next: NextFunction)
     };
     if (!listed) log.warn("auth", `Rejected non-allow-listed sign-in: ${email}`);
   } catch (e) {
-    log.warn("auth", `Token verification failed: ${(e as Error).message}`);
+    // Include the route (method + path, never the query string — media tokens ride in queries) so a
+    // recurring failure identifies its caller instead of reading as an anonymous expired token.
+    log.warn("auth", `Token verification failed (${req.method} ${req.path}): ${(e as Error).message}`);
     withUser.user = DEFAULT_USER;
   }
   return next();

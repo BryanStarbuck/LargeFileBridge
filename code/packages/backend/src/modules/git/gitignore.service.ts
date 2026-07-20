@@ -303,6 +303,76 @@ function readGitignoreLineSet(repo: string): Set<string> {
   }
 }
 
+// ── Legacy artifact-ignore HEALING (artifact_placement_policy.mdx §1.1.2) ─────────────────────────────
+//
+// Two since-deleted "nudge" writers (describe.service `ensureLfbridgeIgnored`, 2026-07-05→07-13, and the
+// transcribe twin `ensureTranscribeIgnored`) appended these exact lines to a WORKING repo's root
+// `.gitignore` back when derived artifacts were policy-ignored. The policy reversed — artifacts now live
+// COMMITTED in `.lfbridge/` so they travel with the repo — but the lines those builds already wrote were
+// never removed, so every artifact in an affected repo was invisible to git: written, readable locally,
+// and permanently stranded on the machine that produced it (proven live on charlie-kirk, 2026-07-20:
+// 158 `.ai_description` + 59 `.transcription` files, 0 tracked). `unignorePaths()` deliberately refuses
+// pattern rules, so nothing else in the product could ever heal this. This is the working-repo twin of
+// git.service `ensureSdlCommittable()` (which heals the same defect shape for SDL repos).
+export const LEGACY_ARTIFACT_IGNORE_LINES: ReadonlySet<string> = new Set([
+  ".lfbridge/",
+  ".lfbridge",
+  "/.lfbridge/",
+  "/.lfbridge",
+  "*.transcription",
+  "*.ai_description",
+]);
+
+/** The legacy artifact-ignore lines currently present in a repo's root `.gitignore` (read-only probe —
+ *  used by the debug export so a dump can NAME the poison without mutating anything). */
+export function legacyArtifactIgnoreLines(repoRoot: string): string[] {
+  try {
+    const body = fs.readFileSync(path.join(repoRoot, ".gitignore"), "utf8");
+    return body.split("\n").map((l) => l.trim()).filter((l) => LEGACY_ARTIFACT_IGNORE_LINES.has(l));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Remove the legacy artifact-ignore lines from a WORKING repo's root `.gitignore` so the committed
+ * `.lfbridge/` artifact tree can actually enter git. Scope is deliberately exact:
+ *   • Only a WORKING repo (`usesLfbridgeDir` kind) with a `.git/` — SDL repos are healed by
+ *     `ensureSdlCommittable()` on every backbone cycle and are not touched here.
+ *   • Only lines whose trimmed text EXACTLY matches one of {@link LEGACY_ARTIFACT_IGNORE_LINES} — the
+ *     shapes LFB's own deleted nudges wrote. Every other rule (the big-file byte ignores, the user's own
+ *     rules) is preserved byte-for-byte.
+ * Idempotent, never throws. Returns the removed lines (empty = nothing to heal).
+ */
+export function repairLegacyArtifactIgnores(repoRoot: string): string[] {
+  try {
+    const root = path.resolve(expandHome(repoRoot));
+    if (!fs.existsSync(path.join(root, ".git"))) return [];
+    if (!usesLfbridgeDir(resolveStorageType(root))) return []; // an SDL — ensureSdlCommittable's job
+    const gi = path.join(root, ".gitignore");
+    let body: string;
+    try {
+      body = fs.readFileSync(gi, "utf8");
+    } catch {
+      return []; // no .gitignore → nothing is ignoring the artifacts
+    }
+    const lines = body.split("\n");
+    const removed = lines.map((l) => l.trim()).filter((l) => LEGACY_ARTIFACT_IGNORE_LINES.has(l));
+    if (removed.length === 0) return [];
+    const kept = lines.filter((l) => !LEGACY_ARTIFACT_IGNORE_LINES.has(l.trim()));
+    fs.writeFileSync(gi, kept.join("\n"), "utf8");
+    log.info(
+      "git",
+      `${root}: healed .gitignore — removed legacy artifact-ignore line(s) ${removed.map((l) => `'${l}'`).join(", ")} ` +
+        `so the committed .lfbridge/ artifacts can travel (artifact_placement_policy.mdx §1.1.2)`,
+    );
+    return removed;
+  } catch (e) {
+    log.warn("git", `could not heal legacy artifact ignores in ${repoRoot}: ${(e as Error).message}`);
+    return [];
+  }
+}
+
 /**
  * Append the given lines to `<repo>/.gitignore`, skipping any already present (append-only + idempotent,
  * git_ignore.mdx §5.4). Preserves a trailing newline. Returns how many lines were actually written.

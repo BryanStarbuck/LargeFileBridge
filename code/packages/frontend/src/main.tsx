@@ -24,6 +24,7 @@ import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog, errMessage } from "./lib/clientLog.js";
 import { isTransientNetworkError } from "./lib/transientError.js";
+import { tryStaleModuleReload } from "./lib/staleModuleReload.js";
 import "./styles.css";
 
 // The bottom-left offset that clears the left bar for BOTH the toast stack and the progress dock
@@ -77,6 +78,17 @@ window.addEventListener("error", (e) => {
 });
 window.addEventListener("unhandledrejection", (e) => {
   reportGlobal("window.unhandledrejection", e.reason);
+});
+
+// Stale-chunk recovery (lib/staleModuleReload.ts): after a redeploy/dev-server restart an open tab's
+// next dynamic import can point at a chunk URL that no longer exists — Vite surfaces that as
+// `vite:preloadError`. Reload once (loop-guarded) to pick up the fresh module graph; preventDefault()
+// suppresses Vite's own re-throw while the reload is in flight. The sibling failure mode — a dep
+// RE-OPTIMIZATION splitting react/react-query into two live copies mid-render — throws inside a
+// component instead and is handled by the same helper from ErrorBoundary.componentDidCatch.
+window.addEventListener("vite:preloadError", (e) => {
+  clientLog.warn("vite.preloadError", errMessage((e as unknown as { payload?: unknown }).payload));
+  if (tryStaleModuleReload("vite.preloadError")) e.preventDefault();
 });
 
 // A centered full-height status card — the three non-app boot states (Loading / Reconnecting / a

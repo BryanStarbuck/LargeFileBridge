@@ -259,11 +259,9 @@ async function readMarker(abs: string, media: CompressMedia, tools: CompressTool
   }
 }
 
-// True when the file already carries OUR current-version marker — the skip signal (§8.4). A mark from an
-// OLDER version is treated as absent so a genuinely improved engine can re-sweep those files.
-async function isAlreadyCompressed(abs: string, media: CompressMedia, tools: CompressTools): Promise<boolean> {
-  return (await readMarker(abs, media, tools)).startsWith(MARKER_PREFIX);
-}
+// The skip signal (§8.4) is `readMarker(...).startsWith(MARKER_PREFIX)`, tested inline at the top of
+// compressFile — the RAW marker string is kept there so the record backfill can read the codec out of it.
+// A mark from an OLDER version fails the prefix test, so an improved engine re-sweeps those files.
 
 async function imageDims(abs: string, tools: CompressTools): Promise<{ w: number; h: number } | null> {
   if (!tools.magick) return null;
@@ -631,7 +629,28 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   // §8.4 — the already-compressed marker. If this file already carries our in-file marker (from a prior
   // pass here, or because a peer compressed it and it pinned over IPFS), skip it BEFORE any transcode — the
   // whole point is to never re-encode a file we (or another of the user's computers) already compressed.
-  if (await isAlreadyCompressed(abs, media, tools)) {
+  const marker = await readMarker(abs, media, tools);
+  if (marker.startsWith(MARKER_PREFIX)) {
+    // BACKFILL the travelling compression record on a marker skip (best-effort, §8.4): the marker rode in
+    // WITH the bytes (a peer compressed this file and it pinned over IPFS, or a pre-record engine did), so
+    // THIS machine may hold no record — and without one the Compress status keeps counting the file
+    // "compressible" forever (units.service.ts compressStatusFor reads the record via analysisOutputs).
+    // Sizes are the CURRENT bytes (the original is unknown here; ratio 1 = "no measured gain, marker-skip").
+    if (beforeBytes != null) {
+      try {
+        const storageRoot = findStorageRootForPath(abs);
+        if (storageRoot) {
+          const rel = path.relative(storageRoot, abs);
+          writeCompressionRecord(storageRoot, rel, {
+            source: rel,
+            original: { name: path.basename(abs), extension: path.extname(abs).replace(/^\./, ""), size: beforeBytes },
+            compressed: { codec: marker.split(";")[2] ?? null, size: beforeBytes, ratio: 1, at: new Date().toISOString() },
+          });
+        }
+      } catch (e) {
+        log.warn("compress", `marker-skip record backfill skipped: ${(e as Error).message}`);
+      }
+    }
     return { path: abs, status: "skipped", reason: "already compressed (marker)", beforeBytes, afterBytes: beforeBytes, codec: check.targetCodec };
   }
 

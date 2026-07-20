@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
@@ -20,6 +23,13 @@ export default defineConfig({
   test: {
     include: ["src/**/*.spec.ts"],
     environment: "node",
+    // Specs import the REAL logger (shared/logging.ts), which resolves its files at import time to
+    // ~/T/_large_files_bridge/. Without this, every test run appends its fixture WARN/ERROR lines to
+    // the PRODUCTION error.err — proven live: sync-trigger.spec's mocked rejection ("git exploded")
+    // showed up 37 times in the real error log and was investigated as a backbone failure. Specs that
+    // assert on log files (logging.spec, session.spec, heap-watch.spec) set their own LFB_LOG_DIR
+    // before import, which overrides this baseline.
+    env: { LFB_LOG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "lfb-vitest-logs-")) },
     // Fingerprint tests decode real images with sharp; the import-graph walk reads the tree.
     // Both are CPU-bound and short — the default pool is fine, just give them room.
     testTimeout: 30_000,

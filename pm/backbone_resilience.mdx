@@ -278,6 +278,39 @@ tree and one git index at the same time (**F10**). The rule, owned by
 Serializing every git operation per storage behind one lock is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock(id, fn)`, taken by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit()` / `ensureDeviceRegistered()` / `syncStorageText()` and by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` (whose `withCompanyGitLock` is now an alias of the same lock, not a second one).
 
+### 6.4 Working repos: the guest rule, narrowed to what it protects (LOCKED)
+
+Everything above governs the **SDL backbone repos** LFB owns. A **working repo** (charlie-kirk) is
+different by charter: LFB is a **guest** there — it never commits, rewrites, or merges the **user's
+content**. The 2026-07-20 charlie-kirk strand proved that reading "guest" as *never touch git at all*
+guarantees stranding: 158 AI descriptions + 59 transcripts sat gitignored and uncommitted with a clean
+`git status`, no code path had "deliver the finished work" as its purpose (the §18.5.1 stowaway defect,
+alive for the working-repo case the SDL fix never covered), and **nothing on the other computer ever
+pulled the repo**, so even a delivered artifact had no way to arrive. The narrowed rule: the `.lfbridge/`
+quarantine is **LFB's own output** — that is the whole point of quarantining it — so LFB owns its
+delivery end-to-end, while everything outside `.lfbridge/` stays untouchable. Four responsibilities:
+
+* **Committability** — after every artifact write, verify the path is not gitignored and repair the repo's
+  `.gitignore` additively when it is ([artifact_placement_policy.mdx §1.1.1](./artifact_placement_policy.mdx));
+  additionally the exact legacy nudge lines LFB itself once wrote (`.lfbridge/`, `*.transcription`,
+  `*.ai_description`) are removed outright when found.
+* **Delivery** — an artifact write into `<repo>/.lfbridge/` schedules a **pathspec-scoped** commit
+  (`git add -- .lfbridge`, commit with explicit pathspec, so the user's staged work is never swept) and a
+  push with one fetch + `--ff-only` retry. Never `add -A`, never a force-push.
+* **Convergence** — the receive side: on Repos-list / One-repo page loads, tracked repos where LFB
+  artifacts are in play (`.lfbridge/` on disk or the durable-artifact latch) get a throttled background
+  `git fetch` + `merge --ff-only`. Fast-forward-only can never conflict and never merges a diverged
+  branch — that remains the user's call. A diverged repo is logged and left alone.
+* **Visibility** — the debug export's per-unit `artifact_health` block reports artifacts on-disk vs
+  git-tracked vs blocked-by-ignore vs committed-but-unpushed, and every analysis row carries a per-op
+  `artifacts` probe (expected path, exists, layout matched, committed, pushed), so a strand is one read.
+
+Committability guard + `artifact_health` audit implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts` — `ensureArtifactCommittable()` (hooked from `sync-trigger.service.ts` `noteArtifactWritten()`) and `auditArtifactCommittability()` (emitted by `debug-export.service.ts` `exportOneUnit()`).
+
+Legacy-line healing, scoped delivery, and ff-only convergence implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `repairLegacyArtifactIgnores()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` (delivery, fired via `sync-trigger.service.ts` `noteArtifactWritten()`'s `repo:` target) and `maybeConvergeWorkingRepo()` / `convergeWorkingRepoFromOrigin()` (convergence, fired from `repos.router.ts` list + detail loads).
+
 ---
 
 ## 7. Staleness surfacing — an overdue worker is visible (LOCKED)

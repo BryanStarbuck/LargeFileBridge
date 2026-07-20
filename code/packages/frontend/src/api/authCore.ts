@@ -19,10 +19,54 @@ const ALLOWED_DOMAINS = ["act3ai.com"];
 // (prod) at the same origin, so the session cookie rides along with credentials: "include".
 export const authCore = new RealAuthCore("/api", "lfb-embedded", ALLOWED_DOMAINS);
 
+// Minimum remaining validity a Bearer must have at ATTACH time. The SDK reuses its cached token until
+// ~10s before `exp`, which is not enough once real delivery delays exist: a tab that slept past expiry
+// can fire a request before the (sleep-paused) proactive-refresh timer runs, and a backend whose event
+// loop is briefly blocked can verify a nearly-expired token AFTER it lapsed. Both showed up in
+// error.err as `[auth] Token verification failed: "exp" claim timestamp check failed`.
+const TOKEN_MIN_TTL_S = 60;
+
+/**
+ * Read the `exp` (epoch seconds) claim WITHOUT verifying — used only to decide "refresh before use",
+ * never for a trust decision (mirrors the SDK's own readJwtExp).
+ */
+function readJwtExp(jwt: string): number | null {
+  try {
+    const payload = jwt.split(".")[1];
+    if (!payload) return null;
+    const json = atob(payload.replace(/-/g, "+").replace(/_/g, "/"));
+    const exp = (JSON.parse(json) as { exp?: number }).exp;
+    return typeof exp === "number" ? exp : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Refresh-before-use token getter (authentication.mdx §4): returns the cached Bearer unless it is
+ * within TOKEN_MIN_TTL_S of expiry, in which case it forces a fresh mint FIRST so no request ever
+ * leaves with a token about to (or already) lapse. Concurrent callers queue on the SDK's single-flight
+ * mint, so a refresh never fans out into parallel /tokens calls. If the mint fails (backend blip), a
+ * still-valid old token is used as-is; a known-expired one is dropped (send no Bearer, let the
+ * reactive 401→reload backstop recover) — never knowingly attach an expired token.
+ */
+export async function getFreshToken(): Promise<string | null> {
+  const token = await authCore.getToken();
+  if (!token) return null;
+  const exp = readJwtExp(token);
+  const now = Math.floor(Date.now() / 1000);
+  if (exp !== null && exp - now < TOKEN_MIN_TTL_S) {
+    const fresh = await authCore.refresh().catch(() => null);
+    if (fresh) return fresh;
+    return exp > now ? token : null;
+  }
+  return token;
+}
+
 // Attach the minted access token to every axios request, and re-hydrate on a 401 so a rolled/expired
 // session recovers instead of hard-failing.
 registerAuthBridge(
-  () => authCore.getToken(),
+  () => getFreshToken(),
   () => authCore.load(),
 );
 

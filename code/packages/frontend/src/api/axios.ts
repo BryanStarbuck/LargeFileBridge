@@ -37,6 +37,10 @@ http.interceptors.response.use(
       await reloadSession().catch((e) => {
         console.error("[axios.reloadSession]", e);
       });
+      // Drop the STALE Bearer before retrying: the request interceptor re-runs on retry and only
+      // overwrites the header when it gets a token — if the re-mint fails it would otherwise re-send
+      // the very expired token that just 401'd (a second guaranteed-failed verification).
+      delete error.config.headers?.Authorization;
       return http.request(error.config);
     }
     if (status === 403) toast.error("You don't have permission to do that.");

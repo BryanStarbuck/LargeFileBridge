@@ -156,7 +156,7 @@ export async function scanAll(
     const threshold = resolveThreshold(rc.big_file_override, cfg.big_file.threshold_bytes);
     const ig = rc.large_files.follow_gitignore ? buildRepoIgnore(repoPath) : null;
     // ig === null means "no real .gitignore to follow" → size-gate only, no media-bypass.
-    const { candidates } = await walkUnit(repoPath, threshold, {
+    const { candidates, dropped } = await walkUnit(repoPath, threshold, {
       ignore: ig,
       includeGlobs: rc.large_files.include_globs,
       excludeGlobs: rc.large_files.exclude_globs,
@@ -165,7 +165,7 @@ export async function scanAll(
       // `threshold` below the global 50 MB would otherwise nudge on files it also treats as payload.
       checkedInThreshold: Math.min(cfg.big_file.checked_in_threshold_bytes, threshold),
     });
-    const status = writeStatus(folder, "repo", candidates, threshold, source);
+    const status = writeStatus(folder, "repo", candidates, threshold, source, dropped);
 
     // Map each candidate's repo-relative path to the CID the committed manifest recorded for it, so we can
     // tell — cheaply, reusing the ONE pinset fetched for this whole scan — which candidates are already
@@ -288,6 +288,8 @@ async function scanComputerUnit(
   const all: Candidate[] = [];
   let dropped = 0;
   for (const root of scanRoots) {
+    // Each root gets what remains of BOTH budgets (soft and hard), so the totals — not the per-root
+    // counts — are what the caps bound (2_2_do §I item I4, scan.mdx §4.5).
     const res = await walkUnit(
       root,
       globalThreshold,
@@ -298,7 +300,8 @@ async function scanComputerUnit(
         maskPaths,
         rootLabelAbsolute: true,
       },
-      UNIT_CANDIDATE_CAP - all.length,
+      Math.max(0, UNIT_CANDIDATE_CAP - all.length),
+      Math.max(0, UNIT_CANDIDATE_HARD_CAP - all.length),
     );
     for (const c of res.candidates) all.push(c);
     dropped += res.dropped;
@@ -306,12 +309,12 @@ async function scanComputerUnit(
   if (dropped > 0) {
     log.warn(
       "scan",
-      `computer unit hit the ${UNIT_CANDIDATE_CAP}-candidate cap across ${scanRoots.length} root(s) — ${dropped} candidate(s) dropped`,
+      `computer unit hit the ${UNIT_CANDIDATE_HARD_CAP}-candidate hard cap across ${scanRoots.length} root(s) — ${dropped} candidate(s) dropped`,
     );
   }
   const dir = computerUnitDir();
   const prev = readYaml(unitStatusPath(dir), UnitStatusSchema);
-  const next = diffStatus(prev, all, globalThreshold, source, "computer");
+  const next = diffStatus(prev, all, globalThreshold, source, "computer", dropped);
   writeYaml(unitStatusPath(dir), { ...next });
   return all.length;
 }
@@ -332,13 +335,22 @@ interface WalkOpts {
 // both 5000 — so all three bound the same way. Without it `out` was the one unbounded accumulator here,
 // and scanComputerUnit then concatenated one per root, multiplying it.
 //
-// NO SILENT TRUNCATION (charter): on hitting the cap we keep WALKING and keep COUNTING — we just stop
-// PUSHING — so the warning we log carries the exact number of candidates dropped, not a vague "some".
-// That also keeps this a memory-only fix: the walk covers the same tree it always did, so nothing about
-// which files are discovered changes below the cap. Reported via log.warn to the durable fault trail,
-// exactly how tracking.service reports its MAX_FILES cap. (UnitStatus has no truncation field and
-// adding one would change the on-disk format.)
+// NO SILENT TRUNCATION (charter): on hitting the hard cap we keep WALKING and keep COUNTING — we just
+// stop PUSHING — so the warning we log (and the `scan_dropped_candidates` count we persist to the unit's
+// status.yaml) carries the exact number of candidates dropped, not a vague "some". Reported via log.warn
+// to the durable fault trail, exactly how tracking.service reports its MAX_FILES cap.
 const UNIT_CANDIDATE_CAP = 5000;
+
+// NO PERMANENT BLINDNESS (scan.mdx §4.5): the 5000 cap is a SOFT bound with bounded headroom, not a
+// cliff. A unit that lands a little over the soft cap (the real-world case: 5097 and 7003 candidates)
+// used to drop the SAME overflow files on EVERY scan — a stable set of files silently invisible to the
+// product forever, because nothing ever picked up the remainder. The walk order is deterministic, so a
+// fixed cap converts a one-scan memory guard into a permanent censorship of the tail. Now the walk keeps
+// accumulating past the soft cap up to this HARD ceiling (2× soft), so the observed overflows are kept
+// whole; memory stays bounded (never more than 2× the old worst case, and only for trees that genuinely
+// have that many candidates). Only past the hard ceiling do we drop — and then the exact count is
+// persisted (`scan_dropped_candidates`) so the truncation is visible in the product, not only in a log.
+const UNIT_CANDIDATE_HARD_CAP = UNIT_CANDIDATE_CAP * 2;
 
 // Yield control back to the event loop so a long, CPU-bound synchronous walk does not FREEZE the whole
 // web app. The walk is fs.readdirSync/statSync in a tight loop; without cooperative yields it starves
@@ -354,14 +366,16 @@ interface WalkResult {
   dropped: number;
 }
 
-// Recursive stat-only walk. Returns files >= threshold that pass the ignore/mask rules, capped at
-// `cap` rows (default UNIT_CANDIDATE_CAP) with an exact count of what the cap dropped — see the
-// constant for why we keep walking past it (2_2_do §I item I4).
+// Recursive stat-only walk. Returns files >= threshold that pass the ignore/mask rules. `cap` is the
+// SOFT bound (default UNIT_CANDIDATE_CAP) — exceeding it only logs; rows are dropped (with an exact
+// count) only past `hardCap` (default UNIT_CANDIDATE_HARD_CAP) — see the constants for why the walk
+// keeps going past both (2_2_do §I item I4, scan.mdx §4.5).
 async function walkUnit(
   root: string,
   threshold: number,
   opts: WalkOpts,
   cap: number = UNIT_CANDIDATE_CAP,
+  hardCap: number = UNIT_CANDIDATE_HARD_CAP,
 ): Promise<WalkResult> {
   const out: Candidate[] = [];
   let dropped = 0;
@@ -447,8 +461,11 @@ async function walkUnit(
       // any size (rule 1, payload) or a 50–100 MB checked-in nudge (rule 4) is NOT analysisOnly, so it stays
       // visible under the toggle — the 5–100 MB git-ignored clip case (scan.mdx §4.1) is never re-hidden.
       const analysisOnly = !isPayload && !checkedInBig && analysisMedia;
-      // At the cap: stop accumulating, but keep counting so the warning below is exact (§I item I4).
-      if (out.length >= cap) {
+      // At the HARD cap: stop accumulating, but keep counting so the warning below (and the persisted
+      // scan_dropped_candidates) is exact (§I item I4, scan.mdx §4.5). The soft `cap` never drops —
+      // it only marks the walk as over-budget in the log so a growing tree is noticed before it
+      // reaches the ceiling.
+      if (out.length >= hardCap) {
         dropped++;
         continue;
       }
@@ -467,7 +484,14 @@ async function walkUnit(
   if (dropped > 0) {
     log.warn(
       "scan",
-      `walk of ${root} hit the ${cap}-candidate cap — ${dropped} candidate(s) dropped from this unit's scan`,
+      `walk of ${root} hit the ${hardCap}-candidate hard cap — ${dropped} candidate(s) dropped from this unit's scan (recorded on the unit's status as scan_dropped_candidates)`,
+    );
+  } else if (out.length > cap) {
+    // Over the soft cap but inside the headroom: NOTHING was dropped — the census is complete. Logged so
+    // a tree drifting toward the hard ceiling is visible before truncation ever starts (scan.mdx §4.5).
+    log.warn(
+      "scan",
+      `walk of ${root} exceeded the ${cap}-candidate soft cap (${out.length} candidates kept within the ${hardCap} headroom — nothing dropped)`,
     );
   }
   return { candidates: out, dropped };
@@ -479,9 +503,10 @@ function writeStatus(
   candidates: Candidate[],
   threshold: number,
   source: "scheduled" | "manual",
+  dropped = 0,
 ): UnitStatus {
   const prev = getRepoStatus(folder);
-  const next = diffStatus(prev, candidates, threshold, source, "repo");
+  const next = diffStatus(prev, candidates, threshold, source, "repo", dropped);
   next.folder_name = folder;
   writeRepoStatus(folder, next);
   return next; // the caller reads changes_since_last_scan.added to drive the default-decision policy pass
@@ -588,6 +613,7 @@ function diffStatus(
   threshold: number,
   source: "scheduled" | "manual",
   repoState: "repo" | "computer",
+  dropped = 0,
 ): UnitStatus {
   const prevByPath = new Map(prev.candidates.map((c) => [c.path, c]));
   const nowByPath = new Map(candidates.map((c) => [c.path, c]));
@@ -641,6 +667,9 @@ function diffStatus(
     // large file and must not inflate the repos-list count/bytes (one_repo.mdx §4.1 / repos.mdx §4.1).
     big_file_count: candidates.filter((c) => !c.analysisOnly).length,
     big_file_bytes: candidates.reduce((s, c) => (c.analysisOnly ? s : s + c.size), 0),
+    // Truncation is a per-scan fact — always overwrite (never inherit prev's via the spread above), and
+    // `undefined` when 0 so YAML.stringify omits the key from a complete census (scan.mdx §4.5).
+    scan_dropped_candidates: dropped > 0 ? dropped : undefined,
     repo_state: repoState === "computer" ? "present" : "present",
     // Persist analysisOnly (the frontend "Large files only" toggle reads it); path/size/modified_at as before.
     candidates: candidates.map((c) => ({

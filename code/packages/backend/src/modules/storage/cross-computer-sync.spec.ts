@@ -157,6 +157,7 @@ import { RepoUnitConfigSchema } from "@lfb/shared";
 import {
   clearPersistedSyncRepoFalse,
   repairEmptySyncRepoBlock,
+  repairEmptySyncRepoBlocks,
 } from "../../config/migrate-sync-repo-default.js";
 
 describe("clearPersistedSyncRepoFalse — a schema default is not a user's choice (§8.4.2)", () => {
@@ -199,10 +200,38 @@ describe("clearPersistedSyncRepoFalse — a schema default is not a user's choic
   });
 });
 
+// THE 2026-07-20 OUTAGE, LAYER ZERO: the schema itself must survive the broken file. Twice in one day a
+// line-level migration left a bare `sync_repo:` (= YAML null) in every repo config, and `.prefault({})`
+// (undefined-only) rejected it — 1000+ "expected object, received null" per hour, every repo unit skipped by
+// reconcileMirroredRepos and every To-Do recalc dead. These tests parse the REAL broken YAML through the REAL
+// schema: no store heal, no repair pass — validation alone may never fail on a valueless block again.
+describe("RepoUnitConfigSchema — a valueless YAML block must read as its defaults, never throw", () => {
+  it("parses the exact broken file shape the migration left behind (bare `sync_repo:`)", () => {
+    const broken = "pinned: true\nsync_repo:\nowner_override: null\n";
+    const parsed = RepoUnitConfigSchema.safeParse(YAML.parse(broken));
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.sync_repo).toEqual({});
+    // Absence still means the mirror is ON (storage_company.mdx §8.4.2) — null must not become an opt-out.
+    expect(parsed.success && parsed.data.sync_repo.enabled).toBeUndefined();
+  });
+
+  it("survives EVERY object block of the repo config being valueless, not just sync_repo", () => {
+    const broken =
+      "repo:\nbig_file_override:\nlarge_files:\npin:\naccess:\nartifacts:\nsync_repo:\ndecisions:\n";
+    const parsed = RepoUnitConfigSchema.safeParse(YAML.parse(broken));
+    expect(parsed.success).toBe(true);
+    expect(parsed.success && parsed.data.pin.pin_locally).toBe(true); // block defaults applied
+    expect(parsed.success && parsed.data.decisions).toEqual({});
+  });
+
+  it("still rejects a genuinely wrong value — null-tolerance is not a bulldozer", () => {
+    expect(RepoUnitConfigSchema.safeParse(YAML.parse("sync_repo:\n  enabled: 12\n")).success).toBe(false);
+  });
+});
+
 describe("repairEmptySyncRepoBlock — cleaning up after the version that shipped broken", () => {
   it("rewrites a valueless `sync_repo:` as an explicit empty map", () => {
     const broken = "pinned: true\nsync_repo:\nowner_override: null\n";
-    expect(RepoUnitConfigSchema.safeParse(YAML.parse(broken)).success).toBe(false); // the live failure
     const fixed = repairEmptySyncRepoBlock(broken)!;
     expect(fixed).toBe("pinned: true\nsync_repo: {}\nowner_override: null\n");
     expect(RepoUnitConfigSchema.safeParse(YAML.parse(fixed)).success).toBe(true);
@@ -218,6 +247,24 @@ describe("repairEmptySyncRepoBlock — cleaning up after the version that shippe
 
   it("handles the block running to end-of-file", () => {
     expect(repairEmptySyncRepoBlock("pinned: true\nsync_repo:\n")).toBe("pinned: true\nsync_repo: {}\n");
+  });
+
+  // THE MARKER LOCKOUT (2026-07-20, second occurrence): the damage recurred AFTER the repair's one-time
+  // marker was written, so the sweep never ran again and every repo unit stayed dark. The sweep is now
+  // content-driven — an existing marker must never stop it from fixing a re-broken file.
+  it("repairEmptySyncRepoBlocks re-repairs even when its marker already exists", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "lfb-repair-"));
+    try {
+      fs.writeFileSync(path.join(stateDir, ".sync-repo-empty-block-repaired"), "2026-07-20T18:03:00.000Z");
+      const repoDir = path.join(stateDir, "pin", "r", "some-repo");
+      fs.mkdirSync(repoDir, { recursive: true });
+      const cfg = path.join(repoDir, "config.yaml");
+      fs.writeFileSync(cfg, "pinned: true\nsync_repo:\nowner_override: null\n");
+      repairEmptySyncRepoBlocks(stateDir);
+      expect(fs.readFileSync(cfg, "utf8")).toBe("pinned: true\nsync_repo: {}\nowner_override: null\n");
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
   });
 });
 

@@ -35,6 +35,7 @@ import { applyGitIgnore, unignorePaths } from "../git/gitignore.service.js";
 import { classifyRemoteVisibility } from "../git/git.service.js";
 import { classifySpecial } from "../scanner/special-file.service.js";
 import { effectiveFlags, getAppConfig } from "../store-model/config.service.js";
+import { repoUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { getRepoConfig, updateRepoConfig } from "../store-model/units.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { log } from "../../shared/logging.js";
@@ -283,29 +284,21 @@ export async function recordDecision(
     decided_at: decidedAt,
   }));
 
-  // The SHARED write is gated on the machine-local keep-.lfbridge consent (decisions.mdx §6).
-  if (keepsLfbridge(repoRoot)) {
-    // Append the events (decisions AND tombstones) to the team-shared ledger, then reconcile — the fold
-    // projects the ledger onto the local frozen enum, so a tombstone (asked:false) correctly un-decides.
-    try {
-      appendEvents(repoRoot, events);
-    } catch (e) {
-      log.error("decisions", `${repoRoot}: shared ledger append failed: ${(e as Error).message}`);
-      throw e;
-    }
-    await reconcile(folder);
-  } else {
-    // Consent OFF (rare): do NOT touch the repo root. Remember the decision LOCALLY ONLY so this computer
-    // never re-asks; it is simply not shared to the team from this machine (decisions.mdx §6). Skip
-    // reconcile so a teammate's shared ledger doesn't overwrite this local-only choice.
-    await updateRepoConfig(folder, (c) => {
-      for (const p of relPaths) {
-        if (!asked) delete c.decisions[p];
-        else c.decisions[p] = axes.ipfs ? "sync" : "ignore";
-      }
-      return c;
-    });
+  // The ledger is ALWAYS written — to Local Storage, unconditionally (decisions.mdx §6, LOCKED). It never
+  // touches the working repo, so the keep-`.lfbridge/` consent (which now governs only Category-A content
+  // artifacts) has nothing to gate here; whether the events TRAVEL is governed by the sync repo alone
+  // (`mirrorToSyncRepo` no-ops when none is configured). The old consent gate wrote the frozen cache with
+  // NO ledger event — a decision honored on this machine that no other computer could ever learn, the
+  // cache-only shape behind the 2026-07-20 "not backed up: 22 / 0" defect.
+  // Append the events (decisions AND tombstones) to the team-shared ledger, then reconcile — the fold
+  // projects the ledger onto the local frozen enum, so a tombstone (asked:false) correctly un-decides.
+  try {
+    appendEvents(repoRoot, events);
+  } catch (e) {
+    log.error("decisions", `${repoRoot}: shared ledger append failed: ${(e as Error).message}`);
+    throw e;
   }
+  await reconcile(folder);
 
   // Apply the git-ignore axis through the engine (anchored, idempotent, skip-already-ignored) only when
   // the user turned it ON — we never git-ignore on our own (charter / git_ignore.mdx). Independent of the
@@ -353,6 +346,54 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
   } catch (e) {
     log.warn("decisions", `${repoRoot}: reconcile skipped (ledger unreadable): ${(e as Error).message}`);
     return { changed: [] };
+  }
+  // ── BACKFILL cache-only decisions into the ledger (decisions.mdx §13, as a STANDING guard) ──────────
+  // A frozen-enum entry with NO ledger event AT ALL (not even a tombstone) has no vehicle to travel: the
+  // pin engine honors it here forever while the user's other computers can never learn it — the exact
+  // shape behind "not backed up: 22 on the tower, 0 on the laptop" (2026-07-20 charlie-kirk): the one-time
+  // §13 migration HAD seeded these events on Jul 12, then the old wholesale mirror copy erased them, and
+  // the migration's marker meant nothing would ever re-seed. The guard therefore lives HERE, on every
+  // reconcile, not behind a run-once marker — idempotent because once written, the fold sees the events.
+  // Stamps per §13: `decided_by:"migrated"`, `decided_at:` the config file's mtime (best-known time, and
+  // deliberately OLD so any real teammate event for the same path wins the last-writer fold).
+  try {
+    const cacheOnly = Object.entries(getRepoConfig(folder).decisions).filter(([p]) => !folded.has(p));
+    if (cacheOnly.length > 0) {
+      const sid = decisionSid(folder, repoRoot);
+      let decidedAt: string;
+      try {
+        decidedAt = fs.statSync(unitConfigPath(repoUnitDir(folder))).mtime.toISOString();
+      } catch {
+        decidedAt = new Date().toISOString();
+      }
+      const events: DecisionEvent[] = cacheOnly.map(([p, d]) => ({
+        sid,
+        path: p,
+        fingerprint: null,
+        asked: true,
+        ipfs: d === "sync",
+        // Provenance-only here: the ⊘ axis reads git reality, never the ledger (decisions.mdx §1.1),
+        // and a backfill must not claim a git-ignore intent nobody expressed.
+        gitignore: false,
+        decided_by: "migrated",
+        decided_at: decidedAt,
+      }));
+      appendEvents(repoRoot, events);
+      for (const e of events) {
+        folded.set(e.path, {
+          sid: e.sid,
+          path: e.path,
+          asked: e.asked,
+          ipfs: e.ipfs,
+          gitignore: e.gitignore,
+          decidedBy: e.decided_by,
+          decidedAt: e.decided_at,
+        });
+      }
+      log.info("decisions", `${repoRoot}: backfilled ${events.length} cache-only decision(s) into the shared ledger`);
+    }
+  } catch (e) {
+    log.warn("decisions", `${repoRoot}: cache-only decision backfill failed: ${(e as Error).message}`);
   }
   // Track which paths' projected IPFS-axis enum FLIPS vs. the previous local value (decisions.mdx §11) —
   // the caller (pin pass) uses this to surface the quiet "N decisions changed by teammates" dock note.

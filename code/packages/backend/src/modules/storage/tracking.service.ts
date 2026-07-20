@@ -10,7 +10,7 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { compressInfo, HARD_SKIP } from "../fs/badges.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
-import { repoStateDir } from "./tracking-root.service.js";
+import { repoStateDir, resolveStateSyncRepo } from "./tracking-root.service.js";
 import {
   resolveStorageType,
   tracksIndexInLocalStorage,
@@ -112,7 +112,68 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
   for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
     if (analysisDirs.some((d) => isFileAt(path.join(d, file)))) out.push(key);
   }
+  // Travelling compression record (compression.mdx §8 step 6 / §8.4) — `analysis/<rel>/compression.yaml`,
+  // written by analysis.service.ts writeCompressionRecord() after an in-place re-encode (and backfilled on
+  // a §8.4 marker skip). An in-place video compress keeps its FILENAME, so the name-only heuristic
+  // (badges.ts compressInfo) would re-offer the file forever on every computer; the record flips it to
+  // "done" mesh-wide. Probed in every placement it can live in: the Category-B Local-Storage state dir
+  // (the write target), the shared sync-repo mirror (how ANOTHER computer's record reaches this one), and
+  // the tracking-base dirs (legacy records written before the Category-B placement fix). Probed ONLY when
+  // the name still reads "should compress" (the record is the only signal that can override it) and
+  // counted ONLY while FRESH: the record carries the compressed size, so replacing the media with new
+  // bytes of a different size invalidates it and the file is offered again.
+  if (compressInfo(path.basename(rel)).compressState === "should") {
+    const syncSub = cachedStateSyncRepo(root);
+    const recordDirs = [
+      path.join(repoStateDir(root), ANALYSIS_DIR, rel),
+      ...(syncSub ? [path.join(syncSub, ANALYSIS_DIR, rel)] : []),
+      ...analysisDirs,
+    ];
+    for (const d of recordDirs) {
+      const f = path.join(d, COMPRESSION_RECORD_FILE);
+      if (!isFileAt(f)) continue;
+      if (compressionRecordFresh(f, path.join(root, rel))) out.push("compression");
+      break; // first record found decides — a stale record never falls through to another copy
+    }
+  }
   return out;
+}
+
+const COMPRESSION_RECORD_FILE = "compression.yaml";
+
+// resolveStateSyncRepo reads the `.sync-repo` marker file each call; analysisOutputs runs per ROW on the
+// View-One-Repo hot path, so memoize per root (the marker changes only when the user re-configures the
+// owning storage's sync repo — a restart-scale event; a stale null/path here only delays a metric hint).
+const stateSyncRepoCache = new Map<string, string | null>();
+function cachedStateSyncRepo(root: string): string | null {
+  if (!stateSyncRepoCache.has(root)) {
+    stateSyncRepoCache.set(
+      root,
+      (() => {
+        try {
+          return resolveStateSyncRepo(root);
+        } catch {
+          return null;
+        }
+      })(),
+    );
+  }
+  return stateSyncRepoCache.get(root) ?? null;
+}
+
+/** Fresh iff the record's compressed size matches the media's CURRENT size (a record without a size is
+ *  trusted). A mismatch means the bytes changed since the compress — the record no longer describes them. */
+function compressionRecordFresh(recordAbs: string, mediaAbs: string): boolean {
+  try {
+    const rec = YAML.parse(fs.readFileSync(recordAbs, "utf8")) as {
+      compressed?: { size?: number | null };
+    } | null;
+    const recSize = rec?.compressed?.size;
+    if (recSize == null) return true;
+    return fs.statSync(mediaAbs).size === recSize;
+  } catch {
+    return false; // unreadable record / missing media → never claim "done" on it
+  }
 }
 
 /** A cheap-but-robust fingerprint: hash of size + mtime + the head and tail bytes. ASYNC (fs.promises) so

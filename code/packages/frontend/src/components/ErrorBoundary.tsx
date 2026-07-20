@@ -7,6 +7,7 @@
 // internal tree out of step, so a clean remount is the safe path); a lighter "Try again" resets state.
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { clientLog } from "../lib/clientLog.js";
+import { isStaleModuleError, tryStaleModuleReload } from "../lib/staleModuleReload.js";
 
 interface Props {
   children: ReactNode;
@@ -27,6 +28,11 @@ export class ErrorBoundary extends Component<Props, State> {
     // Reaches error.err through the client-log bridge, with the component stack so the culprit subtree
     // is identifiable — instead of the app just vanishing.
     clientLog.error("ErrorBoundary", { message: error.message, stack: error.stack, componentStack: info.componentStack });
+    // Stale Vite module graph (a re-optimization/redeploy split react/react-query into two live copies —
+    // e.g. the null-dispatcher "reading 'useContext'" crash in ProgressProvider): no amount of re-rendering
+    // fixes it, only a clean page load does. Auto-reload ONCE (sessionStorage-guarded against loops); if the
+    // guard blocks it, fall through to the normal error card.
+    if (isStaleModuleError(error)) tryStaleModuleReload("ErrorBoundary.staleModule");
   }
 
   private reset = () => this.setState({ error: null });

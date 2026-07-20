@@ -232,8 +232,8 @@ that becomes queue items — so the toast and the dock never disagree.
 
 ```
 ┌───────────────────────────────────────────────────────────────────────────┐
-│  ‹ Repos  /  Our_Movies                          ┌ ⟳ Pin now  ┐   More ▾    │ ← header: title + primary + entity
-│  ~/BGit/…/Our_Movies                             └────────────┘             │   "More ▾" menu (menus.mdx §4.1)
+│  ‹ Repos  /  Our_Movies                          ┌ ⟳ Pin now  ┐             │ ← header: title + primary (the
+│  ~/BGit/…/Our_Movies                             └────────────┘             │   repo page has NO header More ▾)
 │                                                                             │
 │  🎬 Create Transcriptions · ✨ Create AI descriptions · 🗜 Compress videos   │ ← ONE measured row, UNDER the title;
 │  · 🗜 Compress images · 🚫 Git ignore                        ⋯ More ▾        │   what fits stays inline, the rest
@@ -279,13 +279,17 @@ its own row directly under that title block** — not in the header's right-alig
 remains the page's one emphasised call-to-action in the header; the action-links row is the flat list of
 everything else.
 
-> **Two different `More ▾` controls can appear on one page — keep them straight.** The **header's**
-> **More ▾** is the **entity menu** ([menus.mdx §4.1](./menus.mdx)) — the single-entity page's action
-> catalog, now the **word `More` + a chevron in blue link text**, with **no leading `⋮`** and **no
-> bordered box**. This row's **More ▾** is the **overflow** for actions that did not fit (§3.1). They sit
-> at different altitudes (one entity vs. this page's whole file set) and hold different items; they must
-> never be merged. The **blue-text styling is deliberately shared** — the header's More and this row's
-> links are one family of quiet text affordances, distinct from the page's single boxed primary button.
+> **One page never shows two `More ▾` controls.** On the file/directory single-entity pages the header's
+> **More ▾** is the **entity menu** ([menus.mdx §4.1](./menus.mdx)) and this row's `More ▾` handles width
+> overflow — those pages render one or the other, not both at once in practice. On the **one-repo page**
+> the two are **folded into ONE menu**: the header carries no entity More ⌄ at all, and this row's
+> right-pinned **More ▾** always renders, carrying the width-overflowed inline links (if any) **above**
+> the repo entity catalog ([menus.mdx §5.1](./menus.mdx), grouped exactly as the entity menus render it,
+> minus the items the row already offers inline — [one_repo.mdx §3.1](./one_repo.mdx)). The **blue-text
+> styling is shared** — the row's links and its More ▾ are one family of quiet text affordances, distinct
+> from the page's single boxed primary button.
+> The always-in-More entity set rides `PageActions`' `overflow` prop in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` (overflow items render through the shared grouped `MenuList`/`MenuPortal`).
 
 **Distinct from the `⋮` bulk menu.** The table's existing selection **`⋮` bulk menu** (set decision
 Add to IPFS (pin)/Ignore/Undecided across checked rows, [one_repo.mdx §4.4](./one_repo.mdx)) stays where it is, in the
@@ -308,7 +312,10 @@ does not fit rolls into the more, and the more is on the right."* Concretely:
   chevron `▾`) renders at the **right end** of the row and opens a small popover listing the overflowed
   actions **in the same catalog order**. The width reserved for `More ▾` is included in the fit math so it
   never itself causes a clipped last item.
-* **No overflow → no `More ▾`.** If every action fits, the `More ▾` link is **not** rendered at all.
+* **No overflow → no `More ▾`.** If every action fits, the `More ▾` link is **not** rendered at all —
+  **except** on a page that hands the row an **always-in-More set** (the one-repo page's repo entity
+  catalog, `PageActions`' `overflow` prop): there `More ▾` always renders and its width is always
+  reserved in the fit math.
 * **Order is preserved.** Overflow is purely a function of width, not importance: the actions keep their
   catalog order across the inline row and the `More ▾` popover, so an action never jumps position. (Producing
   actions — Create Transcriptions / Create AI descriptions — come first in the catalog, so they are the last

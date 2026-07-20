@@ -329,6 +329,19 @@ must converge **without a human ever resolving a conflict**. The design that gua
    overrides Alice's decision on a file, the record now reads `decided_by: bob@…` with a newer
    `decided_at`; Alice's earlier event remains in the log until compaction.
 
+6. **The sync-repo mirror UNIONS the ledger in BOTH directions — never a wholesale file copy.** The
+   union-merge of point 2 happens at `git merge` time, but the ledger also crosses the mirror boundary
+   **outside** git: the mirror write (Local Storage → `<syncRepo>/repos/<repoUid>/decisions.yaml`) and the
+   reconcile read (mirror → Local Storage). Both were once plain file copies — last-writer-wins — and with
+   **two writers of one mirror file** (the user's two computers, or **two clones of the same remote on one
+   machine**, which share ONE `repos/<repoUid>/` subtree) each copy silently **erased** the events the copy
+   source did not know. The surviving frozen cache kept honoring the decision locally while no other
+   computer could ever learn it — the 2026-07-20 charlie-kirk "not backed up: 22 here / 0 there" defect.
+   Both directions now union by **event identity** (exact duplicates collapse; the fold resolves the rest),
+   so no writer can ever subtract another writer's events.
+   The event-identity union crossing the mirror boundary in both directions is handled in code:
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `unionLedgerEvents()`, applied in `tracking-sync.service.ts` — `mirrorToSyncRepo()` (write) and `reconcileFromSyncRepo()` (read).
+
 Folding the merged event log to current per-file state (latest `decided_at` per `path`, `decided_by` tiebreak) and compacting on a full pass is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()` and `compactLedger(repoRoot)` (compaction called from the pin pass in `pin.service.ts`).
 
@@ -404,7 +417,7 @@ a decision is recorded, LFB reconciles:
   choice ([storage_local.mdx §7](./storage_local.mdx), "the scanner reconciles, it never clobbers").
 
 Projecting the folded ledger onto the machine-local `decisions:` enum map (IPFS axis) and ensuring the git-ignore axis via the gitignore engine, on every pass and after each write, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, and inline from `PATCH /:repoId/files`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, inline from `PATCH /:repoId/files`, and from `tracking-sync.service.ts` — `reconcileMirroredRepos()` right after every backbone pull folds a mirrored ledger, so a teammate's arriving decision reaches the pin engine without waiting for the next scan).
 
 ---
 
@@ -585,8 +598,18 @@ suddenly re-ask about everything already triaged:
 * **The frozen enum is untouched as an input** — migration **reads** it and **writes** the ledger; the
   reconciliation (§7) then keeps that same enum map as the ledger's projection going forward.
 
-The one-time legacy-decisions backfill (seed the ledger from `config.yaml → decisions:`, `decided_by:"migrated"`, guarded and idempotent) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-decisions-to-ledger.ts` — `migrateDecisionsToLedger()` (run at boot alongside `migrate-sync-to-pin.ts`).
+> **The backfill is ALSO a STANDING guard, not only a run-once migration.** The marker-guarded one-time
+> pass proved insufficient in the field (2026-07-20, charlie-kirk): it HAD seeded the ledger on Jul 12,
+> then the old wholesale mirror copy (§5.6) erased those events — and the marker guaranteed nothing would
+> ever re-seed them, leaving decisions that were honored locally but could never reach the other computer
+> ("not backed up: 22 here / 0 there"). Every reconcile therefore re-checks the invariant *"every frozen-enum
+> entry has at least one ledger event (a tombstone counts)"* and re-emits `decided_by:"migrated"` events
+> (`decided_at:` the config mtime, deliberately old so any real event wins the fold) for any entry that has
+> none. Idempotent by construction: once written, the fold sees the events. The debug export surfaces the
+> violated invariant per file as `decision_in_ledger: false` ([debug.mdx §7](./debug.mdx)).
+
+The one-time legacy-decisions backfill (seed the ledger from `config.yaml → decisions:`, `decided_by:"migrated"`, guarded and idempotent) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-decisions-to-ledger.ts` — `migrateDecisionsToLedger()` (run at boot alongside `migrate-sync-to-pin.ts`); the standing per-reconcile guard lives in `decisions.service.ts` — `reconcile()` (the cache-only backfill block).
 
 ---
 

@@ -248,6 +248,14 @@ Three rules, together, define the path — **all LOCKED**:
 > derived tracking artifact lives in **one** hidden place. Transcripts are small UTF-8 text, so committing
 > them is cheap and desirable (unlike the multi-GB media, which stays git-ignored and rides IPFS).
 
+> **Committable, not just written.** The travel guarantee above silently dies if the repo's `.gitignore`
+> excludes `.lfbridge/` or `*.transcription` (the 2026-07-20 charlie-kirk strand: 59 finished transcripts
+> invisible to the laptop). After every transcript write, LFB verifies the artifact is not gitignored and,
+> if it is, appends `!.lfbridge/` + `!.lfbridge/**` re-include rules
+> ([artifact_placement_policy.mdx §1.1.1](./artifact_placement_policy.mdx)).
+> Verifies and repairs committability in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts`, `ensureArtifactCommittable()`.
+
 ### 3.2 Append-not-replace resolves the old collision caveat (LOCKED)
 
 Because the original extension is **kept** and `.transcription` is **appended** (not substituted), two

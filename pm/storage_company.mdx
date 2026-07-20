@@ -452,8 +452,14 @@ Local Storage therefore **merges per file entry** and never overwrites the local
 * **Reconcile runs on every backbone pull** for the SDL, not on demand. A merge that only happens when
   someone clicks something is a merge that does not happen.
 
+* **The decision ledger merges the same way, in BOTH directions.** `decisions.yaml` unions by **event
+  identity** on the reconcile read AND on the mirror write — never a wholesale file copy. Two writers share
+  one `repos/<repoUid>/` subtree (the user's computers, and two clones of one remote on one machine), so a
+  copy in either direction is last-writer-wins and silently erases the other writer's events
+  ([decisions.mdx §5.6](./decisions.mdx) — the 2026-07-20 "not backed up: 22 / 0" defect).
+
 Merging a pulled sync-repo subtree into Local Storage is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`, plus the `ledger-merge.ts` `unionLedgerEvents()` fold for `decisions.yaml`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
 
 #### 8.4.4 Binding a forge org to a company storage — `owner_slugs` (LOCKED)
 

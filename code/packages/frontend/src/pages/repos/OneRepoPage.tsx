@@ -15,7 +15,7 @@ import { api } from "../../api/client.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill } from "../../components/Pill.js";
-import { EntityKebab, ActionsMore, type Action } from "../../components/menu/EntityMenu.js";
+import { EntityKebab, type Action } from "../../components/menu/EntityMenu.js";
 import { useRepoActions } from "../../components/menu/RowKebabs.js";
 import { PageActions, producingActions } from "../../components/menu/PageActions.js";
 import { compressAllVideos, compressAllImages, gitIgnoreBig } from "../../components/menu/domainActions.js";
@@ -324,10 +324,12 @@ export function OneRepoPage() {
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
 
-  // The page's "More ⌄" ENTITY menu (menus.mdx §4/§5.1, one_repo.mdx §3.1). It was specified but never
-  // mounted — the header only ever had tabs + gear + primary — so every repo-entity action (including
-  // Export Debug Information, debug.mdx §2.2) was unreachable from this page. It carries the SAME §5.1
-  // catalog as the repos-table row ⋮, minus "Open repo" (you are already here).
+  // The repo-entity catalog (menus.mdx §5.1) — the SAME catalog as the repos-table row ⋮. This page has
+  // ONE "More ▾" menu: the action-links row's, which carries these entity items always plus whatever
+  // inline links overflow on a narrow window. (The header's separate entity "More ⌄" is gone — two More
+  // menus on one page read as two different things.) Omitted here, so nothing is lost, are the items the
+  // action-links row already offers in a richer, selection-aware form: Open repo (you are already here),
+  // Rescan, Pin now, and the producing trio (Create Transcriptions / AI descriptions / OCR text).
   const debugTarget = useQuery({ queryKey: ["debugTarget"], queryFn: api.debugExportTarget });
   const repoMoreActions = useRepoActions(
     {
@@ -336,7 +338,10 @@ export function OneRepoPage() {
       path: detail?.path ?? "",
       pinned: detail?.pinned ?? false,
     },
-    { omit: ["open"], debugPath: debugTarget.data ? (debugTarget.data.path ?? null) : undefined },
+    {
+      omit: ["open", "rescan", "pin", "create-transcriptions", "create-descriptions", "create-ocr-text"],
+      debugPath: debugTarget.data ? (debugTarget.data.path ?? null) : undefined,
+    },
   );
 
   const columns: LfbColumn<FileRow>[] = [
@@ -620,7 +625,7 @@ export function OneRepoPage() {
         }
         title={detail?.name ?? "…"}
         subtitle={detail?.path}
-        actionsRow={<PageActions actions={repoActions} selectedCount={selected.size} />}
+        actionsRow={<PageActions actions={repoActions} selectedCount={selected.size} overflow={repoMoreActions} />}
         actions={
           <>
             {/* Task tabs (task_tabs.mdx §1) — a little right of center, before the gear + header primary. */}
@@ -656,8 +661,6 @@ export function OneRepoPage() {
                 <ChevronRight className="h-4 w-4" strokeWidth={2.5} />
               </button>
             ) : null}
-            {/* The entity "More ⌄" menu (menus.mdx §4.1): the word More + a chevron — no ⋮, no border. */}
-            <ActionsMore actions={repoMoreActions} />
           </>
         }
       />

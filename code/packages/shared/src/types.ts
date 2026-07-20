@@ -230,6 +230,9 @@ export interface RepoDetail {
   // When this repo was last scanned for big files (ISO), or null if never. Drives the "Scan now"
   // header primary when the repo is scan-stale (one_repo.mdx §3.1 / scan.mdx §2.3).
   lastScanAt: string | null;
+  // Candidates the last scan's HARD candidate cap dropped for this unit (scan.mdx §4.5).
+  // Absent/0 = the file list below is the complete census; >0 = the list is truncated by exactly this many.
+  scanDroppedCandidates?: number;
   ipfs: IpfsHealth;
   counts: RepoCounts;
   files: FileRow[];

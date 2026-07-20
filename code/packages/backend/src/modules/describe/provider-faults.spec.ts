@@ -3,11 +3,12 @@
 // The case that motivated this file: Gemini refuses an image by returning an EMPTY candidate carrying only
 // a `finishReason` — no error, no block verdict, HTTP 200.
 //
-// The counter-intuitive half, and the reason these tests exist: a refusing `finishReason` is NOT permanent.
-// Generation is SAMPLED, so the output-side filter is a coin toss. MEASURED on one slide, 10 identical
-// calls: 6 described (7.6k-10.2k chars), 4 `RECITATION`. Classifying it permanent would strand a file that
-// describes ~60% of the time and write it a rejection record it never earned. Only `promptFeedback.blockReason`
-// — the INPUT refused before generation — is a real verdict on the file.
+// A structured refusal is PERMANENT (reversed 2026-07-20 — this file used to pin the opposite). Generation
+// is sampled, and one measurement (one slide, 10 identical calls: 6 described, 4 `RECITATION`) argued for a
+// re-roll — but in production refusing files burned all 4 attempts plus backoff and were rejected anyway,
+// hundreds of wasted provider calls per batch. So a refusal now fails on attempt 1, routes straight to the
+// `.ai_description_rejected` record, and never feeds the transient-retry ceiling. Overwrite (§2.3) is the
+// deliberate way to re-roll a file the sampling may yet describe.
 import { describe, it, expect } from "vitest";
 import { classifyProviderFault, attachRejection, rejectionOf, isRefusalFinishReason, withProviderRetry, type ProviderRejection } from "./adapters.js";
 
@@ -24,23 +25,24 @@ const rejection = (over: Partial<ProviderRejection> = {}): ProviderRejection => 
 const refusal = (over: Partial<ProviderRejection> = {}) =>
   attachRejection(new Error(`Gemini returned no description (finishReason: ${over.finishReason ?? "RECITATION"})`), rejection(over));
 
-describe("classifyProviderFault — a sampled refusal is TRANSIENT, not a verdict", () => {
+describe("classifyProviderFault — a structured refusal is PERMANENT, never retried", () => {
   it.each(["RECITATION", "PROHIBITED_CONTENT", "SAFETY", "BLOCKLIST", "SPII"])(
-    "retries finishReason %s (output-side filter, measured 4/10 flaky)",
+    "rejects finishReason %s on attempt 1 (content refusal — retrying wastes calls)",
     (finishReason) => {
-      expect(classifyProviderFault(refusal({ finishReason }))).toBe("transient");
+      expect(classifyProviderFault(refusal({ finishReason }))).toBe("permanent");
     },
   );
 
-  // The prose names the reason for humans; classification must not key off it. "…(finishReason:
-  // PROHIBITED_CONTENT)" contains "PROHIBITED" and would trip the safety regex by pure wording.
+  // The prose names the reason for humans; classification must not key off it. Without the attached
+  // evidence, "Gemini returned no description (finishReason: RECITATION)" matches the empty-200 rule
+  // ("returned no description") and stays transient — only the OBJECT makes it a refusal.
   it("classifies on the attached object, not on words in the message", () => {
-    const e = new Error("Gemini returned no description (finishReason: PROHIBITED_CONTENT)");
-    expect(classifyProviderFault(e)).toBe("permanent"); // no evidence attached → prose is all we have
-    expect(classifyProviderFault(refusal({ finishReason: "PROHIBITED_CONTENT" }))).toBe("transient"); // evidence wins
+    const e = new Error("Gemini returned no description (finishReason: RECITATION)");
+    expect(classifyProviderFault(e)).toBe("transient"); // no evidence attached → empty-200 rule applies
+    expect(classifyProviderFault(refusal({ finishReason: "RECITATION" }))).toBe("permanent"); // evidence wins
   });
 
-  it("treats a blocked INPUT as permanent — that one IS deterministic", () => {
+  it("treats a blocked INPUT as permanent too", () => {
     const e = attachRejection(new Error("Gemini blocked the request: OTHER"), rejection({ blockReason: "OTHER", finishReason: null }));
     expect(classifyProviderFault(e)).toBe("permanent");
   });
@@ -95,36 +97,32 @@ describe("classifyProviderFault — the faults the refusal rule must not swallow
   });
 });
 
-// The seam that makes §2.3 work at all: a refusal now RETRIES (it is sampled), so the evidence has to
-// survive all 4 attempts and still be on the error that finally escapes — otherwise the record that the
-// provider refused could never be written for the ~2.6% of files that genuinely exhaust their retries.
-// These two exercise the RETRY LOOP, not the backoff clock, so they pin `retryAfterMs: 1` — the same hint
-// a provider's `Retry-After` rides in on (`adapters.ts`: `const backoff = hinted ?? RETRY_BASE_MS * 2 ** …`).
-// Without it each `withProviderRetry` sleeps for REAL through 2s→4s→8s of jittered backoff; this block calls
-// it twice, so a worst-case jitter roll needs ~42s against vitest's 30s limit. It passed alone and failed in
-// a loaded full run — a test that fails on CPU contention rather than on a defect. The hint makes the loop's
-// behavior (4 attempts, rejection intact) deterministic without weakening a single assertion.
-const fast = (over: Partial<ProviderRejection> = {}) => {
-  const e = refusal(over) as Error & { retryAfterMs?: number };
-  e.retryAfterMs = 1;
-  return e;
-};
-
-describe("withProviderRetry — the refusal evidence survives the retries", () => {
-  it("retries a refusal, then rethrows it with the rejection intact", async () => {
+// A refusal must escape the retry loop on ATTEMPT 1 with its evidence intact — the wasted-call bug was
+// exactly this loop walking a deterministic refusal through attempts 1→4 (plus backoff) before the caller
+// could write the `.ai_description_rejected`. Genuine transients (here: a blank empty-200) still retry;
+// `retryAfterMs: 1` pins the backoff clock so the transient case never sleeps for real under vitest.
+describe("withProviderRetry — a refusal exits on attempt 1; transients still retry", () => {
+  it("does NOT retry a refusal — one attempt, rejection intact", async () => {
     let attempts = 0;
     const always = () => {
       attempts++;
-      return Promise.reject(fast({ finishReason: "RECITATION" }));
+      return Promise.reject(refusal({ finishReason: "RECITATION" }));
     };
     await expect(withProviderRetry("test", always)).rejects.toThrow(/RECITATION/);
-    expect(attempts).toBe(4); // sampled → worth 4 rolls of the dice, not 1
+    expect(attempts).toBe(1); // a content refusal is a verdict — asking again wastes a billed call
     await expect(withProviderRetry("test2", always).catch((e) => rejectionOf(e)?.finishMessage)).resolves.toMatch(/copyrighted/);
   });
 
-  it("succeeds on a later attempt — the 6-in-10 case that must not be recorded as a refusal", async () => {
+  it("still retries a blank empty-200 to success — the bad-moment case must not be spent", async () => {
     let n = 0;
-    const flaky = () => (++n < 3 ? Promise.reject(fast()) : Promise.resolve({ text: "a description", model: "m" }));
-    await expect(withProviderRetry("test3", flaky)).resolves.toEqual({ text: "a description", model: "m" });
+    const blip = (): Promise<{ text: string; model: string }> => {
+      if (++n < 3) {
+        const e = new Error("Gemini returned no description (finishReason: STOP)") as Error & { retryAfterMs?: number };
+        e.retryAfterMs = 1;
+        return Promise.reject(e);
+      }
+      return Promise.resolve({ text: "a description", model: "m" });
+    };
+    await expect(withProviderRetry("test3", blip)).resolves.toEqual({ text: "a description", model: "m" });
   });
 });

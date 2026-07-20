@@ -340,6 +340,9 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set
     peerCount: peerCountForFiles(files),
     lastPinAt: status.last_pin_at,
     lastScanAt: status.last_scan_at,
+    // Surface scan truncation (scan.mdx §4.5): >0 means the last scan's hard candidate cap dropped
+    // exactly this many candidates, so `files` below is NOT the complete census. Absent when complete.
+    ...(status.scan_dropped_candidates ? { scanDroppedCandidates: status.scan_dropped_candidates } : {}),
     ipfs,
     counts,
     files,
@@ -425,17 +428,18 @@ function composeFileRows(
       // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`. Reality, not intent:
       // `prov.gitignore` is the recorded DECISION and is kept for provenance only.
       ...gitIgnoreAxis(repoRootAbs, cand.path, ignoreRules),
-      // The Compress / Transcribe / Describe / OCR task-tab status (task_tabs.mdx §4.4/§5/§6). Compress is
-      // cheap name-only. The other three all key off the SAME analysis-artifact probe, so it is done at
-      // most ONCE per row (only when the file could carry an artifact) and shared across the three, instead
-      // of each helper re-running ~a dozen statSyncs (the View-One-Repo hot-path cost this collapses).
-      compress: compressStatusFor(cand.path),
+      // The Compress / Transcribe / Describe / OCR task-tab status (task_tabs.mdx §4.4/§5/§6). All four key
+      // off the SAME analysis-artifact probe, so it is done at most ONCE per row (only when the file could
+      // carry an artifact) and shared, instead of each helper re-running ~a dozen statSyncs (the
+      // View-One-Repo hot-path cost this collapses). Compress reads the probe's travelling
+      // compression-record signal (compress.mdx §8.2) on top of its cheap name-only verdict.
       ...(() => {
         const outputs =
           repoRootAbs && couldHaveAnalysisArtifact(path.basename(cand.path))
             ? safeAnalysisOutputs(repoRootAbs, cand.path, storageType)
             : null;
         return {
+          compress: compressStatusFor(cand.path, outputs),
           transcribe: transcribeStatusFor(cand.path, outputs),
           describe: describeStatusFor(cand.path, outputs),
           ocr: ocrStatusFor(cand.path, outputs),
@@ -576,10 +580,15 @@ function gitIgnoreAxis(
 // Compress task status (task_tabs.mdx §6). Reuses the single-source-of-truth extension verdict
 // compressInfo(name): "could" = a video/image that looks uncompressed; "done" = already compressed;
 // "na" = not a compressible media kind (audio is never compressible — charter).
-function compressStatusFor(relPath: string): TaskStatus {
+// SECOND signal (compress.mdx §8.2): the shared `analysisOutputs` probe reports "compression" when the
+// travelling compression record (`analysis/<rel>/compression.yaml`, committed with the repo) says this
+// exact file was already re-encoded in place — an in-place video compress keeps its filename, so without
+// the record the name heuristic would count it "compressible" forever, on every one of the user's computers.
+function compressStatusFor(relPath: string, outputs: string[] | null): TaskStatus {
   const ci = compressInfo(path.basename(relPath));
   if (ci.compressible === null) return "na";
-  return ci.compressState === "done" ? "done" : "could";
+  if (ci.compressState === "done") return "done";
+  return outputs?.includes("compression") ? "done" : "could";
 }
 
 // The three per-file analysis-task statuses (Transcribe / Describe / OCR) all read from ONE shared

@@ -205,18 +205,23 @@ The menu's copy actions (Copy path / Copy CID), which only copy and never naviga
 
 ## 4. The entity "More ▾" menu — single-entity pages
 
-A page that shows **one** entity — the [One repo](./one_repo.mdx) page, the **View one file** page
-([files.mdx](./files.mdx)), the **View one directory** page ([directories.mdx](./directories.mdx)), the
-[media viewers](./media_viewer.mdx), or a selected entry in the [File System](./directories.mdx)
-browser — carries a **top-right "More ▾" button**. Opening it shows the **same catalog** as that
-entity's row kebab — because the page *is* that entity.
+A page that shows **one** entity — the **View one file** page ([files.mdx](./files.mdx)), the **View one
+directory** page ([directories.mdx](./directories.mdx)), the [media viewers](./media_viewer.mdx), or a
+selected entry in the [File System](./directories.mdx) browser — carries a **top-right "More ▾" button**.
+Opening it shows the **same catalog** as that entity's row kebab — because the page *is* that entity.
+
+> **Exception — the [One repo](./one_repo.mdx) page has NO separate header "More ▾".** That page already
+> carries the action-links row's right-pinned **More ▾** ([page_actions.mdx §3.1](./page_actions.mdx)),
+> and two More menus on one page read as two different things. Its repo entity catalog (§5.1) therefore
+> lives **inside** the action-links row's More ▾ — always present, grouped exactly as here, beneath any
+> width-overflowed inline links ([one_repo.mdx §3.1](./one_repo.mdx)).
 
 ```
 ┌───────────────────────────────────────────────────────────────────────┐
-│  ‹ Repos  /  Our_Movies                          ┌────────────┐        │
-│  ~/BGit/…/Our_Movies                             │ ⟳ Pin now  │ More ▾ │ ← entity "More" menu
-│                                                  └────────────┘        │
-└───────────────────────────────────────────────────────────────────────┘
+│  ‹ Repos  /  Our_Movies                                                │
+│  ~/BGit/…/Our_Movies                                                   │
+│  📝 Create Transcriptions · ✨ Create AI descriptions · …      More ▾  │ ← the action-links row's
+└───────────────────────────────────────────────────────────────────────┘    More ▾ (repo page)
                                                                     │
                               ┌─────────────────────────────────────▼──┐
                               │  Open in File System                    │
@@ -244,9 +249,9 @@ The single-entity page's top-right **More ▾** button, rendering the same catal
 ### 4.1 What the "More" button LOOKS like (LOCKED)
 
 Every page that renders the single-entity trigger — **View one file** ([files.mdx](./files.mdx)), the
-**media viewers** ([media_viewer.mdx](./media_viewer.mdx)), **View one directory**
-([directories.mdx](./directories.mdx)), and the one-repo page — renders the **same** button, and it looks
-like this:
+**media viewers** ([media_viewer.mdx](./media_viewer.mdx)), and **View one directory**
+([directories.mdx](./directories.mdx)) — renders the **same** button, and it looks like this (the one-repo
+page renders no separate trigger — its catalog rides the action-links row's More ▾, §4's exception):
 
 * **It is the WORD `More`, followed by a down chevron (`▾`).** Label first, chevron second.
 * **It is styled as blue link text** — the same treatment as the **page action-links row** sitting right
@@ -590,10 +595,12 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
    action catalog** (§5) for that row's entity, as a grouped popover with destructive items separated
    last; it is a control column and never opens the row. **Right-clicking the same entity opens the same
    menu** (§3.1).
-3. Every **single-entity page** (view one repo / file / directory; the media viewers; the File System
+3. Every **single-entity page** (view one file / directory; the media viewers; the File System
    selection) has a **top-right "More ▾" menu** rendering the **same catalog** as that entity's row kebab
    (§4); the one most-common action may also be a visible primary button. The file/directory pages are
-   [files.mdx](./files.mdx) / [directories.mdx](./directories.mdx).
+   [files.mdx](./files.mdx) / [directories.mdx](./directories.mdx). **Exception:** the **one-repo page**
+   renders no separate top-right trigger — its repo catalog (§5.1) lives inside the **action-links row's**
+   right-pinned More ▾ (§4's exception, [one_repo.mdx §3.1](./one_repo.mdx)).
 3b. **The More button's look (§4.1, LOCKED):** on every page that renders it, the single-entity trigger is
    the **word `More` + a down chevron**, styled as **blue link text** like the page action-links row beside
    it — with **no leading `⋮` triple-dot** and **no bordered rounded rectangle**. The **row kebab is still
@@ -654,7 +661,8 @@ Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is co
   more-menu on single-entity pages (same catalog as the row kebab). ROW kebab glyph is ALWAYS vertical ⋮,
   never ⋯ — but that is the ROW's identity ONLY.
   §4.1 (NEW, LOCKED) THE "MORE" BUTTON'S LOOK: on every EntityMore page (View one file, the media viewers,
-  View one directory, one repo) the trigger is the WORD "More" + a down chevron, styled as BLUE TEXT like
+  View one directory — NOT the one-repo page, whose repo catalog rides the action-links row's More ▾
+  instead of a separate header trigger) the trigger is the WORD "More" + a down chevron, styled as BLUE TEXT like
   the page action-links row next to it (page_actions §3). TWO LOCKED NEGATIVES: (a) NO leading ⋮ triple-dot
   — the word says it, and ⋮ is the ROW kebab's identity (§3), so reusing it made two affordances at two
   altitudes look alike; (b) NO bordered rounded rectangle — chrome is reserved for the page's single

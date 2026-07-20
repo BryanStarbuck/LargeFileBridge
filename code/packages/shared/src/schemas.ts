@@ -4,6 +4,17 @@ import { z } from "zod";
 
 const iso = z.string();
 
+/**
+ * An object block that tolerates a VALUELESS YAML key. When a line-level migration or hand edit removes a
+ * block's last child, the bare parent key left behind (`sync_repo:`) parses as `null` — and `.prefault({})`
+ * only covers `undefined`, so every reader of the file throws "expected object, received null". That exact
+ * shape took all 178 repo units down twice (2026-07-20: migrate-sync-repo-default's first version). Mapping
+ * `null` → absent lets the block's own `.prefault`/`.default` decide what absence means. This is the
+ * schema-level twin of yaml-store's `dropEmptyBlocks` read heal — belt AND suspenders, because direct
+ * `Schema.parse(YAML.parse(...))` callers (tests, tools, older builds) never pass through the store heal.
+ */
+const nullAsAbsent = <T extends z.ZodType>(schema: T) => z.preprocess((v) => v ?? undefined, schema);
+
 // ── hardware fingerprint (devices.mdx §7) ───────────────────────────────────
 // The facts that identify a PHYSICAL computer, collected ENTIRELY LOCALLY (never over the network).
 // Lives on `config.yaml → computer.hardware` (this machine) and is copied into each device file
@@ -371,53 +382,65 @@ export type CommunitySubscriptionConfig = z.infer<typeof CommunitySubscriptionSc
 export const RepoUnitConfigSchema = z.object({
   schema_version: z.number().default(1),
   updated_at: iso.optional(),
-  repo: z
-    .object({
-      name: z.string().default(""),
-      path: z.string().default(""),
-      remote: z.string().nullable().default(null),
-    })
-    .prefault({}),
+  repo: nullAsAbsent(
+    z
+      .object({
+        name: z.string().default(""),
+        path: z.string().default(""),
+        remote: z.string().nullable().default(null),
+      })
+      .prefault({}),
+  ),
   pinned: z.boolean().default(false),
   bookmarked: z.boolean().default(false), // user favorite (repos.mdx §8) — local, not shared to peers
-  big_file_override: z
-    .object({
-      enabled: z.boolean().default(false),
-      value: z.number().default(100),
-      unit: z.enum(["MB", "GB", "TB"]).default("MB"),
-    })
-    .prefault({}),
-  large_files: z
-    .object({
-      follow_gitignore: z.boolean().default(true),
-      include_globs: z.array(z.string()).default([]),
-      exclude_globs: z.array(z.string()).default([]),
-    })
-    .prefault({}),
-  pin: z
-    .object({
-      pin_locally: z.boolean().default(true),
-      fetch_missing: z.boolean().default(true),
-      publish_manifest: z.boolean().default(true),
-    })
-    .prefault({}),
-  access: z
-    .object({
-      shared: z.boolean().default(false),
-      participants: z.array(z.string()).default([]),
-    })
-    .prefault({}),
+  big_file_override: nullAsAbsent(
+    z
+      .object({
+        enabled: z.boolean().default(false),
+        value: z.number().default(100),
+        unit: z.enum(["MB", "GB", "TB"]).default("MB"),
+      })
+      .prefault({}),
+  ),
+  large_files: nullAsAbsent(
+    z
+      .object({
+        follow_gitignore: z.boolean().default(true),
+        include_globs: z.array(z.string()).default([]),
+        exclude_globs: z.array(z.string()).default([]),
+      })
+      .prefault({}),
+  ),
+  pin: nullAsAbsent(
+    z
+      .object({
+        pin_locally: z.boolean().default(true),
+        fetch_missing: z.boolean().default(true),
+        publish_manifest: z.boolean().default(true),
+      })
+      .prefault({}),
+  ),
+  access: nullAsAbsent(
+    z
+      .object({
+        shared: z.boolean().default(false),
+        participants: z.array(z.string()).default([]),
+      })
+      .prefault({}),
+  ),
   // Where this repo's transcripts / AI descriptions / OCR text are written (repo_settings.mdx §4/§5,
   // placement_radios.mdx, ocr.mdx §5.3). Frozen wire enum lfbridge | beside | sync_repo; all default to
   // lfbridge. All three are Category-A content artifacts under the same kind-resolved tracking base, so they
   // share one radio SHAPE — the OCR instance's parameterized noun is "OCR text".
-  artifacts: z
-    .object({
-      transcription_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
-      ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
-      ocr_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
-    })
-    .prefault({}),
+  artifacts: nullAsAbsent(
+    z
+      .object({
+        transcription_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+        ai_description_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+        ocr_placement: z.enum(["lfbridge", "beside", "sync_repo"]).default("lfbridge"),
+      })
+      .prefault({}),
+  ),
   // Whether THIS repo additionally mirrors its Category-B tracking state (repo_storage.yaml, sidecars,
   // history, decisions.yaml, manifest.yaml) to the owning company/Personal storage's SYNC REPO so it travels
   // (artifact_placement_policy.mdx §4). The mirror is ON by default and this toggle is an OPT-OUT
@@ -429,7 +452,9 @@ export const RepoUnitConfigSchema = z.object({
   // no marker written, nothing mirrored, nothing travelling, and no remote-only row could ever exist. The
   // whole cross-computer feature was inert behind this one default (§8.4.2: "a default that has to be found
   // and switched on before anything works is a bug wearing a setting's clothes").
-  sync_repo: z.object({ enabled: z.boolean().optional() }).prefault({}),
+  // `nullAsAbsent` because a bare `sync_repo:` (= YAML null) is EXACTLY what the first migrate-sync-repo-default
+  // left behind in all 178 repo configs — twice. A valueless block must read as the default, never throw.
+  sync_repo: nullAsAbsent(z.object({ enabled: z.boolean().optional() }).prefault({})),
   // The LOCAL grouping override (repo_company_mapping.mdx §5.2). ABSENT (null) => auto-derive the owner from
   // the git remote (source:"auto"). PRESENT => the user reassigned this repo (source:"manual"), sticky across
   // rescans and NEVER overwritten by a teammate. `company_id` is set only when kind==="company". Machine-local
@@ -444,7 +469,7 @@ export const RepoUnitConfigSchema = z.object({
     .default(null),
   // Per-file decisions (one_repo.mdx §1). Keyed by relative path. The "sync" value is a FROZEN wire
   // literal (= add-to-IPFS / pin) that travels between computers — do not rename it.
-  decisions: z.record(z.string(), z.enum(["sync", "ignore", "undecided"])).default({}),
+  decisions: nullAsAbsent(z.record(z.string(), z.enum(["sync", "ignore", "undecided"])).default({})),
 });
 export type RepoUnitConfig = z.infer<typeof RepoUnitConfigSchema>;
 
@@ -757,6 +782,11 @@ export const UnitStatusSchema = z.object({
   effective_threshold_bytes: z.number().default(104857600),
   big_file_count: z.number().default(0),
   big_file_bytes: z.number().default(0),
+  // EXACT number of candidates the walk's hard candidate cap dropped from this unit's last scan
+  // (scan.mdx §4.5). Absent/0 = the census is complete. Persisted so truncation is a queryable metric
+  // on the unit's status — never only a log line. The walk keeps walking and counting past the cap
+  // precisely so this number is exact.
+  scan_dropped_candidates: z.number().optional(),
   repo_state: z.enum(["present", "missing"]).default("present"),
   last_error: z.string().nullable().default(null),
   folder_name: z.string().optional(),
