@@ -19,6 +19,7 @@ import { formatBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { writeClipboard } from "@/lib/clipboard";
 import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, num } from "./ipfsShared.js";
 
@@ -40,6 +41,9 @@ export function IpfsDashboardPage() {
     refetchInterval: (q) => (q.state.data?.status === "running" ? 1200 : false),
   });
   const jobActive = job?.status === "running";
+  // Live refresh (performance.mdx Aspect 6b). The 15s node poll stays: daemon death is an external
+  // event no server write observes, so a bump can't announce it — the poll is the honest fallback.
+  useLiveRefresh(["ipfs"], [["ipfsNode"], ["ipfsJob"]]);
 
   const daemon = useMutation({
     mutationFn: api.ipfsDaemon,
@@ -83,8 +87,18 @@ export function IpfsDashboardPage() {
     }
   }, [jobActive, node, navigate]);
 
+  // Shell-first (performance.mdx Aspect 6b): the header paints now; the node cards fill in.
   if (isLoading && !node) {
-    return <div className="text-black/50">Loading the IPFS node…</div>;
+    return (
+      <div>
+        <h1 className="mb-4 text-2xl font-bold">IPFS</h1>
+        <div className="animate-pulse space-y-3" aria-busy="true" aria-label="Loading">
+          <div className="h-20 rounded bg-slate-100" />
+          <div className="h-20 rounded bg-slate-100" />
+          <div className="h-20 rounded bg-slate-100" />
+        </div>
+      </div>
+    );
   }
 
   return (

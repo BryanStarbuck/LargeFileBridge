@@ -9,6 +9,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import {
   bumpTopic,
   bumpTopics,
+  bumpTopicThrottled,
   subscribe,
   currentRevisions,
   subscriberCount,
@@ -80,5 +81,26 @@ describe("state-events bus", () => {
     const t = repoTopic("hello-repo");
     const rev = bumpTopic(t);
     expect(currentRevisions()[t]).toBe(rev);
+  });
+
+  it("bumpTopicThrottled fires on the leading edge and folds a burst into one trailing bump", async () => {
+    const seen: number[] = [];
+    const off = subscribe((b) => {
+      if (b.topic === "throttle-topic") seen.push(b.revision);
+    });
+
+    // A 1,440-task settle burst must not become 1,440 stream lines (performance.mdx Aspect 6b).
+    for (let i = 0; i < 50; i++) bumpTopicThrottled("throttle-topic", 30);
+    expect(seen.length).toBe(1); // leading edge only — a lone event is never delayed
+
+    await new Promise((r) => setTimeout(r, 60));
+    expect(seen.length).toBe(2); // the 49 folded bumps became exactly one trailing bump
+
+    // A later, quiet-period bump fires immediately again (the window reset).
+    bumpTopicThrottled("throttle-topic", 30);
+    expect(seen.length).toBe(3);
+    await new Promise((r) => setTimeout(r, 60)); // nothing pending — no phantom trailing bump
+    expect(seen.length).toBe(3);
+    off();
   });
 });

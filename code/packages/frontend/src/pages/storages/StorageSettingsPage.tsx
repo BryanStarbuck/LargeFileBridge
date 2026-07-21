@@ -14,12 +14,15 @@ import { api } from "../../api/client.js";
 // The Owned-repos reassign reuses POST /api/repos/:repoId/owner and reads GET /api/storages/:id/owned-repos.
 // Neither has a typed method on `api` (client.ts), so call them through the shared http/unwrap directly.
 import { http, unwrap } from "../../api/axios.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 export function StorageSettingsPage() {
   const { storageId } = useParams({ strict: false }) as { storageId: string };
   const qc = useQueryClient();
   const { data: s } = useQuery({ queryKey: ["storageSettings", storageId], queryFn: () => api.storageSettings(storageId) });
+  useLiveRefresh(["storages"], [["storageSettings", storageId], ["storageMappedDirs", storageId], ["storageOwnedRepos", storageId]]);
 
   const patch = useMutation({
     mutationFn: (p: StorageSettingsPatch) => api.patchStorageSettings(storageId, p),
@@ -34,7 +37,18 @@ export function StorageSettingsPage() {
     },
   });
 
-  if (!s) return <div className="text-black/50">Loading…</div>;
+  // Shell-first (performance.mdx Aspect 6b): back link + title paint now; the sections fill in.
+  if (!s) {
+    return (
+      <div className="max-w-2xl">
+        <Link to="/storages" className="flex items-center gap-1 text-sm text-black/50 hover:text-black">
+          <ChevronLeft className="h-4 w-4" /> Storages
+        </Link>
+        <h1 className="mb-1 mt-2 text-2xl font-bold">Storage settings</h1>
+        <PageSkeleton />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl">

@@ -20,6 +20,8 @@ import type { DeviceRow, DeviceHardware } from "@lfb/shared";
 import { deviceDescriptor } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime } from "../../lib/format.js";
@@ -97,6 +99,7 @@ export function ViewOneDevicePage() {
     queryFn: () => api.device(deviceId),
     retry: false,
   });
+  useLiveRefresh(["devices"], [["device", deviceId]]);
 
   const backLink = (
     <Link to="/devices" className="flex items-center gap-1 text-sm text-black/50 hover:text-black">
@@ -108,7 +111,7 @@ export function ViewOneDevicePage() {
     return (
       <div>
         <PageHeader above={backLink} title="…" />
-        <p className="text-sm text-black/50">Loading device…</p>
+        <PageSkeleton />
       </div>
     );
   }

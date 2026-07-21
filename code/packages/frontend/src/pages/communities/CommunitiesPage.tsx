@@ -15,6 +15,7 @@ import { api } from "@/api/client";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
+import { useLiveRefresh } from "@/lib/useLiveRefresh";
 import { clientLog } from "@/lib/clientLog";
 
 const GIB = 1024 * 1024 * 1024;
@@ -24,6 +25,7 @@ const MODE_LABEL: Record<CommunityBackupMode, string> = { block: "Block", recomm
 export function CommunitiesPage() {
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["communities"], queryFn: api.communities });
+  useLiveRefresh(["storages"], [["communities"]]);
 
   // One community's subscription patch (intent / backup mode / bookmark) — invalidates so the budget
   // meter and per-row targets re-plan against the change.

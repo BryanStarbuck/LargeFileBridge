@@ -625,6 +625,11 @@ the storage tree. Any write that changes what a page would show **bumps** its to
 | A scan status write | candidates, sizes, badges | `repo:<folder>`, `repos` |
 | A decision write (`decisions.yaml`) | the pin / ignore axes, and every metric derived from them | `repo:<folder>` |
 
+This table is the **repo/storage family only** — the rule it states ("every server-side write that
+changes a page bumps a topic") is now **sitewide product direction**, and the full topic catalog (jobs,
+scans, progress, todo, devices, settings, ipfs, and the choke point each bumps from) is LOCKED in
+[performance.mdx Aspect 6b](./performance.mdx).
+
 The bus is **in-process and unpersisted on purpose** — it carries "something changed", never the change
 itself. A client that misses a bump loses nothing but latency: its next read is still authoritative, and
 `currentRevisions()` on connect lets a reconnecting client notice it fell behind and re-read once. **We

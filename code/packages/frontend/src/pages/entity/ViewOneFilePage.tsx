@@ -16,6 +16,7 @@ import { StatusBanner } from "@/components/ui/StatusBanner";
 import { type Health } from "@/components/ui/health";
 import { relativeTime, absoluteTime, middleTruncate } from "@/lib/format";
 import { clientLog } from "@/lib/clientLog";
+import { useLiveRefresh, repoTopic } from "@/lib/useLiveRefresh";
 import { copyText } from "@/lib/clipboard";
 
 export function ViewOneFilePage() {
@@ -28,6 +29,9 @@ export function ViewOneFilePage() {
     queryFn: () => api.entity(path!),
     enabled: !!path,
   });
+  // A backbone pull or batch settle can change this entity while the page sits open (performance.mdx
+  // Aspect 6b).
+  useLiveRefresh([v?.repo ? repoTopic(v.repo.repoId) : null, "jobs"], [["entity", path]]);
 
   const decide = useMutation({
     mutationFn: (d: Decision) => api.setEntityDecision(path!, d),

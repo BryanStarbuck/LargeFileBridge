@@ -32,6 +32,7 @@ import type {
 } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
+import { useLiveRefresh } from "../lib/useLiveRefresh.js";
 import { clientLog } from "../lib/clientLog.js";
 import { lastBatchFinishedAt, isRecentlyFinished } from "./linger.js";
 
@@ -91,14 +92,17 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   const optimisticJobs = useMemo(() => Object.values(optimistic), [optimistic]);
   const dockBusy = optimisticJobs.length > 0;
 
-  // Source B — poll the server job set. Gentle while idle (the dock may be empty), faster while the
-  // dock already shows work so a determinate bar updates smoothly.
+  // Source B — the server job set. While work is visibly running, a fast foreground poll keeps the
+  // determinate bars smooth; while IDLE there is NO interval at all — the `progress` topic on the
+  // event stream announces a job this tab didn't start (performance.mdx Aspect 6b), replacing the old
+  // constant 3s idle poll.
   const { data: server } = useQuery({
     queryKey: ["progress"],
     queryFn: api.progress,
-    refetchInterval: dockBusy ? 1200 : 3000,
+    refetchInterval: (q) => (dockBusy || (q.state.data?.jobs.length ?? 0) > 0 ? 1200 : false),
     refetchOnWindowFocus: false,
   });
+  useLiveRefresh(["progress", "jobs"], [["progress"]]);
 
   // Merge A ∪ B, de-duped by id (an optimistic card takes precedence over the same server job so it
   // never doubles). Server jobs this tab did not start are added underneath.

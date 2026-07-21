@@ -837,6 +837,65 @@ The client subscription that maps a bumped topic to query keys and invalidates t
 The on-demand freshness trigger that gives the bus something to announce (a stale storage backbone cycle + reconcile, debounced and single-flighted) is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
 
+### Aspect 6b — Sitewide coverage: every page paints instantly and stays live (LOCKED)
+
+Aspect 6a built the mechanism for one page (One Repo) and one family of topics (`repo:*`, `repos`,
+`storages`). This aspect makes the two behaviors it enables the **sitewide rule** — product direction:
+*every* UI page loads asynchronously from the server, and *every* open page updates itself when the
+server's state changes (the canonical case: a git-backbone sync of the company or personal storage repo
+lands new files while a page sits open).
+
+**Rule 1 — Shell-first paint (never block first render on server data).** A page renders its shell —
+header, back link, title, controls — **immediately**, from local code alone; the content region shows a
+skeleton until its query lands. A page must never early-return a bare "Loading…" (or `null`) for the
+whole page: a server that takes minutes to answer must cost the user *content latency*, never *page
+latency*. Auth/security gating in `main.tsx` is the one allowed whole-tree gate; **data** may gate only
+the region that shows it. Tables keep their existing loading-table/skeleton pattern; detail/settings
+pages use the shared skeleton.
+
+The shared content-region skeleton every shell-first page uses is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageSkeleton.tsx` — `PageSkeleton()`
+
+**Rule 2 — Every state-changing write bumps a topic, and every page subscribes.** The sitewide topic
+catalog (backend constants in `state-events.service.ts`, subscriptions via `useLiveRefresh`):
+
+| Topic | Server state it names | Bumped by (choke points) | Pages watching → keys invalidated |
+| --- | --- | --- | --- |
+| `repo:<folder>` / `repo:<repoId>` | one repo's rows, metrics, settings | `writeRepoStatus`/`writeRepoManifest` (units.service), the reconcile fold (tracking-sync), decision writes (decisions.service `recordDecision`/`reconcile`/`setDecisionPolicy`) | One Repo → `["repo",id]`; Repo Settings → `["repoSettings",id]`; entity/viewer pages → `["entity",path]` |
+| `repos` | the repo list / rollups | same choke points (via `repoBumpTopics`) | Repos → `["repos"]`; AppShell + mapping review → `["company-mappings","pending"]` |
+| `storages` | storage list, descriptors, settings, mapped dirs, bookmarks | `writeDescriptor` + `setBookmark` (storage.service), `writeStorageSettings`/`setMappedDirs`/`patchMappedDirs` (storage-settings.service) | Storages → `["storages"],["organizations"]`; detail → `["storage",id]`; settings → `["storageSettings",id]`…; Communities → `["communities"]` |
+| `jobs` | the job queue + batches + recent failures | `enqueue`/`createBatch`/`stopBatch`/`recordQuarantined` and the per-task settle in `runTask`'s `finally` (jobqueue.service, **throttled**) | Scans → `["jobs"]`; One Repo (task icons) → `["repo",id]`; media viewer → `["transcript"/"description"/"ocr",path]` |
+| `scans` | the scan-job lifecycle | `startScan` + `runJob` completion/rerun (scan-job.ts) | ScanProgressBar → `["scanStatus"]`; Repos → `["scanStatus"]` |
+| `progress` | the progress-dock registry | `begin`/`end` (immediate) and `report` (**throttled**) in progress.registry.ts | ProgressContext → `["progress"]` |
+| `todo` | the TO DO batch store | `writeBatch`/`removeStale*`/`removeBatchFile` (todo-batches.store, **throttled**) | To Do → `["todo","batches"]` |
+| `devices` | the device registry / peers | `ensureDeviceRegistered` after its git cycle (pin.service, **throttled**) | Devices → `["devices"]`; one device → `["device",id]` |
+| `settings` | app config, AI config, flags | `updateAppConfig` — the one choke point every config write passes through (config.service, **throttled**) | Settings → `["settings"],["ai-config"],["compress-settings"]` |
+| `ipfs` | node/install/upgrade state, pinset | install/upgrade `append()` (ipfs-node.service), `pinAdd`/`pinRm` (ipfs.service, **throttled**) | IPFS dashboard/off → `["ipfsNode"],["ipfsJob"]`; IPFS pins → `["ipfs"]`; Tools → `["ipfs-node"]`… |
+
+**Throttling (the flood rule).** High-frequency writes (a 1,440-task batch settling, per-file pins in a
+pass, progress ticks) must not become 1,440 stream lines and 1,440 refetches. The bus offers a
+trailing-edge coalesced bump — leading edge fires at once (a lone event never waits), later bumps inside
+the ~1s window fold into one. Every choke point marked **throttled** above uses it.
+
+The coalesced bump is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopicThrottled()` / `bumpTopicsThrottled()`
+
+**The polls that remain, and why (exhaustive — anything else is a defect).** The stream announces
+*server writes*; a poll is only honest where the state changes with **no server write to observe**, or
+where smooth *determinate progress* is wanted mid-run:
+
+* `["ipfsNode"]` 15s (IPFS pages) — daemon liveness is an external process dying; no write observes it.
+* `["ipfsLiveness"]` 20s (status banner) — same reason.
+* `["scanStatus"]` **1s only while `running`** (ScanProgressBar) — per-unit progress ticks; the idle
+  15s leg is **gone**, replaced by the `scans` topic.
+* `["progress"]` **1.2s only while jobs are visible** (ProgressContext) — smooth bars; the idle 3s leg
+  is **gone**, replaced by the `progress` topic.
+* `["ipfsJob"]` / `["ipfs-install-status"]` 1.2s **only while a job runs** — determinate install output.
+* `["authInit"]` 3s **only while the backend is unreachable** (boot) — there is no stream to ride yet.
+
+ScansPage's former constant 10s `["jobs"]` poll is **deleted** — its lifecycle rides `scans`/`jobs`/
+`progress` bumps.
+
 ### Aspect 7 — Scaling / server mode
 
 - **Cursor/limit on the stream** — the backend already caps at 5000; expose a `?limit`/`?after`
@@ -883,6 +942,7 @@ The on-demand freshness trigger that gives the bus something to announce (a stal
 | P-32 | **Heap-pressure WARN + 30s HEARTBEAT** — a predictive signal before the abort that can't be logged | `backend/shared/heap-watch.ts`, `backend/shared/transactions.ts`, `backend/src/main.ts` |
 | P-33 | **Durable backlog** — fsync'd append-only journal, 3 commit points, boot restore, 2-strike quarantine | `backend/modules/jobqueue/queue-journal.ts`, `queue-restore.ts`, `jobqueue.service.ts`, `backend/config/state-dir.ts` (`resolveQueueDir()`) |
 | P-34 | **BEGIN/END for every job and every API call** — the work ledger | `backend/shared/transactions.ts`, `backend/modules/describe/describe.service.ts`, `adapters.ts`, `fit-media.ts`, `backend/modules/transcribe/transcribe.service.ts`, `backend/tools/transcribe/engine.ts`, `backend/modules/jobqueue/jobqueue.service.ts` |
+| P-36 | **Sitewide shell-first + live pages (Aspect 6b)** — six pages that hard-blocked first paint (Settings, Repo Settings, Storage Settings, Tools, IPFS dashboard/off) now render their shell + `PageSkeleton` immediately; seven new topics (`jobs`/`scans`/`progress`/`todo`/`devices`/`settings`/`ipfs`) bumped at their write choke points with a trailing-edge coalesced bump; `useLiveRefresh` wired on every data page (was: One Repo only), `storages` finally emitted; idle polls deleted (ScansPage 10s, ProgressContext 3s idle, ScanProgressBar 15s idle) — running-state fast polls kept for determinate progress | `backend/modules/events/state-events.service.ts` (`bumpTopicThrottled`), `jobqueue.service.ts`, `batch settle in runTask`, `scan-job.ts`, `progress.registry.ts`, `decisions.service.ts`, `storage.service.ts`, `storage-settings.service.ts`, `todo-batches.store.ts`, `pin.service.ts`, `config.service.ts`, `ipfs.service.ts`, `ipfs-node.service.ts`; `frontend/components/ui/PageSkeleton.tsx`, `ScanProgressBar.tsx`, `progress/ProgressContext.tsx`, and every page under `frontend/src/pages/` |
 | P-35 | **Progressive, non-blocking consumption** (completes P-22; formerly numbered P-23, which the pin-pass entry owns) — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**

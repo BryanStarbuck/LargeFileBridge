@@ -10,6 +10,7 @@ import { OptionImagePreviewLayer } from "../../components/preview/OptionImagePre
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
 import { useSessionPing } from "../../lib/useSessionPing.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { useHotkeys } from "../../lib/hotkeys.js";
 
 const FALLBACK: CurrentUser = {
@@ -54,6 +55,9 @@ export function AppShell() {
     queryFn: api.companyMappingsPending,
     staleTime: 60_000,
   });
+  // A backbone pull can land a new owner proposal while the app sits open — the consent badge/route
+  // must light up without a reload (performance.mdx Aspect 6b).
+  useLiveRefresh(["storages", "repos"], [["company-mappings", "pending"]]);
   useEffect(() => {
     if (!pendingMappings || pendingMappings.length === 0) return;
     if (pathname === "/company-mappings/review") return;

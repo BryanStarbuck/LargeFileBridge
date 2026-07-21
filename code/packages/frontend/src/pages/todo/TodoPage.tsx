@@ -9,8 +9,10 @@ import type { TodoBatchSummary, TodoBatchDetail, TodoBatchItem, TodoCategory } f
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
 import { WarningPopup } from "../../components/ui/WarningPopup.js";
 import type { WarningDef, WarningTarget, WarningTargetAxes } from "../../components/ui/warnings/registry.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 const SCOPE_LABEL: Record<string, string> = {
@@ -97,6 +99,7 @@ export function TodoPage() {
     queryKey: ["todo", "batches"],
     queryFn: api.todoBatches,
   });
+  useLiveRefresh(["todo"], [["todo", "batches"]]);
 
   const dismiss = useMutation({
     mutationFn: (id: string) => api.dismissTodoBatch(id),
@@ -140,7 +143,9 @@ export function TodoPage() {
       />
 
       {isLoading ? (
-        <p className="mt-6 text-center text-black/50">Loading…</p>
+        <div className="mt-6">
+          <PageSkeleton />
+        </div>
       ) : batches.length === 0 ? (
         <div className="mt-10 rounded-lg border border-[var(--lfb-border)] bg-white p-8 text-center text-black/60">
           Nothing to do. Large File Bridge will list recommendations here after its next scan.

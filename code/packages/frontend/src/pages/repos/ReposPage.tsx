@@ -14,6 +14,7 @@ import { pinAllRepos } from "../../components/menu/domainActions.js";
 import type { Action } from "../../components/menu/EntityMenu.js";
 import { RepoStatusPill } from "../../components/Pill.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 const STATUS_OPTIONS: RepoStatus[] = [
@@ -37,6 +38,10 @@ export function ReposPage() {
   // this page mounted) without doubling the request rate.
   const { data: scan } = useQuery({ queryKey: ["scanStatus"], queryFn: api.scanStatus });
   const scanning = scan?.status === "running";
+
+  // Live refresh (performance.mdx Aspect 6b): a backbone reconcile or scan changes the list, an open
+  // page learns without a reload.
+  useLiveRefresh(["repos", "scans"], [["repos"], ["scanStatus"]]);
 
   // When a scan transitions out of "running", refresh the repos table with the fresh counts.
   const wasRunning = useRef(false);

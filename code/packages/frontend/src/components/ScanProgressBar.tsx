@@ -6,14 +6,16 @@ import { useQuery } from "@tanstack/react-query";
 import { RefreshCw, CheckCircle2, AlertCircle } from "lucide-react";
 import type { ScanJob } from "@lfb/shared";
 import { api } from "../api/client.js";
+import { useLiveRefresh } from "../lib/useLiveRefresh.js";
 
-// Poll fast (1s) only while a scan is actively running; poll slowly (15s) otherwise so a scan started
-// elsewhere (a scheduled run, or Rescan on another tab) still lights the bar up within a few seconds
-// — without hammering the status endpoint every 5s on every page forever (performance.mdx P-07). This
-// component is mounted once in the AppShell, so it is the SINGLE source of truth for ["scanStatus"];
-// other pages read the shared cache instead of adding their own interval.
-function pollInterval(job: ScanJob | undefined): number {
-  return job?.status === "running" ? 1000 : 15_000;
+// Poll fast (1s) ONLY while a scan is actively running (per-unit progress ticks don't ride the event
+// stream); while idle there is NO interval — the `scans` topic on the event stream lights the bar up
+// the moment a run starts anywhere (a scheduled run, or Rescan on another tab), replacing the old 15s
+// idle poll (performance.mdx Aspect 6b, P-07). This component is mounted once in the AppShell, so it
+// is the SINGLE source of truth for ["scanStatus"]; other pages read the shared cache instead of
+// adding their own interval.
+function pollInterval(job: ScanJob | undefined): number | false {
+  return job?.status === "running" ? 1000 : false;
 }
 
 export function ScanProgressBar() {
@@ -22,6 +24,7 @@ export function ScanProgressBar() {
     queryFn: api.scanStatus,
     refetchInterval: (q) => pollInterval(q.state.data),
   });
+  useLiveRefresh(["scans"], [["scanStatus"]]);
 
   // Keep the "complete/failed" banner up briefly after a run finishes, then fade it out. We track the
   // finishedAt we last showed so a NEW completion re-triggers the banner.

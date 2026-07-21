@@ -135,7 +135,9 @@ export function OneRepoPage() {
   // Without this the page keeps showing the old list until someone reloads — indistinguishable, from the
   // user's chair, from a sync that is simply broken. A bump on this repo's topic invalidates ["repo",
   // repoId] and nothing broader, so the row appears on its own and sort/filter/scroll are preserved.
-  useLiveRefresh([repoTopic(repoId)], [["repo", repoId]]);
+  // `jobs` too: a batch settle (transcribe/describe/OCR/compress) flips this page's task icons and
+  // Done counts, and those settle without any repo-topic write until the artifact commits.
+  useLiveRefresh([repoTopic(repoId), "jobs"], [["repo", repoId]]);
 
   const setDecision = useMutation({
     mutationFn: ({ paths, decision }: { paths: string[]; decision: Decision }) =>

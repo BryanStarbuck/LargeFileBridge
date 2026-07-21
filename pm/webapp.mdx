@@ -481,8 +481,11 @@ GET /api/progress   →  { ok: true, data: { jobs: Job[] } }
 Job = { id, kind, target, startedAt, done?, total?, unit? }   // done/total present iff determinate
 ```
 
-The frontend polls it (TanStack Query `refetchInterval`) at a **gentle cadence while idle** and a
-**faster one while the dock is non-empty**, and **merges** those jobs into the same dock by `id`. A
+The frontend learns about server jobs two ways: while jobs are **visible** it polls at a fast cadence
+so determinate bars update smoothly, and while **idle** it does **not poll at all** — the `progress`
+topic on the authenticated event stream ([performance.mdx Aspect 6b](./performance.mdx)) announces a
+job this tab did not start, and the client refetches `GET /api/progress` once. It **merges** those jobs
+into the same dock by `id`. A
 server job's card leaves when it stops appearing in the poll. Optimistic (A) and polled (B) cards are
 **de-duplicated by job id**, so a job this tab started (and already shows optimistically) is not
 doubled when the same job comes back on the poll.

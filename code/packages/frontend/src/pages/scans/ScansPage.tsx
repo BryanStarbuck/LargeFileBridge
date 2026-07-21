@@ -13,6 +13,7 @@ import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { DiagnosticCard } from "../../components/ui/DiagnosticCard.js";
 import { type Health } from "../../components/ui/health.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 
 function workerHealth(s: WorkerState): Health {
   if (!s.installed) return "neutral";
@@ -23,9 +24,12 @@ function workerHealth(s: WorkerState): Health {
 }
 
 export function ScansPage() {
-  const { data, error } = useQuery({ queryKey: ["jobs"], queryFn: api.jobsPage, refetchInterval: 10_000 });
-  // The Scans payload poll runs every 10s; a fetch failure otherwise stays invisible (no toast on a
-  // background refetch), so mirror it to error.err. Warn (not error) — a transient poll miss self-heals.
+  // No interval: the constant 10s poll is replaced by the event stream (performance.mdx Aspect 6b) —
+  // scan/job lifecycle bumps `scans`/`jobs`, live progress ticks bump `progress` (throttled server-side).
+  const { data, error } = useQuery({ queryKey: ["jobs"], queryFn: api.jobsPage });
+  useLiveRefresh(["scans", "jobs", "progress"], [["jobs"]]);
+  // A fetch failure otherwise stays invisible (no toast on a background refetch), so mirror it to
+  // error.err. Warn (not error) — a transient miss self-heals on the next bump.
   useEffect(() => {
     if (error) clientLog.warn("ScansPage.jobsPage.poll", error);
   }, [error]);

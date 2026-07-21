@@ -792,10 +792,12 @@ The detached background job — kicked off by a route that returns immediately a
   `source`, `startedAt` / `finishedAt`, `phase` (`discovering → repos → computer → done`),
   `reposTotal` / `reposDone`, `currentUnit`, `candidatesFound`, and `error` / `ok`.
 * `GET /api/repos/scan-status` returns it. The web app mounts **one global progress bar** (in the app
-  shell, present on **every** page) that **polls** this endpoint — fast (~1 s) while running, slow
-  (~5 s) when idle so a scan started **elsewhere** (a scheduled run, or Rescan on another tab/computer)
-  still lights it up. Because the state is on the server and the bar is always mounted, **navigating
-  away and back simply re-attaches** to the same live job — the progress on the bottom returns.
+  shell, present on **every** page). It **polls** this endpoint fast (~1 s) **only while a scan is
+  running** (per-unit progress ticks); while **idle it does not poll at all** — the `scans` topic on
+  the event stream ([performance.mdx Aspect 6b](./performance.mdx)) lights it up the moment a scan
+  starts **elsewhere** (a scheduled run, or Rescan on another tab/computer). Because the state is on
+  the server and the bar is always mounted, **navigating away and back simply re-attaches** to the
+  same live job — the progress on the bottom returns.
 * The Repos page's **Rescan button reflects the *server* scan status**, not local mutation state — it
   shows *"Scanning…"* and is disabled whenever a scan is running, even one it did not start.
 

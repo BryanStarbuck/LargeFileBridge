@@ -7,12 +7,15 @@ import { toast } from "sonner";
 import type { RepoSettings, SizeUnit, PlacementChoice } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
+import { useLiveRefresh, repoTopic } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 export function RepoSettingsPage() {
   const { repoId } = useParams({ strict: false }) as { repoId: string };
   const qc = useQueryClient();
   const { data: s } = useQuery({ queryKey: ["repoSettings", repoId], queryFn: () => api.repoSettings(repoId) });
+  useLiveRefresh([repoTopic(repoId)], [["repoSettings", repoId]]);
 
   const patch = useMutation({
     mutationFn: (p: Record<string, unknown>) => api.patchRepoSettings(repoId, p),
@@ -27,7 +30,18 @@ export function RepoSettingsPage() {
     },
   });
 
-  if (!s) return <div className="text-black/50">Loading…</div>;
+  // Shell-first (performance.mdx Aspect 6b): back link + title paint now; the sections fill in.
+  if (!s) {
+    return (
+      <div className="max-w-2xl">
+        <Link to="/repos/$repoId" params={{ repoId }} className="flex items-center gap-1 text-sm text-black/50 hover:text-black">
+          <ChevronLeft className="h-4 w-4" /> Back
+        </Link>
+        <h1 className="mb-1 mt-2 text-2xl font-bold">Repo settings</h1>
+        <PageSkeleton />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-2xl">

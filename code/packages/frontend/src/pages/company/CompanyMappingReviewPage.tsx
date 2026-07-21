@@ -14,6 +14,8 @@ import { toast } from "sonner";
 import type { PendingCompanyMapping, CompanyMappingSelection, CompanyMappingApplyResult } from "@lfb/shared";
 import { http, unwrap } from "../../api/axios.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 // GET the pending mappings (repo_owner_propagation.mdx §3) and POST the batch of per-row selections (§4.3).
@@ -41,6 +43,7 @@ export function CompanyMappingReviewPage() {
     queryKey: ["company-mappings", "pending"],
     queryFn: fetchPending,
   });
+  useLiveRefresh(["storages", "repos"], [["company-mappings", "pending"]]);
 
   // Per-repo choice state, keyed by repoId. Initialized to the default (checked + company) for every pending
   // row the first time it appears; existing choices are preserved across refetches.
@@ -100,7 +103,7 @@ export function CompanyMappingReviewPage() {
     return (
       <div>
         <PageHeader title="Review company repo mappings" />
-        <p className="mt-6 text-center text-black/50">Loading…</p>
+        <PageSkeleton />
       </div>
     );
   }

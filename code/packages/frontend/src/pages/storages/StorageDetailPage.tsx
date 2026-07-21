@@ -22,6 +22,7 @@ import type { LfbColumn } from "@/components/table/types";
 import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, TASK_ICON, type TaskIconKind } from "@/components/table/taskIcons";
 import { taskRowValue } from "@/components/table/fileFilter";
 import { relativeTime, absoluteTime } from "@/lib/format";
+import { useLiveRefresh } from "@/lib/useLiveRefresh";
 import { clientLog } from "@/lib/clientLog";
 
 export function StorageDetailPage() {
@@ -29,6 +30,7 @@ export function StorageDetailPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["storage", storageId], queryFn: () => api.storageDetail(storageId) });
+  useLiveRefresh(["storages"], [["storage", storageId]]);
 
   const index = useMutation({
     mutationFn: () => api.indexStorage(storageId),

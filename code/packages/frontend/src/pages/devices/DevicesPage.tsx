@@ -19,6 +19,7 @@ import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { healthColor, type Health } from "../../components/ui/health.js";
 import { relativeTime, truncatePeerId } from "../../lib/format.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { copyText } from "@/lib/clipboard";
 
 // Recent = green, a bit stale = amber, long gone / never = neutral.
@@ -47,6 +48,7 @@ function copyPeerId(id: string) {
 export function DevicesPage() {
   const navigate = useNavigate();
   const { data, isLoading } = useQuery({ queryKey: ["devices"], queryFn: api.devices });
+  useLiveRefresh(["devices"], [["devices"]]);
   const rows = data ?? [];
   const onlySelf = !isLoading && rows.length === 1 && rows[0]?.isSelf;
 

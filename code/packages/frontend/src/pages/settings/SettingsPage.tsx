@@ -12,14 +12,17 @@ import { api } from "../../api/client.js";
 import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
 import { TranscriptionSettingsSection } from "./TranscriptionSettingsSection.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
 import { Section } from "../../components/ui/Section.js";
 import { Disclosure } from "../../components/ui/Disclosure.js";
 import { healthColor } from "../../components/ui/health.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 export function SettingsPage() {
   const qc = useQueryClient();
   const { data } = useQuery({ queryKey: ["settings"], queryFn: api.settings });
+  useLiveRefresh(["settings"], [["settings"], ["ai-config"], ["compress-settings"]]);
   const { data: auth } = useQuery({ queryKey: ["authConfig"], queryFn: api.authConfig });
   const [value, setValue] = useState(100);
   const [unit, setUnit] = useState<SizeUnit>("MB");
@@ -64,7 +67,16 @@ export function SettingsPage() {
     },
   });
 
-  if (!data) return <div className="text-black/50">Loading…</div>;
+  // Shell-first (performance.mdx Aspect 6b): the page never blocks on the server — the header paints
+  // now and the sections fill in when the data lands.
+  if (!data) {
+    return (
+      <div className="max-w-2xl">
+        <PageHeader title="Settings" />
+        <PageSkeleton blocks={4} />
+      </div>
+    );
+  }
 
   const ipfsOk = data.ipfs.health === "ok";
   const ipfsState = !ipfsOk ? "bad" : data.ipfs.compliant ? "ok" : "warn";

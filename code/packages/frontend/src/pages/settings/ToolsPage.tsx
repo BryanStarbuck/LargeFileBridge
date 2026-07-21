@@ -10,8 +10,10 @@ import { toast } from "sonner";
 import type { IpfsNodeStatus, IpfsInstallJob, CompressTools, DescribeKind, TranscribeTools } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
+import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
 import { Section } from "../../components/ui/Section.js";
 import { healthColor, type Health } from "../../components/ui/health.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { copyText } from "@/lib/clipboard";
 
@@ -36,6 +38,7 @@ export function ToolsPage() {
   const qc = useQueryClient();
   // The node status carries the required `ipfs` row + the platform's package manager + install command.
   const { data: node } = useQuery({ queryKey: ["ipfs-node"], queryFn: api.ipfsNode });
+  useLiveRefresh(["ipfs"], [["ipfs-node"], ["compress-tools"], ["transcribe-tools"]]);
   // The optional compression tools (ffmpeg/ffprobe/magick/…).
   const { data: tools } = useQuery({ queryKey: ["compress-tools"], queryFn: api.compressTools });
   // The transcription CLI binaries (Transcribe.mdx §5.2: "the full install preflight also lists these
@@ -71,7 +74,15 @@ export function ToolsPage() {
     onError: (e: Error) => { clientLog.error("ToolsPage.install", e); toast.error(e.message); },
   });
 
-  if (!node) return <div className="text-black/50">Loading…</div>;
+  // Shell-first (performance.mdx Aspect 6b): the header paints now; the tool rows fill in.
+  if (!node) {
+    return (
+      <div className="max-w-2xl">
+        <PageHeader title="Tools" subtitle="Command-line tools LargeFileBridge uses to scan, pin, compress, and transcribe." />
+        <PageSkeleton />
+      </div>
+    );
+  }
 
   const rows = buildRows(node, tools ?? null, transcribeTools ?? null);
   const missingRequired = rows.filter((r) => r.level === "required" && !r.installed);

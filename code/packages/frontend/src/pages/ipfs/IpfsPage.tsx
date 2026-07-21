@@ -35,6 +35,7 @@ import { Disclosure } from "../../components/ui/Disclosure.js";
 import { StatTile, StatTileRow } from "../../components/ui/StatTile.js";
 import { type Health } from "../../components/ui/health.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { writeClipboard } from "@/lib/clipboard";
 
@@ -50,6 +51,7 @@ export function IpfsPage() {
   const pin = usePinCid(); // per-CID pin/unpin toggle (ipfs.mdx §3)
 
   const { data, isLoading } = useQuery({ queryKey: ["ipfs"], queryFn: api.ipfs });
+  useLiveRefresh(["ipfs", "storages"], [["ipfs"]]);
 
   const set = (d: IpfsPageData) => qc.setQueryData(["ipfs"], d);
 

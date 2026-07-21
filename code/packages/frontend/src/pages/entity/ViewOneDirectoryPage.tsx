@@ -15,6 +15,7 @@ import { FlagSwitches, EntityHeaderMissing } from "./entityShared";
 import { relativeTime } from "@/lib/format";
 import { confirmModal } from "@/lib/modals";
 import { clientLog, errMessage } from "@/lib/clientLog";
+import { useLiveRefresh, repoTopic } from "@/lib/useLiveRefresh";
 
 interface RollupRow {
   id: string;
@@ -34,6 +35,7 @@ export function ViewOneDirectoryPage() {
     queryFn: () => api.entity(path!),
     enabled: !!path,
   });
+  useLiveRefresh([v?.repo ? repoTopic(v.repo.repoId) : null, "jobs"], [["entity", path]]);
 
   if (!path) return <p className="text-black/60">No directory selected.</p>;
   if (isLoading) return <SkeletonPage />;

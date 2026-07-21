@@ -29,6 +29,7 @@ import {
   type StartDiagnosis,
 } from "./ipfs-config-health.service.js";
 import * as ipfs from "./ipfs.service.js";
+import { bumpTopicThrottled, IPFS_TOPIC } from "../events/state-events.service.js";
 import { log, rotateIfOversized } from "../../shared/logging.js";
 
 const run = promisify(execFile);

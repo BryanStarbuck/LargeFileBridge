@@ -13,12 +13,14 @@ import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
 import { StorageGear, StorageKebab } from "@/components/menu/RowKebabs";
+import { useLiveRefresh } from "@/lib/useLiveRefresh";
 import { clientLog } from "@/lib/clientLog";
 
 export function StoragesPage() {
   const navigate = useNavigate();
   const qc = useQueryClient();
   const { data, isLoading } = useQuery({ queryKey: ["storages"], queryFn: api.storages });
+  useLiveRefresh(["storages"], [["storages"], ["organizations"]]);
 
   const init = useMutation({
     mutationFn: (id: string) => api.initStorage(id),

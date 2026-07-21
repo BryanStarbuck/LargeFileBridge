@@ -17,6 +17,7 @@ import { toast } from "sonner";
 import type { IpfsNodeStatus } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { ProgressView, ErrorPanel, ManualCommand, ConfigHealthCard } from "./ipfsShared.js";
 
 // A blocker that the Config-health card should take over for (ipfs_ui.mdx §14.4). "missing" is NOT one:
@@ -42,6 +43,7 @@ export function IpfsOffPage() {
   });
   const jobActive = job?.status === "running";
   const jobErrored = job?.status === "error";
+  useLiveRefresh(["ipfs"], [["ipfsNode"], ["ipfsJob"]]);
 
   const install = useMutation({
     mutationFn: api.ipfsInstall,
@@ -83,8 +85,17 @@ export function IpfsOffPage() {
     }
   }, [jobActive, node, navigate]);
 
+  // Shell-first (performance.mdx Aspect 6b): the header paints now; the state cards fill in.
   if (isLoading && !node) {
-    return <div className="text-black/50">Loading the IPFS node…</div>;
+    return (
+      <div>
+        <h1 className="mb-4 text-2xl font-bold">IPFS</h1>
+        <div className="animate-pulse space-y-3" aria-busy="true" aria-label="Loading">
+          <div className="h-20 rounded bg-slate-100" />
+          <div className="h-20 rounded bg-slate-100" />
+        </div>
+      </div>
+    );
   }
 
   return (

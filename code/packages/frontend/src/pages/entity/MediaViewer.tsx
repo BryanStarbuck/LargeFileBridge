@@ -37,6 +37,7 @@ import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { copyText } from "@/lib/clipboard";
 import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
+import { useLiveRefresh, repoTopic } from "@/lib/useLiveRefresh";
 import { clientLog } from "../../lib/clientLog.js";
 
 /** The viewer route for a media kind (media_viewer.mdx §1). */
@@ -71,6 +72,13 @@ export function MediaViewer({ kind }: { kind: MediaKind }) {
     queryFn: () => api.entity(path!),
     enabled: !!path,
   });
+  // Live refresh (performance.mdx Aspect 6b): a batch settle (`jobs`) may have just written THIS file's
+  // transcript / description / OCR — the open viewer shows it without a reload; the repo topic covers
+  // pin/decision changes arriving from a backbone pull.
+  useLiveRefresh(
+    [v?.repo ? repoTopic(v.repo.repoId) : null, "jobs"],
+    [["entity", path], ["transcript", path], ["description", path], ["ocr", path]],
+  );
   // The signed same-origin URL the media element loads (Range-capable). Refetched per path.
   const { data: grant } = useQuery({
     queryKey: ["media-grant", path],
