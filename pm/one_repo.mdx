@@ -951,6 +951,18 @@ The server-side bumps this page listens for are handled in code:
 
 ---
 
+### 4.12 Option-key floating image preview (LOCKED reference)
+
+Holding **Option** (Alt on Windows/Linux) while hovering a row whose file is an **image** floats a
+preview of that image, placed by the four-corner biggest-fit geometry and gone the instant the key is
+released or the pointer leaves the row. Remote-only rows are excluded — their bytes aren't on this
+computer (§4.10). The full behavior, geometry, and grant-gated byte source are specified in
+[option_image_preview.mdx](./option_image_preview.mdx).
+This table opts in via the DataTable `hoverPreview` prop, wired in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `hoverPreview` prop on `DataTable`).
+
+---
+
 ## 5. Empty & loading states
 
 * **No large files:** the table is replaced by a card — "No large files found in this repo. LFBridge

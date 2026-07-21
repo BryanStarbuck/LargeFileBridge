@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+# Large File Bridge CLI shim — the callable top level (pm/cli.mdx §1.1). Everything real lives in
+# cli/code/; this only self-builds when dist/ is missing or stale, then execs node.
+set -euo pipefail
+DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MAIN="$DIR/code/dist/main.js"
+
+needs_build() {
+  [ ! -f "$MAIN" ] && return 0
+  # Rebuild when any source is newer than the built entry (cheap staleness check).
+  local newer
+  newer=$(find "$DIR/code/src" -name '*.ts' -newer "$MAIN" 2>/dev/null | head -1 || true)
+  [ -n "$newer" ]
+}
+
+if needs_build; then
+  echo "Building the Large File Bridge CLI…" >&2
+  (cd "$DIR/code" && pnpm install --silent && pnpm build) >&2
+fi
+
+exec node "$MAIN" "$@"

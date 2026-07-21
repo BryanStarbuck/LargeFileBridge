@@ -1,0 +1,117 @@
+---
+title: LargeFileBridge — Option-key floating image preview (hold ⌥ over an image row)
+description: A cross-cutting hover affordance for every file list — hold the Option key (Alt on Windows/Linux) while the pointer is over a row that is an IMAGE file and a floating preview of that image appears, sized and placed by a four-corner geometry test that always picks the screen corner giving the LARGEST preview for the image's aspect ratio. Release Option and it disappears; press Option again while still hovering and it reappears; hover off the image row and it disappears. Ships on the One-repo files table and the File System left-bar tab (the column browser AND the Full-paths table). Bytes come from the same short-lived signed media grant the viewer uses, so nothing new is exposed. Implemented by components/preview/OptionImagePreview.tsx (the layer + the pure corner-geometry function) mounted once in AppShell.
+---
+
+# LargeFileBridge — Option-key floating image preview
+
+Hold **Option** (macOS; **Alt** on Windows/Linux) while hovering a **file row that is an image** and a
+**floating preview** of that image appears — as big as the screen allows, anchored into whichever screen
+corner gives the largest preview for the image's aspect ratio. It is a *peek*, not a navigation: nothing
+is clicked, no page changes, and letting go of the key makes it vanish.
+
+---
+
+## 1. The trigger (LOCKED)
+
+* The preview shows only while **BOTH** are true:
+  * the **Option key is held down**, and
+  * the **pointer is over a row whose file is an image** (the shared file-type classifier says `image`).
+* **Release Option → the preview disappears.** The hover target is remembered.
+* **Press Option again while still hovering the same image row → the preview reappears.**
+* **Hover off the image row → the preview disappears** (even with Option still held). Moving onto
+  another image row with Option held shows that row's preview.
+* Non-image rows (video / audio / pdf / other / directories) never show a preview. On One-repo,
+  **remote-only rows** are also excluded — their bytes are not on this computer, so there is nothing to
+  preview ([one_repo.mdx §4.10](./one_repo.mdx)).
+
+The row is the hover target — anywhere on the row counts, not just the file-name cell.
+
+Reference — image classification is `fileTypeForName()` (the same discriminator the File-type facet and
+the media viewer use), in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName`.
+
+## 2. Placement — the four-corner geometry test (LOCKED)
+
+The preview must be **as large as possible** without sitting under the cursor. We test all four screen
+corners and keep the winner:
+
+1. Take the **cursor position** and the **viewport size**.
+2. For each corner (top-left, top-right, bottom-left, bottom-right) build a **candidate rectangle**
+   between two points:
+   * the **near point** — the cursor moved **10 px toward the corner being tested**, on both axes.
+     (Testing the top-left corner → 10 px up and 10 px left of the cursor. Testing the bottom-right
+     corner → 10 px down and 10 px right. Always in the direction of the corner under test.)
+   * the **far point** — the screen corner itself, inset **5 px toward the center of the screen** on
+     both axes. This is the closest the preview ever gets to the physical corner.
+3. **Fit the image's aspect ratio inside each candidate rectangle** and measure the fitted area. The
+   fitted preview keeps the true aspect ratio, so it will not fully use one of the two axes.
+4. **The corner with the biggest fitted preview wins.**
+5. The fitted image is **anchored at the far point** (it hugs the winning corner, 5 px in) and extends
+   from there toward the cursor.
+
+Two refinements the geometry carries:
+
+* **Never upscale** — the preview is capped at the image's natural pixel size. A small icon shows at
+  its own size in the winning corner, not blown up to fill the screen.
+* The placement is **recomputed as the cursor moves** along the rows, so the preview always reflects
+  the current cursor position (and flips corners when crossing the middle of the screen).
+
+The corner test is a pure function (unit-tested), in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/preview/OptionImagePreview.tsx` — `bestPreviewPlacement()`.
+
+## 3. What it looks like
+
+* A plain floating `<img>` at the computed rectangle — `position: fixed`, above the page, with a hairline
+  border and soft shadow so it reads as a layer, never as page content.
+* It is **pointer-transparent** (`pointer-events: none`): the row underneath keeps its hover, its
+  tooltip, and its click behavior. The preview is an overlay, not an obstacle.
+* Nothing renders while the image bytes are still loading or if they fail to load (a broken/HEIC-only
+  file the browser can't decode simply shows no preview — never a broken-image glyph).
+
+## 4. Where the bytes come from (LOCKED — no new surface)
+
+The preview loads the file through the **same short-lived signed media grant** the media viewer uses
+([media_viewer.mdx §2](./media_viewer.mdx)) — a same-origin URL minted per hover, allow-list-gated and
+session-bound. No new endpoint, no wider exposure; a preview is exactly as private as opening the file.
+
+Reference — grant minting and the raw stream are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `mintGrant` / grant verification.
+
+## 5. Surfaces (LOCKED)
+
+The layer is mounted **once** in the app shell (like the hover-info bridge), and any file surface opts
+in by publishing its hover target:
+
+* **One repo — the files table**, on every task tab ([one_repo.mdx §4](./one_repo.mdx)). The DataTable
+  wires the whole row via its `hoverPreview` prop.
+* **File System — the column browser** ([file_system.mdx](./file_system.mdx)): hovering an image file
+  row in any column.
+* **File System — the Full paths tab**: hovering an image row in the flat table.
+
+Reference — the layer + the row-target publisher are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/preview/OptionImagePreview.tsx` — `OptionImagePreviewLayer` / `setOptionPreviewTarget`.
+Mounted once in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`.
+
+## 6. Acceptance criteria
+
+1. Holding **Option** while hovering an **image** file row on One-repo, the File System columns, or
+   Full paths shows a floating preview of that image; non-image rows and remote-only rows never do.
+2. Releasing Option hides it; pressing Option again while still on the row brings it back; hovering off
+   the row hides it.
+3. The preview lands in the **corner whose candidate rectangle fits the largest preview** for the
+   image's aspect ratio — near point 10 px from the cursor toward the tested corner, far point 5 px in
+   from the screen corner — anchored at the far point, aspect ratio preserved, never upscaled past the
+   image's natural size.
+4. The preview is pointer-transparent and never intercepts the row's own hover/click behavior.
+5. Bytes load only through the signed media grant; a failed grant or undecodable image shows nothing.
+
+<!--
+  option_image_preview.mdx — hold Option (Alt) over an image file row → floating preview. Four-corner
+  geometry: candidate rect per corner from (cursor moved 10px toward that corner) to (corner inset 5px);
+  fit aspect; biggest fitted area wins; anchor at the far point. Release = hide, re-press = reappear,
+  hover-off = hide. Surfaces: One-repo files table (DataTable hoverPreview prop), FS column browser,
+  Full paths. Bytes via the signed media grant (media_viewer.mdx §2) — no new exposure. Impl:
+  components/preview/OptionImagePreview.tsx (bestPreviewPlacement pure fn + layer), mounted in AppShell.
+-->

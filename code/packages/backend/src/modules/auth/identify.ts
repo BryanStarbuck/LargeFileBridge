@@ -1,18 +1,58 @@
 // "Identify, don't gate" middleware (sister pattern) + LFB's allow-list enforcement.
 // Verifies the Bearer access token via @auth/backend, then re-checks the email against the LIVE
 // security allow-list (security.mdx §1/§6.2 — companies OR individuals; charter: allow-listed only).
+import crypto from "node:crypto";
 import type { Request, Response, NextFunction } from "express";
 import { verifyToken } from "@auth/backend";
 import { getAppConfig } from "../store-model/config.service.js";
 import { AUTH_ISSUER } from "./auth-frontend.js";
-import { hasGoogleCreds } from "../../config/credentials-file.js";
+import { hasGoogleCreds, loadApiSecret } from "../../config/credentials-file.js";
 import { allowListed, securityConfigured } from "../security/security.service.js";
 import { DEFAULT_USER, type AuthUser } from "./current-user.js";
 import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
+/**
+ * The CLI's machine-caller channel (cli.mdx §3.2): X-LFB-Api-Key verified against the shared secret
+ * in ~/.credentials/large_files_bridge.json. Localhost-ONLY by construction — a non-loopback caller
+ * presenting the header is ignored (falls through to real auth), never honored. Constant-time
+ * comparison; possession of the same-user 0600 file is the proof of identity, so the fabricated
+ * principal maps to the first allow-listed email (same visibility as the browser session — no
+ * privilege beyond what the local user already has).
+ */
+function apiKeyUser(req: Request): AuthUser | null {
+  const presented = req.header("x-lfb-api-key");
+  if (!presented || !isLoopback(req)) return null;
+  if (getAppConfig().server.mode !== "local") return null; // shared-file trick is a same-machine mechanism only
+  const secret = loadApiSecret();
+  if (!secret) return null;
+  const a = Buffer.from(presented, "utf8");
+  const b = Buffer.from(secret, "utf8");
+  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
+    log.warn("auth", `Rejected X-LFB-Api-Key call (${req.method} ${req.path}): key mismatch`);
+    return null;
+  }
+  const email = getAppConfig().access.allowed_emails[0] || "cli@localhost";
+  return {
+    authenticated: true,
+    email,
+    name: "Large File Bridge CLI",
+    roles: ["admin"],
+    permissions: [],
+    allowListed: true,
+    sessionId: "cli",
+  };
+}
+
 export async function identify(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const withUser = req as Request & { user?: AuthUser };
+
+  // CLI machine caller (cli.mdx §3) — checked FIRST: a valid loopback API key needs no Bearer token.
+  const cliUser = apiKeyUser(req);
+  if (cliUser) {
+    withUser.user = cliUser;
+    return next();
+  }
 
   // Localhost dev bypass (security audit finding 1). This fabricates an admin principal, so it is
   // gated on ALL of the following — never on "no Google creds" alone, which previously handed an

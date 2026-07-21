@@ -1,0 +1,367 @@
+---
+title: LargeFileBridge — The CLI (`lfb`)
+description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. CLI code lives in ~/BGit/Bryan_git/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
+---
+
+# LargeFileBridge — The CLI (`lfb`)
+
+The CLI is the **terminal front door** to Large File Bridge. It exists so the user can sit in any
+directory — a repo, a personal media tree, anywhere — and ask the questions the web app answers,
+without opening a browser: *which of these files could I compress? which have I not OCR'd yet?
+which are big and not git-ignored? which live on my other computers but not here?*
+
+Two design commitments define everything below:
+
+1. **The CLI is a thin client.** It owns argument parsing, output formatting, and getting the
+   server up. It owns **no business logic**. Every scan, categorization, baseline comparison, and
+   action is computed by the **web app backend** and returned over its localhost REST API. One set
+   of code powers both the UI and the CLI — the CLI is a rendering of the same answers.
+2. **The CLI is self-sufficient.** If the backend is not running when the CLI is invoked, the CLI
+   brings it up itself — performing the same work the root `justfile` performs — then proceeds.
+   The user never has to run `just run` first.
+
+> **Command name.** The command is **`lfb`**. A CLI command is a code token, not user-facing
+> English prose, so the abbreviation is allowed under the naming rule in the repo `CLAUDE.md`
+> (spell out "Large File Bridge" in sentences the CLI *prints*; the binary name itself is `lfb`).
+> Help text and human-readable output say "Large File Bridge" in full.
+
+---
+
+## 1. Placement, layout, and build integration (LOCKED)
+
+### 1.1 Directory layout
+
+The CLI lives in its own top-level directory of the repo:
+
+```
+LargeFileBridge/
+├── cli/            # The CLI — the ONLY new top-level code location
+│   ├── code/       # ALL CLI implementation files go under here
+│   └── (top level) # The entry point / final artifact the user invokes lives at the top
+├── code/           # Web app (frontend + backend) — unchanged, still owns ALL functionality
+├── pm/             # Product management (this spec)
+└── justfile
+```
+
+* **`~/BGit/Bryan_git/LargeFileBridge/cli/`** — the top level of the CLI. Whatever the user (or
+  the justfile, or a shell alias) needs to *call* lives here: the entry script / built single-file
+  artifact / bin shim. It is the callable surface.
+* **`~/BGit/Bryan_git/LargeFileBridge/cli/code/`** — the large number of files that *implement*
+  the CLI (command parsing, REST client, credential bootstrap, output renderers, server
+  bring-up) all go under here. Nothing implementation-shaped sits loose at `cli/` top level.
+* **Charter amendment.** The repo charter previously said `code/` is the only place application
+  code may go. That rule is hereby refined: **`cli/code/` is the second sanctioned code
+  location**, and it may hold **CLI wrapper code only** — argument handling, HTTP calls,
+  formatting, process bring-up. Any logic that computes an *answer about files* (what is
+  compressible, what is transcribable, what is not backed up…) is **forbidden** in `cli/` and
+  must live in the backend under `code/packages/backend/`. If a CLI feature seems to need new
+  computation, the computation is added to the backend as a REST endpoint first, and the CLI
+  calls it.
+* `pm/` remains product-management-only; no code there, including no CLI code.
+
+### 1.2 Language / stack
+
+TypeScript on Node, same as the rest of the product (repo `CLAUDE.md` tech-stack rule). The CLI is
+a Node entry point; no shell-script core. It may share types with the backend (e.g. a small
+`@lfb/cli` workspace package) but must not import backend *services* — only speak REST to them.
+
+### 1.3 Build integration with the root justfile (LOCKED)
+
+* **`just build` builds the CLI too.** Whenever the root `just build` (or the `setup`/build chain
+  that `just run` triggers) runs, the CLI under `cli/` is also installed/compiled and brought
+  fully up to date. The CLI must never be stale relative to the app.
+* **`just run` also builds the CLI** as part of its dependency chain, for the same reason.
+* **`cli/` has its own justfile** with its own `build` and `run` recipes: `cd cli && just build`
+  compiles/installs just the CLI; `cd cli && just run …` builds then invokes `lfb` with the
+  arguments passed through. This is in addition to — not instead of — the root-level contract:
+  *root build/run ⇒ CLI current*.
+
+Root recipes implemented in: `~/BGit/Bryan_git/LargeFileBridge/justfile` — recipes `build`,
+`run`, `setup` (extend these to cover `cli/`).
+
+### 1.4 Relationship to the existing worker CLI
+
+The backend already ships an *internal, headless worker* entry — `scan`/`pin`/agent
+install for launchd — which is **not** this CLI and is unchanged by this spec.
+
+Worker entry implemented in:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()` (scan | pin |
+install-agent | uninstall-agent).
+
+The new `lfb` CLI is the **user-facing** tool. Over time `lfb` may grow verbs that *wrap* the
+worker's REST-side equivalents (e.g. `lfb scan` calling the scanner endpoint), but the launchd
+worker keeps its direct in-process entry because it must run when no server exists at all.
+
+---
+
+## 2. Server bring-up — the CLI's justfile-equivalent duty (LOCKED)
+
+Every `lfb` invocation that needs the API begins with a **liveness preflight**:
+
+1. **Probe** `GET http://127.0.0.1:8787/api/health` (backend port per
+   [code_plan.mdx](./code_plan.mdx); honor `BE_PORT` env override exactly as the justfile does).
+   A fast, small timeout (~2 s). If healthy → proceed to the actual command.
+2. **If down, bring the server up.** The CLI performs the same effective work as the root
+   justfile's `setup` + `run` recipes. It is **not required to shell out to `just`** — it must
+   simply achieve the same result — though invoking the justfile is an acceptable implementation
+   when `just` is present. The same-result contract means:
+   * dependency install / build if needed (`pnpm install`, workspace build) — the `setup` recipe's job;
+   * stop any half-dead prior instance of **our** app the way `just stop` does (repo-scoped
+     matchers + port loop — never blanket-kill the ports; see the justfile's `stop` for why);
+   * start the backend + web app in the background, stdout/stderr through the rotating launcher
+     sink so logs stay size-bounded in the state root (never `/tmp`);
+   * **wait** for `/api/health` to answer OK (bounded wait, ~30–60 s), then proceed.
+3. **If bring-up fails**, print the failure loudly with the tail of
+   `~/T/_large_files_bridge/launcher.log` (the only place a V8 OOM abort appears) and exit
+   non-zero. Never silently fall back to computing answers locally — there is no local compute
+   path (§1.1).
+
+Bring-up behavior mirrored from: `~/BGit/Bryan_git/LargeFileBridge/justfile` — recipes `run`,
+`stop`, `status` (port-wait loop, health check, log-tail-on-failure). Health endpoint served by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/`.
+CLI side implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/bringup.ts` —
+`ensureServerUp()` (prefers `just run` when `just` is installed; falls back to direct
+`pnpm install` + backgrounded `pnpm dev` through the launcher log), `failWithLogTail()`.
+
+* A dedicated `lfb up` command performs steps 2–3 explicitly (and `lfb status` reports what
+  `just status` reports: web port, backend health-checked, launchd agents loaded). These exist so
+  the CLI is a complete operational surface on a machine where the user never touches `just`.
+* **FRONTEND UP ≠ APP UP.** The preflight gates on the **backend health endpoint**, never on the
+  Vite port answering HTTP — Vite serves pages happily over a dead backend (see the 2026-07-15
+  incident note in the justfile's `status` recipe).
+
+---
+
+## 3. Authentication — the local shared API secret (LOCKED)
+
+The web app's browser sessions authenticate via OpenAuthFederated Google login
+([authentication.mdx](./authentication.mdx)). The CLI is a **machine caller** on the same
+computer, so it uses a second, purpose-built channel: a **shared secret file** both processes can
+read because they share the local filesystem.
+
+### 3.1 The credentials file
+
+* **Location:** `~/.credentials/large_files_bridge.json` — the product's existing credentials
+  file in the user's `~/.credentials/` directory. (The dictated name "large-file-bridge.json" is
+  normalized to this on-disk spelling; readers MUST also accept a legacy/hyphenated sibling if one
+  is ever found, but writers only ever write the canonical underscore name.)
+* **Contents:** under the existing top-level `large_files_bridge` object, an `api` block:
+
+  ```json
+  {
+    "large_files_bridge": {
+      "api": {
+        "secret_key": "<64 hex chars — 32 bytes from a CSPRNG>",
+        "created": "2026-07-21T00:00:00Z"
+      }
+    }
+  }
+  ```
+
+* **Auto-creation, both sides (LOCKED).** The user never creates this by hand:
+  * If the **CLI** starts and the file (or the `api.secret_key` field) is missing, the CLI
+    generates the key with a **cryptographically random** source (`crypto.randomBytes(32)`) and
+    writes it — merging into the existing JSON, never clobbering other keys in the file.
+  * If the **web app backend** boots and the field is missing, it does the same.
+  * Whichever process writes first wins; the other reads it. Writes are atomic
+    (write-temp + rename) and the file is created with mode `0600`.
+
+### 3.2 How the secret is used
+
+* The CLI sends the key on **every** REST call, in a header: `X-LFB-Api-Key: <secret_key>`.
+* The backend verifies the header against the file's current value **before** any handler runs,
+  using a constant-time comparison. A missing or wrong key → `401`, and the CLI prints a clear
+  message (including the credentials path) rather than a raw HTTP error.
+* This channel **only exists on localhost**. The API-key path never satisfies auth for a
+  non-loopback caller; when the hosted/server-side deployment arrives, machine callers get a real
+  token scheme — the shared-file trick is explicitly a same-filesystem mechanism.
+* The API-key identity maps to the local allow-listed user for authorization purposes (same
+  visibility as the browser session; no privilege escalation, no bypass of allow-listing).
+
+Verification belongs in the backend's auth seam:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/` (guard alongside
+`identify.ts` / `current-user.ts`) with key bootstrap in a small shared service (e.g.
+`modules/security/security.service.ts`).
+
+---
+
+## 4. Command family: **get file list** (`lfb files`)
+
+The first and most important command family. The dictated name for the category of calls is
+**"get file list"**; the command surface is:
+
+```
+lfb files [PATH] [--all] [CATEGORY FLAGS…] [--tree] 
+```
+
+### 4.1 Scope — what part of the filesystem
+
+* **`PATH` (positional, optional).** A repo root, a directory inside a repo, or a personal-files
+  path. The query covers **that directory and everything below it, recursively — always**.
+  Recursion is the default and only mode; there is no non-recursive flag in v1.
+* **No `PATH` given →** the **current working directory** is the scope (again recursive).
+* **`--all` →** the **entire tracked filesystem**: every scanner root / storage the web app knows
+  (all repos + personal/company file areas), not a raw walk of the disk. `--all` and `PATH` are
+  mutually exclusive; passing both is an argument error.
+* Scope resolution happens **server-side**: the CLI passes the absolute path (or the all flag) and
+  the backend maps it onto its tracked units, applying the same masks/exclusions the UI uses
+  (bundle skipping, repo masks, etc.). A path the backend does not track at all yields a clear
+  "not a tracked area — add it in the web app" message, not an empty success.
+
+### 4.2 Categories — the criteria a file can match
+
+Each category is a named predicate the backend already computes for the UI. The CLI's flags select
+which ones the user cares about:
+
+| Flag | Category key | Matches files that… | Backend semantics live in |
+| --- | --- | --- | --- |
+| `--compress` | `compress` | are video (primarily) or image (secondarily) files that **look uncompressed** against the learned size baselines and could be compressed | `code/packages/backend/src/modules/compress/` ([compression.mdx](./compression.mdx), [compress.mdx §engine](./compression.mdx)) |
+| `--ignore` | `ignore` | are **big but not git-ignored** — check-in hazards we nudge about (scan rule 4; state read from `git check-ignore`, never the ledger) | `code/packages/backend/src/modules/git/` ([git_ignore.mdx](./git_ignore.mdx), [scan.mdx §4](./scan.mdx)) |
+| `--pull-down` | `pull_down` | exist on the user's **other computers** (pinned there, listed in the manifests/Sync List) but are **missing on this machine** and could be fetched over IPFS | `code/packages/backend/src/modules/pin/`, `modules/ipfs/` ([pin_process.mdx](./pin_process.mdx), [sync_list.mdx](./sync_list.mdx), [foreign_pin_discovery.mdx](./foreign_pin_discovery.mdx)) |
+| `--not-backed-up` | `not_backed_up` | are tracked-worthy large files with **no durable copy anywhere** — not IPFS-pinned (no `sync` decision) and not carried by git — i.e. lose this disk, lose the file | `modules/pin/` + decisions ledger ([decisions.mdx](./decisions.mdx), [storage_local.mdx](./storage_local.mdx)) |
+| `--transcribe` | `transcribe` | are audio/video with **no transcription artifact yet** (`<name>.<ext>.transcription` absent from the tracking area) and are eligible to transcribe | `code/packages/backend/src/modules/transcribe/` ([Transcribe.mdx](./Transcribe.mdx), [transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)) |
+| `--describe` | `describe` | are video/image with **no AI description yet** (`<name>.<ext>.ai_description` absent) and are eligible to describe | `code/packages/backend/src/modules/describe/` ([ai_description.mdx](./ai_description.mdx), [describe_calc_engine.mdx](./describe_calc_engine.mdx)) |
+| `--ocr` | `ocr` | are video/image/PDF with **no OCR text yet** and are eligible for OCR (all three OCR kinds, incl. PDF via poppler) | `code/packages/backend/src/modules/ocr/` ([ocr.mdx](./ocr.mdx)) |
+
+Rules:
+
+* **Flags are additive.** `lfb files ~/BGit/Bryan_git/charlie-kirk --compress --ocr` returns the
+  union, grouped per category (§4.4). Any subset of the seven may be combined.
+* **No category flags →** **all seven categories** are evaluated and every category **with at
+  least one match** is printed, each under its header. Categories with zero matches are omitted
+  (no empty headers) — except see `--tree` note in §4.3.
+* **Category membership is the backend's verdict, verbatim.** The CLI never re-filters, never
+  re-derives "looks uncompressed", never stats files. Same numbers the UI tiles show, same files
+  the To-Do batches would target ([to_do_batches.mdx](./to_do_batches.mdx)). Eligibility honors
+  the same gates the UI honors (analysis-candidate rules, `nudgeOnly`/`analysisOnly` semantics,
+  bundle exclusion) so CLI and UI can never disagree.
+
+### 4.3 Output formats
+
+* **Default: full absolute paths**, one per line, under the category header(s). Absolute paths so
+  the output pipes cleanly into `xargs`, editors, and other tools ([full_paths.mdx](./full_paths.mdx)
+  house rule: full paths are the interchange format).
+* **`--tree`:** instead of a flat list, render a hierarchical tree in the style of the `tree`
+  command, containing **only** the matching files and the minimal directory chain needed to reach
+  them (non-matching siblings are not shown). One tree per category, under that category's
+  header. Directories that contain no matches are pruned entirely.
+* Output goes to **stdout**; diagnostics, progress, and bring-up chatter go to **stderr**, so
+  `lfb files … | wc -l` counts only file paths.
+
+### 4.4 Grouped output contract (default, all-categories case)
+
+When multiple categories print (whether via multiple flags or the no-flag default):
+
+* Each category block starts with a **title header line** naming the category in plain English
+  ("Large File Bridge" spelled out where the product name appears; category titles are short
+  labels like `Compressible:`, `Should be git-ignored:`, `Pull down (on your other computers):`,
+  `Not backed up anywhere:`, `Transcribable:`, `AI describable:`, `OCR-able:`).
+* Under the header: the matching full paths (or the `--tree` tree), one per line.
+* **Two blank lines between category blocks.** Exactly two — this is the dictated separator and
+  it is what makes the default output skimmable.
+* When exactly **one** category flag is given, the header MAY still print (consistency beats
+  cleverness), but a `--bare` flag suppresses headers for pure pipe use.
+* A trailing summary line per category with the count (e.g. `— 14 files`) is printed to stderr,
+  not stdout, keeping stdout pure paths.
+
+Example (default, no category flags, scoped to a directory):
+
+```
+Should be git-ignored:
+/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/rally_full.mp4
+/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/press_raw.mov
+
+
+AI describable:
+/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4
+… (14 paths)
+
+
+Transcribable:
+/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4
+```
+
+### 4.5 The REST call underneath
+
+One endpoint powers the whole family — a **query, not an action** (it changes nothing on disk):
+
+* `GET /api/files/list?scope=<abs path>|all&categories=compress,ocr,…&format=flat|tree`
+  (exact route to be settled in the backend's router conventions; it composes the existing
+  per-category calc engines rather than inventing a new scanner).
+* The response carries, per category: the category key, display title, and the matching absolute
+  paths (plus enough parent structure for the CLI to render `--tree` without touching the disk).
+* Long scopes reuse the backend's existing walk/caching machinery (fsindex, scan output); the
+  endpoint must respect the same event-loop rules as everything else (async walks only — see the
+  performance notes in [performance.mdx](./performance.mdx)).
+
+Server side implemented in:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/files-query/files-query.service.ts`
+— `listFilesByCategory()` (scope resolution, category predicates over `FileRow`), route in
+`files-query.router.ts` (`GET /api/files/list`), mounted at `/api/files` in `src/main.ts`.
+CLI side implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` — `cmdFiles()`,
+renderers in `render.ts` — `renderFlat()` / `renderTree()`.
+Response types in: `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` —
+`FilesListCategoryKey`, `FilesListCategory`, `FilesListResult`.
+
+### 4.6 Coverage by unit kind (v1)
+
+* **Repo units** carry **all seven** categories — their rows come from the same
+  `composeFileRows` composition the One-repo page renders (task statuses, git-ignore axis,
+  presence, pin claims).
+* **Directory storages** (personal / company file areas) carry the categories their fingerprint
+  index (`files.yaml`, [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) records today:
+  **compress**, **transcribe**, **describe**. `ignore` is inherently N/A (no git);
+  `pull_down` / `not_backed_up` / `ocr` join for these storages when the SDL index carries those
+  signals — the service is structured so each is one added predicate, and this section is the
+  tracker for that parity gap.
+* `unitsSearched` in the response (and the CLI's stderr diagnostics) is the transparency count of
+  repos + storages actually consulted, so a surprising zero always has an explanation.
+
+---
+
+## 5. Beyond `files` — the action pattern (forward-looking)
+
+`get file list` is read-only. The same thin-wrapper pattern extends to **actions**: think of the
+web app as owning a set of actions (enqueue compress, enqueue transcribe/describe/OCR batches, pin,
+git-ignore) and the CLI as another caller of them. Ground rules for when those verbs are added:
+
+* Actions always go through the **same endpoints the UI uses** — the job queue, the batch
+  system, the decisions ledger ([processing_batches.mdx](./processing_batches.mdx),
+  [job_queue.mdx](./job_queue.mdx)). The CLI enqueues; it never executes work inline.
+* Everything consent-gated in the UI stays consent-gated from the CLI (no `--yes-destroy-things`
+  shortcuts around, e.g., compression's integrity gate or gitignore edits).
+* The natural composition is `lfb files … | <action>` or a `--enqueue <task>` flag on `files`;
+  either way the file *list* endpoint stays pure and the action is a second, explicit call.
+
+These verbs are out of scope for v1 and each gets its own spec section when built.
+
+---
+
+## 6. Errors, exit codes, and logging
+
+* **Exit 0**: the query ran, results printed — including the "zero matches anywhere" case (empty
+  stdout is a valid answer; a note goes to stderr).
+* **Exit non-zero**: server could not be brought up (§2), auth failed (§3), argument error
+  (§4.1), or scope not tracked. Every failure prints a one-line cause plus the next step (which
+  log to read, which page in the web app to visit).
+* The CLI logs its own invocations (command, scope, categories, duration, outcome) through the
+  backend's client-log channel so CLI usage appears in the same rotating logs in
+  `~/T/_large_files_bridge/` — never its own log file in `/tmp` (charter logging policy).
+  Client-log seam: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/clientlog/`.
+
+---
+
+## 7. Invariants recap (LOCKED)
+
+1. CLI code lives only in `cli/` (entry at top, implementation under `cli/code/`); all
+   functionality lives in the backend; the CLI computes no answers itself.
+2. Root `just build` / `just run` always build the CLI too — the CLI is never stale.
+3. If the backend is down, the CLI brings it up (justfile-equivalent work) and gates on
+   `/api/health` — never on the frontend port.
+4. The shared API secret is auto-created by whichever side needs it first, with a CSPRNG, in
+   `~/.credentials/large_files_bridge.json`, mode 0600; the backend verifies it on every
+   machine-caller request; the mechanism is localhost-only.
+5. `lfb files`: recursive always; cwd default; `--all` for every tracked root; seven category
+   flags; no flags ⇒ all matching categories, headers + two blank lines between blocks; full
+   absolute paths by default; `--tree` prints a pruned hierarchy of only the matching set.
+6. Category verdicts come from the backend verbatim — CLI and UI can never disagree.

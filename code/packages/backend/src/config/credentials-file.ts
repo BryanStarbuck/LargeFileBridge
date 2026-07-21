@@ -201,3 +201,64 @@ export function hasGoogleCreds(): boolean {
   if (!ok) log.info("auth", "Google OAuth credentials not configured (sign-in disabled).");
   return ok;
 }
+
+// ── CLI ↔ web app shared API secret (cli.mdx §3) ─────────────────────────────
+// A machine-caller secret both local processes can read because they share the filesystem. It lives
+// in the SAME ~/.credentials/large_files_bridge.json as the Google creds, under an `api` block, and
+// is AUTO-CREATED by whichever side needs it first (backend boot or a CLI invocation) with a CSPRNG.
+// Localhost-only by design: possession of the file proves same-user, same-machine. Never valid for a
+// non-loopback caller (enforced at the auth seam, identify.ts).
+
+interface ApiSecretShape {
+  large_files_bridge?: { api?: { secret_key?: string; created?: string } } & Record<string, unknown>;
+}
+
+/** Read the shared API secret from the credentials file. Null when absent/unreadable. */
+export function loadApiSecret(): string | null {
+  const p = credsFilePath();
+  try {
+    const raw = fs.readFileSync(p, "utf8");
+    const { data } = parseCredsJson(raw);
+    const key = (data as ApiSecretShape).large_files_bridge?.api?.secret_key;
+    return typeof key === "string" && key.length >= 32 ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Ensure the shared API secret exists, creating it (crypto.randomBytes(32) → 64 hex chars) when
+ * missing. MERGES into the existing JSON — other keys in the file (google creds, unrelated apps'
+ * blocks) are never clobbered. Atomic write (temp + rename), file mode 0600, dir mode 0700.
+ */
+export function ensureApiSecret(): string {
+  const existing = loadApiSecret();
+  if (existing) return existing;
+  const p = credsFilePath();
+  const dir = path.dirname(p);
+  fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+  let doc: ApiSecretShape = {};
+  try {
+    const { data } = parseCredsJson(fs.readFileSync(p, "utf8"));
+    if (data && typeof data === "object") doc = data as ApiSecretShape;
+  } catch {
+    /* absent or unreadable → start fresh (merge target stays {}) */
+  }
+  const secret = crypto.randomBytes(32).toString("hex");
+  doc.large_files_bridge = {
+    ...(doc.large_files_bridge ?? {}),
+    api: { secret_key: secret, created: new Date().toISOString() },
+  };
+  const tmp = `${p}.tmp-${process.pid}`;
+  fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", { mode: 0o600 });
+  fs.renameSync(tmp, p);
+  try {
+    fs.chmodSync(p, 0o600);
+  } catch {
+    /* best-effort — rename preserved the tmp file's 0600 already */
+  }
+  log.info("auth", `Created shared API secret for the Large File Bridge CLI at ${p}.`);
+  // Invalidate the mtime-keyed Google-creds cache — the file just changed under it.
+  fileCredsCache = null;
+  return secret;
+}

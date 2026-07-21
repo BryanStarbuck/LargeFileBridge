@@ -75,8 +75,12 @@ setup: _check-tools _check-auth-lib
     cd {{code}}/packages/backend && test -f .env || cp .env.example .env
     @echo "Setup complete."
 
-# Typecheck / build every package.
-build: setup
+# Build the CLI (cli/ — pm/cli.mdx §1.3): root build/run always bring it fully up to date too.
+build-cli:
+    cd {{justfile_directory()}}/cli/code && pnpm install && pnpm build
+
+# Typecheck / build every package (and the CLI — cli.mdx §1.3).
+build: setup build-cli
     cd {{code}} && pnpm -r build
 
 # Typecheck every package (no build output).
@@ -90,7 +94,7 @@ test:
 # Vite resolves the web port on boot (takes over our own stale instance; steps past a foreign one),
 # so we do NOT blanket-kill :2222 here — we only stop OUR previous instance first.
 # Start backend (:8787) + web app (:2222, collision-resolved) in the background.
-run: setup stop
+run: setup build-cli stop
     -@rm -f {{portfile}}
     @mkdir -p "{{state_dir}}"   # ensure the local storage / log dir exists before the sink opens the log
     # Stream stdout+stderr THROUGH the rotating sink so {{log}} is size-bounded (5 MiB × 5) instead of

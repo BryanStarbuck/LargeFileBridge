@@ -529,6 +529,16 @@ rows and honor the deepest-column scope-containment guarantee (§5.1).
 The directory/file entity menu's producing items opening the scoped batch popup are built in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `create-transcriptions` / `create-descriptions` items call `openTranscribeBatch` / `openDescribeBatch` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`); the action-links row's producing pair is built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
 
+### 5.4 Option-key floating image preview (LOCKED reference)
+
+Holding **Option** (Alt on Windows/Linux) while hovering a column row (or a Full-paths row) whose file
+is an **image** floats a preview of that image, placed by the four-corner biggest-fit geometry and gone
+the instant the key is released or the pointer leaves the row. Directories and non-image files never
+preview. The full behavior, geometry, and grant-gated byte source are specified in
+[option_image_preview.mdx](./option_image_preview.mdx).
+The rows publish their hover target in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (calls `setOptionPreviewTarget`), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — the row `<tr>` handlers.
+
 ---
 
 ## 6. Acceptance criteria

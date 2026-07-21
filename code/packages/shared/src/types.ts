@@ -2194,3 +2194,32 @@ export interface Err {
   code?: string;
 }
 export type ApiResult<T = unknown> = Ok<T> | Err;
+
+// ── CLI files-query (cli.mdx §4) ─────────────────────────────────────────────
+// The "get file list" category keys the CLI (`lfb files`) selects with its flags. Each key is a
+// per-file predicate the backend ALREADY computes for the UI (FileRow task statuses, the git-ignore
+// axis, presence, pin claims) — the CLI never derives these itself (cli.mdx §4.2).
+export type FilesListCategoryKey =
+  | "compress" // video/image that looks uncompressed (compress === "could")
+  | "ignore" // big but NOT git-ignored — check-in hazards (gitignore === false, scan rule 4)
+  | "pull_down" // on another of the user's computers, missing here (remote-only / decided-not-pinned)
+  | "not_backed_up" // no pin claim anywhere and no sync decision — lose this disk, lose the file
+  | "transcribe" // audio/video with no .transcription artifact yet
+  | "describe" // video/image with no .ai_description artifact yet
+  | "ocr"; // image/video/PDF with no OCR artifact yet
+
+// One category block of GET /api/files/list — the paths are ABSOLUTE (full_paths.mdx interchange
+// rule) so the CLI can print them verbatim or fold them into its --tree rendering.
+export interface FilesListCategory {
+  key: FilesListCategoryKey;
+  title: string; // plain-English header the CLI prints above the block (cli.mdx §4.4)
+  paths: string[]; // absolute paths, sorted
+}
+
+// GET /api/files/list response (cli.mdx §4.5). Categories with zero matches are OMITTED — the CLI
+// prints no empty headers. `unitsSearched` is the transparency count (repos + storages consulted).
+export interface FilesListResult {
+  scope: string; // the resolved absolute scope, or "all"
+  unitsSearched: number;
+  categories: FilesListCategory[];
+}
