@@ -37,7 +37,7 @@ import { classifySpecial } from "../scanner/special-file.service.js";
 import { effectiveFlags, getAppConfig } from "../store-model/config.service.js";
 import { repoUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { getRepoConfig, updateRepoConfig, repoBumpTopics } from "../store-model/units.service.js";
-import { bumpTopics } from "../events/state-events.service.js";
+import { bumpTopics, bumpTopicsThrottled } from "../events/state-events.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { log } from "../../shared/logging.js";
 
@@ -414,7 +414,9 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
     }
     return c;
   });
-  if (changed.length > 0) bumpTopics(repoBumpTopics(folder)); // teammates' folded decisions just landed
+  // Teammates' folded decisions just landed. Throttled: the pin pass reconciles every repo in a burst,
+  // and the shared `repos` topic must not fire once per repo (performance.mdx Aspect 6b flood rule).
+  if (changed.length > 0) bumpTopicsThrottled(repoBumpTopics(folder));
   return { changed };
 }
 

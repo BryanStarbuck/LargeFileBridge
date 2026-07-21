@@ -609,6 +609,10 @@ function haltPending(match: (t: QueueTask) => boolean, reason: string, context: 
     `HALTED ${halted.length} queued job(s): ${reason}. They were NOT attempted and NOT failed — ` +
       `fix the cause and re-run the action to queue them again (to_fix.mdx §2.4/§2.7).`,
   );
+  // The shared choke point for ALL THREE halt causes (user stop, provider circuit, retry budget) — the
+  // automatic two never pass through stopBatch, so the bump must live here or an open Processing page
+  // misses a circuit-halted batch entirely (performance.mdx Aspect 6b).
+  bumpTopicThrottled(JOBS_TOPIC);
   return halted.length;
 }
 

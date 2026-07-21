@@ -217,6 +217,10 @@ export async function registerRepo(absPath: string): Promise<{ folder: string; r
  * folder or any local file on disk (charter / menus.mdx §6.2: local bytes are never deleted by LFB).
  */
 export function unregisterRepo(folder: string): void {
+  // Resolve the topic set BEFORE the delete — repoTopicsFor reads the unit config, which is about to
+  // be removed (afterwards only the degraded folder+list topics would fire, missing the repoId topic
+  // an open One-Repo page watches).
+  const topics = repoTopicsFor(folder);
   try {
     fs.rmSync(repoUnitDir(folder), { recursive: true, force: true });
   } catch (e) {
@@ -225,6 +229,9 @@ export function unregisterRepo(folder: string): void {
     log.error("units", `Unregister repo unit pin/r/${folder} failed: ${(e as Error).message}`);
     throw e;
   }
+  // A removed repo is a list change with NO status/manifest write to ride — bump explicitly, or every
+  // other open tab keeps showing the deleted row (performance.mdx Aspect 6b).
+  bumpTopics(topics);
   log.info("units", `Unregistered repo unit pin/r/${folder} (local files untouched)`);
 }
 
