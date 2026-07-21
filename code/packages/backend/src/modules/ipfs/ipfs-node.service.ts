@@ -291,6 +291,9 @@ function append(line: string): void {
   job.log.push(line);
   // Keep the log bounded so a chatty installer can't grow it without limit.
   if (job.log.length > 500) job.log.splice(0, job.log.length - 500);
+  // Every install/upgrade log line and status flip flows through here or fail() — the IPFS pages
+  // learn live, throttled against chatty installers (performance.mdx Aspect 6b).
+  bumpTopicThrottled(IPFS_TOPIC);
 }
 
 function fail(message: string, manualCommand: string | null): void {
