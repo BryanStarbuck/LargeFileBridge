@@ -697,6 +697,14 @@ export function OneRepoPage() {
         // File-type facet classifies each row by name. Together they let the user reach a small JPG to OCR.
         largeOnly={{ rowIsLarge: (f) => !f.analysisOnly, defaultOn: tab.largeOnlyDefault }}
         fileTypeFacet={{ valueOf: (f) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1)) }}
+        // Option-key floating image preview (option_image_preview.mdx §5 / one_repo.mdx §4.12): hovering
+        // an image row with Option held floats the preview. Remote-only rows are excluded — their bytes
+        // aren't on this computer (§4.10), so a grant could never stream them.
+        hoverPreview={(f) => {
+          if (!detail?.path || f.presence === "remote-only") return null;
+          const name = f.path.slice(f.path.lastIndexOf("/") + 1);
+          return fileTypeForName(name) === "image" ? `${detail.path}/${f.path}` : null;
+        }}
         searchKeys={(f) => f.path}
         getRowId={(f) => f.fileId}
         // Row click → the file's "View one file" experience: media routes to its viewer

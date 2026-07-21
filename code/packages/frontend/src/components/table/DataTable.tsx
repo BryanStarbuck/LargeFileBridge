@@ -21,6 +21,7 @@ import {
 } from "@tanstack/react-table";
 import { Search, Filter, ArrowUpDown, Columns3 } from "lucide-react";
 import { useDebounced } from "../../lib/useDebounced.js";
+import { setOptionPreviewTarget } from "../preview/OptionImagePreview.js";
 import { useWindowedRows } from "./useWindowedRows.js";
 import { useTableView } from "../../api/useTableView.js";
 import type { LfbColumn } from "./types.js";
@@ -68,6 +69,10 @@ interface DataTableProps<T> {
   // listed so the user can filter to them without expanding; a "More types…" disclosure reveals the rest
   // (Other). An "All kinds" checkbox clears the filter. Images/Videos/Audio/PDFs start checked; Other unchecked.
   fileTypeFacet?: { valueOf: (row: T) => string };
+  // Option-key floating image preview (option_image_preview.mdx §5): return the row's ABSOLUTE path when
+  // the row is an image whose bytes are on this computer, else null. When provided, hovering a row
+  // publishes that target so holding Option floats the image preview; the whole row is the hover surface.
+  hoverPreview?: (row: T) => string | null;
   // Stable id for this table (tables.mdx — remembered view state). When set, the table's sort, column
   // filters, search, hidden columns, and promoted facet state are persisted per logged-in user (in the
   // per-user config.yaml `tables:` record) and restored on the next visit. Keep it unique per surface —
@@ -113,6 +118,7 @@ export function DataTable<T>({
   defaultSort,
   largeOnly,
   fileTypeFacet,
+  hoverPreview,
   tableId,
 }: DataTableProps<T>) {
   // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
@@ -756,6 +762,14 @@ export function DataTable<T>({
                       e.preventDefault();
                       window.open(href, "_blank", "noopener,noreferrer");
                     }}
+                    // Option-key image preview target (option_image_preview.mdx §1): hovering an image
+                    // row publishes it; holding Option floats the preview. Null targets clear.
+                    onMouseEnter={
+                      hoverPreview
+                        ? (e) => setOptionPreviewTarget(hoverPreview(row.original), e.clientX, e.clientY)
+                        : undefined
+                    }
+                    onMouseLeave={hoverPreview ? () => setOptionPreviewTarget(null) : undefined}
                     style={{ height: ROW_H }}
                     className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""}`}
                   >

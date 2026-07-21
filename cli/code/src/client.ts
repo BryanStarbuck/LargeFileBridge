@@ -32,6 +32,24 @@ export interface FilesListResult {
   categories: FilesListCategory[];
 }
 
+/**
+ * Fire-and-forget invocation trail (cli.mdx §7): CLI usage lands in the app's own rotating logs in
+ * the state root via the client-log bridge — the CLI never writes a log file of its own (and never
+ * to /tmp). Best-effort by design; a down backend or slow socket must never delay or fail a command.
+ */
+export async function logInvocation(message: string): Promise<void> {
+  try {
+    await fetch(`${apiBase()}/client-log`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-LFB-Api-Key": ensureApiSecret() },
+      body: JSON.stringify({ level: "info", context: "cli", message }),
+      signal: AbortSignal.timeout(2000),
+    });
+  } catch {
+    /* best-effort */
+  }
+}
+
 export async function apiGet<T>(pathAndQuery: string): Promise<T> {
   const secret = ensureApiSecret();
   const url = `${apiBase()}${pathAndQuery}`;

@@ -137,8 +137,12 @@ export function OptionImagePreviewLayer() {
   // Resolve the signed media grant per shown target (option_image_preview.mdx §4) — the same short-lived
   // same-origin URL the media viewer loads from, so the preview is exactly as private as opening the file.
   const grantFor = useRef<string | null>(null);
+  // Error latch: a file whose bytes the browser can't decode (or whose grant failed) must not be
+  // re-fetched in a loop — onError clears grantUrl, which would otherwise re-arm the fetch effect.
+  const failedFor = useRef<string | null>(null);
   useEffect(() => {
     if (!wantShow || !target) return;
+    if (failedFor.current === target) return; // undecodable — stays blank (§3)
     if (grantFor.current === target && grantUrl) return; // already resolved for this hover
     let cancelled = false;
     grantFor.current = target;
@@ -150,8 +154,12 @@ export function OptionImagePreviewLayer() {
         if (!cancelled && grantFor.current === target) setGrantUrl(g.url);
       })
       .catch(() => {
-        // A failed grant (file gone, not allow-listed) simply shows no preview (§3).
-        if (!cancelled && grantFor.current === target) setGrantUrl(null);
+        // A failed grant (file gone, not allow-listed) simply shows no preview (§3) — latched so the
+        // fetch never retries in a loop for this hover target.
+        if (!cancelled && grantFor.current === target) {
+          failedFor.current = target;
+          setGrantUrl(null);
+        }
       });
     return () => {
       cancelled = true;
@@ -184,7 +192,10 @@ export function OptionImagePreviewLayer() {
         const el = e.currentTarget;
         if (el.naturalWidth > 0) setNatural({ w: el.naturalWidth, h: el.naturalHeight });
       }}
-      onError={() => setGrantUrl(null)}
+      onError={() => {
+        failedFor.current = grantFor.current;
+        setGrantUrl(null);
+      }}
       style={
         placement
           ? {

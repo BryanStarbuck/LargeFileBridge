@@ -6,6 +6,7 @@ import type { CurrentUser } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Sidebar } from "../../components/layout/Sidebar.js";
 import { HoverInfoBridge } from "../repos/HoverInfoRegion.js";
+import { OptionImagePreviewLayer } from "../../components/preview/OptionImagePreview.js";
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
 import { useSessionPing } from "../../lib/useSessionPing.js";
@@ -83,6 +84,10 @@ export function AppShell() {
           Mounted HERE, not per page, so every surface that uses the shared icon control columns — IPFS
           pins, Storage detail, One-repo — actually has a consumer for what it publishes. */}
       <HoverInfoBridge />
+      {/* The ONE Option-key floating image preview layer (option_image_preview.mdx §5). Mounted here,
+          not per page, so every surface that publishes a hover target (One-repo files table, the File
+          System columns, Full paths) shares one overlay + one Option-key tracker. */}
+      <OptionImagePreviewLayer />
       <ScanProgressBar />
     </div>
   );

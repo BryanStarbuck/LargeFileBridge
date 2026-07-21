@@ -8,7 +8,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSearch, useNavigate } from "@tanstack/react-router";
 import { ChevronRight, Cloud, File as FileIcon, Folder, Home } from "lucide-react";
 import type { FsEntry, FsListing, FileSystemView } from "@lfb/shared";
-import { viewerRouteForName } from "@lfb/shared";
+import { viewerRouteForName, fileTypeForName } from "@lfb/shared";
 import { api } from "@/api/client";
 import { Badges, BADGE_META } from "@/components/fs/Badges";
 import { useHoverInfoSource, type HoverInfo } from "@/components/hoverinfo/HoverInfoContext";
@@ -23,6 +23,7 @@ import {
 } from "@/components/menu/domainActions";
 import { folderGlyphStyle, isInteresting } from "@/components/fs/folderInterest";
 import { useWindowedRows } from "@/components/table/useWindowedRows";
+import { setOptionPreviewTarget } from "@/components/preview/OptionImagePreview";
 import { formatBytes, middleTruncate } from "@/lib/format";
 import { FsTabs } from "./FsTabs";
 
@@ -355,12 +356,26 @@ const FsRow = memo(function FsRow({
   }, [entry]);
   const hover = useHoverInfoSource(hoverPayload);
 
+  // Option-key floating image preview (option_image_preview.mdx §5 / file_system.mdx §5.4): an image
+  // FILE row publishes itself as the hover target; directories and non-images publish null (clear).
+  // Composed AFTER the {...hover} spread so both the hover-info panel and the preview see the events.
+  const previewPath =
+    entry.kind === "file" && fileTypeForName(entry.name) === "image" ? entry.path : null;
+
   return (
     <div
       role="button"
       tabIndex={0}
       style={FSROW_STYLE}
       {...hover}
+      onMouseEnter={(e) => {
+        hover.onMouseEnter();
+        setOptionPreviewTarget(previewPath, e.clientX, e.clientY);
+      }}
+      onMouseLeave={() => {
+        hover.onMouseLeave();
+        setOptionPreviewTarget(null);
+      }}
       onClick={() => (isDir ? onOpenDir(colIndex, entry.path) : openFile())}
       onContextMenu={(e) => {
         e.preventDefault();

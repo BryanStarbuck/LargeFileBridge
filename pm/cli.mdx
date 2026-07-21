@@ -178,10 +178,14 @@ read because they share the local filesystem.
 * The API-key identity maps to the local allow-listed user for authorization purposes (same
   visibility as the browser session; no privilege escalation, no bypass of allow-listing).
 
-Verification belongs in the backend's auth seam:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/` (guard alongside
-`identify.ts` / `current-user.ts`) with key bootstrap in a small shared service (e.g.
-`modules/security/security.service.ts`).
+Verification implemented in:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` —
+`apiKeyUser()` (loopback + local-mode + constant-time check, runs FIRST inside `identify()`).
+Key bootstrap implemented in:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` —
+`ensureApiSecret()` / `loadApiSecret()` (called at boot from `main.ts` `bootstrapState()`).
+CLI-side mirror implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/credentials.ts` —
+`ensureApiSecret()`; sent per-call by `client.ts` — `apiGet()`.
 
 ---
 
@@ -319,7 +323,22 @@ Response types in: `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/ty
 
 ---
 
-## 5. Beyond `files` — the action pattern (forward-looking)
+## 5. Installation on PATH
+
+The `cli/` directory goes on the user's `PATH` so `lfb` works from any directory:
+
+* The callable is the shim at `~/BGit/Bryan_git/LargeFileBridge/cli/lfb` — a small self-building
+  wrapper that compiles `cli/code/` when `dist/` is missing or stale, then execs Node. Because the
+  shim self-builds, a freshly cloned repo works with zero setup steps.
+* The user's `~/.zshrc` exports
+  `PATH="$HOME/BGit/Bryan_git/LargeFileBridge/cli:$PATH"` (installed once; the shim is the only
+  executable in that directory, so the PATH entry stays clean).
+
+Shim implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/lfb` — staleness check `needs_build()`.
+
+---
+
+## 6. Beyond `files` — the action pattern (forward-looking)
 
 `get file list` is read-only. The same thin-wrapper pattern extends to **actions**: think of the
 web app as owning a set of actions (enqueue compress, enqueue transcribe/describe/OCR batches, pin,
@@ -337,7 +356,7 @@ These verbs are out of scope for v1 and each gets its own spec section when buil
 
 ---
 
-## 6. Errors, exit codes, and logging
+## 7. Errors, exit codes, and logging
 
 * **Exit 0**: the query ran, results printed — including the "zero matches anywhere" case (empty
   stdout is a valid answer; a note goes to stderr).
@@ -351,7 +370,7 @@ These verbs are out of scope for v1 and each gets its own spec section when buil
 
 ---
 
-## 7. Invariants recap (LOCKED)
+## 8. Invariants recap (LOCKED)
 
 1. CLI code lives only in `cli/` (entry at top, implementation under `cli/code/`); all
    functionality lives in the backend; the CLI computes no answers itself.

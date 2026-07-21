@@ -37,6 +37,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import type { FsEntry } from "@lfb/shared";
+import { fileTypeForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { Badges } from "../../components/fs/Badges.js";
 import { BadgeLegend } from "../../components/fs/BadgeLegend.js";
@@ -49,6 +50,7 @@ import { clientLog } from "../../lib/clientLog.js";
 import { useDebounced } from "../../lib/useDebounced.js";
 import { useWindowedRows } from "../../components/table/useWindowedRows.js";
 import { useStreamedFlatListing } from "../../components/table/useStreamedFlatListing.js";
+import { setOptionPreviewTarget } from "../../components/preview/OptionImagePreview.js";
 import { FsTabs } from "./FsTabs.js";
 
 const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
@@ -560,6 +562,16 @@ export function FullPathsPage() {
                   <tr
                     key={row.id}
                     style={ROW_STYLE}
+                    // Option-key floating image preview (option_image_preview.mdx §5 / file_system.mdx
+                    // §5.4): an image row publishes itself as the hover target; others clear it.
+                    onMouseEnter={(ev) =>
+                      setOptionPreviewTarget(
+                        fileTypeForName(e.name) === "image" ? e.path : null,
+                        ev.clientX,
+                        ev.clientY,
+                      )
+                    }
+                    onMouseLeave={() => setOptionPreviewTarget(null)}
                     className="group border-b border-[var(--lfb-border)] hover:bg-slate-100"
                   >
                     <td className="px-2">

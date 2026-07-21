@@ -3,7 +3,7 @@
 // call, render. No business logic lives here — the backend computes every answer (cli.mdx §1).
 import os from "node:os";
 import path from "node:path";
-import { apiGet, backendHealthy, backendPort, type FilesListResult } from "./client";
+import { apiGet, backendHealthy, backendPort, logInvocation, type FilesListResult } from "./client";
 import { ensureServerUp } from "./bringup";
 import { renderFlat, renderTree } from "./render";
 
@@ -78,7 +78,12 @@ async function cmdFiles(args: string[]): Promise<void> {
 
   const qs = new URLSearchParams({ scope });
   if (categories.length) qs.set("categories", categories.join(","));
+  const started = Date.now();
   const result = await apiGet<FilesListResult>(`/files/list?${qs.toString()}`);
+  const matched = result.categories.reduce((n, c) => n + c.paths.length, 0);
+  await logInvocation(
+    `files scope=${scope} categories=${categories.join(",") || "all"} units=${result.unitsSearched} matched=${matched} durationMs=${Date.now() - started}`,
+  );
 
   if (!result.categories.length) {
     if (result.unitsSearched === 0 && scope !== "all") {
