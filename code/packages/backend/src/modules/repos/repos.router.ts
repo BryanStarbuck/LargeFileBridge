@@ -28,8 +28,13 @@ import { ensureSyncRepoMarker } from "../storage/tracking-sync.service.js";
 import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
 import { getStorageRow } from "../storage/storage.service.js";
+import { indexStorageFiles, storageIndexDroppedFiles } from "../storage/tracking.service.js";
 import { maybeSyncBackbone } from "../storage/backbone-freshness.service.js";
-import { maybeConvergeWorkingRepo } from "../pin/repo-artifact-sync.service.js";
+import {
+  maybeConvergeWorkingRepo,
+  getRepoSyncBlock,
+  recheckWorkingRepoConvergence,
+} from "../pin/repo-artifact-sync.service.js";
 import { assertCompanyOwnership, withdrawCompanyOwnership } from "../storage/owner-propagation.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
@@ -171,6 +176,26 @@ reposRouter.post("/rescan", (_req, res) => {
   res.json({ ok: true, data: result });
 });
 
+// POST /api/repos/:repoId/index — (re)build this repo's per-file fingerprint index (storages.mdx §4.1).
+// Exists so the one-repo page can act on an INCOMPLETE index: when a build hits its size backstop the page
+// says exactly how many large files went unrecorded (§4.1a), and this is the button that re-checks it once
+// the user has trimmed what the repo carries. Returns how many files were indexed and how many were
+// dropped, so the caller never has to infer completeness.
+reposRouter.post("/:repoId/index", async (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  const root = getRepoConfig(folder).repo.path;
+  if (!root) return res.status(400).json({ ok: false, error: "repo has no path" });
+  const abs = path.resolve(root.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  try {
+    const indexed = await indexStorageFiles(abs);
+    res.json({ ok: true, data: { indexed, dropped: storageIndexDroppedFiles(abs) } });
+  } catch (e) {
+    log.error("repos", `${folder}: index rebuild failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 // GET /api/repos/scan-status — live progress of the current/last discovery scan (scan.mdx §10). The
 // progress bar polls this so it can re-attach after the user navigates away and back.
 reposRouter.get("/scan-status", (_req, res) => {
@@ -288,6 +313,9 @@ reposRouter.get("/:repoId", async (req, res) => {
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
+    // Why this repo can no longer fast-forward from its remote, when that is the case (bug #15B). Refusing
+    // to touch the user's repo is right; leaving them unaware that it has stopped converging is not.
+    detail.syncBlocked = getRepoSyncBlock(repoRootFor(folder)) ?? undefined;
     res.json({ ok: true, data: detail });
   } catch (e) {
     log.error("repos", `${folder}: detail failed: ${(e as Error).message}`);
@@ -413,6 +441,24 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
     res.json({ ok: true, data: detail });
   } catch (e) {
     log.error("repos", `${folder}: pull failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/repos/:repoId/sync-check — re-attempt convergence for a repo that reported a sync block
+// (bug #15B). The user has (presumably) just committed/stashed their changes or reconciled their branch, so
+// this bypasses the 30-minute converge throttle and answers with the CURRENT block (null = resolved).
+// STRICTLY READ-ONLY toward the user's work: it is the same `fetch` + `merge --ff-only` the background
+// converge runs — never a rebase, never a reset, never a force.
+reposRouter.post("/:repoId/sync-check", async (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  try {
+    const r = await recheckWorkingRepoConvergence(repoRootFor(folder));
+    log.info("repos", `${folder}: sync re-check → converged=${r.converged} blocked=${r.block?.kind ?? "no"}`);
+    res.json({ ok: true, data: { converged: r.converged, syncBlocked: r.block ?? null } });
+  } catch (e) {
+    log.error("repos", `${folder}: sync re-check failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });

@@ -12,7 +12,7 @@
 import { RefreshCw } from "lucide-react";
 import { useNavigate } from "@tanstack/react-router";
 import type { ProgressJob } from "@lfb/shared";
-import { useProgress, verb } from "../progress/ProgressContext.js";
+import { useProgress, verb } from "../progress/progress-context.js";
 import { leftBar } from "../config/left_bar.js";
 
 // 256px bar + 16px gutter. Parsed from the yaml-driven width so the dock never sits over the nav.

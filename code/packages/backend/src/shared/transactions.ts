@@ -48,11 +48,28 @@ function mintId(): string {
 
 const MIB = 1024 * 1024;
 
-/** heapUsedMB/rssMB for every line (transactions_log.mdx §3.2). Never throws. */
+/**
+ * heapUsedMB/heapTotalMB/rssMB for every line (transactions_log.mdx §3.2). Never throws.
+ *
+ * `heapTotalMB` is here because of the 2026-07-20T22:55 incident: the ledger showed `rssMB=4103` beside
+ * `heapUsedMB=78` and there was NO WAY to tell which of the two possible stories it was — V8 holding 4 GB
+ * of committed-but-empty pages after an allocation storm, or 4 GB of native/external memory outside the
+ * heap entirely. Those have completely different causes and completely different fixes, and the one field
+ * that separates them (`heapTotal`, what V8 has committed) was the one we did not log. `externalMB` joins
+ * it only when it is large enough to matter, so a normal line stays short.
+ */
+const EXTERNAL_REPORT_FLOOR = 32 * MIB;
+
 function memFields(): TxnFields {
   try {
     const m = process.memoryUsage();
-    return { heapUsedMB: Math.round(m.heapUsed / MIB), rssMB: Math.round(m.rss / MIB) };
+    const f: TxnFields = {
+      heapUsedMB: Math.round(m.heapUsed / MIB),
+      heapTotalMB: Math.round(m.heapTotal / MIB),
+      rssMB: Math.round(m.rss / MIB),
+    };
+    if (m.external >= EXTERNAL_REPORT_FLOOR) f.externalMB = Math.round(m.external / MIB);
+    return f;
   } catch {
     return {};
   }
@@ -146,6 +163,14 @@ export function txnShutdown(fields: TxnFields = {}): void {
 export interface PreviousSession {
   previousEnded: "clean" | "abnormal" | "unknown";
   previousEndedAt?: string;
+  /**
+   * When the dead session managed to record WHY it was dying — the `kind` of the `process_fatal` record
+   * main.ts writes from its uncaughtException / unhandledRejection handlers (§8.1). Present only for an
+   * `abnormal` verdict, and absent far more often than not: the deaths that leave no fatal record (SIGKILL,
+   * a V8 OOM abort, the machine powering off) are precisely the ones that run no JavaScript. Its absence is
+   * therefore information too — "it threw" vs "it vanished" — so the boot report must say which it saw.
+   */
+  previousFatal?: string;
 }
 
 /**
@@ -186,17 +211,19 @@ export function readPreviousSessionEnd(): PreviousSession {
     for (let i = lines.length - 1; i >= 0; i--) {
       if (!isVerb(lines[i], "BOOT")) continue;
       const bootAt = timestampOf(lines[i]);
-      // Did that session ever say goodbye?
+      // Did that session ever say goodbye? And if not, did it manage to say why it was dying?
+      let fatal: string | undefined;
       for (let j = i + 1; j < lines.length; j++) {
         if (isVerb(lines[j], "SHUTDOWN")) {
           return { previousEnded: "clean", previousEndedAt: timestampOf(lines[j]) ?? bootAt };
         }
+        if (fatal === undefined) fatal = fatalKindOf(lines[j]);
       }
       // A BOOT with nothing after it — the session it opened never closed.
       // previousEndedAt is the LAST thing that session managed to write: the closest we can get to a
       // time of death from a process that could not report its own.
       const lastActivity = lastTimestampAfter(lines, i) ?? bootAt;
-      return { previousEnded: "abnormal", previousEndedAt: lastActivity };
+      return { previousEnded: "abnormal", previousEndedAt: lastActivity, previousFatal: fatal };
     }
   }
   // No BOOT anywhere. No ledger at all ⇒ first run ⇒ nothing was interrupted. A ledger that exists but has
@@ -207,6 +234,16 @@ export function readPreviousSessionEnd(): PreviousSession {
 /** True when `line` carries `verb` in the VERB column — `[ISO] [BOOT]`, not merely somewhere in the text. */
 function isVerb(line: string, verb: TxnVerb): boolean {
   return new RegExp(`^\\[[^\\]]+\\] \\[${verb}\\]`).test(line);
+}
+
+/**
+ * The `kind` carried by a `process_fatal` record (main.ts's uncaughtException / unhandledRejection
+ * handlers), or undefined for any other line. Matched on the CONTEXT column so a task whose file path
+ * contains "process_fatal" can never masquerade as a crash report.
+ */
+function fatalKindOf(line: string): string | undefined {
+  if (!/^\[[^\]]+\] \[(?:BEGIN|END)\] +\[process_fatal\]/.test(line)) return undefined;
+  return /(?:^| )kind=(\S+)/.exec(line)?.[1] ?? "unknown";
 }
 
 /** The leading `[ISO]` stamp of a ledger line, if it has one. */

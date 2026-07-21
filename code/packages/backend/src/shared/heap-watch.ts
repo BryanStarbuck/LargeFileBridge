@@ -72,6 +72,31 @@ const REARM_FRACTION = Math.max(0, WARN_FRACTION - 0.05);
 const REWARN_MS = Math.max(10_000, Number(process.env.LFB_HEAP_WARN_COOLDOWN_MS) || 5 * 60_000);
 
 /**
+ * ── THE RSS BLIND SPOT (memory.mdx — the 4 GB incident of 2026-07-20T22:55) ──────────────────────────
+ *
+ * Everything above measures heapUsed against the V8 ceiling. On 2026-07-20 this process reached
+ * `rssMB=4103` and died, and NOT ONE WARNING was written — because `heapUsedMB` was 78 the whole time.
+ * 78 / 6240 = 1.2% of the ceiling. By its own (correct) arithmetic the heap was idle; meanwhile the
+ * process was holding 4 GB of the user's RAM and heading for a jetsam kill that would look, from the
+ * logs, like yet another unexplained death.
+ *
+ * heapUsed is simply the wrong number for that failure. RSS is what the OS bills us for and what the OOM
+ * killer reads, and it counts three things heapUsed does not: V8 pages committed but not currently live,
+ * external/ArrayBuffer bytes, and native allocations (libvips and friends). A watchdog that cannot see
+ * any of those cannot see the thing that actually kills a long-running daemon on a laptop.
+ *
+ * So RSS gets its own threshold — an ABSOLUTE one, not a fraction. There is no "RSS limit" to take a
+ * percentage of; what exists is a product expectation, from the charter: this thing sits quietly in the
+ * background and syncs files every 15 minutes. 1.5 GB resident is already far outside that, whatever the
+ * heap says about it, and it is well below the ~4 GB where the incident became fatal — so the warning
+ * lands with room to act rather than as an epitaph.
+ */
+const RSS_WARN_BYTES = Math.max(256 * MIB, Number(process.env.LFB_RSS_WARN_BYTES) || 1536 * MIB);
+
+/** Re-arm only after RSS falls this far back under the line — same anti-sawtooth reasoning as REARM_FRACTION. */
+const RSS_REARM_BYTES = Math.max(128 * MIB, RSS_WARN_BYTES - 256 * MIB);
+
+/**
  * The TRUTHFUL ceiling. v8.getHeapStatistics().heap_size_limit reflects --max-old-space-size when we
  * set it (package.json's NODE_OPTIONS, P-31) and V8's own default when we don't — so the denominator on
  * every warning is the number the runtime will actually abort at, never a number we assumed. Read once:
@@ -377,11 +402,66 @@ function context(): TxnFields {
   }
 }
 
+let rssArmed = true;
+let lastRssWarnAt = 0;
+
+/**
+ * The RSS half of the sampler (see RSS_WARN_BYTES). Deliberately independent of the heap half: the whole
+ * point is that it must speak when the heap is silent. Same crossing/hysteresis/cooldown shape.
+ */
+function sampleRss(m: NodeJS.MemoryUsage): void {
+  if (m.rss < RSS_REARM_BYTES) {
+    rssArmed = true;
+    return;
+  }
+  if (m.rss < RSS_WARN_BYTES) return;
+
+  const now = Date.now();
+  if (!rssArmed && now - lastRssWarnAt < REWARN_MS) return;
+  const crossing = rssArmed;
+  rssArmed = false;
+  lastRssWarnAt = now;
+
+  const rssMB = Math.round(m.rss / MIB);
+  const heapUsedMB = Math.round(m.heapUsed / MIB);
+  const heapTotalMB = Math.round(m.heapTotal / MIB);
+  const externalMB = Math.round(m.external / MIB);
+  // heapTotal vs external is the whole diagnosis, so say it rather than make a reader compute it:
+  // RSS ≫ heapTotal means the bytes are native/external; RSS ≈ heapTotal means V8 is holding committed
+  // pages it will not give back — which is what an allocation storm (a whole-file JSON rewritten per
+  // scanned file, the 2026-07-20 cause) leaves behind long after the garbage itself is collected.
+  const where =
+    m.rss - m.heapTotal > 512 * MIB
+      ? "most of it is OUTSIDE the V8 heap (native/external — libvips, Buffers, child-process pipes)"
+      : "most of it is V8 heap V8 has committed and is not returning (an allocation storm, not live data)";
+  const ctx = { ...context(), ...machineContext() };
+  const ctxText = Object.entries(ctx)
+    .filter(([, v]) => v !== undefined && v !== null)
+    .map(([k, v]) => `${k}=${String(v)}`)
+    .join(" ");
+
+  log.warn(
+    "heap-watch",
+    `RESIDENT MEMORY ${crossing ? "(crossed threshold)" : "(still elevated)"}: rss=${rssMB}MB ` +
+      `(warn at ${Math.round(RSS_WARN_BYTES / MIB)}MB) with heapUsed=${heapUsedMB}MB, ` +
+      `heapTotal=${heapTotalMB}MB, external=${externalMB}MB — ${where}. ` +
+      `The heap warning above will NOT fire for this: heapUsed is small, and it is RSS the OS bills us ` +
+      `for and the OOM killer reads. Large File Bridge is meant to sit quietly in the background, so ` +
+      `this much resident memory is a bug even when nothing crashes. ` +
+      (ctxText ? `In flight: ${ctxText}. ` : ""),
+  );
+  const t = txnBegin("rss_pressure", { rssMB, heapUsedMB, heapTotalMB, externalMB, crossing, ...ctx });
+  txnEnd(t, "ok", { rssMB, heapUsedMB, heapTotalMB });
+}
+
 function sample(): void {
+  const mem = process.memoryUsage();
+  sampleRss(mem); // independent of the heap check below — it must speak when the heap is silent
+
   const ceiling = heapCeilingBytes();
   if (!ceiling) return; // no truthful denominator → no honest warning; stay silent rather than guess
 
-  const heapUsed = process.memoryUsage().heapUsed;
+  const heapUsed = mem.heapUsed;
   const fraction = heapUsed / ceiling;
 
   // Back under the line with hysteresis to spare: re-arm so the NEXT climb warns as a fresh crossing.

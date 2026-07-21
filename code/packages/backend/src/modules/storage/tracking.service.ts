@@ -39,7 +39,37 @@ const ANALYSIS_FILES: Record<string, string> = {
 const TRANSCRIPTION_EXT = ".transcription";
 const AI_DESCRIPTION_EXT = ".ai_description";
 const OCR_EXT = ".ocr";
-const MAX_FILES = 5000; // a safety cap so an enormous tree can't run the index unbounded (logged if hit).
+// ── Index size bounds (storages.mdx §4.1a) ────────────────────────────────────────────────────────────────
+// THE CAP IS A CRASH BACKSTOP, NOT A ROUTINE LIMIT. Every file the index drops is a file that is never
+// fingerprinted, never pinned, never synced to the user's other computers, and never counted in the
+// compression / big-file / git-ignore rollups. A cap a real tree can reach is therefore not a safety
+// measure — it is silent, permanent under-reporting of the user's own data (the walk order is
+// deterministic, so the SAME tail files are dropped on EVERY re-index, forever).
+//
+// SIZING (measured on this machine, 2026-07):
+//   • YAML cost per entry: 275 B (measured — 411 real entries with a mean relative path of 48 chars
+//     rendered through YAML.stringify() in exactly the shape written below). Live phase-1 `Entry` objects
+//     run ~400 B (abs + rel + name + two ISO strings + 3 numbers).
+//   • Largest tree on this machine: `~/BGit/all/jfk`, 76,825 files TOTAL — i.e. the absolute ceiling of
+//     entries that tree could ever produce even with the big-file threshold set to zero. The largest real
+//     candidate set measured by the scanner walk was 5,364 (`~/BGit/Bryan_git/UAP_Murder_Docus`) — already
+//     OVER the old 5,000 cap, which is exactly how this bug showed up.
+//   • At the default 100 MB threshold, real repos here index 0–4 entries. This cap is nowhere near
+//     routine use; it is reachable only by a pathological tree (a runaway generated dir, a mounted archive).
+// 200,000 entries ≈ 55 MB of YAML and ≈ 80 MB of peak heap — bounded, while being ~2.6× the entry count the
+// largest tree observed could produce at a ZERO threshold and ~37× the largest measured candidate set.
+// Deliberately the same number as the scanner's UNIT_CANDIDATE_HARD_CAP so both walks fail at the same place.
+const MAX_FILES = 200_000;
+// A heads-up, never a limit: crossing it drops NOTHING, it only logs once so a tree heading somewhere
+// unusual is noticed BEFORE the backstop could ever truncate. ~10× the largest tree measured here, because a
+// soft cap a normal storage crosses on every re-index is noise nobody reads (mirrors the scanner's
+// UNIT_CANDIDATE_CAP).
+const SOFT_NOTICE_FILES = 50_000;
+// Written at the TOP of `files.yaml` when — and only when — the backstop truncated the index, carrying the
+// EXACT number of large files that were found but not recorded. Its presence is what makes every count
+// derived from this index non-authoritative, so it is read back (cheaply, see storageIndexDroppedFiles)
+// and surfaced in the UI rather than living only in a log line.
+const DROPPED_KEY = "dropped_files";
 const FINGERPRINT_CHUNK = 64 * 1024;
 // Phase-1 walk responsiveness: hand the event loop back every N processed entries, exactly like the flat
 // walk in fs/fsindex (performance.mdx P-16, charter T3). A recursive SYNC walk with no yield pins the single
@@ -223,9 +253,12 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
   // the whole of phase 2 alongside the rows (2_2_do §I2).
   interface Entry { rel: string; name: string; abs: string; size: number; mtimeMs: number; modified: string; created: string | null; }
   const collected: Entry[] = [];
+  // Large files found but NOT recorded because the backstop was already full. The walk never aborts early:
+  // it keeps descending and keeps counting, so the number we report (and persist) is EXACT — "some files
+  // not indexed" is exactly the silent under-report this cap must not produce.
+  let dropped = 0;
   let sinceYield = 0;
   const walk = async (dir: string): Promise<void> => {
-    if (collected.length >= MAX_FILES) return;
     let entries: fs.Dirent[];
     try {
       entries = await fs.promises.readdir(dir, { withFileTypes: true });
@@ -237,7 +270,6 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
     // deeper down they are just ordinary user directories inside a mapped-dir mirror and must be indexed.
     const atSdlRoot = !usesLfbridgeDir(t) && path.resolve(dir) === path.resolve(root);
     for (const ent of entries) {
-      if (collected.length >= MAX_FILES) break;
       const name = ent.name;
       if (name === LFBRIDGE_DIR || name === ".git" || name === "node_modules" || HARD_SKIP.has(name)) continue;
       if (atSdlRoot && RESERVED_SDL_ROOT_NAMES.has(name)) continue;
@@ -258,6 +290,12 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
         continue;
       }
       if (st.size < threshold) continue;
+      // At the backstop: stop accumulating, but keep walking and counting so the WARN and the persisted
+      // `dropped_files` carry the exact shortfall (storages.mdx §4.1a).
+      if (collected.length >= MAX_FILES) {
+        dropped++;
+        continue;
+      }
       collected.push({
         rel: path.relative(root, abs),
         name,
@@ -270,7 +308,6 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
     }
   };
   await walk(root);
-  const capped = collected.length >= MAX_FILES;
   const total = collected.length;
 
   // Phase 2 — fingerprint IN PARALLEL across files (bounded by the responsive budget). Each result carries
@@ -310,15 +347,34 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
   // keeps NO `.lfbridge/` at all (the absolute rule).
   const outPath = filesYamlPath(root, t);
   fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, YAML.stringify({ files }), "utf8");
+  // `dropped_files` is written FIRST (and only when non-zero) so the incompleteness is the first thing any
+  // reader — ours or a human opening the file — sees, and so storageIndexDroppedFiles can find it in the
+  // file's head without parsing the whole index. A complete index is byte-identical to what we wrote before.
+  fs.writeFileSync(outPath, YAML.stringify(dropped > 0 ? { [DROPPED_KEY]: dropped, files } : { files }), "utf8");
   // We are the index's only in-process writer — drop any cached read of it immediately, so no reader can be
   // served a pre-build view even within the stat-check's mtime resolution (see readStorageIndex's cache).
   invalidateStorageIndexCache();
   // Now that a repo's index lives in Local Storage, remove any stale Category-B state a prior build left in the
   // working repo's `.lfbridge/` (and drop the folder if it's left empty) — the one-time on-disk migration.
   if (tracksIndexInLocalStorage(t)) sweepLegacyRepoTracking(root);
-  if (capped) log.warn("storage", `index for ${root} hit the ${MAX_FILES}-file cap — some files not indexed`);
-  else log.info("storage", `indexed ${total} large file(s) in ${root}`);
+  if (dropped > 0) {
+    // EXACT, never "some": the count is what the user is missing, and it is also persisted in the index
+    // itself (`dropped_files`) so the UI can say the same number instead of the truth living only here.
+    log.warn(
+      "storage",
+      `index for ${root} hit the ${MAX_FILES}-file backstop — ${dropped} large file(s) found but NOT indexed ` +
+        `(${total} indexed; recorded in files.yaml as ${DROPPED_KEY}, surfaced in the app as an incomplete index)`,
+    );
+  } else if (total > SOFT_NOTICE_FILES) {
+    // Over the heads-up line but nothing dropped — the index is COMPLETE. Logged so a storage growing
+    // toward the backstop is visible long before it could ever truncate (storages.mdx §4.1a).
+    log.warn(
+      "storage",
+      `index for ${root} holds ${total} large file(s), over the ${SOFT_NOTICE_FILES}-file heads-up line ` +
+        `(nothing dropped — the index is complete; the backstop is ${MAX_FILES})`,
+    );
+    log.info("storage", `indexed ${total} large file(s) in ${root}`);
+  } else log.info("storage", `indexed ${total} large file(s) in ${root}`);
   return total;
 }
 
@@ -511,5 +567,42 @@ export function countStorageIndex(root: string, type?: StorageType): number | nu
     return Object.keys(doc.files ?? {}).length;
   } catch {
     return null;
+  }
+}
+
+// How many bytes of the index's HEAD we need to decide "is this index complete?". `dropped_files` is always
+// written as the FIRST line (see indexStorageFiles), so a small head read answers it; 512 B is generous.
+const DROPPED_HEAD_BYTES = 512;
+
+/**
+ * How many large files the last index build FOUND but could not RECORD — 0 when the index is complete,
+ * which is the normal case. Every count derived from this index (file counts, the compression / big-file /
+ * git-ignore rollups, the sync decisions) is an UNDER-report by exactly this many while it is > 0, so no
+ * caller may present those numbers as authoritative without also showing this (storages.mdx §4.1a).
+ *
+ * Deliberately cheap: it reads only the head of `files.yaml` and never parses the index, so callers on the
+ * Storages/Repos list hot path can ask per storage. A legacy index written before this field existed simply
+ * has no `dropped_files` line and reads as complete.
+ */
+export function storageIndexDroppedFiles(root: string, type?: StorageType): number {
+  const p = indexReadPath(root, type);
+  let fd: number | null = null;
+  try {
+    fd = fs.openSync(p, "r");
+    const buf = Buffer.alloc(DROPPED_HEAD_BYTES);
+    const n = fs.readSync(fd, buf, 0, DROPPED_HEAD_BYTES, 0);
+    // Column 0 is unambiguous — every `files:` entry underneath is indented.
+    const m = new RegExp(`^${DROPPED_KEY}:\\s*(\\d+)`, "m").exec(buf.toString("utf8", 0, n));
+    return m ? Number(m[1]) : 0;
+  } catch {
+    return 0; // never indexed / unreadable → nothing to claim was dropped
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* best-effort */
+      }
+    }
   }
 }

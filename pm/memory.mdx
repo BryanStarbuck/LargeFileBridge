@@ -504,6 +504,71 @@ Read live at admission and served/edited over the settings surface, in code:
    I/O" must state its per-job byte cost in this spec first.
 8. **Every OOM-class failure must be preceded by a WARN we wrote.** If the first sign of memory
    trouble is an abort in `launcher.log`, the instrumentation is broken.
+9. **No whole-file store may be read-modify-written inside a per-file loop.** A background pass that
+   touches N files must touch its own JSON/YAML stores O(1) times, not N — load once, mutate in
+   memory, flush on a debounce plus an explicit end-of-pass and process-exit flush. See §5.1.
+10. **Every persistent cache has a stated ceiling.** A cache keyed on a file's identity accumulates a
+    dead entry every time that file changes, so without a cap it grows forever — and if it is also
+    rewritten per file, it grows *quadratically* in cost. See §5.1.
+11. **The memory watchdog watches RSS, not only `heapUsed`.** `heapUsed` cannot see V8's committed-
+    but-idle pages, external/ArrayBuffer bytes, or native allocations, and a daemon on a laptop is
+    killed on RSS. See §5.1.
+
+---
+
+### 5.1 The 4 GB RSS incident of 2026-07-20 — invariants 9, 10, 11
+
+**What happened.** `transactions.log` recorded `rssMB=4103` beside `heapUsedMB=78` on the last lines
+before the process died at 22:55 PDT, during the whole-computer scan that started at 22:38 (RSS was
+312 MB at that scan's boot). Three earlier long-lived processes show the same shape at shutdown —
+673 MB, 810 MB, 2,608 MB, 3,782 MB — always with `heapUsed` under 140 MB. It is a **ratchet, not a
+leak**: RSS climbs with work done and never returns, while the object graph stays small.
+
+**Root cause.** Foreign-pin discovery rewrote its entire fingerprint cache **once per scanned file**:
+a `readFileSync` + `JSON.parse` of a 3.9 MB / 18,521-entry JSON, then a pretty-printed
+`JSON.stringify` + `writeFileSync` of the whole thing — inside the scan's per-file loop, with many
+repo units walking in parallel. That is ~20 MB of garbage per file. No object leaked; the
+**allocation rate** forced V8 (and the OS) to commit pages they then never gave back. The cache was
+also uncapped and keyed on `(path, size, mtime)`, so every entry it appended made every *subsequent*
+file's parse more expensive — quadratic within a single scan and unbounded across scans.
+
+Measured on a copy of the real cache, 2,000 files through the old path: RSS 45 → 349 MB in 38.7 s.
+Through the fixed path: RSS 84 → 113 MB in 0.04 s.
+
+*The write-back store — load once, mutate in memory, debounced + explicit flush, bounded entry count —*
+*is implemented in* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts`,
+*class* `WriteBackStore` *(`get` / `touch` / `flush`), consumed by* `discoverForeignPin`, `recordForeignPin`,
+`verifyForeignPins`, *and drained by the exported* `flushForeignPinStores()`.
+
+*The scan flushes both stores at its commit point in*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts`, *function* `scanAll`.
+
+**Why nothing warned.** `heap-watch` measured `heapUsed / heap_size_limit` — 78 MB of 6,240 MB, i.e.
+1.2%. By its own correct arithmetic the process was idle while it held 4 GB of the user's RAM. RSS
+now has its own absolute threshold (1.5 GB, `LFB_RSS_WARN_BYTES`) with the same crossing/hysteresis/
+cooldown shape, and its WARN names whether the bytes sit outside the V8 heap or inside it as
+committed-but-idle pages.
+
+*The RSS threshold and its warning are implemented in*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts`, *function* `sampleRss`
+*(called from* `sample`*)*.
+
+**Why it was unattributable after the fact.** The ledger logged `heapUsed` and `rss` but not
+`heapTotal`, and those two stories — "V8 is holding committed pages" vs "the bytes are native/
+external" — have different causes and different fixes. `heapTotalMB` is now on every line, and
+`externalMB` joins it above 32 MB.
+
+*The memory snapshot on every ledger line is written by*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/transactions.ts`, *function* `memFields`.
+
+**Secondary contributor.** `sharp`/libvips defaults (a 50 MB operation cache with a 0% hit rate for
+hash-once work, plus a per-pipeline worker pool sized to the core count, each carrying a malloc arena
+macOS never returns) held ~75 MB of permanently resident native memory that `heapUsed` cannot see.
+`cache(false)` + `concurrency(1)` remove it with no change to any hash value — we already fan out at
+the job level, and the decode is bounded to ~1 MB of pixels either way.
+
+*Set at module load in*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts`.
 
 ---
 

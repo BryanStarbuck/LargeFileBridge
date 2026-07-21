@@ -96,7 +96,13 @@ describe("noteArtifactWritten — producing an artifact schedules its own sync (
   });
 
   it("never throws into the artifact writer's success path when the sync fails", async () => {
-    syncStorageText.mockRejectedValueOnce(new Error("git exploded"));
+    // The fixture's message is deliberately SELF-IDENTIFYING. `fire()` logs a failed pass through the real
+    // logger, so this string is one env-var away from a human's incident log — and the earlier wording
+    // ("git exploded") did leak into ~/T/_large_files_bridge/error.err, where it read like a genuine git
+    // fault and was investigated twice as a live backbone failure. The environmental cure is
+    // vitest.config.ts (`env.LFB_LOG_DIR` / `env.LFB_STATE_DIR` temp dirs); this is the belt to that
+    // suspenders — if a redirect is ever dropped, the forged line names itself as forged on sight.
+    syncStorageText.mockRejectedValueOnce(new Error("TEST FIXTURE (sync-trigger.spec): simulated git failure"));
     const { noteArtifactWritten } = await importFresh();
     expect(() => noteArtifactWritten(`${ROWS.personal.root}/a.mp4.ocr`, "OCR texts")).not.toThrow();
     await expect(vi.advanceTimersByTimeAsync(20_000)).resolves.not.toThrow();

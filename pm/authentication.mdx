@@ -134,6 +134,51 @@ Refresh-before-use attach guard is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `getFreshToken()`
 (consumed by `axios.ts`'s request interceptor and `lib/streamNdjson.ts`).
 
+### 4.1 Why expired Bearers still reached the API — the three remaining holes (LOCKED)
+
+The two mechanisms above (proactive timer + attach guard) still let real page loads fail as
+`[auth] Token verification failed (GET /todo/batches): "exp" claim timestamp check failed`, minutes
+after the tab's last successful mint. Three defects, all client-side, all now closed:
+
+1. **The forced refresh was not single-flight.** `RealAuthCore.refresh()` clears the token cache and
+   then mints, so every concurrent request that landed inside the 60 s attach window fired its OWN
+   `POST /tokens` — visible in `log.log` as 3–4 `Access token refreshed` lines in the SAME millisecond.
+   Every one of those clears also **cancels the SDK's pending proactive timer**.
+2. **One failed mint disarmed proactive renewal for the life of the tab.** The SDK re-arms its timer
+   only from a SUCCESSFUL mint, so after a single blip (or a storm whose last mint failed) the tab
+   silently fell back to reactive-only renewal — which is exactly the state in which a 15-minute token
+   lapses under an open page and rides out on the next real request.
+3. **A "not expired yet" token was still attached** when a re-mint failed. A token with a second of
+   life left lapses in flight (queueing, a resumed-from-sleep tab, a briefly blocked backend event
+   loop) and reproduces the warning. Below a hard **10 s** floor we now send NO Bearer and let the 401
+   backstop recover the call.
+
+The renewal targets are layered so the attach guard rarely bites: the keep-alive renews at **120 s**
+before `exp`, the attach guard at **60 s**, and the hard floor is **10 s**.
+
+Threshold decisions are pure and unit-tested in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/tokenFreshness.ts` —
+`needsProactiveRenewal()` / `needsRefreshBeforeUse()` / `safeToAttachStaleToken()`
+(regression guard: `tokenFreshness.spec.ts`).
+
+One shared mint per refresh storm is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `refreshTokenOnce()`.
+
+The self-healing keep-alive (re-derived every 60 s, plus on tab-visible / `pageshow` / `online`, and
+never while the tab is hidden so the no-background-polling rule holds) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` —
+`startSessionKeepAlive()`, started once from `main.tsx`.
+
+**A 401 recovers once, together, and ends in a clean re-login.** Concurrent 401s share ONE recovery
+(re-mint first; if that fails, rehydrate the session from the cookie and mint again) and then each
+retries once with the recovered Bearer. If there is no live session left, the user is NOT left on a
+page rendering failed data: a single notice — "Your Large File Bridge session has expired. Please sign
+in again." — is shown and the boot gate re-runs, landing on the sign-in page.
+
+Single-flight 401 recovery + the clean re-login are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — `recoverSession()` and
+`announceSessionLapsed()` (response interceptor).
+
 The backend's verification warning names its caller (method + path, never the query string) so a
 recurring expired-token source is identifiable from the log alone — `identify.ts`'s `catch` in
 `identify()`.

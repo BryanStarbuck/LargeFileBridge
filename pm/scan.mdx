@@ -482,26 +482,36 @@ the **tools preflight** ([tools.mdx §3](./tools.mdx#3-the-preflight--check-befo
 One unit walk bounds how many candidate rows it holds in memory (and persists to that unit's
 `status.yaml`). The bound is **two-tier**:
 
-* **Soft cap: 5,000 candidates per unit** (the house number shared with the fs index and the tracking
-  index). Exceeding it drops **nothing** — the walk keeps accumulating into a bounded **headroom** and
-  logs a heads-up WARN, so a tree drifting toward the ceiling is noticed **before** truncation starts.
-* **Hard cap: 2× the soft cap (10,000).** Only past this ceiling does the walk stop pushing rows. It
-  still keeps **walking and counting**, so the number of dropped candidates is **exact**, never "some".
-* **Truncation is a persisted metric, not only a log line.** When the hard cap drops candidates, the
-  exact count lands on the unit's status as **`scan_dropped_candidates`** (absent/0 = the census is
-  complete) and rides the one-repo detail payload as `scanDroppedCandidates`, so the UI can say "the
-  file list is missing exactly N candidates". It is re-stamped **every scan** — a unit that shrinks back
-  under the cap clears it.
-* **Why a fixed cliff was a bug.** The walk order is deterministic, so a fixed 5,000 cliff dropped the
-  **same** overflow files on **every** scan — a stable set of files (observed: 97 and 2,003 per unit)
-  silently invisible to the product **forever**; the cap protected a single scan but nothing ever picked
-  up the remainder. The headroom keeps the real-world overflows whole while memory stays bounded; a
-  tree that exceeds even the hard cap is truncated **loudly** (the persisted count) instead of silently.
+* **Soft cap: 50,000 candidates per unit — a heads-up, never a limit.** Exceeding it drops **nothing**:
+  the walk keeps accumulating into the headroom and logs one WARN, so a tree heading somewhere unusual is
+  noticed **before** truncation could ever start. It is deliberately ~10× the largest real tree we have
+  measured, because a soft cap a normal repo crosses every scan is noise, not a signal.
+* **Hard cap: 200,000 — a crash backstop, not a routine bound.** It exists only so a pathological tree
+  can't exhaust memory; a real user directory must never reach it (~37× the largest observed). Past it the
+  walk stops pushing rows but keeps **walking and counting**, so the dropped count is **exact**.
+* **Truncation makes the census INCOMPLETE, and the product says so.** When the hard cap drops candidates,
+  the exact count lands on the unit's status as **`scan_dropped_candidates`** (absent/0 = the census is
+  complete) and rides the one-repo detail payload as `scanDroppedCandidates`. The one-repo page then shows
+  the **highest-priority** recommendation — ranked above even a down IPFS engine — telling the user the
+  file list and every count on the page are an under-report, because a truncated census must never be
+  presented as authoritative. It is re-stamped **every scan** — a unit that shrinks back clears it.
+* **Why the old numbers were a bug.** The walk order is deterministic, so the old 5,000 cliff dropped the
+  **same** overflow files on **every** scan — silently invisible to the product **forever** (observed:
+  364 files of a 5,364-candidate repo, dropped on every 15-minute scan). Files that are never discovered
+  are never tracked, never pinned, never synced, and never counted in the rollup metrics.
+* **Budget is spent only on files that could matter.** Irrelevant subtrees are pruned **before** anything
+  is counted — VCS internals, dependency/build/cache directories (`HARD_SKIP`, §4.3), macOS bundles, and
+  the unit's own `exclude_globs`, which prune the **directory** rather than being tested file-by-file
+  inside it. The size/type admission rules (§4.1) run **before** the candidate counter, so a tiny
+  irrelevant file never consumes budget.
 * **The computer unit budgets the TOTAL.** Its per-root walks each receive what remains of **both**
   budgets, so N roots can never hold N × the cap.
 
 The two-tier cap, the exact drop counting, and the per-root budget split are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`UNIT_CANDIDATE_CAP` / `UNIT_CANDIDATE_HARD_CAP`), `scanComputerUnit()`, and `diffStatus()` (stamps `scan_dropped_candidates`); surfaced in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`scanDroppedCandidates`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`UNIT_CANDIDATE_CAP` / `UNIT_CANDIDATE_HARD_CAP`, and `dirIsExcluded()` for the subtree prune), `scanComputerUnit()`, and `diffStatus()` (stamps `scan_dropped_candidates`); carried to the client in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`scanDroppedCandidates`).
+
+The incomplete-census recommendation the user actually sees is built in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildScanTruncatedWarning()`, ranked first by `topRecommendation()`.
 
 ---
 

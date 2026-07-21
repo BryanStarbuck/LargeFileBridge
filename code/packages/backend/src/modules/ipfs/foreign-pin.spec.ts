@@ -77,5 +77,48 @@ describe("discoverForeignPin size-prune (foreign_pin_discovery §3)", () => {
     expect(r).toBeNull();
     // Second call must be served from the negative cache (still null, still no hashing).
     expect(await m.discoverForeignPin("/does/not/matter.mp4", 12345, 999, ctx)).toBeNull();
+    // …and the entry must be durable once flushed.
+    m.flushForeignPinStores();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(tmpDir, "foreign-pin-cache.json"), "utf8"));
+    expect(Object.keys(onDisk)).toHaveLength(1);
+  });
+});
+
+// ── the memory regression this module exists to not repeat (memory.mdx — 4 GB RSS, 2026-07-20) ─────────
+// discoverForeignPin used to readFileSync + JSON.parse + JSON.stringify + writeFileSync the ENTIRE cache
+// file on EVERY call, from inside the scan's per-file loop. At 18,521 entries / 3.9 MB that is ~20 MB of
+// garbage per scanned file, and the resulting allocation rate — not any leaked object — is what drove RSS
+// to 4,103 MB while heapUsed sat at 78 MB. This test locks the shape of the fix: many mutations, at most
+// one write. It asserts on the FILE, not on an internal, so it still fails if someone "simplifies" the
+// write-back store back into a per-call rewrite.
+describe("foreign-pin cache is write-back, not rewritten per file (memory.mdx)", () => {
+  it("does not touch the cache file once per discovery, and flushes them all in one write", async () => {
+    const ctx = { keptSet: new Set<string>(), keptSizes: [] as number[] };
+    const cacheFile = path.join(tmpDir, "foreign-pin-cache.json");
+
+    const N = 200; // well under the FLUSH_MAX_PENDING forced-write cap, so nothing should hit disk yet
+    for (let i = 0; i < N; i++) {
+      expect(await m.discoverForeignPin(`/fake/file_${i}.mp4`, 1000 + i, 42, ctx)).toBeNull();
+    }
+    // THE ASSERTION THAT MATTERS: N discoveries produced ZERO whole-file rewrites.
+    expect(fs.existsSync(cacheFile)).toBe(false);
+
+    m.flushForeignPinStores();
+    const onDisk = JSON.parse(fs.readFileSync(cacheFile, "utf8"));
+    expect(Object.keys(onDisk)).toHaveLength(N);
+
+    // And the flushed state is what the next lookup is served from — no re-hash, no re-read.
+    expect(await m.discoverForeignPin("/fake/file_7.mp4", 1007, 42, ctx)).toBeNull();
+  });
+
+  it("keeps the index in memory too — recordForeignPin is also on the per-file path", async () => {
+    const indexFile = path.join(tmpDir, "foreign-pins.json");
+    for (let i = 0; i < 50; i++) {
+      m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: `/repo/f_${i}.mp4`, size: i, repoRoot: "/repo" });
+    }
+    expect(fs.existsSync(indexFile)).toBe(false); // debounced, not 50 rewrites
+    expect(m.readForeignPins()).toHaveLength(50); // …yet readable immediately (memory is authoritative)
+    m.flushForeignPinStores();
+    expect(JSON.parse(fs.readFileSync(indexFile, "utf8"))).toHaveLength(50);
   });
 });

@@ -23,7 +23,13 @@ import { listRepoFolders } from "../store-model/units.service.js";
 import { expandHome } from "../fs/badges.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
-import { readStorageIndex, countStorageIndex, indexStorageFiles, LFBRIDGE_DIR } from "./tracking.service.js";
+import {
+  readStorageIndex,
+  countStorageIndex,
+  storageIndexDroppedFiles,
+  indexStorageFiles,
+  LFBRIDGE_DIR,
+} from "./tracking.service.js";
 import { bumpTopic, STORAGES_TOPIC } from "../events/state-events.service.js";
 import { trackingBaseDir, clearStorageTypeCache } from "./storage-type.service.js";
 import { analyzeFile } from "./analysis.service.js";
@@ -328,6 +334,9 @@ function buildRow(root: string): StorageRow {
     // working repo; for an SDL the root IS the tracking area, so this is true once the root exists.
     hasLfbridge: safeIsDir(trackingBaseDir(root, type)),
     fileCount: countStorageIndex(root, type),
+    // The honesty companion to `fileCount` (storages.mdx §4.1a): > 0 means the index build hit its backstop
+    // and `fileCount` is short by exactly this many, so the UI shows it as incomplete rather than final.
+    indexDroppedFiles: storageIndexDroppedFiles(root, type),
     clones: desc?.clones ?? { ...EMPTY_CLONES },
     route: type === "personal" ? "/storages/personal" : `/storages/${id}`,
   };
@@ -344,6 +353,7 @@ function localRow(): StorageRow {
     initialized: true,
     hasLfbridge: false,
     fileCount: null,
+    indexDroppedFiles: 0, // the local row has no fingerprint index of its own, so nothing can be dropped
     clones: { ...EMPTY_CLONES },
     route: "/settings",
   };

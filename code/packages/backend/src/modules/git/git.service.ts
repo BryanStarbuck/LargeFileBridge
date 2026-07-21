@@ -22,11 +22,21 @@ import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
 import { LFBRIDGE_DIR } from "../storage/storage-type.service.js";
 import { stableGitBin } from "./git-bin.js";
+// The working-tree gate: no outside writer may dirty a working copy while git is mid-cycle in it
+// (worktree-gate.ts). A leaf module, so importing it here creates no cycle.
+import { withWorktreeBusy } from "./worktree-gate.js";
+// The durable "did this computer's state actually reach the shared repo?" record + its jittered re-arm
+// (push-health.service.ts, bug #16). A leaf module — it lazy-imports pin.service, so no cycle here.
+import { recordPushSuccess, recordPushFailure, armUnpushedRetry } from "./push-health.service.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 // The remote parser lives in a LEAF module so tracking-root.service.ts can derive a repo's shared identity
 // (repoUid) without importing this heavy module — one parser, no cycle (storage_company.mdx §8.4.1).
 import { parseRemoteOwner } from "../storage/repo-identity.js";
 export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { log } from "../../shared/logging.js";
+// "The machine was offline" is its own class of remote failure — recoverable, retried on reconnect, and
+// deliberately NOT written into the durable fault trail (net-transient.ts, bug #15).
+import { isTransientNetworkError } from "../../shared/net-transient.js";
 
 /** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2).
  *  Both SHAPES are listed: the SDL root (current — an SDL has no `.lfbridge/`, artifact_placement_policy.mdx
@@ -112,6 +122,58 @@ function isRepoStorageYamlPath(p: string): boolean {
  */
 export type ConflictResolution = "regenerate" | "ours" | "union" | null;
 
+/**
+ * Is this path a file LFB ITSELF generated inside a storage's own git working copy?
+ *
+ * This is the ownership line that makes the pre-merge checkpoint safe (`checkpointOwnWrites`) and the
+ * blocked-merge clean-up honest (`clearBlockingOwnFiles`): LFB commits — and may regenerate — only what LFB
+ * wrote. Anything else is the user's, and the user's uncommitted work is never committed, reset, or moved.
+ *
+ * Ours, by shape: every path with an automatic conflict resolution (`resolutionFor`), the SDL's root payload
+ * names (`storage.yaml`, `devices/`, `analysis/`, `repos/`, …), the two git control files LFB maintains for
+ * the backbone (`.gitattributes` via `ensureMergeAttributes`, `.gitignore` via `ensureSdlCommittable`), the
+ * legacy `.lfbridge/` quarantine, and the analysis sidecars.
+ */
+export function isLfbOwnedSdlPath(p: string): boolean {
+  const rel = p.replace(/^\.\//, "").replace(/^\//, "");
+  if (!rel) return false;
+  if (resolutionFor(rel) !== null) return true;
+  const base = rel.split("/").pop() ?? rel;
+  if (base === ".gitattributes" || base === ".gitignore") return true;
+  const top = rel.split("/")[0]!;
+  if (SDL_ROOT_PAYLOAD.has(top)) return true;
+  if (top === LFBRIDGE_DIR) return true;
+  if (/\.(ai_description|ai_description_rejected|transcription|ocr)$/.test(rel)) return true;
+  return false;
+}
+
+/**
+ * The working-tree paths git named when it REFUSED a merge before starting it — the `Your local changes to
+ * the following files would be overwritten by merge:` / `The following untracked working tree files would be
+ * overwritten by merge:` blocks. In this state `git status` reports NO conflicted paths (no merge is in
+ * progress), so the error text is the only place the blockers are named. Exported for test.
+ */
+export function parseBlockedPaths(message: string): string[] {
+  const out: string[] = [];
+  let collecting = false;
+  for (const raw of (message ?? "").split("\n")) {
+    const line = raw.replace(/\r$/, "");
+    if (/would be overwritten by (merge|checkout):\s*$/.test(line.trim())) {
+      collecting = true;
+      continue;
+    }
+    if (!collecting) continue;
+    const t = line.trim();
+    // The blocked paths are the tab-indented lines; the block ends at git's advice/verdict lines.
+    if (!t || /^(Please|Aborting|error:|fatal:|hint:|warning:)/.test(t)) {
+      collecting = false;
+      continue;
+    }
+    out.push(t);
+  }
+  return [...new Set(out)];
+}
+
 export function resolutionFor(p: string): ConflictResolution {
   const base = p.split("/").pop() ?? p;
   // Regenerable caches — rebuilt from Local Storage on the next pass.
@@ -138,6 +200,13 @@ export interface GitCycleResult {
   pushed?: boolean;
   /** A human-readable problem to surface on the storage (merge conflict / auth / remote error). */
   problem?: string;
+  /**
+   * TRUE when the ONLY thing that went wrong was that this computer had no network/DNS at the moment
+   * (bug #15). The cycle is not failed — it is POSTPONED: the caller logs it below the durable fault trail
+   * (`error.err` is WARN+ only, and a laptop changing wifi is not a fault) and retries when connectivity
+   * returns instead of losing the cycle until the next 15-minute tick.
+   */
+  offline?: boolean;
   /** Conflicted paths when git could not auto-merge (git_backbone.mdx §4.3). */
   conflicts?: string[];
 }
@@ -309,16 +378,20 @@ export async function resolveWorkingCopy(storageId: string, remote: string): Pro
 export class GitBackbone {
   private git: SimpleGit;
   readonly dir: string;
+  /** The storage this working copy belongs to — carried so a failed push can be re-armed BY STORAGE
+   *  (push-health.service.ts) rather than merely logged against a directory path. */
+  readonly storageId: string;
 
-  private constructor(dir: string) {
+  private constructor(dir: string, storageId: string) {
     this.dir = dir;
+    this.storageId = storageId;
     this.git = openRepo(dir);
   }
 
   /** Build a backbone from a storage's configured remote, or null if no working copy resolves (git_backbone.mdx §3). */
   static async resolve(storageId: string, remote: string): Promise<GitBackbone | null> {
     const dir = await resolveWorkingCopy(storageId, remote);
-    return dir ? new GitBackbone(dir) : null;
+    return dir ? new GitBackbone(dir, storageId) : null;
   }
 
   /** The current branch name (defaults to `main` if detached/unknown). */
@@ -400,25 +473,67 @@ export class GitBackbone {
    */
   async pull(result: GitCycleResult): Promise<void> {
     if (!(await this.hasOrigin())) return;
+    return withWorktreeBusy(this.dir, () => this.pullInner(result));
+  }
+
+  private async pullInner(result: GitCycleResult): Promise<void> {
     // Write the union-merge `.gitattributes` BEFORE the merge (not only in commitAndPush, which runs
     // after): git reads `.gitattributes` from the working tree at merge time, so the shared SDL lists
     // (SyncList, manifest, decisions ledger) only fold conflict-free once this file is present. On a fresh
     // backbone the first merge would otherwise happen before any `.gitattributes` existed (git_backbone.mdx §4.2).
     this.ensureMergeAttributes();
+    // …and the `.gitignore` heal, which ALSO edits the working tree. Both edits used to sit UNCOMMITTED
+    // across the merge, so an incoming change to either file made git refuse the whole merge.
+    this.ensureSdlCommittable();
+    // COMMIT OUR OWN WRITES BEFORE WE MERGE (the bug this whole path exists to kill). Everything LFB writes
+    // into an SDL working tree — the mirrored `repos/<repoUid>/` subtree, the device file, the manifest,
+    // `.gitattributes`/`.gitignore` — is machine-generated text this process owns. Leaving it dirty and then
+    // merging is what produced "Your local changes to the following files would be overwritten by merge:
+    // repos/…/repo_storage.yaml / Aborting" dozens of times a day: the merge never ran, so the storage never
+    // converged. A checkpoint commit costs one commit and makes the merge always legal.
+    await this.checkpointOwnWrites();
     const branch = await this.branch();
     try {
       await this.git.fetch("origin", branch);
       result.fetched = true;
     } catch (e) {
-      result.problem = classifyRemoteError(e as Error);
+      const failure = classifyRemoteFailure(e as Error);
+      result.problem = failure.problem;
+      // A fetch that failed because there is no network is a POSTPONED cycle, not a failed one (bug #15) —
+      // the caller logs it quietly and retries on reconnect rather than burning the cycle.
+      if (failure.kind === "offline") result.offline = true;
       return;
     }
-    try {
-      const before = await this.git.revparse(["HEAD"]).catch(() => "");
-      await this.git.merge(["--no-edit", `origin/${branch}`]);
-      const after = await this.git.revparse(["HEAD"]).catch(() => "");
-      result.merged = before !== after;
-    } catch (e) {
+    let attempt = await this.tryMerge(branch);
+    if (attempt.error) {
+      // The merge was REFUSED BEFORE IT STARTED — git named the working-tree paths in its way ("local
+      // changes … would be overwritten", "untracked working tree files would be overwritten"). There are no
+      // conflicted paths to resolve in this state, so the old code fell straight through to `merge --abort`
+      // and gave up for the cycle. The untracked case is self-inflicted and LOOPS: the "regenerate"
+      // resolution `git rm`s `repo_storage.yaml`, the next scan's mirror re-writes it as an UNTRACKED file,
+      // and the following merge is blocked by it — forever. Clear the ones LFB owns, then merge for real.
+      const blocked = parseBlockedPaths(attempt.error.message);
+      if (blocked.length > 0) {
+        const { cleared, foreign } = await this.clearBlockingOwnFiles(blocked);
+        if (foreign.length > 0) {
+          // NOT ours — never touched. Say exactly whose files stopped the merge instead of a generic abort.
+          log.warn(
+            "git",
+            `${this.dir}: merge blocked by ${foreign.length} file(s) LFB does not own (${foreign.join(", ")}) — ` +
+              `leaving them exactly as they are; commit or stash them and the next cycle will merge.`,
+          );
+        } else if (cleared.length > 0) {
+          log.info("git", `${this.dir}: cleared ${cleared.length} LFB-generated file(s) blocking the merge (${cleared.join(", ")}) — retrying`);
+          attempt = await this.tryMerge(branch);
+        }
+      }
+    }
+    if (!attempt.error) {
+      result.merged = attempt.merged;
+      return;
+    }
+    {
+      const e = attempt.error;
       // A merge conflict git could not auto-resolve. LFB resolves it ITSELF, per file — it never hands the
       // user homework (storage_company.mdx §11.1). Before this, one unresolvable path aborted the merge and
       // `commitAndPush` then refused to run, so a single conflicted file froze the storage's ENTIRE backbone
@@ -451,6 +566,103 @@ export class GitBackbone {
       result.conflicts = conflicts;
       result.problem = `Git merge conflict on ${conflicts.length || "several"} file(s) — resolve with your Git tools. (${(e as Error).message})`;
     }
+  }
+
+  /** One merge attempt. Never throws — the error is RETURNED so the caller can decide between "the tree was
+   *  in the way" (clear it and retry) and "git hit a real conflict" (the per-file resolution ladder). */
+  private async tryMerge(branch: string): Promise<{ merged: boolean; error?: Error }> {
+    try {
+      const before = await this.git.revparse(["HEAD"]).catch(() => "");
+      await this.git.merge(["--no-edit", `origin/${branch}`]);
+      const after = await this.git.revparse(["HEAD"]).catch(() => "");
+      return { merged: before !== after };
+    } catch (e) {
+      return { merged: false, error: e as Error };
+    }
+  }
+
+  /**
+   * Stage + commit every DIRTY path in this working copy that LFB itself generated, so the tree is clean of
+   * OUR writes before a merge (git_backbone.mdx §4; the "local changes would be overwritten by merge" abort).
+   *
+   * Ownership is decided per path by {@link isLfbOwnedSdlPath} and the commit carries an EXPLICIT PATHSPEC:
+   * a file the user happens to keep in this repo is never swept into an LFB commit, and a working repo is
+   * never touched by this code path at all (a GitBackbone only ever exists for a storage's own dedicated
+   * repo — `resolveWorkingCopy`). Returns the committed paths. Never throws; a checkpoint that fails just
+   * leaves the merge to fail the way it used to, which is strictly no worse.
+   */
+  private async checkpointOwnWrites(): Promise<string[]> {
+    let status: Awaited<ReturnType<SimpleGit["status"]>>;
+    try {
+      status = await this.git.status();
+    } catch (e) {
+      log.warn("git", `${this.dir}: pre-merge status failed: ${(e as Error).message}`);
+      return [];
+    }
+    const dirty = new Set<string>([
+      ...status.modified,
+      ...status.not_added,
+      ...status.created,
+      ...status.deleted,
+      ...status.renamed.map((r) => r.to),
+    ]);
+    const ours = [...dirty].filter((p) => isLfbOwnedSdlPath(p));
+    if (ours.length === 0) return [];
+    try {
+      await this.git.add(["--", ...ours]);
+      await this.git.commit(`LFB: checkpoint ${ours.length} generated file(s) before merge`, ours);
+      log.info("git", `${this.dir}: checkpointed ${ours.length} LFB-generated file(s) before the merge`);
+      return ours;
+    } catch (e) {
+      log.warn("git", `${this.dir}: pre-merge checkpoint commit failed: ${(e as Error).message}`);
+      return [];
+    }
+  }
+
+  /**
+   * Get LFB-GENERATED files out of a refused merge's way — deterministically and without data loss.
+   *
+   * Every path is copied into a timestamped quarantine under the state root first
+   * (`<state>/merge-quarantine/<repo>/<stamp>/<rel>`), then: an UNTRACKED file is deleted (the merge will
+   * write the incoming copy), a TRACKED-but-dirty file is restored from HEAD. Both are safe because these
+   * files are Category-B caches whose authoritative copy is Local Storage — the next pass regenerates them.
+   *
+   * A path LFB does NOT own is returned in `foreign` and left untouched, always. That is the charter line:
+   * we never destroy a user's uncommitted work, so the merge stays refused and we say why.
+   */
+  private async clearBlockingOwnFiles(paths: string[]): Promise<{ cleared: string[]; foreign: string[] }> {
+    const cleared: string[] = [];
+    const foreign: string[] = [];
+    const stamp = new Date().toISOString().replace(/[:.]/g, "-");
+    for (const rel of paths) {
+      if (!isLfbOwnedSdlPath(rel)) {
+        foreign.push(rel);
+        continue;
+      }
+      const abs = path.join(this.dir, rel);
+      try {
+        const quarantine = path.join(resolveStateDir(), "merge-quarantine", path.basename(this.dir), stamp, rel);
+        fs.mkdirSync(path.dirname(quarantine), { recursive: true });
+        if (fs.existsSync(abs)) fs.copyFileSync(abs, quarantine);
+      } catch (e) {
+        log.warn("git", `${this.dir}: could not quarantine ${rel} before clearing it: ${(e as Error).message}`);
+      }
+      let tracked = false;
+      try {
+        await this.git.raw(["ls-files", "--error-unmatch", "--", rel]);
+        tracked = true;
+      } catch {
+        tracked = false; // untracked — `ls-files --error-unmatch` exits non-zero
+      }
+      try {
+        if (tracked) await this.git.raw(["checkout", "--", rel]);
+        else fs.rmSync(abs, { force: true });
+        cleared.push(rel);
+      } catch (e) {
+        log.warn("git", `${this.dir}: could not clear ${rel} out of the merge's way: ${(e as Error).message}`);
+      }
+    }
+    return { cleared, foreign };
   }
 
   private async conflictedPaths(): Promise<string[]> {
@@ -559,6 +771,10 @@ export class GitBackbone {
    */
   async commitAndPush(result: GitCycleResult): Promise<void> {
     if (result.conflicts?.length) return; // don't commit on top of an unresolved conflict
+    return withWorktreeBusy(this.dir, () => this.commitAndPushInner(result));
+  }
+
+  private async commitAndPushInner(result: GitCycleResult): Promise<void> {
     this.ensureSdlCommittable(); // the SDL text is the payload for a Git backbone — never let .gitignore hide it
     this.ensureMergeAttributes();
     try {
@@ -600,39 +816,116 @@ export class GitBackbone {
     // loses to any peer that pushes twice while we are working — and on a shared company repo with several
     // members that is an ordinary Tuesday, not an edge case. Each retry re-pulls first, so we are always
     // pushing on top of the newest remote state; we never force.
-    const BACKOFF_MS = [0, 2000, 8000];
-    for (let attempt = 0; attempt < BACKOFF_MS.length; attempt++) {
-      if (BACKOFF_MS[attempt]! > 0) await new Promise((r) => setTimeout(r, BACKOFF_MS[attempt]!));
+    //
+    // THE BACKOFF IS JITTERED (bug #16). It used to be the fixed ladder [0, 2000, 8000] — the same ladder
+    // running on EVERY one of the user's computers, against the same remote, over a window that a slow
+    // re-pull stretches to minutes. Two machines that collide once then retry in lockstep and collide
+    // again; the observed "attempt 3/3; giving up this cycle" lines are that lockstep. Randomizing each
+    // wait breaks the phase lock, which is the only thing that can break it — no local lock can exclude
+    // another COMPUTER's push (see push-health.service.ts).
+    const ATTEMPTS = 3;
+    for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
+      const wait = attempt === 0 ? 0 : pushRetryDelayMs(attempt);
+      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
       try {
         await this.git.push("origin", branch);
         result.pushed = true;
         result.problem = undefined; // a later success clears an earlier attempt's complaint
+        // This computer IS sharing its state — stamp it and clear any outstanding "hasn't pushed" record
+        // (and any re-arm it left pending).
+        recordPushSuccess(this.storageId, this.dir);
         return;
       } catch (e) {
-        const why = classifyRemoteError(e as Error);
-        const last = attempt === BACKOFF_MS.length - 1;
+        const failure = classifyRemoteFailure(e as Error);
+        const why = failure.problem;
+        const last = attempt === ATTEMPTS - 1;
+        // OFFLINE ⇒ STOP RETRYING IMMEDIATELY (bug #15). Three attempts 8 seconds apart cannot conjure a
+        // network, and each one costs a full DNS timeout; the caller retries the whole cycle on reconnect.
+        // Logged at INFO because a closed lid is not a fault (`error.err` is the durable fault trail).
+        if (failure.kind === "offline") {
+          log.info(
+            "git",
+            `${this.dir}: push postponed — this computer is offline (${(e as Error).message.split("\n")[0]}); retrying when the network returns`,
+          );
+          result.problem = why;
+          result.offline = true;
+          return;
+        }
+        // AN AUTH FAILURE IS NOT A RACE. Re-pulling and pushing again cannot produce a credential, so the
+        // remaining attempts only widen the window in which OTHER cycles pile up behind this storage's
+        // lock. Record it (so the user is told) and stop.
+        if (failure.kind === "auth") {
+          log.warn("git", `${this.dir}: push rejected (${why}) — authentication will not fix itself by retrying; recorded for the user.`);
+          result.problem = why;
+          await this.noteUnpushed(why);
+          return;
+        }
         // LOG THE CAUSE (storage_personal.mdx §16.2(g)): previously this error was captured and never read,
         // so an auth failure and a routine non-fast-forward race were indistinguishable in the log — and if
         // a retry then succeeded, the fact that anything went wrong vanished entirely.
         log.warn(
           "git",
-          `${this.dir}: push rejected (${why}) — attempt ${attempt + 1}/${BACKOFF_MS.length}` +
+          `${this.dir}: push rejected (${why}) — attempt ${attempt + 1}/${ATTEMPTS}` +
             (last ? "; giving up this cycle" : "; re-pulling and retrying"),
         );
         result.problem = why;
-        if (last) return;
+        // GIVING UP THIS CYCLE MUST NOT MEAN GIVING UP (bug #16). The commits are still here and the other
+        // computers still cannot see them, so the fact is recorded durably, re-armed on a jittered backoff,
+        // and surfaced on the Scans page until a push actually lands.
+        if (last) {
+          await this.noteUnpushed(why);
+          return;
+        }
         // Re-pull before the next attempt. A conflict here is already auto-resolved per file by pull();
         // if something truly unresolvable remains, stop and surface it rather than pushing blindly.
         const retry: GitCycleResult = { ran: true };
         await this.pull(retry);
+        if (retry.offline) {
+          // The network dropped between the push and the re-pull — postponed, not failed.
+          result.problem = retry.problem;
+          result.offline = true;
+          return;
+        }
         if (retry.conflicts?.length) {
           result.conflicts = retry.conflicts;
           result.problem = retry.problem;
+          // Still unpushed, for a reason the user may have to act on — same durable record, same re-arm.
+          await this.noteUnpushed(retry.problem ?? why);
           return;
         }
       }
     }
   }
+
+  /**
+   * Record that this computer's storage state did NOT reach the shared repo, and re-arm the push.
+   *
+   * This is the difference between "we gave up this cycle" (a log line nobody reads) and "the work is
+   * queued, will be retried, and the user can see it" — a machine that has silently stopped sharing its
+   * state is the worst outcome this product has. Never throws: health bookkeeping must not fail a cycle.
+   */
+  private async noteUnpushed(problem: string): Promise<void> {
+    try {
+      const ahead = await this.aheadCount(await this.branch());
+      const consecutive = recordPushFailure(this.storageId, this.dir, problem, ahead);
+      armUnpushedRetry(this.storageId, consecutive);
+    } catch (e) {
+      log.debug("git", `${this.dir}: recording the unpushed state failed: ${(e as Error).message}`);
+    }
+  }
+}
+
+/**
+ * How long to wait before push retry number `attempt` (1-based: attempt 0 fires immediately).
+ *
+ * Exponential (2s, 8s) with ±40% JITTER. The jitter is the point: the old fixed ladder made every one of
+ * the user's computers retry a lost push at the same offsets, so machines that collided once collided
+ * again on the next attempt and the cycle exhausted its attempts against a peer that was never going to
+ * yield. Exported for test.
+ */
+export function pushRetryDelayMs(attempt: number, rnd: () => number = Math.random): number {
+  const base = 2000 * 4 ** (Math.max(1, attempt) - 1); // 2s, 8s, 32s …
+  return Math.round(base * (0.6 + rnd() * 0.8));
 }
 
 // ── git-ignore helpers (the canonical impls; directories.mdx §3.4a, git_ignore.mdx §5) ──────────
@@ -709,26 +1002,44 @@ export function nearestGitAtOrAbove(dir: string): string | null {
 }
 
 /**
- * The subset of `absPaths` that git IGNORES inside `repoRoot`, computed with ONE
- * `git check-ignore --stdin` invocation (git_ignore.mdx §5.4). The paths are fed newline-joined on
+ * THREE-VALUED git-ignore truth for a batch of paths: ignored / not ignored / UNKNOWN.
+ *
+ * `unknown` is the paths git could not answer for (the repo vanished, it is not a git repository, or the
+ * `check-ignore` process genuinely failed on that path). It exists because "we could not ask git" is NOT
+ * the same answer as "git does not ignore this file": folding a failure into `false` silently misclassifies
+ * every file in the repo as a big-file/check-in hazard (git_ignore.mdx §5.4). Callers that drive the ⊘
+ * column, the bigNotIgnored nudge, or the `ignore` category MUST leave an unknown path undecided.
+ */
+export interface CheckIgnoreResult {
+  ignored: Set<string>;
+  unknown: Set<string>;
+}
+
+/**
+ * The subset of `absPaths` that git IGNORES inside `repoRoot`, computed with batched
+ * `git check-ignore --stdin` invocations (git_ignore.mdx §5.4). The paths are fed newline-joined on
  * stdin and git echoes back exactly those it ignores (as given, so the returned Set holds the same
  * absolute strings the caller passed). No shell — the git binary is exec'd directly (charter).
  *
  * Exit-code contract: 0 = one or more ignored (stdout lists them), 1 = NONE ignored (no output — NOT
  * an error), ≥128 = a real failure. So a bare exit-1 (repo with no matching rule) yields an empty Set,
- * never a throw. Any unexpected failure is logged and treated as "nothing ignored" so a listing/plan
- * never breaks over it.
+ * never a throw. A genuine failure is logged and reported through `unknown` (see `CheckIgnoreResult`),
+ * never as "not ignored", and never breaks a listing/plan.
  */
-export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
+export function checkIgnoreDetailed(repoRoot: string, absPaths: string[]): CheckIgnoreResult {
   const ignored = new Set<string>();
-  if (absPaths.length === 0) return ignored;
-  const out = runCheckIgnore(repoRoot, absPaths, false);
-  if (out === null) return ignored;
-  for (const line of out.split("\n")) {
+  if (absPaths.length === 0) return { ignored, unknown: new Set<string>() };
+  const res = runCheckIgnore(repoRoot, absPaths, false);
+  for (const line of res.out.split("\n")) {
     const p = line.trim();
     if (p) ignored.add(p);
   }
-  return ignored;
+  return { ignored, unknown: new Set(res.unknown) };
+}
+
+/** `checkIgnoreDetailed` without the unknown axis — for callers that only ever ACT on a positive hit. */
+export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
+  return checkIgnoreDetailed(repoRoot, absPaths).ignored;
 }
 
 /** The one `.gitignore` rule that causes a path to be ignored, as git reports it under `-v`. */
@@ -745,14 +1056,19 @@ export interface IgnoreRule {
  * (git_ignore.mdx §5.5). Paths that are not ignored are simply absent from the map.
  *
  * Same exit-code contract and same never-throw posture as `checkIgnore`: any unexpected failure is logged
- * and yields an empty map ("nothing known to be ignored"), so a listing never breaks over it.
+ * and the affected paths come back in `unknown` — absent from the map because their verdict is UNKNOWN,
+ * which is not the same as "not ignored" (see `CheckIgnoreResult`), so a listing never breaks over it.
  */
-export function checkIgnoreVerbose(repoRoot: string, absPaths: string[]): Map<string, IgnoreRule> {
+export interface CheckIgnoreVerboseResult {
+  rules: Map<string, IgnoreRule>;
+  unknown: Set<string>;
+}
+
+export function checkIgnoreVerboseDetailed(repoRoot: string, absPaths: string[]): CheckIgnoreVerboseResult {
   const rules = new Map<string, IgnoreRule>();
-  if (absPaths.length === 0) return rules;
-  const out = runCheckIgnore(repoRoot, absPaths, true);
-  if (out === null) return rules;
-  for (const raw of out.split("\n")) {
+  if (absPaths.length === 0) return { rules, unknown: new Set<string>() };
+  const res = runCheckIgnore(repoRoot, absPaths, true);
+  for (const raw of res.out.split("\n")) {
     if (!raw.trim()) continue;
     // `-v` format: "<source>:<linenum>:<pattern>\t<pathname>". Split on the TAB first so a pattern
     // containing colons (or a path containing them) can never be mis-parsed.
@@ -764,7 +1080,12 @@ export function checkIgnoreVerbose(repoRoot: string, absPaths: string[]): Map<st
     if (!m || !pathname) continue;
     rules.set(pathname, { source: m[1], line: Number(m[2]), pattern: m[3] });
   }
-  return rules;
+  return { rules, unknown: new Set(res.unknown) };
+}
+
+/** `checkIgnoreVerboseDetailed` without the unknown axis — callers that only act on a positive hit. */
+export function checkIgnoreVerbose(repoRoot: string, absPaths: string[]): Map<string, IgnoreRule> {
+  return checkIgnoreVerboseDetailed(repoRoot, absPaths).rules;
 }
 
 /**
@@ -802,62 +1123,163 @@ function splitOnSubmoduleFatal(
   return { inside, rest, subRoot };
 }
 
-/** The shared `git check-ignore --stdin` invocation. Returns stdout, or null when it genuinely failed. */
-function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean, splits = 0): string | null {
-  if (absPaths.length === 0) return "";
-  // A vanished cwd makes spawn fail with the SAME `ENOENT` a missing binary produces — the observed
-  // "spawnSync git ENOENT" storm was a tracked repo whose checkout had been moved/deleted (stale
-  // repoRoot), not a missing git. Say what actually happened instead of spawning into nowhere.
-  if (!fs.existsSync(repoRoot)) {
-    log.warn("git", `check-ignore skipped: repo root no longer exists (moved or deleted?): ${repoRoot}`);
-    return null;
+/**
+ * WHY THE `--stdin` FEED IS BATCHED (the EPIPE storm, git_ignore.mdx §5.4).
+ *
+ * `git check-ignore --stdin` stops reading stdin the instant it hits a fatal (classically "Pathspec … is in
+ * submodule …"). When the path list we are writing is SMALL, the whole list is already sitting in the OS
+ * pipe buffer, so the write completes, `spawnSync` returns a normal exit-128 result and we can read the
+ * fatal off `stderr` and split the batch at the submodule boundary. When the list is LARGER THAN THE PIPE
+ * BUFFER (64 KiB on macOS), the write is still in flight when git exits — the write fails with `EPIPE`, and
+ * spawnSync surfaces `spawnSync git EPIPE` with the child's stderr not reliably captured. The submodule
+ * split then has nothing to parse and the WHOLE repo lost its git-ignore truth (observed: a 1,799-candidate
+ * repo with three submodules, ~177 KiB of stdin, failing on every scan).
+ *
+ * Fix: never hand one spawn more than a pipe-buffer's worth of paths. Each batch's stdin fits, so a fatal
+ * always comes back as a readable exit-128 + stderr and the existing submodule split works. A batch that
+ * still fails is BISECTED (below) so one poison path costs only its own verdict, not the batch's.
+ */
+const CHECK_IGNORE_MAX_BATCH_PATHS = 1000;
+const CHECK_IGNORE_MAX_BATCH_BYTES = 32 * 1024; // half the 64 KiB pipe buffer — the write always completes
+const CHECK_IGNORE_MAX_BISECT_SPAWNS = 64; // bound the recovery cost of a pathological batch
+
+/** Outcome of a `check-ignore` run. `unknown` = paths whose verdict we could NOT obtain — NOT "not ignored". */
+interface CheckIgnoreOutcome {
+  out: string;
+  unknown: string[];
+}
+
+/** Split the path list into stdin-sized batches (see the EPIPE note above). */
+function checkIgnoreBatches(absPaths: string[]): string[][] {
+  const batches: string[][] = [];
+  let cur: string[] = [];
+  let bytes = 0;
+  for (const p of absPaths) {
+    const n = Buffer.byteLength(p, "utf8") + 1; // + the newline separator
+    if (cur.length > 0 && (cur.length >= CHECK_IGNORE_MAX_BATCH_PATHS || bytes + n > CHECK_IGNORE_MAX_BATCH_BYTES)) {
+      batches.push(cur);
+      cur = [];
+      bytes = 0;
+    }
+    cur.push(p);
+    bytes += n;
   }
+  if (cur.length > 0) batches.push(cur);
+  return batches;
+}
+
+/**
+ * Is `repoRoot` somewhere we can even ask git? Answers the two non-git failure modes EXPLICITLY instead of
+ * letting them surface as an opaque spawn error (a vanished cwd reports as `ENOENT`, identical to a missing
+ * git binary; a non-repo answers "fatal: not a git repository" and kills the batch mid-write → `EPIPE`).
+ */
+function checkIgnoreRepoUsable(repoRoot: string, tag: string): boolean {
+  if (!fs.existsSync(repoRoot)) {
+    log.warn("git", `check-ignore${tag} skipped: repo root no longer exists (moved or deleted?): ${repoRoot}`);
+    return false;
+  }
+  if (nearestGitAtOrAbove(repoRoot) === null) {
+    log.warn("git", `check-ignore${tag} skipped: not a git repository (no .git at or above): ${repoRoot}`);
+    return false;
+  }
+  return true;
+}
+
+/** The shared `git check-ignore --stdin` invocation, batched. Paths it could not answer for land in `unknown`. */
+function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean): CheckIgnoreOutcome {
+  if (absPaths.length === 0) return { out: "", unknown: [] };
+  if (!checkIgnoreRepoUsable(repoRoot, "")) return { out: "", unknown: absPaths.slice() };
+  const budget = { bisects: CHECK_IGNORE_MAX_BISECT_SPAWNS };
+  let out = "";
+  const unknown: string[] = [];
+  for (const batch of checkIgnoreBatches(absPaths)) {
+    const r = runCheckIgnoreBatch(repoRoot, batch, verbose, 0, budget);
+    out += r.out;
+    if (r.unknown.length > 0) unknown.push(...r.unknown);
+  }
+  return { out, unknown };
+}
+
+/** ONE spawn over a stdin-sized batch, with submodule split and failure bisection. */
+function runCheckIgnoreBatch(
+  repoRoot: string,
+  absPaths: string[],
+  verbose: boolean,
+  splits: number,
+  budget: { bisects: number },
+): CheckIgnoreOutcome {
+  if (absPaths.length === 0) return { out: "", unknown: [] };
   const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
   try {
-    return execFileSync(stableGitBin(), args, {
+    const out = execFileSync(stableGitBin(), args, {
       cwd: repoRoot,
       input: absPaths.join("\n") + "\n",
       encoding: "utf8",
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       maxBuffer: 64 * 1024 * 1024,
     });
+    return { out, unknown: [] };
   } catch (e) {
     // check-ignore exits 1 when NONE of the inputs are ignored — expected, not an error. Its stdout
     // still carries whichever inputs WERE ignored (empty on a clean exit-1), so read it off the error.
     const err = e as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
-    if (err.status === 1 && err.stdout != null) return err.stdout.toString();
+    if (err.status === 1 && err.stdout != null) return { out: err.stdout.toString(), unknown: [] };
     // Submodule-contained path aborted the batch — split at the boundary and retry both halves.
     const split =
       splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, err.stderr?.toString()) : null;
     if (split) {
-      const insideOut = isGitWorkingTree(split.subRoot)
-        ? runCheckIgnore(split.subRoot, split.inside, verbose, splits + 1)
-        : ""; // no usable submodule tree → conservatively "not ignored"
-      const restOut = runCheckIgnore(repoRoot, split.rest, verbose, splits + 1);
-      if (insideOut === null && restOut === null) return null;
-      return (restOut ?? "") + (insideOut ?? "");
+      const inside = isGitWorkingTree(split.subRoot)
+        ? runCheckIgnoreBatch(split.subRoot, split.inside, verbose, splits + 1, budget)
+        : { out: "", unknown: [] }; // no usable submodule tree → conservatively "not ignored"
+      const rest = runCheckIgnoreBatch(repoRoot, split.rest, verbose, splits + 1, budget);
+      return { out: rest.out + inside.out, unknown: [...rest.unknown, ...inside.unknown] };
     }
-    log.warn("git", `check-ignore failed in ${repoRoot}: ${(e as Error).message}`);
-    return null;
+    // Unattributable failure (a fatal we can't parse, or an `EPIPE` that swallowed stderr): halve the batch
+    // and retry. Bisection isolates the ONE poison path — every other path in the batch still gets its real
+    // verdict instead of the whole repo going blind.
+    if (absPaths.length > 1 && budget.bisects > 0) {
+      budget.bisects -= 2;
+      const mid = absPaths.length >> 1;
+      const a = runCheckIgnoreBatch(repoRoot, absPaths.slice(0, mid), verbose, splits, budget);
+      const b = runCheckIgnoreBatch(repoRoot, absPaths.slice(mid), verbose, splits, budget);
+      return { out: a.out + b.out, unknown: [...a.unknown, ...b.unknown] };
+    }
+    log.warn(
+      "git",
+      `check-ignore failed in ${repoRoot} — ${absPaths.length} path(s) UNKNOWN (first: ${absPaths[0]}): ${(e as Error).message}`,
+    );
+    return { out: "", unknown: absPaths.slice() };
   }
 }
 
 /** Async twin of `runCheckIgnore` (non-blocking spawn) for request paths that must not stall the event loop
  *  on the git process — the badge-context listing walk on a large/cloud-mounted dir (fs.service /
- *  buildEntityView). Same exit-code contract: exit-1 (none ignored) resolves to its stdout, ≥128 → null. */
-async function runCheckIgnoreAsync(
+ *  buildEntityView). Same exit-code contract, same stdin BATCHING and failure bisection as the sync twin
+ *  (see the EPIPE note above): exit-1 (none ignored) resolves to its stdout, an unanswerable path lands in
+ *  `unknown` rather than being reported as "not ignored". */
+async function runCheckIgnoreAsync(repoRoot: string, absPaths: string[], verbose: boolean): Promise<CheckIgnoreOutcome> {
+  if (absPaths.length === 0) return { out: "", unknown: [] };
+  if (!checkIgnoreRepoUsable(repoRoot, " (async)")) return { out: "", unknown: absPaths.slice() };
+  const budget = { bisects: CHECK_IGNORE_MAX_BISECT_SPAWNS };
+  let out = "";
+  const unknown: string[] = [];
+  for (const batch of checkIgnoreBatches(absPaths)) {
+    const r = await runCheckIgnoreAsyncBatch(repoRoot, batch, verbose, 0, budget);
+    out += r.out;
+    if (r.unknown.length > 0) unknown.push(...r.unknown);
+  }
+  return { out, unknown };
+}
+
+/** ONE non-blocking spawn over a stdin-sized batch, with submodule split and failure bisection. */
+async function runCheckIgnoreAsyncBatch(
   repoRoot: string,
   absPaths: string[],
   verbose: boolean,
-  splits = 0,
-): Promise<string | null> {
-  if (absPaths.length === 0) return "";
-  // Same vanished-cwd guard as the sync twin: spawn reports a nonexistent cwd as `ENOENT`, identical
-  // to a missing git binary. Name the real cause and answer "nothing known to be ignored".
-  if (!fs.existsSync(repoRoot)) {
-    log.warn("git", `check-ignore (async) skipped: repo root no longer exists (moved or deleted?): ${repoRoot}`);
-    return null;
-  }
+  splits: number,
+  budget: { bisects: number },
+): Promise<CheckIgnoreOutcome> {
+  if (absPaths.length === 0) return { out: "", unknown: [] };
   const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
   const res = await new Promise<{ err: Error | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
@@ -871,44 +1293,81 @@ async function runCheckIgnoreAsync(
       },
       (err, stdout, stderr) => resolve({ err, stdout: stdout ?? "", stderr: stderr ?? "" }),
     );
+    // git closes stdin the moment it hits a fatal, so the write can fail with EPIPE. That is NOT a reason to
+    // lose the run — the exit/stderr handling below is the real verdict, so swallow the write error here.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(absPaths.join("\n") + "\n");
   });
   // On a non-zero exit execFile sets `err` but still hands us the captured `stdout`. Exit-1 means
   // "none ignored" (stdout carries whichever WERE ignored, empty on a clean 1) — not a failure.
-  if (!res.err) return res.stdout;
-  if ((res.err as { code?: number }).code === 1) return res.stdout;
+  if (!res.err) return { out: res.stdout, unknown: [] };
+  if ((res.err as { code?: number }).code === 1) return { out: res.stdout, unknown: [] };
   // Submodule-contained path aborted the batch — same split-and-retry as the sync twin.
   const split = splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, res.stderr) : null;
   if (split) {
-    const insideOut = isGitWorkingTree(split.subRoot)
-      ? await runCheckIgnoreAsync(split.subRoot, split.inside, verbose, splits + 1)
-      : ""; // no usable submodule tree → conservatively "not ignored"
-    const restOut = await runCheckIgnoreAsync(repoRoot, split.rest, verbose, splits + 1);
-    if (insideOut === null && restOut === null) return null;
-    return (restOut ?? "") + (insideOut ?? "");
+    const inside = isGitWorkingTree(split.subRoot)
+      ? await runCheckIgnoreAsyncBatch(split.subRoot, split.inside, verbose, splits + 1, budget)
+      : { out: "", unknown: [] }; // no usable submodule tree → conservatively "not ignored"
+    const rest = await runCheckIgnoreAsyncBatch(repoRoot, split.rest, verbose, splits + 1, budget);
+    return { out: rest.out + inside.out, unknown: [...rest.unknown, ...inside.unknown] };
   }
-  log.warn("git", `check-ignore (async) failed in ${repoRoot}: ${res.err.message}`);
-  return null;
+  if (absPaths.length > 1 && budget.bisects > 0) {
+    budget.bisects -= 2;
+    const mid = absPaths.length >> 1;
+    const a = await runCheckIgnoreAsyncBatch(repoRoot, absPaths.slice(0, mid), verbose, splits, budget);
+    const b = await runCheckIgnoreAsyncBatch(repoRoot, absPaths.slice(mid), verbose, splits, budget);
+    return { out: a.out + b.out, unknown: [...a.unknown, ...b.unknown] };
+  }
+  log.warn(
+    "git",
+    `check-ignore (async) failed in ${repoRoot} — ${absPaths.length} path(s) UNKNOWN (first: ${absPaths[0]}): ${res.err.message}`,
+  );
+  return { out: "", unknown: absPaths.slice() };
 }
 
-/** Async twin of `checkIgnore` — one non-blocking `git check-ignore --stdin` over `absPaths`. */
-export async function checkIgnoreAsync(repoRoot: string, absPaths: string[]): Promise<Set<string>> {
+/** Async twin of `checkIgnoreDetailed` — non-blocking `git check-ignore --stdin` over `absPaths`. */
+export async function checkIgnoreAsyncDetailed(repoRoot: string, absPaths: string[]): Promise<CheckIgnoreResult> {
   const ignored = new Set<string>();
-  if (absPaths.length === 0) return ignored;
-  const out = await runCheckIgnoreAsync(repoRoot, absPaths, false);
-  if (out === null) return ignored;
-  for (const line of out.split("\n")) {
+  if (absPaths.length === 0) return { ignored, unknown: new Set<string>() };
+  const res = await runCheckIgnoreAsync(repoRoot, absPaths, false);
+  for (const line of res.out.split("\n")) {
     const p = line.trim();
     if (p) ignored.add(p);
   }
-  return ignored;
+  return { ignored, unknown: new Set(res.unknown) };
 }
 
-/** Turn a fetch/push error into a user-facing problem, flagging auth failures for re-authentication (git_backbone.mdx §5). */
-function classifyRemoteError(e: Error): string {
+/** Async twin of `checkIgnore` — the ignored set only, for callers that act only on a positive hit. */
+export async function checkIgnoreAsync(repoRoot: string, absPaths: string[]): Promise<Set<string>> {
+  return (await checkIgnoreAsyncDetailed(repoRoot, absPaths)).ignored;
+}
+
+/** What KIND of remote failure this is — the three cases behave differently (git_backbone.mdx §5).
+ *  • "offline"  — no usable network/DNS at the moment we tried. Expected, self-healing, NOT a fault.
+ *  • "auth"     — a credential the user must fix. A real fault.
+ *  • "remote"   — anything else the remote said no to. A real fault.  */
+export type RemoteErrorKind = "offline" | "auth" | "remote";
+
+/** Classify a fetch/push failure by kind + the sentence to show the user (git_backbone.mdx §5). */
+export function classifyRemoteFailure(e: Error): { kind: RemoteErrorKind; problem: string } {
   const m = e.message || String(e);
-  if (/auth|denied|credential|403|401|could not read Username|terminal prompts disabled/i.test(m)) {
-    return `Git authentication failed for this remote — re-authenticate it (LFB keeps pinning over IPFS meanwhile). (${m.split("\n")[0]})`;
+  const first = m.split("\n")[0];
+  // OFFLINE FIRST — "Could not resolve host" also contains the word "host", and some transports word a DNS
+  // failure in ways that brush the auth regex. A network that is not there cannot be an authentication
+  // problem, so this test wins.
+  if (isTransientNetworkError(m)) {
+    return {
+      kind: "offline",
+      problem:
+        `This computer is offline right now (or its DNS is briefly unavailable), so Large File Bridge could not reach ` +
+        `the git remote. It will retry as soon as the network is back, and it keeps pinning over IPFS meanwhile. (${first})`,
+    };
   }
-  return `Git remote error — LFB keeps pinning over IPFS. (${m.split("\n")[0]})`;
+  if (/auth|denied|credential|403|401|could not read Username|terminal prompts disabled/i.test(m)) {
+    return {
+      kind: "auth",
+      problem: `Git authentication failed for this remote — re-authenticate it (Large File Bridge keeps pinning over IPFS meanwhile). (${first})`,
+    };
+  }
+  return { kind: "remote", problem: `Git remote error — Large File Bridge keeps pinning over IPFS. (${first})` };
 }

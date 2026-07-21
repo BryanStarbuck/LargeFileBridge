@@ -146,6 +146,33 @@ stop:
                 pgrep -f "{{code}}.*src/main.ts"; } 2>/dev/null | sort -u | grep -vx "$self" || true )
       [ -n "$pids" ] && kill -"$1" $pids 2>/dev/null || true
     }
+    # PHASE 0 — the BACKEND is stopped FIRST, ALONE, and we WAIT for it (crash_recovery.mdx §8.1).
+    #
+    # This phase is the fix for the "8× ended ABNORMALLY in two days" report. Before it, the backend node
+    # CHILD — the process that owns the SHUTDOWN marker — was the LAST thing to be signalled, and by then
+    # it was already being torn down out from under itself:
+    #   * `pnpm --parallel dev` kills its sibling script as soon as one of them exits
+    #     (ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL). Killing Vite / the orchestrator first therefore reaped the
+    #     backend by a route that runs none of its JavaScript, so no marker was ever written.
+    #   * even when it survived that, its first SIGTERM arrived in round 1 of the port loop below, whose
+    #     fuse to SIGKILL is 0.4s — not a grace period, a coin flip.
+    # Both produced a BOOT with no preceding SHUTDOWN, which the ledger DEFINES as a crash — so ordinary
+    # `just run` restarts were being reported to the user as crashes and were hiding the real ones.
+    #
+    # So: TERM the backend by port AND by name, then poll until :be_port is actually free, up to ~6s. The
+    # app's own handler needs milliseconds (it emits SHUTDOWN synchronously, first thing); the budget is
+    # generous because a busy event loop is exactly the case that used to lose the marker. Nothing is
+    # escalated here — every hard kill still happens below, so a wedged process is no slower to reap than
+    # before, it just gets a real chance to say goodbye first.
+    be_pids=$( { lsof -ti tcp:{{be_port}} -sTCP:LISTEN; \
+                 pgrep -f "{{code}}.*src/main.ts"; } 2>/dev/null | sort -u | grep -vx "$self" || true )
+    if [ -n "$be_pids" ]; then
+      kill -TERM $be_pids 2>/dev/null || true
+      for i in $(seq 1 40); do
+        lsof -ti tcp:{{be_port}} -sTCP:LISTEN >/dev/null 2>&1 || break
+        sleep 0.15
+      done
+    fi
     kill_tree TERM; sleep 0.6; kill_tree TERM; sleep 0.6; kill_tree KILL
     # Belt-and-suspenders: free the backend port and the web port, catching a child that reparented
     # mid-restart. Loop until both are free (or we give up after a few rounds).

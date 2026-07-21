@@ -39,7 +39,13 @@ async function cycleAllStorages(reason: string): Promise<void> {
       const row = getStorageRow(id);
       if (!row) continue;
       const result = await syncStorageText(id);
-      if (result.problem) log.warn("storage", `${reason}: storage ${id} (${row.name}) — ${result.problem}`);
+      // An OFFLINE cycle is postponed, not failed (bug #15) — pin.service already scheduled its own
+      // retry-on-reconnect, so this line only has to avoid writing laptop weather into `error.err`.
+      if (result.problem) {
+        const line = `${reason}: storage ${id} (${row.name}) — ${result.problem}`;
+        if (result.offline) log.info("storage", line);
+        else log.warn("storage", line);
+      }
     } catch (e) {
       // One bad storage must never stop the others — the whole point is that the OTHER storage's repo
       // still gets its rows.

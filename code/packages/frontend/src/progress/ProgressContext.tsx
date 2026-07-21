@@ -10,62 +10,22 @@
 //      shows. A/B are de-duplicated by job id (a server id is stable; optimistic ids are prefixed).
 //
 // A card exists iff a job is actually running — never fake progress.
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactNode,
-} from "react";
+//
+// THIS MODULE HOLDS ONLY THE PROVIDER COMPONENT. The context object, the ProgressCtx/JobSpec types,
+// useProgress() and verb() live in ./progress-context.ts. That split is load-bearing, not cosmetic:
+// a module whose exports are all components is self-accepting under React Fast Refresh, so editing
+// the provider can never re-evaluate the context object and hand consumers a SECOND context identity
+// (the "useProgress must be used within <ProgressProvider>" crash). See progress-context.ts.
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type {
-  ProgressJob,
-  ProgressKind,
-  ProcessingBatch,
-  QueuedItemView,
-  FailedItemView,
-  SessionView,
-} from "@lfb/shared";
+import type { ProgressJob, ProcessingBatch, QueuedItemView, FailedItemView, SessionView } from "@lfb/shared";
+import { ProgressReactContext, verb, type ProgressCtx } from "./progress-context.js";
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { useLiveRefresh } from "../lib/useLiveRefresh.js";
 import { clientLog } from "../lib/clientLog.js";
 import { lastBatchFinishedAt, isRecentlyFinished } from "./linger.js";
-
-// One unit of browser-initiated work handed to run(). `task` gets a `report` callback for determinate
-// jobs; `invalidate` (query keys) refresh grids/counts when the batch succeeds.
-export interface JobSpec {
-  kind: ProgressKind;
-  target: string;
-  total?: number;
-  unit?: string;
-  task: (report: (p: { done?: number; total?: number; unit?: string }) => void) => Promise<unknown>;
-}
-
-interface ProgressCtx {
-  jobs: ProgressJob[];
-  queued: number; // background job-queue backlog (not-yet-started tasks) — the dock's "+ N queued" footer
-  queuedByOp: Partial<Record<ProgressKind, number>>; // per-op backlog split (processing.mdx §5)
-  batches: ProcessingBatch[]; // active + recently-finished bulk-run batches (processing.mdx §4)
-  queuedItems: QueuedItemView[]; // PENDING items as rows for the per-item table (processing.mdx §4.3)
-  recentFailures: FailedItemView[]; // FAILED items + reason for the per-item table (processing.mdx §4.3)
-  workers: { busy: number; budget: number } | null; // core-budget utilization (processing.mdx §3a)
-  // This session + how the last one ended (crash_recovery.mdx §5.1). The input that lets an empty queue
-  // say WHICH empty it is — Finished, Empty, or Interrupted — instead of always claiming the calm one.
-  session: SessionView | null;
-  processing: boolean; // any running job, pending backlog, OR active batch (processing.mdx §1)
-  // A batch settled within the LINGER window and nothing is running now (processing.mdx §2.1). The nav
-  // item keys off `processing || recentlyFinished` so a fast run stays reachable after it ends; the dock
-  // keys off `processing` alone, because a card must still mean live work.
-  recentlyFinished: boolean;
-  run: (specs: JobSpec[], opts?: { invalidate?: unknown[][]; batchLabel?: string }) => Promise<void>;
-}
-
-const Ctx = createContext<ProgressCtx | null>(null);
 
 const CONCURRENCY = 4; // charter/§13 bounded fan-out
 let seq = 0;
@@ -189,37 +149,5 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, recentlyFinished, run }),
     [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, recentlyFinished, run],
   );
-  return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
-}
-
-export function useProgress(): ProgressCtx {
-  const ctx = useContext(Ctx);
-  if (!ctx) throw new Error("useProgress must be used within <ProgressProvider>");
-  return ctx;
-}
-
-// The card verb per operation kind (webapp.mdx §11). Exported so the dock renders the same label.
-const VERBS: Record<ProgressKind, string> = {
-  scan: "Scanning",
-  pin: "Pinning",
-  publish: "Publishing",
-  compress: "Compressing",
-  transcribe: "Transcribing",
-  describe: "Describing",
-  // A TO DO Apply fan-out — ONE batch spanning several ops (processing_batches.mdx §1.2), so the verb
-  // cannot name a single one.
-  mixed: "Processing",
-  // The third analysis transaction (ocr.mdx). "Reading text" rather than "OCR-ing": the dock card is read
-  // by a person watching their files, and the verb should say what is happening to them.
-  ocr: "Reading text in",
-  hash: "Hashing",
-  fingerprint: "Fingerprinting",
-  ignore: "Ignoring",
-  import: "Importing",
-  install: "Installing",
-  download: "Downloading",
-  configure: "Configuring",
-};
-export function verb(kind: ProgressKind): string {
-  return VERBS[kind] ?? "Working";
+  return <ProgressReactContext.Provider value={value}>{children}</ProgressReactContext.Provider>;
 }

@@ -22,8 +22,10 @@
 // if fast-forward is impossible it logs, surfaces via the debug export, and leaves the repo alone.
 import fs from "node:fs";
 import path from "node:path";
+import type { RepoSyncBlock } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
-import { openRepo } from "../git/git.service.js";
+import { openRepo, parseBlockedPaths } from "../git/git.service.js";
+import { isTransientNetworkError, hostFromGitError, whenOnline } from "../../shared/net-transient.js";
 import { repairLegacyArtifactIgnores } from "../git/gitignore.service.js";
 import { resolveStorageType, usesLfbridgeDir, LFBRIDGE_DIR } from "../storage/storage-type.service.js";
 import { hasDurableArtifact } from "../storage/tracking-root.service.js";
@@ -123,8 +125,18 @@ export async function syncWorkingRepoArtifacts(repoRoot: string): Promise<RepoAr
     }
     log.info("sync", `${root}: pushed .lfbridge artifacts to origin/${branch}`);
   } catch (e) {
-    result.problem = `artifact push failed: ${(e as Error).message}`;
-    log.warn("sync", `${root}: ${result.problem}`);
+    const message = (e as Error).message;
+    result.problem = `artifact push failed: ${message}`;
+    // Offline ⇒ INFO + a retry on reconnect (bug #15). The commit is already on disk; only its trip to the
+    // remote is postponed, and the caller (sync-trigger) also declines to count this as a failure.
+    if (isTransientNetworkError(message)) {
+      log.info("sync", `${root}: artifact push postponed — this computer is offline (${message.split("\n")[0]})`);
+      whenOnline(`artifact push ${root}`, hostFromGitError(message), () => {
+        void syncWorkingRepoArtifacts(root).catch(() => {});
+      });
+    } else {
+      log.warn("sync", `${root}: ${result.problem}`);
+    }
   }
   return result;
 }
@@ -145,21 +157,42 @@ export async function convergeWorkingRepoFromOrigin(
     return { converged: false, problem: null };
   }
   // Heal locally too: a poisoned .gitignore on the RECEIVING machine would re-strand its own future writes.
-  repairLegacyArtifactIgnores(root);
+  const healed = repairLegacyArtifactIgnores(root);
   try {
     const git = openRepo(root);
     const remotes = await git.getRemotes();
     if (!remotes.some((r) => r.name === "origin")) return { converged: false, problem: null };
     const branch = (await git.status()).current ?? "main";
+    // COMMIT OUR OWN EDIT BEFORE WE MERGE. The heal above rewrites `.gitignore` — an LFB-authored change to
+    // an LFB-owned line — and leaving it dirty made git refuse the fast-forward every single time:
+    //   "error: Your local changes to the following files would be overwritten by merge: .gitignore / Aborting"
+    // …which read in the log as "local branch diverged", so the repo silently never converged again. The
+    // commit carries an EXPLICIT `.gitignore` pathspec, so nothing the user has in flight is swept in — the
+    // same guest rule `syncWorkingRepoArtifacts` already follows for the heal it makes.
+    if (healed.length > 0) {
+      try {
+        await git.commit("LFB: healed legacy artifact-ignore lines in .gitignore", [".gitignore"]);
+        log.info("sync", `${root}: committed the .gitignore heal so the fast-forward is not blocked by it`);
+      } catch (e) {
+        log.warn("sync", `${root}: could not commit the .gitignore heal: ${(e as Error).message}`);
+      }
+    }
     await git.fetch("origin", branch);
     const before = await git.revparse(["HEAD"]).catch(() => "");
     try {
       await git.raw(["merge", "--ff-only", `origin/${branch}`]);
     } catch (e) {
-      const problem = `cannot fast-forward from origin/${branch}: ${(e as Error).message}`;
+      const message = (e as Error).message;
+      const problem = `cannot fast-forward from origin/${branch}: ${message}`;
+      // A REPO THAT CAN NEVER FAST-FORWARD NEVER CONVERGES AGAIN — silently, forever (bug #15B). Refusing
+      // to touch the user's repo is right and stays; what was missing is that the refusal was invisible
+      // outside `error.err`. Record it so the One-repo page can TELL the user, in their words, that this
+      // repo has stopped receiving their other computers' finished work and what resolves it.
+      recordSyncBlock(root, branch, message);
       log.warn("sync", `${root}: ${reason} — ${problem} (local branch diverged or working tree blocks it; not touching a user's repo)`);
       return { converged: false, problem };
     }
+    clearSyncBlock(root); // a successful merge means whatever was blocking this repo is resolved
     const after = await git.revparse(["HEAD"]).catch(() => "");
     if (before !== after) {
       log.info("sync", `${root}: ${reason} — fast-forwarded to origin/${branch}; another computer's finished work is now visible here`);
@@ -167,10 +200,80 @@ export async function convergeWorkingRepoFromOrigin(
     }
     return { converged: false, problem: null }; // already current
   } catch (e) {
-    const problem = `converge failed: ${(e as Error).message}`;
+    const message = (e as Error).message;
+    const problem = `converge failed: ${message}`;
+    // OFFLINE (bug #15A): the fetch above found no network. That is not a fault and it must not cost this
+    // repo its convergence — clear the 30-minute throttle stamp the trigger already wrote (otherwise a
+    // 2-second DNS blip silently buys a 30-minute blackout) and re-run the whole converge on reconnect.
+    if (isTransientNetworkError(message)) {
+      lastConvergeAt.delete(root);
+      log.info(
+        "sync",
+        `${root}: ${reason} — postponed, this computer is offline (${message.split("\n")[0]}); retrying when the network returns`,
+      );
+      whenOnline(`converge ${root}`, hostFromGitError(message), () => {
+        void convergeWorkingRepoFromOrigin(root, `${reason} (retry after reconnect)`).catch(() => {});
+      });
+      return { converged: false, problem: null };
+    }
     log.warn("sync", `${root}: ${reason} — ${problem}`);
     return { converged: false, problem };
   }
+}
+
+// ── "This repo has stopped converging" — the state behind the UI surface (bug #15B) ─────────────────
+//
+// LFB may never touch a user's repo to unstick it (charter / §17 guest rule), so the ONLY correct response
+// to a refused fast-forward is to tell the user. This registry is that memory: the converge writes it, the
+// One-repo detail endpoint reads it, and the page turns it into a plain-English recommendation. It is
+// deliberately IN-MEMORY — a restart also clears the converge throttle, so the very next page load re-runs
+// the converge and either re-records the block or clears it. The truth is always re-derived, never stale.
+const syncBlocks = new Map<string, RepoSyncBlock>();
+
+/** Classify a refused `merge --ff-only` and remember it for the UI. */
+function recordSyncBlock(root: string, branch: string, message: string): void {
+  const paths = parseBlockedPaths(message);
+  // Two genuinely different situations, and the user's next step differs for each:
+  //   • local-changes — uncommitted edits in the working tree sit where the incoming commit writes. The
+  //     user commits or stashes them and it converges on its own. (LFB's OWN writes in this class are
+  //     already committed before the merge by the heal above / `syncWorkingRepoArtifacts`.)
+  //   • diverged — this computer has commits origin does not. Only the user can decide (merge/rebase/push).
+  const kind: RepoSyncBlock["kind"] = paths.length > 0 ? "local-changes" : "diverged";
+  syncBlocks.set(root, {
+    kind,
+    branch,
+    paths,
+    detail: message.split("\n").slice(0, 8).join("\n").trim(),
+    at: new Date().toISOString(),
+  });
+}
+
+function clearSyncBlock(root: string): void {
+  syncBlocks.delete(root);
+}
+
+/** What is stopping this repo from receiving the user's other computers' work, or null when nothing is. */
+export function getRepoSyncBlock(repoRoot: string): RepoSyncBlock | null {
+  return syncBlocks.get(path.resolve(expandHome(repoRoot))) ?? null;
+}
+
+/** TEST-ONLY: forget every recorded block. */
+export function resetRepoSyncBlocksForTest(): void {
+  syncBlocks.clear();
+}
+
+/**
+ * Re-run the converge for ONE repo right now, ignoring the 30-minute throttle — what the "Check again"
+ * button in the not-converging recommendation calls after the user has resolved their side.
+ */
+export async function recheckWorkingRepoConvergence(
+  repoRoot: string,
+): Promise<{ converged: boolean; problem: string | null; block: RepoSyncBlock | null }> {
+  const root = path.resolve(expandHome(repoRoot));
+  lastConvergeAt.delete(root);
+  const r = await convergeWorkingRepoFromOrigin(root, "User asked Large File Bridge to check again");
+  lastConvergeAt.set(root, Date.now());
+  return { ...r, block: getRepoSyncBlock(root) };
 }
 
 // Page-load convergence trigger — same idiom as scan-job's `maybeTriggerStaleScan` and

@@ -8,7 +8,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { ProcessingBatch } from "@lfb/shared";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
-import { useProgress } from "../../progress/ProgressContext.js";
+import { useProgress } from "../../progress/progress-context.js";
 import { ProcessingItemsTable } from "./ProcessingItemsTable.js";
 import { ProcessingBatchesTable } from "./ProcessingBatchesTable.js";
 import { api } from "../../api/client.js";

@@ -65,6 +65,7 @@ Each row is a way the flow has stopped or could stop. For each: how LFB **detect
 | **F7** | **App not running** — the web app is closed, so nothing (not even the watchdog) runs | the launchd trigger still fires the OS worker independently of the app; on next app start, boot reconcile + watchdog catch up | OS worker keeps the 10/15-min cadence while the app is down; the app re-converges on launch | last-run age visible on next open |
 | **F8** | **Tracking mirror written, never announced** — LFB mirrors a repo's tracking state into the SDL between timer ticks, so it sits uncommitted in the sync repo's working tree for up to a full interval | the mirror step knows it wrote; nothing downstream is told | the write **nudges** its SDL's backbone on a **debounce** (§6.1 below, [git_backbone.mdx §6.2](./git_backbone.mdx#62-a-mirror-write-nudges-its-sdls-backbone--debounced-locked)); the next timer tick is the backstop | — (it just flows sooner) |
 | **F9** | **No `origin` at all** — a tracking repo (typically a freshly `git init`ed company storage) has no remote, so it commits forever and **never pushes**; the cycle "succeeds" every time | the cycle checks for an `origin` remote before pushing | none is possible — **there is nowhere to push** — so the only correct response is to **say so** (§6.2); once a remote exists, §6 delivers everything that piled up | **standing fault** on the storage's row + a WARN naming the storage |
+| **F11** | **Fire triggered, never delivered** — the launchd job fires ON TIME but the kick never reaches the backend (app closed, no acknowledgement, socket torn down). Distinct from F1: the schedule is healthy; the *delivery* failed | the trigger classifies the failure itself and probes whether the port is accepting connections | the miss is **recorded to disk** (`~/T/_large_files_bridge/worker-misses.json`), and the watchdog **runs the missed cycle immediately** on its next tick — it does not wait for the 2× overdue threshold | "Some scheduled pin runs didn't reach Large File Bridge" on the Scans page, with the reason in the user's words (§7) |
 | **F10** | **Two uncoordinated writers on one working copy** — the pin/device cycle takes a per-storage lock while a second path (ownership assertion) runs its own git chain over the same index | the failure is a corrupted index / lost write, not an error message | **one lock per storage** covers *every* git operation against that working copy (§6.3) | index/commit errors on the storage, if it happens at all |
 
 The load-bearing insight: **F1, F2, F3, and F9 are the ones that fail *silently*** — they produce no error,
@@ -106,6 +107,40 @@ watchdog extends that same repair to the **long gap between startups**.
 
 The in-process watchdog — overdue detection, running the overdue worker's pass in the app, and calling the schedule reconcile so a dead OS trigger self-repairs — is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` (heartbeat), `tick()` (per-worker overdue check + in-process run + reconcile), `runWorkerInProcess(kind)`. Started once at boot by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`. The plist rewrite + reload it triggers is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()`.
+
+### 3.1 The kick is fire-and-acknowledge — and an undelivered fire is recorded, not guessed at (LOCKED)
+
+The launchd job does not *do* the work; it **kicks** the app. The backend **accepts the job and answers
+immediately**, and the pass runs detached inside the app. That shape is mandatory, not stylistic: a pin
+pass walks every repo and a device pass git-pulls/commits/pushes every storage, routinely for minutes.
+Any design where the trigger holds the request open for the pass guarantees a client-side timeout on a
+perfectly healthy system — and then invites the trigger to misread its own timeout as evidence the app is
+down. That is exactly what happened (§8.1).
+
+So the trigger **diagnoses** instead of guessing, and distinguishes three states that look identical from
+inside a `fetch` rejection:
+
+* **App genuinely not running** — the connection was *refused*; nothing is listening on the port. Expected
+  between app sessions. Record the miss, exit 0.
+* **No acknowledgement in time, but the port IS accepting connections** — the app is up and busy. This is a
+  **client-side** timeout and says nothing about the server. Never claim the app is down, and never claim
+  the cycle was skipped: the kick may already have been received.
+* **Socket torn down mid-flight** (`UND_ERR_SOCKET` and friends) — transient. **Retry**, then record.
+
+Every undelivered fire is written to `~/T/_large_files_bridge/worker-misses.json` — the only channel that
+works when the app is the thing that is down — so a lost cycle is **recoverable and visible** rather than
+silently rolled into the next 15 minutes. A completed pass clears the record.
+
+The fire-and-acknowledge kick route (accept the job, return at once, never await the pass) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /run/:worker`.
+The detached, single-flight pass for `pin` and `device`, which stamps `last_run` on completion rather than on accept, is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/run-job.ts` — `startRun(kind, source)`, `runDetached()`, `runIsActive(kind)`.
+The trigger's failure classification, liveness probe, and retry are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/deploy/launchd/run-worker.mjs` — `classify(e)`, `portIsAccepting()`, `recordMiss(reason, detail)`.
+Reading and clearing the missed-cycle record is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/worker-misses.service.ts` — `workerMiss(kind)`, `clearWorkerMiss(kind)`.
+Running a recorded missed cycle immediately (without waiting for the 2× overdue threshold) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `tick()`.
 
 ---
 
@@ -311,6 +346,57 @@ Committability guard + `artifact_health` audit implemented in code:
 Legacy-line healing, scoped delivery, and ff-only convergence implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `repairLegacyArtifactIgnores()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` (delivery, fired via `sync-trigger.service.ts` `noteArtifactWritten()`'s `repo:` target) and `maybeConvergeWorkingRepo()` / `convergeWorkingRepoFromOrigin()` (convergence, fired from `repos.router.ts` list + detail loads).
 
+### 6.5 An offline laptop is not a fault, and a stuck repo is not a secret (LOCKED)
+
+Two failures used to look identical to every surface in the app — both landed in the durable fault trail as
+a WARN and both quietly cost the user a sync cycle. They are not the same thing and are now handled apart.
+
+**(a) Offline / DNS is a POSTPONED cycle, never a failed one.** `Could not resolve host` and
+`Resolving timed out` mean a closed lid, a wifi switch, or a resolver that hadn't woken yet. These are
+expected and self-healing, so:
+
+* They are **classified as their own kind** of remote failure — ahead of the auth test, because a network
+  that is not there cannot be a credential problem.
+* They are logged at **INFO**. `error.err` is the durable fault trail (WARN/ERROR/FATAL); a laptop changing
+  wifi does not belong in it, and burying real faults under laptop weather is how a fault trail stops being
+  read.
+* **Nothing is marked bad**: the artifact-sync consecutive-failure counter is untouched (so five blips
+  never escalate to ERROR or push the retry to the 30-minute backoff ceiling), and a converge that fails
+  offline **clears its own 30-minute throttle stamp** — otherwise a 2-second DNS blip silently bought a
+  30-minute blackout for that repo.
+* **The cycle is retried when connectivity returns**, not at the next 15-minute tick: the failing remote's
+  host is re-probed through the OS resolver (no HTTP, no third-party traffic — consistent with the
+  no-relay posture) and each waiting cycle re-fires the moment its host resolves, with a ceiling so a
+  waiter can never leak. A push that fails offline also stops retrying immediately instead of burning
+  three DNS timeouts that cannot conjure a network.
+
+Classifying offline vs. auth vs. remote, and the retry-when-connectivity-returns waiter, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/net-transient.ts` — `isTransientNetworkError()`, `hostFromGitError()` / `hostFromRemote()`, `whenOnline()`; and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `classifyRemoteFailure()` (which sets `GitCycleResult.offline`).
+
+Logging an offline cycle below the fault trail and re-firing it on reconnect is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `reportGitProblem()`; and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteFailure()` (which declines to count a transient as a consecutive failure).
+
+**(b) A repo that can never fast-forward must be visible to the user.** Refusing to touch a user's repo
+(§6.4) stays exactly as it is — no reset, no rebase, no discarded work, ever. But a repo stuck that way
+**never converges again**: the other computer's transcripts, AI descriptions and decisions can never
+arrive, and the page keeps re-offering work that is already done. So the refusal is now **recorded and
+surfaced**, classified into the two situations whose next step differs:
+
+* **`local-changes`** — uncommitted edits sit where the incoming commit writes. Git names the files; we
+  repeat them. The user commits or stashes them.
+* **`diverged`** — this computer has commits the remote does not. Only the user can decide how to join the
+  two histories.
+
+The One-repo page raises this as its top recommendation, above every per-file count (those counts are
+computed from work that cannot arrive). The only action offered is **Check again** — the same
+fetch + fast-forward-only merge, so the button can never damage anything.
+
+Recording and classifying the refusal is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `convergeWorkingRepoFromOrigin()` → `recordSyncBlock()` / `getRepoSyncBlock()` / `recheckWorkingRepoConvergence()`; served on `RepoDetail.syncBlocked` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/:repoId` and `POST /api/repos/:repoId/sync-check`.
+
+Turning it into the user's recommendation is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildSyncBlockedWarning()`, ranked in `topRecommendation()`.
+
 ---
 
 ## 7. Staleness surfacing — an overdue worker is visible (LOCKED)
@@ -333,6 +419,19 @@ an honest picture of the background process's health.
 
 Deriving the **overdue** flag from `last_run_at` + interval and returning it in the Scans page worker state is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `isWorkerOverdue(intervalSeconds, lastRunAt)` and `workerState(kind)` (sets `overdue` when installed + enabled). The field rides `WorkerState` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` and is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `workerHealth(state)`.
+
+Two further signals ride the same card, both required by the charter's background-process transparency:
+
+* **Running now.** A detached pass can legitimately run for minutes (§3.1), so a worker in flight says so
+  rather than showing a stale last-run reading — and it is **never** counted overdue while it is working.
+* **Undelivered cycles (F11).** A fire that was triggered but never reached the app is stated in the user's
+  words, with the *right* reason for each of the three cases — "Large File Bridge wasn't running",
+  "didn't get an answer in time — the app was reachable, so the work may already have run", "lost the
+  connection". This is deliberately **not** collapsed into one message: the old code called all three
+  "app not running", which sent every reader looking for the wrong problem.
+
+Surfacing "running now" and the undelivered-cycle notice is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `missedCycleNote(state)` and `WorkerCard`, fed by `workerState(kind)` (`running`, `lastMiss`) in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts`.
 
 ---
 
@@ -378,6 +477,31 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
 > never written into the git working copy), not a backbone failure — the backbone correctly delivered every file
 > that was actually present. Tracked separately in [Transcribe.mdx](./Transcribe.mdx).
 
+### 8.1 The follow-on incident: the trigger blamed the app for its own timeout (2026-07-21)
+
+**Symptom.** Nine WARNs in `error.err` over two days, all of this shape:
+
+```
+[WARN] [run-worker] device: backend unreachable at POST .../api/internal/run/device
+       (This operation was aborted) — app not running? Skipping this interval.
+```
+
+**What was actually true.** The app was running. `pin` and `device` **awaited their entire pass inside the
+HTTP request**, unlike `scan`, which had been fire-and-acknowledge from the start. A pass takes minutes, so
+the trigger's 60s client timeout fired every time the machine was busy — and `AbortError` is a **client**
+timeout, `UND_ERR_SOCKET` a socket teardown; neither is evidence about the server. Nothing was "skipped"
+either: Express cannot cancel an async handler because the client hung up, so the pass ran to completion
+behind the closed socket (the logs kept going for another 90 s after each abort). The fault trail therefore
+pointed at a healthy app, hid the real defect, and taught anyone reading it to distrust the wrong component.
+
+**What this changes.** The **shape**, not the timeout — raising the timeout would only lengthen the wrong
+wait. `pin` and `device` now match `scan`: accept and return, work detached (§3.1). The trigger classifies
+its failures honestly and probes the port before making any claim about the app. Undelivered fires are
+recorded and recovered (F11) instead of vanishing into the next interval, and the Scans page shows them (§7).
+
+The regression test that runs the real trigger against a fast-accept backend, a connect-but-never-answer backend, and a dead port is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/run-worker-trigger.spec.ts`.
+
 ---
 
 ## 9. Acceptance criteria
@@ -416,6 +540,16 @@ than an accident that happened to work; and the overdue signal (§7) makes the s
     and a rejected push is retried **three times with backoff**, each attempt re-pulling first and never
     forcing ([git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-budget--three-attempts-with-backoff-locked)) —
     superseding AC 5's "re-pushes once".
+12. **A worker kick never waits for the work.** `POST /api/internal/run/<worker>` accepts the job and
+    returns immediately for **every** worker; the pass runs detached and stamps `last_run` on completion
+    (§3.1). No trigger may hold a request open for the duration of a pass.
+13. **The trigger never misdiagnoses its own timeout.** A client-side abort or socket teardown is never
+    reported as "the app isn't running" and never as a skipped cycle. The three delivery failures are
+    distinguished — refused / no-acknowledgement-but-port-alive / socket error — and the port is probed
+    before any claim about the app is made (§3.1).
+14. **A fire that never landed is recoverable and visible.** It is recorded to disk, run by the watchdog on
+    its next tick without waiting for the overdue threshold, cleared by the next successful pass, and shown
+    on the Scans page in the user's words (F11, §7).
 
 <!--
   AUTHORITATIVE spec for BACKBONE RESILIENCE — keeping the cross-computer data flow ALIVE, not just correct

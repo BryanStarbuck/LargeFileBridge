@@ -32,6 +32,7 @@ import {
   discoverForeignPin,
   recordForeignPin,
   verifyForeignPins,
+  flushForeignPinStores,
   type DiscoveryCtx,
 } from "../ipfs/foreign-pin.service.js";
 import { compressInfo } from "../fs/badges.js";
@@ -270,6 +271,12 @@ export async function scanAll(
     log.warn("scan", `TO DO recalc stage failed: ${(e as Error).message}`);
   }
 
+  // The foreign-pin stores are WRITE-BACK (foreign-pin.service.ts): the per-file loop mutates them in
+  // memory and a debounce coalesces the writes, because rewriting a 3.9 MB JSON once per scanned file is
+  // what drove RSS to 4 GB on 2026-07-20. A scan is the natural commit point — write them through here so
+  // this pass's discoveries are durable the moment it reports complete, not two seconds later.
+  flushForeignPinStores();
+
   progress.setPhase("done");
   log.info("scan", `Scan (${source}) complete.`);
 }
@@ -339,18 +346,28 @@ interface WalkOpts {
 // stop PUSHING — so the warning we log (and the `scan_dropped_candidates` count we persist to the unit's
 // status.yaml) carries the exact number of candidates dropped, not a vague "some". Reported via log.warn
 // to the durable fault trail, exactly how tracking.service reports its MAX_FILES cap.
-const UNIT_CANDIDATE_CAP = 5000;
+// THE SOFT CAP IS A HEADS-UP, NOT A LIMIT. It must sit far above what a legitimate tree produces, or the
+// WARN fires on every scheduled scan of a perfectly normal repo and becomes noise nobody reads (the
+// real-world case: UAP_Murder_Docus, 5,364 genuine media/PDF candidates — no junk in the count at all —
+// warned every 15 minutes under the old 5,000 soft cap and, before the headroom existed, silently dropped
+// 364 of them on EVERY scan). 50,000 is ~10× the largest tree observed on this machine, so crossing it
+// means a tree is genuinely heading somewhere unusual and deserves a look.
+const UNIT_CANDIDATE_CAP = 50_000;
 
-// NO PERMANENT BLINDNESS (scan.mdx §4.5): the 5000 cap is a SOFT bound with bounded headroom, not a
-// cliff. A unit that lands a little over the soft cap (the real-world case: 5097 and 7003 candidates)
-// used to drop the SAME overflow files on EVERY scan — a stable set of files silently invisible to the
-// product forever, because nothing ever picked up the remainder. The walk order is deterministic, so a
-// fixed cap converts a one-scan memory guard into a permanent censorship of the tail. Now the walk keeps
-// accumulating past the soft cap up to this HARD ceiling (2× soft), so the observed overflows are kept
-// whole; memory stays bounded (never more than 2× the old worst case, and only for trees that genuinely
-// have that many candidates). Only past the hard ceiling do we drop — and then the exact count is
-// persisted (`scan_dropped_candidates`) so the truncation is visible in the product, not only in a log.
-const UNIT_CANDIDATE_HARD_CAP = UNIT_CANDIDATE_CAP * 2;
+// NO PERMANENT BLINDNESS (scan.mdx §4.5): the cap is a SOFT bound with bounded headroom, not a cliff. A
+// unit that lands over the soft cap used to drop the SAME overflow files on EVERY scan — a stable set of
+// files silently invisible to the product forever, because nothing ever picked up the remainder. The walk
+// order is deterministic, so a fixed cap converts a one-scan memory guard into a permanent censorship of
+// the tail.
+//
+// THE HARD CAP IS A CRASH BACKSTOP, NOT A ROUTINE BOUND. It exists only so a pathological tree (a runaway
+// generated directory, a mounted archive) can't OOM the web-app process — it must never be reached by a
+// real user directory. Sizing: a persisted candidate row measures ~150 B in status.yaml (measured: 804 KB
+// for 5,364 rows) and ~250 B live, so 200,000 rows is ~30 MB of YAML and ~50 MB of heap in the absolute
+// worst case — bounded, while being ~37× the largest tree we have ever observed. Only past this ceiling do
+// we drop, and then the exact count is persisted (`scan_dropped_candidates`) and surfaced in the UI, so a
+// truncated census is never presented as authoritative.
+const UNIT_CANDIDATE_HARD_CAP = 200_000;
 
 // Yield control back to the event loop so a long, CPU-bound synchronous walk does not FREEZE the whole
 // web app. The walk is fs.readdirSync/statSync in a tight loop; without cooperative yields it starves
@@ -382,6 +399,18 @@ async function walkUnit(
   const stack: string[] = [root];
   const excl = ignore().add(opts.excludeGlobs);
   const incl = opts.includeGlobs.length ? ignore().add(opts.includeGlobs) : null;
+  // Can an excluded directory be PRUNED (not descended at all)? Only when no exclude pattern is a
+  // NEGATION — a `!keep/big.mp4` re-includes something under an otherwise-excluded tree, and pruning the
+  // tree would skip it. Without negations, "everything under this dir is excluded" is decidable.
+  const exclHasNegation = opts.excludeGlobs.some((g) => g.trimStart().startsWith("!"));
+  // True when `relDir` is excluded as a whole. Three probes, because the gitignore grammar spells the
+  // same intent three ways and `ignores()` is literal about it: `foo` matches the bare path, `foo/`
+  // matches only the trailing-slash form, and `foo/**` matches NEITHER — it matches only paths INSIDE,
+  // which the probe child covers. All three mean "don't walk in here".
+  const dirIsExcluded = (relDir: string): boolean =>
+    excl.ignores(relDir) ||
+    excl.ignores(relDir + "/") ||
+    (!exclHasNegation && excl.ignores(relDir + "/.lfb-prune-probe"));
   let sinceYield = 0;
 
   while (stack.length) {
@@ -404,6 +433,12 @@ async function walkUnit(
       if (ent.isSymbolicLink()) continue;
       if (ent.isDirectory()) {
         if (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name)) continue; // bundles are opaque
+        // PRUNE THE SUBTREE, don't filter its files one by one. The unit's `exclude_globs` used to be
+        // tested only on FILES (below), so an excluded directory was still descended into in full — every
+        // file inside it stat'd and matched before being thrown away. Pruning here means an excluded tree
+        // costs nothing and can never consume the candidate budget.
+        const relDir = path.relative(root, abs);
+        if (relDir && dirIsExcluded(relDir)) continue;
         stack.push(abs);
         continue;
       }

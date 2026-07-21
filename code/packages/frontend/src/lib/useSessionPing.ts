@@ -7,6 +7,7 @@ import { useEffect, useRef } from "react";
 import { useRouterState } from "@tanstack/react-router";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
+import { isExpectedDisconnect } from "./liveStream.js";
 
 const THROTTLE_MS = 60_000; // ≤ 1 ping/min — hour-scale windows don't need finer resolution
 
@@ -19,6 +20,12 @@ export function useSessionPing(): void {
     // Always ping on the first render (lastPingAt === 0); afterwards throttle to once per THROTTLE_MS.
     if (lastPingAt.current !== 0 && now - lastPingAt.current < THROTTLE_MS) return;
     lastPingAt.current = now;
-    api.recordActivity().catch((e) => clientLog.warn("sessionPing", e));
+    api.recordActivity().catch((e) => {
+      // A ping killed by the page unloading/navigating away, or by an offline machine, is the browser
+      // doing its job — not a fault. Warning about it fills the shared fault trail with noise that hides
+      // real failures ("AxiosError: Network Error" lines that mean nothing).
+      if (isExpectedDisconnect()) return;
+      clientLog.warn("sessionPing", e);
+    });
   }, [pathname]);
 }

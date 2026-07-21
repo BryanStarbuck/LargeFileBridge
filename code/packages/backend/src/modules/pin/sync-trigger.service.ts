@@ -26,6 +26,7 @@ import { log } from "../../shared/logging.js";
 import { listStorageIds, getStorageRow } from "../storage/storage.service.js";
 import { expandHome } from "../fs/badges.js";
 import { workingRepoRootForArtifact } from "../storage/artifact-committability.service.js";
+import { isTransientNetworkError, hostFromGitError, whenOnline } from "../../shared/net-transient.js";
 
 /** §18.4 — coalesce a burst of artifact writes into one pass shortly after the burst ends. */
 const DEBOUNCE_MS = 20_000;
@@ -128,6 +129,24 @@ function backoffMs(count: number): number {
  * with the identical failure and no growing interval.
  */
 function noteFailure(storageId: string, reasons: Map<string, number>, what: string, detail: string): void {
+  // OFFLINE IS NOT A FAILURE (bug #15). "Could not resolve host" / "Resolving timed out" means the lid was
+  // shut or the wifi was mid-switch — the artifact is fine, the remote is fine, there is simply no network
+  // this second. Counting it would (a) write laptop weather into the durable fault trail, (b) escalate to
+  // ERROR after five blips, and (c) push the retry out to the 30-minute backoff ceiling for something that
+  // typically clears in seconds. So: leave the consecutive-failure state UNTOUCHED, say it at INFO, and
+  // re-fire the pass the moment the remote's host resolves again.
+  if (isTransientNetworkError(detail)) {
+    log.info(
+      "sync",
+      `artifact sync for storage ${storageId} (${storageRootForLog(storageId)}; ${what}) postponed — ` +
+        `this computer is offline (${detail.split("\n")[0]}); retrying when the network returns`,
+    );
+    if (pending.has(storageId)) return; // a queued pass already covers this storage
+    whenOnline(`artifact sync ${storageId}`, hostFromGitError(detail), () => {
+      void fire(storageId, reasons);
+    });
+    return;
+  }
   const prev = failures.get(storageId);
   const count = (prev?.count ?? 0) + 1;
   const delay = backoffMs(count);

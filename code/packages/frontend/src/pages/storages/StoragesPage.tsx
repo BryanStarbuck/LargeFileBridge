@@ -50,8 +50,22 @@ export function StoragesPage() {
       filterOptions: ["personal", "company", "community"], cell: (s) => <span className="capitalize">{s.type}</span> },
     { id: "detail", header: "Detail", kind: "text", sortable: false, filterable: false, accessor: (s) => s.companyName ?? s.communityId ?? "",
       cell: (s) => <span className="text-black/60">{s.companyName ?? s.communityId ?? "—"}</span> },
+    // The count is flagged INCOMPLETE whenever the index build hit its backstop (storages.mdx §4.1a) — a
+    // short count must never read as the whole truth, so the badge travels with the number itself.
     { id: "files", header: "Files", kind: "int", align: "right", accessor: (s) => s.fileCount ?? -1,
-      cell: (s) => <span className="text-black/70">{s.fileCount ?? "—"}</span> },
+      cell: (s) => (
+        <span className="flex items-center justify-end gap-1.5">
+          <span className="text-black/70">{s.fileCount ?? "—"}</span>
+          {s.indexDroppedFiles > 0 && (
+            <span
+              className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-800"
+              title={`Incomplete — ${s.indexDroppedFiles.toLocaleString()} more large file(s) were found but could not be recorded in the index. Open this storage and index its files again.`}
+            >
+              incomplete
+            </span>
+          )}
+        </span>
+      ) },
     { id: "root", header: "Root", kind: "text", accessor: (s) => s.root,
       cell: (s) => <span className="font-mono text-xs text-black/50">{s.root}</span> },
     {

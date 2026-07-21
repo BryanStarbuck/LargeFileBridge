@@ -13,7 +13,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronRight, CircleSlash, Film, Image as ImageIcon, Music, Pin, Search, Shrink } from "lucide-react";
 import { healthColor, healthIcon } from "./health.js";
 import { Disclosure } from "./Disclosure.js";
-import { useProgress } from "../../progress/ProgressContext.js";
+import { useProgress } from "../../progress/progress-context.js";
 import { DecisionToggle, type ToggleState } from "../decision/DecisionToggles.js";
 import {
   AXIS_ORDER,

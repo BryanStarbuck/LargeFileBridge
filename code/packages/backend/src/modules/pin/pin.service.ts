@@ -55,6 +55,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
+import { whenOnline, hostFromRemote } from "../../shared/net-transient.js";
 
 // One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
 // (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
@@ -268,6 +269,16 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
           if (abs === null) return; // ungrafted mapped dir — known-but-absent on this computer
           if (fs.existsSync(abs)) return; // already on disk here — nothing to fetch
           try {
+            // SELF-HEAL a wrapper-directory CID before we pin OR cat it. A manifest written before the
+            // basename fix in `ipfs.addFile` can hold the CID of the WRAPPER DIRECTORY Kubo builds for a
+            // slashed upload filename; `cat` on a directory node can never succeed, so the old code retried
+            // the same failure every sync pass forever and the file NEVER synced. Resolving first also means
+            // we pin the file itself rather than the wrapper tree.
+            const fileCid = await ipfs.resolveFileCid(entry.cid, path.basename(entry.path));
+            if (fileCid !== entry.cid) {
+              log.info("pin", `Healed wrapper-directory CID for ${entry.path}: ${entry.cid} -> ${fileCid}`);
+              entry.cid = fileCid; // persisted below by t.writeManifest — the bad CID stops being retried
+            }
             if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
               await ipfs.pinAdd(entry.cid); // hold a local copy first…
               pinset.add(ipfs.canonicalCid(entry.cid));
@@ -459,6 +470,29 @@ export function pinStorageUnit(id: string): Promise<void> {
   return withStorageGitLock(id, () => pinStorageUnitInner(id));
 }
 
+/**
+ * Report ONE git cycle's problem at the RIGHT severity, and never lose the cycle to a network blip (bug #15).
+ *
+ * A real remote/auth/merge problem stays a WARN — it is a fault, it belongs in `error.err`, and a human has
+ * to do something about it. An OFFLINE cycle (`Could not resolve host`, `Resolving timed out` — a closed lid,
+ * a wifi switch, a resolver that hadn't woken yet) is neither: it is logged at INFO so the durable fault
+ * trail stays a list of real faults, NOTHING is marked failed, and the whole cycle is re-run the moment the
+ * remote's host resolves again instead of waiting out the next 15-minute tick.
+ */
+function reportGitProblem(prefix: string, id: string, remote: string | null, r: GitCycleResult): void {
+  if (!r.problem) return;
+  if (r.offline) {
+    log.info("pin", `${prefix}storage ${id} git: ${r.problem}`);
+    whenOnline(`storage ${id}`, hostFromRemote(remote), () => {
+      void syncStorageText(id).catch((e) =>
+        log.warn("pin", `storage ${id}: retry after reconnect failed: ${(e as Error).message}`),
+      );
+    });
+    return;
+  }
+  log.warn("pin", `${prefix}storage ${id} git: ${r.problem}`);
+}
+
 async function pinStorageUnitInner(id: string): Promise<void> {
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return;
@@ -487,7 +521,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
     await gitBackbone.pull(gitResult).catch((e) => {
       gitResult.problem = `Git pull failed: ${(e as Error).message}`;
     });
-    if (gitResult.problem) log.warn("pin", `storage ${id} git: ${gitResult.problem}`);
+    reportGitProblem("", id, gitRemote?.remote ?? null, gitResult);
     // Fold in what the pull delivered (storage_company.mdx §8.4.3: reconcile runs on EVERY backbone pull,
     // not just the git-only cycle). Without this a full pin pass fetches the SDL's text and drops the
     // `repos/<repoUid>/` subtrees on the floor for that cycle — the peer's file stays invisible until some
@@ -544,7 +578,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
     await gitBackbone.commitAndPush(gitResult).catch((e) => {
       gitResult.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (gitResult.problem) log.warn("pin", `storage ${id} git: ${gitResult.problem}`);
+    if (gitResult.problem) reportGitProblem("", id, gitRemote?.remote ?? null, gitResult);
     else if (gitResult.pushed) log.info("pin", `storage ${id} git: pushed device state to remote`);
   }
 }
@@ -621,7 +655,7 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
     await gitBackbone.pull(result).catch((e) => {
       result.problem = `Git pull failed: ${(e as Error).message}`;
     });
-    if (result.problem) log.warn("pin", `${tag} storage ${id} git: ${result.problem}`);
+    reportGitProblem(`${tag} `, id, gitRemote?.remote ?? null, result);
     // 1b. FOLD IN what the pull just delivered (storage_company.mdx §8.4.3). Every `repos/<repoUid>/` subtree
     //     another of the user's computers pushed is merged into this machine's Local Storage — which is what
     //     turns "the Tower pinned a file" into a row, a metric, and a To-Do item over here. Runs on EVERY
@@ -644,7 +678,7 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
     await gitBackbone.commitAndPush(result).catch((e) => {
       result.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (result.problem) log.warn("pin", `${tag} storage ${id} git: ${result.problem}`);
+    if (result.problem) reportGitProblem(`${tag} `, id, gitRemote?.remote ?? null, result);
     else if (result.pushed) log.info("pin", `${tag} storage ${id} git: pushed SDL text to remote`);
   }
   return result;
@@ -848,6 +882,7 @@ export async function pullMissing(
   const by = opts.by ?? null;
   let pulled = 0;
   let failed = 0;
+  let healed = false; // any wrapper-directory CID rewritten below → persist the manifest afterwards
 
   // Bounded fan-out through the same global IPFS limiter the pin pass uses, so many pulls don't stampede
   // the daemon. Each file's failure is contained; one bad CID never fails the rest.
@@ -862,6 +897,15 @@ export async function pullMissing(
         }
         const abs = path.join(repoRoot, entry.path);
         try {
+          // Same wrapper-directory self-heal as the pin pass's fetch-missing: unwrap a legacy directory CID
+          // to the file inside it BEFORE pinning or cat-ing, and record the corrected CID (written back to
+          // the tracking manifest after the fan-out) so the dead CID is never retried again.
+          const fileCid = await ipfs.resolveFileCid(entry.cid, path.basename(entry.path));
+          if (fileCid !== entry.cid) {
+            log.info("pin", `pullMissing: healed wrapper-directory CID for ${rel}: ${entry.cid} -> ${fileCid}`);
+            entry.cid = fileCid;
+            healed = true;
+          }
           if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
             await ipfs.pinAdd(entry.cid); // fetch + hold the bytes locally (does NOT re-add / mint a new CID)
             pinset.add(ipfs.canonicalCid(entry.cid));
@@ -909,6 +953,16 @@ export async function pullMissing(
       }),
     ),
   );
+
+  // Persist any healed CIDs. Best-effort: a manifest write failure must not fail an otherwise-good pull —
+  // the bytes are already on disk; the worst case is that the heal is redone on the next pull.
+  if (healed) {
+    try {
+      writeRepoTrackingManifest(repoRoot, manifest);
+    } catch (e) {
+      log.warn("pin", `pullMissing: could not persist healed CIDs for ${repoRoot}: ${(e as Error).message}`);
+    }
+  }
 
   log.info("pin", `pullMissing ${path.basename(repoRoot)}: pulled ${pulled}, failed ${failed} (compress=${Boolean(opts.compress)}).`);
   return { pulled, failed };

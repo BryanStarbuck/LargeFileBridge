@@ -24,6 +24,8 @@ export { mergeManifests } from "./manifest-merge.js";
 import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
+// The working-tree gate — a LEAF module (logging + path only), so no cycle with the git service.
+import { deferWhileBusy } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 
@@ -133,6 +135,17 @@ function copyTree(src: string, dst: string, top = true): void {
 export function mirrorToSyncRepo(repoRoot: string): boolean {
   const dst = resolveStateSyncRepo(repoRoot);
   if (!dst) return false;
+  // NEVER write into a working copy that git is mid-cycle in (worktree-gate.ts). This copy runs on the SCAN
+  // path — synchronously, from `writeRepoStorage`, with no idea a backbone cycle is in flight — and landing
+  // between that cycle's fetch and its merge is precisely what made git refuse the merge ("Your local
+  // changes to the following files would be overwritten by merge: repos/<uid>/repo_storage.yaml"), aborting
+  // the whole storage sync. Defer instead: the cycle runs this exact mirror the moment it releases the tree.
+  // Keyed by repo, so N scans during one cycle collapse into ONE mirror at the end (the mirror is a
+  // reconciliation to current state, never a queue of work items).
+  if (deferWhileBusy(dst, `mirror:${path.resolve(repoRoot)}`, () => void mirrorToSyncRepo(repoRoot))) {
+    log.info("storage", `mirrorToSyncRepo(${repoRoot}): ${dst} is mid-git-cycle — deferred until it releases`);
+    return false;
+  }
   try {
     // The mirror's ledger may hold events THIS machine has not reconciled yet — a peer's push, or (two
     // clones of one remote share ONE `repos/<repoUid>/` subtree) the other clone's decisions. Capture them

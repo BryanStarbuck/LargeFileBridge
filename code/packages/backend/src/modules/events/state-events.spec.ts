@@ -52,7 +52,10 @@ describe("state-events bus", () => {
   it("a throwing subscriber is dropped and NEVER fails the write that bumped", () => {
     const good: string[] = [];
     const offBad = subscribe(() => {
-      throw new Error("this stream's socket is half-closed");
+      // Self-identifying on purpose: the bus logs a dropped subscriber through the real logger, so this
+      // string is one env-var away from ~/T/_large_files_bridge/error.err. The redirect that keeps it out
+      // lives in vitest.config.ts; naming the fixture means a leak is recognizable instead of investigated.
+      throw new Error("TEST FIXTURE (state-events.spec): simulated bad subscriber");
     });
     const offGood = subscribe((b) => good.push(b.topic));
     expect(subscriberCount()).toBe(2);

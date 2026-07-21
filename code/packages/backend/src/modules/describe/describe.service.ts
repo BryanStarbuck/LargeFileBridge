@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan, ProviderHealthView, ProviderResumeResult } from "@lfb/shared";
+import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeRejectionView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan, ProviderHealthView, ProviderResumeResult } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { collectFilesRecursive } from "../../shared/fs-walk.js";
@@ -101,11 +101,50 @@ function describeKindFor(name: string): DescribeKind | null {
   return k === "image" || k === "video" ? k : null;
 }
 
-/** The existing generated description for a media file (text + model + when), or null if none/skeleton. */
+/**
+ * Read back a recorded REFUSAL as the viewer's "why is this blank" answer (§2.3).
+ *
+ * The `.ai_description_rejected` record has existed since the refusal work landed, but nothing READ it: the
+ * only read path was `readDescription`, which returns null for a refused file, so the viewer rendered the
+ * same "No AI description yet" pane it shows a file nobody has asked about. The verdict was durable and
+ * invisible at once. Best-effort by design — a hand-edited or truncated record still counts as "refused"
+ * (the file's mere existence is the signal), it just carries less detail.
+ */
+function readRejection(rejectedPath: string): DescribeRejectionView | null {
+  if (!exists(rejectedPath)) return null;
+  let doc: {
+    provider?: string;
+    generated?: string;
+    rejected?: { finish_reason?: string | null; block_reason?: string | null; finish_message?: string | null };
+  } = {};
+  try {
+    doc = (YAML.parse(fs.readFileSync(rejectedPath, "utf8")) ?? {}) as typeof doc;
+  } catch (e) {
+    log.warn("describe", `rejection record unreadable (${rejectedPath}) — reporting the refusal without its detail: ${(e as Error).message}`);
+  }
+  return {
+    reason: doc.rejected?.finish_reason ?? doc.rejected?.block_reason ?? "unknown",
+    message: doc.rejected?.finish_message ?? null,
+    provider: doc.provider ?? null,
+    recordPath: rejectedPath,
+    rejectedAt: doc.generated ?? null,
+  };
+}
+
+/** The existing generated description for a media file (text + model + when).
+ *
+ *  When there is no description BUT the provider refused this file, this returns a view carrying the
+ *  `rejection` instead of null — that is what lets the viewer say "unavailable, and here is why" rather
+ *  than leaving the field blank forever (§2.3). null still means genuinely nothing: never asked. */
 export function readDescription(input: string): DescribeView | null {
   const abs = path.resolve(expandHome(input.trim()));
-  const { descriptionPath } = resolveDescriptionPath(abs);
-  if (!exists(descriptionPath)) return null;
+  const { descriptionPath, rejectedPath } = resolveDescriptionPath(abs);
+  if (!exists(descriptionPath)) {
+    const rejection = readRejection(rejectedPath);
+    return rejection
+      ? { mediaPath: abs, descriptionPath: rejectedPath, text: "", model: null, generatedAt: rejection.rejectedAt, rejection }
+      : null;
+  }
   try {
     const doc = (YAML.parse(fs.readFileSync(descriptionPath, "utf8")) ?? {}) as {
       status?: string;
@@ -339,7 +378,12 @@ export async function describeOne(
     ledgerNoWork(abs, { bytes, kind }, "blocked", "needs_setup");
     return result(abs, "needs_setup", null, null, "no storage is set up for this file — configure Personal storage first");
   }
-  if (!opts.overwrite && readDescription(abs)) {
+  // `!!readDescription()` alone is no longer the "already described" test: it now also answers for a REFUSED
+  // file (with `.rejection` set, so the viewer can explain the blank field). A refusal must fall through to
+  // the already_rejected gate below, which says the true thing — reporting it as "already described" would
+  // claim a description that does not exist.
+  const existing = readDescription(abs);
+  if (!opts.overwrite && existing && !existing.rejection) {
     ledgerNoWork(abs, { bytes, kind }, "skipped", "already_described");
     return result(abs, "skipped", descriptionPath, null, "already described");
   }

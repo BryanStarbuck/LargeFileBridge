@@ -169,10 +169,18 @@ async function main(): Promise<void> {
   const previousSession = readPreviousSessionEnd();
   recordSessionStart(previousSession);
   if (previousSession.previousEnded === "abnormal") {
+    // Say WHICH kind of abnormal. A `process_fatal` record means the process threw and told us so; its
+    // absence means it never ran another line of JavaScript — SIGKILL, a V8 OOM abort, or the machine
+    // powering off. Those want completely different investigations, so the one line that reports the
+    // death must not flatten them together.
     log.warn(
       "main",
       `the previous session ended ABNORMALLY${previousSession.previousEndedAt ? ` (last sign of life ${previousSession.previousEndedAt})` : ""} — ` +
-        `no SHUTDOWN marker followed its BOOT (crash_recovery.mdx §5.1).`,
+        `no SHUTDOWN marker followed its BOOT (crash_recovery.mdx §5.1). ` +
+        (previousSession.previousFatal
+          ? `It DID record a fatal fault first (${previousSession.previousFatal}) — see the process_fatal record in transactions.log and the stack in error.err.`
+          : `It recorded no fatal fault, so no JavaScript ran after the last line above: SIGKILL (a stop that escalated before the handler could run), ` +
+            `a V8 out-of-memory abort (only launcher.log would show it), or the machine powering off.`),
     );
   }
 
@@ -197,6 +205,7 @@ async function main(): Promise<void> {
   // `server` is assigned once app.listen() runs; before that, a signal exits directly (nothing to drain).
   let server: Server | null = null;
   let shuttingDown = false;
+  let fatalSeen = false;
   const shutdown = (sig: string) => {
     if (shuttingDown) return; // TERM,TERM,KILL escalation — the second TERM must not double-run this
     shuttingDown = true;
@@ -220,6 +229,31 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  // SIGHUP — the controlling terminal went away (window closed, ssh dropped, macOS logout/restart tearing
+  // down the login session). It is a DELIBERATE stop from the OS's point of view and it was the one signal
+  // we did not answer, so those exits all read as crashes at the next boot. `just run` starts the dev tree
+  // under `nohup`, which sets SIGHUP to SIG_IGN and passes that disposition to every child; registering a
+  // listener here REPLACES the ignore, which is what we want — we would rather record the stop and exit
+  // than survive as an orphan nobody can see.
+  process.on("SIGHUP", () => shutdown("SIGHUP"));
+
+  // LAST-CHANCE MARKER. `exit` is the only hook Node guarantees on an ORDERLY teardown, and it covers the
+  // exits no signal handler sees: process.exit() from somewhere else in the tree, and an event loop that
+  // simply ran dry. It cannot forge a clean record for a real crash — a SIGKILL and a V8 OOM abort run no
+  // JavaScript at all, so this listener never fires for either, and the missing SHUTDOWN stays missing
+  // exactly as crash_recovery.mdx §8.2 requires.
+  //
+  // Two guards keep it HONEST rather than merely quiet:
+  //   * `fatalSeen` — if uncaughtException/unhandledRejection already fired, this process is dying of a
+  //     fault. Writing SHUTDOWN there would launder a crash into a clean stop; the ledger keeps the gap.
+  //   * a non-zero exit code — exit(1) is a failed boot or a fatal listen error, not a deliberate stop.
+  // Anything that survives both guards genuinely ended on purpose, and `signal=none` records that it left
+  // by the door rather than by a signal.
+  process.on("exit", (code) => {
+    if (shuttingDown || fatalSeen || code !== 0) return;
+    shuttingDown = true;
+    txnShutdown({ signal: "none", reason: "orderly-exit", code });
+  });
 
   // Watch the heap climb toward that ceiling and WARN before V8 aborts (memory.mdx P-32). Started before
   // any work is admitted; the timer is unref()'d, so it can never hold the process open.
@@ -389,6 +423,8 @@ async function main(): Promise<void> {
   // heap-watch.ts warns on the APPROACH instead; these handlers cover ordinary fatal faults, and the
   // ledger line they write is what distinguishes "threw" from "vanished" the morning after.
   const fatal = (kind: string, err: unknown): void => {
+    // Latched BEFORE anything else so the `exit` listener above can never mistake a fault for a clean stop.
+    fatalSeen = true;
     try {
       logError({ file: "main.ts", operation: kind, error: err });
       log.fatal("main", `${kind}: ${(err as Error)?.stack || String(err)}`);

@@ -5,7 +5,7 @@
 import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
-import type { WorkerKind, WorkerState, WatcherState } from "@lfb/shared";
+import type { WorkerKind, WorkerState, WatcherState, BackbonePushState } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { relativeTime } from "../../lib/format.js";
@@ -20,7 +20,77 @@ function workerHealth(s: WorkerState): Health {
   if (!s.enabled) return "warn";
   if (s.lastRunOk === false) return "bad";
   if (s.overdue) return "warn"; // installed + on but hasn't run when it should (backbone_resilience.mdx §7)
+  if (s.lastMiss !== null) return "warn"; // fires happened but never reached the app — see missedCycleNote
   return "ok";
+}
+
+// A scheduled fire that never reached the app, in the user's words. The charter's background-process
+// transparency has to cover the cycles the app itself could not see: the launchd job fired, the work did
+// not happen, and before this the only trace was a line in error.err. Each reason is a genuinely different
+// story and gets a genuinely different sentence — the old code called all of them "app not running".
+function missedCycleNote(s: WorkerState): string | null {
+  if (s.lastMiss === null) return null;
+  const { reason, consecutive, at } = s.lastMiss;
+  const many = consecutive > 1 ? `${consecutive} scheduled runs in a row` : "A scheduled run";
+  const when = `(most recently ${relativeTime(at)})`;
+  if (reason === "app-not-running")
+    return `${many} couldn't start because Large File Bridge wasn't running ${when}. Now that it's open, Large File Bridge is catching the missed work up in the background.`;
+  if (reason === "ack-timeout")
+    return `${many} didn't get an answer from Large File Bridge in time ${when} — the app was reachable, so the work may already have run. Large File Bridge is re-checking in the background.`;
+  if (reason === "socket-error")
+    return `${many} lost the connection to Large File Bridge before it could start ${when}. Large File Bridge is re-running the missed work in the background.`;
+  return `${many} was turned away by Large File Bridge ${when}. If this keeps happening, reinstall the job below.`;
+}
+
+// One backbone that is failing to push, in the user's words. Says the three things that matter: WHAT is
+// stuck (this computer's file list), FOR HOW LONG, and that Large File Bridge is still retrying it.
+function unsharedNote(s: BackbonePushState): string {
+  const since = s.lastPushAt
+    ? `The last update that reached them was ${relativeTime(s.lastPushAt)}.`
+    : `No update from this computer has ever reached them.`;
+  const held =
+    s.unpushedCommits > 0
+      ? ` ${s.unpushedCommits} update${s.unpushedCommits === 1 ? "" : "s"} ${s.unpushedCommits === 1 ? "is" : "are"} waiting to go out.`
+      : "";
+  return (
+    `Large File Bridge could not send this computer's tracking updates for "${s.repoName}" — ` +
+    `${s.consecutiveFailures} attempt${s.consecutiveFailures === 1 ? "" : "s"} in a row were rejected. ${since}${held} ` +
+    `Nothing is lost: Large File Bridge keeps the updates and keeps retrying in the background.`
+  );
+}
+
+// The card. Only appears when something is actually stuck — a backbone that is sharing normally is not
+// news. Never a "check the log" instruction: the remote's own words are behind the chevron.
+function BackbonePushCard({ states }: { states: BackbonePushState[] }) {
+  const worst = states[0]!;
+  return (
+    <DiagnosticCard
+      state={worst.consecutiveFailures >= 3 ? "bad" : "warn"}
+      title="Sharing with your other computers"
+      summary={unsharedNote(worst)}
+      pills={<Pill on={false} onLabel="Sharing" offLabel="Not sharing" />}
+    >
+      <div className="space-y-2">
+        {states.map((s) => (
+          <div key={s.storageId}>
+            <div className="font-medium text-black/80">{s.repoName}</div>
+            <div className="text-xs text-black/60">
+              {s.consecutiveFailures} rejected attempt{s.consecutiveFailures === 1 ? "" : "s"} in a row
+              {s.lastFailureAt ? `, most recently ${relativeTime(s.lastFailureAt)}` : ""}
+              {s.unpushedCommits > 0 ? ` · ${s.unpushedCommits} update(s) held locally` : ""}
+            </div>
+            {s.problem && <div className="mt-0.5 text-xs text-black/45">{s.problem}</div>}
+          </div>
+        ))}
+        <div className="text-xs text-black/45">
+          This usually means another of your computers pushed to the same shared repository at the same
+          moment. Large File Bridge retries on its own, waiting a little longer each time. If it keeps
+          failing, the message above says what the shared repository is complaining about — an
+          authentication problem is the one case that needs you.
+        </div>
+      </div>
+    </DiagnosticCard>
+  );
 }
 
 export function ScansPage() {
@@ -63,6 +133,25 @@ export function ScansPage() {
         headline: "Automatic pinning is overdue",
         sub: "The background job hasn't run when it should have. The app is retrying it in the background and repairing the schedule; if it stays overdue, reinstall the transfer job below.",
       };
+    // THIS COMPUTER HAS STOPPED SHARING (bug #16). The jobs can all be healthy while every push is being
+    // rejected — and then the other computers never learn about the new large files and the machines drift
+    // apart silently, which is the one failure this product exists to prevent. It outranks a missed fire.
+    if (data.backbonePush.length > 0) {
+      const worst = data.backbonePush[0]!;
+      return {
+        state: worst.consecutiveFailures >= 3 ? "bad" : "warn",
+        headline: "This computer hasn't shared its file list with your other computers",
+        sub: unsharedNote(worst),
+      };
+    }
+    // Fires that were TRIGGERED but never reached the app. Distinct from "overdue": the schedule is alive
+    // and firing on time — the delivery is what failed — so the fix is different and the wording must be too.
+    if (t.lastMiss !== null)
+      return {
+        state: "warn",
+        headline: "Some scheduled pin runs didn't reach Large File Bridge",
+        sub: missedCycleNote(t) ?? "",
+      };
     return {
       state: ipfsDown ? "bad" : "ok",
       headline: ipfsDown
@@ -89,6 +178,7 @@ export function ScansPage() {
 
       {data && (
         <div className="space-y-4">
+          {data.backbonePush.length > 0 && <BackbonePushCard states={data.backbonePush} />}
           <WorkerCard
             worker="pin"
             title="Transfer — moves your files"
@@ -211,12 +301,16 @@ function WorkerCard({
   });
 
   const h = workerHealth(state);
-  const lastRun =
-    state.lastRunAt == null
+  const lastRun = state.running
+    ? // A pass is detached from whatever kicked it and can legitimately run for minutes (run-job.ts) —
+      // show that it is working rather than leaving a stale "last run" reading as if nothing is happening.
+      `running now${state.lastRunAt == null ? "" : ` — last finished ${relativeTime(state.lastRunAt)}`}`
+    : state.lastRunAt == null
       ? "never run"
       : `last run ${relativeTime(state.lastRunAt)}${
           state.lastRunOk === false ? " — failed" : state.overdue ? " — overdue" : ""
         }`;
+  const missed = missedCycleNote(state);
 
   return (
     <DiagnosticCard
@@ -227,6 +321,7 @@ function WorkerCard({
         <>
           <Pill on={state.installed} onLabel="Installed" offLabel="Not installed" />
           {state.installed && <Pill on={state.enabled} onLabel="On" offLabel="Off" />}
+          {state.running && <Pill on onLabel="Running now" offLabel="" />}
         </>
       }
       fix={
@@ -252,6 +347,7 @@ function WorkerCard({
     >
       <div className="space-y-1">
         <div>{lastRun}</div>
+        {missed && <div className="text-xs text-amber-700">{missed}</div>}
         <div className="text-xs text-black/45">
           Scheduled as a macOS <code>launchd</code> job ({state.label}), every{" "}
           {Math.round(state.intervalSeconds / 60)} min. Installing creates the job; turning it on/off is

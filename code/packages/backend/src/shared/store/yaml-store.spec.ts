@@ -15,6 +15,7 @@ import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
 import { readYaml } from "./yaml-store.js";
+import { resolveLogDir, resolveStateDir } from "../../config/state-dir.js";
 
 const Schema = z.object({
   pinned: z.boolean().default(false),
@@ -65,5 +66,32 @@ describe("readYaml — a valueless block must not brick the file", () => {
 
   it("still throws when a valueless block is not the whole problem", () => {
     expect(() => readYaml(tmpYaml("sync_repo:\npinned: 12\n"), Schema)).toThrow(/Invalid schema/);
+  });
+});
+
+// The two negative tests above are SUPPOSED to fail schema validation, and `readYaml` is supposed to log
+// that at ERROR before it throws. Both are correct. What was NOT correct: those fixture errors landed in
+// the user's PRODUCTION fault trail, ~/T/_large_files_bridge/error.err — four "Schema validation failed:
+// /var/folders/.../lfb-store-XXXXXX/config.yaml" entries per run, alongside real faults, in the one file
+// the charter designates as the durable record of what actually went wrong on this machine. A fixture that
+// forges evidence in the incident log is a defect in its own right.
+//
+// The cure is environmental, not a lowered log level: vitest.config.ts gives every worker a temp
+// LFB_LOG_DIR *and* LFB_STATE_DIR. This guard locks that in — without it the redirect can be dropped from
+// the config and nothing fails until someone next reads error.err and finds test noise in it.
+describe("test isolation — a spec must never write into the production state root", () => {
+  const production = path.join(os.homedir(), "T", "_large_files_bridge");
+
+  it("resolves the log dir and state root away from ~/T/_large_files_bridge", () => {
+    expect(resolveLogDir()).not.toBe(production);
+    expect(resolveStateDir()).not.toBe(production);
+  });
+
+  // Assert on CONTENT, not on file growth: the logger folds repeated near-identical fault lines into
+  // `[×N since HH:MM]` (logging.ts collapse), so a second identical ERROR in the same run appends nothing.
+  it("sends a failed validation's ERROR line to the redirected error.err, not the production one", () => {
+    expect(() => readYaml(tmpYaml("pinned: 'not a boolean'\n"), Schema)).toThrow(/Invalid schema/);
+    const redirected = fs.readFileSync(path.join(resolveLogDir(), "error.err"), "utf8");
+    expect(redirected).toMatch(/Schema validation failed/); // the fault IS recorded — just not in prod
   });
 });

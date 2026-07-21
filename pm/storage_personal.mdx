@@ -1011,7 +1011,9 @@ allowed to be a no-op — and on a healthy single-writer machine it always is.
 Item 3's three changes above were written as **CHANGED** against v1. They are now **BUILT**, and the engine
 spec states them: [git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-budget--three-attempts-with-backoff-locked).
 
-* **Three attempts, `0s / 2s / 8s`.** Exactly the budget asked for here. Each attempt **re-pulls first**, so
+* **Three attempts, `0s / ~2s / ~8s` with ±40% jitter** (the jitter keeps two of the user's computers from
+  retrying in lockstep — [git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-budget--three-attempts-with-backoff-locked)).
+  Exactly the budget asked for here. Each attempt **re-pulls first**, so
   every retry pushes on top of the newest remote state; if that re-pull leaves something genuinely
   unresolvable, the cycle **stops and surfaces** rather than pushing blindly.
 * **The original error is logged**, with its classification and its attempt number — closing v1(g), where
@@ -1023,7 +1025,9 @@ spec states them: [git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-
   Tuesday ([storage_company.mdx §11.4](./storage_company.mdx#114-push-retries)). §16.1.1 is why the same
   budget serves both.
 * **Exhausting the budget is not loss.** The commit stays local, the fault is reported, and item 4's
-  push-when-ahead sends it on the next pass. A repo with **no `origin`** at all is a different, louder case
+  push-when-ahead sends it on the next pass — and it is now also **recorded, re-armed on a jittered
+  backoff, and surfaced to the user** until a push actually lands
+  ([git_backbone.mdx §6.4](./git_backbone.mdx#64-giving-up-this-cycle-must-never-mean-giving-up-locked)). A repo with **no `origin`** at all is a different, louder case
   ([git_backbone.mdx §4.3.2](./git_backbone.mdx#432-a-repo-with-no-origin-is-a-loud-standing-fault-locked),
   [backbone_resilience.mdx §6.2](./backbone_resilience.mdx#62-a-repo-with-no-origin--committing-forever-reaching-nobody-locked)) —
   it is a **standing fault**, not a retry.

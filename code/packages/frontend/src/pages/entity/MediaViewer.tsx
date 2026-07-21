@@ -571,9 +571,26 @@ function MediaAnalysis({
   };
 
   // Left column — AI description (video + image).
+  // Three states, not two: described · REFUSED (a settled answer, with the reason) · never asked. The middle
+  // one used to render as the third — the provider had answered, Large File Bridge had recorded the verdict
+  // in a `.ai_description_rejected` sidecar, and the viewer still showed a blank "No AI description yet"
+  // pane, so a user could not tell "we never asked" from "we asked and were told no" (ai_description.mdx §2.3).
   const descriptionColumn = canDescribe ? (
-    <AnalysisColumn title="AI description" present={!!description}>
-      {description ? (
+    <AnalysisColumn title="AI description" present={!!description && !description.rejection}>
+      {description?.rejection ? (
+        <GeneratePane
+          icon={<Ban className="h-8 w-8 text-amber-500/70" />}
+          title={`AI description unavailable — ${describeRejectionLabel(description.rejection.reason)}`}
+          blurb={
+            (description.rejection.message ??
+              `The AI provider considered this file and declined to describe it (${description.rejection.reason}).`) +
+            " Large File Bridge recorded the provider's full answer beside this file, so nothing about that decision is lost."
+          }
+          cta="Ask the provider again"
+          onGenerate={() => onGenerateDescription(true)}
+          hint={`Recorded in ${description.rejection.recordPath.split("/").pop()}${description.rejection.provider ? ` · ${description.rejection.provider}` : ""}. Asking again may get the same answer.`}
+        />
+      ) : description ? (
         <AnalysisBody
           body={description.text}
           meta={<>AI description{description.model ? ` · ${description.model}` : ""}{description.generatedAt ? ` · ${relativeTime(description.generatedAt)}` : ""}</>}
@@ -731,6 +748,29 @@ function MediaAnalysis({
 
 // One analysis half — a titled panel with a ✓ availability marker (green when its content already
 // exists on disk, hollow when empty). Both halves render at once (media_viewer.mdx §6).
+/** A provider's refusal CODE as a phrase a person can read (ai_description.mdx §2.3). The raw code is still
+ *  in the `.ai_description_rejected` record and in the hint line, so nothing is hidden — this only makes the
+ *  headline sentence readable. An unknown code falls back to itself rather than to a vague "declined". */
+function describeRejectionLabel(reason: string): string {
+  switch (reason.toUpperCase()) {
+    case "RECITATION":
+      return "the provider's answer looked like copyrighted material";
+    case "SAFETY":
+    case "IMAGE_SAFETY":
+      return "the provider's safety filter blocked it";
+    case "PROHIBITED_CONTENT":
+      return "the provider does not allow this content";
+    case "BLOCKLIST":
+      return "the provider's blocklist matched";
+    case "SPII":
+      return "the provider flagged personal information";
+    case "UNKNOWN":
+      return "the provider gave no reason";
+    default:
+      return reason;
+  }
+}
+
 function AnalysisColumn({ title, present, children }: { title: string; present: boolean; children: React.ReactNode }) {
   return (
     <section className="flex min-w-0 flex-col">

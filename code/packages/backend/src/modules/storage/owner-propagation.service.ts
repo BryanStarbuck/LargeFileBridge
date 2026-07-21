@@ -135,8 +135,12 @@ async function mutateOwnerMap(
       await bb.commitAndPush(result).catch((e) => {
         result.problem = `Git push failed: ${(e as Error).message}`;
       });
-      if (result.problem) log.warn("storage", `owner_map ${companyId}: ${result.problem}`);
-      else log.info("storage", `owner_map ${companyId}: wrote assertion for ${key}${result.pushed ? " (pushed)" : ""}`);
+      // Offline ⇒ INFO, not a fault (bug #15): the assertion is written locally and travels on the next
+      // cycle once the network is back; `error.err` stays the list of things a human must act on.
+      if (result.problem) {
+        if (result.offline) log.info("storage", `owner_map ${companyId}: ${result.problem}`);
+        else log.warn("storage", `owner_map ${companyId}: ${result.problem}`);
+      } else log.info("storage", `owner_map ${companyId}: wrote assertion for ${key}${result.pushed ? " (pushed)" : ""}`);
     } catch (e) {
       log.warn("storage", `owner_map ${companyId}: mutate failed: ${(e as Error).message}`);
     }

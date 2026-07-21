@@ -10,7 +10,7 @@ import { leftBar } from "../../config/left_bar.js";
 import { api } from "../../api/client.js";
 import { http, unwrap } from "../../api/axios.js";
 import { clientLog } from "../../lib/clientLog.js";
-import { useProgress } from "../../progress/ProgressContext.js";
+import { useProgress } from "../../progress/progress-context.js";
 import { NavIcon } from "./NavIcon.js";
 import { HoverInfoPanel } from "../hoverinfo/HoverInfoPanel.js";
 

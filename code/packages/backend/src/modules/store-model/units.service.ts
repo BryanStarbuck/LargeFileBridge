@@ -26,7 +26,7 @@ import {
 import type { ComputerUnitConfig, PlacementChoice, StorageType } from "@lfb/shared";
 import type { RepoOwner } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
-import { resolveRepoOwner, checkIgnoreVerbose, type IgnoreRule } from "../git/git.service.js";
+import { resolveRepoOwner, checkIgnoreVerboseDetailed, type IgnoreRule } from "../git/git.service.js";
 // storage.service <-> units.service form a static import cycle used ONLY inside functions (getStorageRow is
 // called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
 // storage.service <-> storage-settings.service pair documents.
@@ -36,7 +36,7 @@ import { getStorageRow, listStorageIds } from "../storage/storage.service.js";
 import { deviceLabelIndex, resolveDeviceLabel } from "../storage/devices.service.js";
 import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
-import { analysisOutputs } from "../storage/tracking.service.js";
+import { analysisOutputs, storageIndexDroppedFiles } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
 // Leaf modules only — the read path must not pull tracking-sync.service (and its storage.service edge) in.
 import { repoStateDir } from "../storage/tracking-root.service.js";
@@ -337,6 +337,11 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set
   const manifest = mergeRepoManifests(folder, cfg);
   const files = composeFileRows(folder, cfg, status, manifest, pinset);
   const counts = countDecisions(files);
+  // Cheap head-read of this repo's fingerprint index (never a parse) — see tracking.service
+  // storageIndexDroppedFiles(). Non-throwing: a repo with no path or no index reads as complete.
+  const indexDropped = cfg.repo.path
+    ? storageIndexDroppedFiles(path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~")))
+    : 0;
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
     name: cfg.repo.name || folder,
@@ -350,6 +355,10 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set
     // Surface scan truncation (scan.mdx §4.5): >0 means the last scan's hard candidate cap dropped
     // exactly this many candidates, so `files` below is NOT the complete census. Absent when complete.
     ...(status.scan_dropped_candidates ? { scanDroppedCandidates: status.scan_dropped_candidates } : {}),
+    // Surface tracking-index truncation the same way (storages.mdx §4.1a): >0 means the last index build hit
+    // its backstop, so exactly this many large files are unfingerprinted — and therefore never pinned, never
+    // synced, and missing from every rollup this page shows. Absent when the index is complete (the norm).
+    ...(indexDropped > 0 ? { indexDroppedFiles: indexDropped } : {}),
     ipfs,
     counts,
     files,
@@ -380,13 +389,17 @@ function composeFileRows(
   // genuinely ignores. `git check-ignore` is the source of truth for "is this file ignored" — one
   // batched call per repo. The VERBOSE form also gives us the OWNING RULE, which tells the UI whether the
   // toggle can be turned off (our exact anchored line) or is locked by a rule we must not rewrite
-  // (git_ignore.mdx §5.5). Never let it break row composition; on failure nothing is reported ignored.
-  const ignoreRules = repoRootAbs
-    ? checkIgnoreVerbose(
+  // (git_ignore.mdx §5.5). Never let it break row composition. A path git could NOT answer for comes back
+  // in `unknown` and the row's git-ignore axis is left UNDECIDED (`gitignore` undefined) — reporting it as
+  // "not ignored" would mis-file the file into the big-files-to-ignore nudge on nothing but a spawn failure.
+  const ignoreLookup = repoRootAbs
+    ? checkIgnoreVerboseDetailed(
         repoRootAbs,
         status.candidates.map((c) => path.join(repoRootAbs, c.path)),
       )
-    : new Map<string, IgnoreRule>();
+    : { rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() };
+  const ignoreRules = ignoreLookup.rules;
+  const ignoreUnknown = ignoreLookup.unknown;
   // Resolve the storage KIND ONCE per repo (it's memoized, but this also lets us hand the known type to
   // analysisOutputs so it never re-resolves per file). The analysis-artifact probe below is the same
   // value for all three task axes, so it is computed once per row and shared (see the task-status helpers).
@@ -434,7 +447,7 @@ function composeFileRows(
       // The git-ignore axis as GIT ACTUALLY SEES IT (decisions.mdx §1) — drives the inline
       // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`. Reality, not intent:
       // `prov.gitignore` is the recorded DECISION and is kept for provenance only.
-      ...gitIgnoreAxis(repoRootAbs, cand.path, ignoreRules),
+      ...gitIgnoreAxis(repoRootAbs, cand.path, ignoreRules, ignoreUnknown),
       // The Compress / Transcribe / Describe / OCR task-tab status (task_tabs.mdx §4.4/§5/§6). All four key
       // off the SAME analysis-artifact probe, so it is done at most ONCE per row (only when the file could
       // carry an artifact) and shared, instead of each helper re-running ~a dozen statSyncs (the
@@ -570,9 +583,15 @@ function gitIgnoreAxis(
   repoRootAbs: string | null,
   relPath: string,
   rules: Map<string, IgnoreRule>,
+  unknown?: Set<string>,
 ): Pick<FileRow, "gitignore" | "gitignoreLocked" | "gitignoreRule"> {
   if (!repoRootAbs) return { gitignore: false };
-  const rule = rules.get(path.join(repoRootAbs, relPath));
+  const abs = path.join(repoRootAbs, relPath);
+  // git could not answer for this path (repo gone, not a repo, or check-ignore genuinely failed on it).
+  // Leave `gitignore` UNDEFINED — "not determined" — so the ⊘ column, the bigNotIgnored metric and the
+  // `ignore` category all skip it instead of asserting a verdict git never gave (git_ignore.mdx §5.4).
+  if (unknown?.has(abs)) return {};
+  const rule = rules.get(abs);
   if (!rule) return { gitignore: false };
   const ownRootIgnore = path.resolve(repoRootAbs, rule.source) === path.join(repoRootAbs, ".gitignore");
   const exact = `/${relPath.split(path.sep).join("/")}`;
@@ -720,7 +739,9 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
       else m.compressibleVideos++;
     }
     if (f.compress === "done") m.alreadyCompressed++;
-    if (!f.gitignore && f.sizeBytes >= bigFileMetricThreshold) m.bigNotIgnored++;
+    // `gitignore === false` is git's OWN verdict. `undefined` means check-ignore could not answer for this
+    // path (git_ignore.mdx §5.4) — an undetermined row is not a nudge, so it must not inflate this count.
+    if (f.gitignore === false && f.sizeBytes >= bigFileMetricThreshold) m.bigNotIgnored++;
   }
   return m;
 }

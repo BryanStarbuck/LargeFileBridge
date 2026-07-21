@@ -3,7 +3,7 @@
 // deprecated Reprovider block — it FATAL-s Kubo 0.42+ on start), no public/recursive gateway.
 import fs from "node:fs";
 import path from "node:path";
-import { Readable } from "node:stream";
+import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { IpfsHealth, IpfsPinType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
@@ -49,6 +49,87 @@ async function rpc(
   } finally {
     if (t) clearTimeout(t);
   }
+}
+
+// ── Liveness for LONG-RUNNING IPFS work: idle time, not wall-clock time ──────────────────────────────
+// A `pin/add` that must FETCH a multi-hundred-MB DAG from a peer, a `pin/ls` over a large pinset, and a
+// `cat` of a big video all legitimately run for minutes — a wall clock sized for a control call kills
+// them mid-flight ("This operation was aborted"), which silently breaks the product promise that a file
+// is held on this computer. These ops therefore get NO total-duration cap. What they get instead is a
+// STALL watchdog: the deadline resets on every byte of progress, so a transfer that is still moving is
+// never cut off, while one that has genuinely wedged (dead peer, hung daemon) still fails instead of
+// pinning a limiter slot forever.
+//
+// Each call builds its OWN controller here. Nothing is shared or reused across calls (one abort must
+// never take down an unrelated in-flight op), and NO request-scoped signal is ever threaded into this
+// layer — background/scheduled pin work must not die because a browser tab navigated away.
+interface StallGuard {
+  readonly signal: AbortSignal;
+  /** Report progress — restarts the idle countdown. */
+  touch(): void;
+  /** Stop the watchdog (always call in a `finally`). */
+  clear(): void;
+  /** True when WE aborted for lack of progress (vs. any other abort). */
+  readonly stalled: boolean;
+}
+
+function stallGuard(stallMs: number): StallGuard {
+  const ctrl = new AbortController();
+  let timer: NodeJS.Timeout | undefined;
+  let stalled = false;
+  return {
+    signal: ctrl.signal,
+    touch() {
+      if (ctrl.signal.aborted) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        stalled = true;
+        ctrl.abort(); // default AbortError, so isAbortError() below still recognizes it
+      }, stallMs);
+      timer.unref?.(); // a watchdog must never hold the process open
+    },
+    clear() {
+      if (timer) clearTimeout(timer);
+      timer = undefined;
+    },
+    get stalled() {
+      return stalled;
+    },
+  };
+}
+
+/** Did this failure come from an abort (ours or the runtime's)? Retryable; a protocol error is not. */
+const isAbortError = (e: unknown): boolean =>
+  (e as Error)?.name === "AbortError" || /abort/i.test((e as Error)?.message ?? "");
+
+const delay = (ms: number): Promise<void> =>
+  new Promise((resolve) => {
+    setTimeout(resolve, ms).unref?.();
+  });
+
+/** Backoff before retrying an aborted/stalled op. `LFB_IPFS_RETRY_MS` shortens it (tests only). */
+const retryDelayMs = (baseMs: number, attempt: number): number =>
+  (Number(process.env.LFB_IPFS_RETRY_MS) || baseMs) * attempt;
+
+/** Read a WHATWG response body as NDJSON, touching the stall guard on every chunk. Yields whole lines. */
+async function* ndjsonLines(res: Response, guard: StallGuard): AsyncGenerator<string> {
+  if (!res.body) {
+    const text = await res.text();
+    for (const line of text.split("\n")) if (line.trim()) yield line;
+    return;
+  }
+  let buf = "";
+  for await (const chunk of Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0])) {
+    guard.touch(); // progress — reset the idle countdown
+    buf += Buffer.from(chunk as Buffer).toString("utf8");
+    let nl: number;
+    while ((nl = buf.indexOf("\n")) >= 0) {
+      const line = buf.slice(0, nl);
+      buf = buf.slice(nl + 1);
+      if (line.trim()) yield line;
+    }
+  }
+  if (buf.trim()) yield buf;
 }
 
 export async function health(): Promise<IpfsHealth> {
@@ -104,42 +185,196 @@ export async function addFile(absPath: string): Promise<string> {
 }
 
 /**
- * Materialize a file's bytes by CID to `destPath` — the byte side of "fetch" (pin_process.mdx / storage.mdx
- * §9). Streams the HTTP RPC `cat` (a single unixfs file — LFB adds one file per CID) to a temp file, then
- * renames it into place atomically, creating parent dirs. No 15s abort: large media legitimately take a
- * while; the caller bounds concurrency via the pin limiter. A partial download is cleaned up, never left
- * as a truncated final file.
+ * The UnixFS node type of a CID ("file" | "directory" | null when the node can't be read). Metadata only —
+ * `files/stat` reads the root block, moves no file bytes. Best-effort: an unresolvable CID yields null so
+ * callers fall through to their normal error path instead of inventing a verdict.
  */
-export async function catToFile(cid: string, destPath: string): Promise<void> {
+async function dagNodeType(cid: string): Promise<"file" | "directory" | null> {
+  try {
+    const res = await rpc("files/stat", { args: [`/ipfs/${cid}`] });
+    const json = (await res.json()) as { Type?: string };
+    return json.Type === "directory" ? "directory" : json.Type === "file" ? "file" : null;
+  } catch (e) {
+    log.debug("ipfs", `dagNodeType unavailable for ${cid}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
+/** One directory listing (`ls`) as {name, hash} links; [] when the CID lists nothing / can't be read. */
+async function lsLinks(cid: string): Promise<Array<{ name: string; hash: string }>> {
+  const res = await rpc("ls", { args: [cid] });
+  const json = (await res.json()) as {
+    Objects?: Array<{ Links?: Array<{ Name?: string; Hash?: string }> }>;
+  };
+  return (json.Objects ?? [])
+    .flatMap((o) => o.Links ?? [])
+    .filter((l): l is { Name: string; Hash: string } => !!l.Hash)
+    .map((l) => ({ name: l.Name ?? "", hash: l.Hash }));
+}
+
+// A wrapper chain is one node per path segment (`bryan/BGit/…/videos/clip.mp4`), so allow a generous but
+// finite descent — a cycle or a genuine deep tree must not spin forever.
+const MAX_WRAPPER_DEPTH = 24;
+
+/**
+ * Resolve a recorded CID to the CID of the actual FILE it denotes — the fix for the "this dag node is a
+ * directory" retry loop (thousands of identical failures/day, and the file never syncing).
+ *
+ * WHY THIS EXISTS. Kubo's HTTP `add` treats a SLASHED multipart filename as a directory tree: it wraps the
+ * file in one UnixFS directory per path segment and returns the WRAPPER-dir CID. `addFile` now sends only the
+ * basename (see above), but manifests written before that fix still carry wrapper CIDs — and `ipfs cat` on a
+ * directory node can NEVER work, so every sync cycle re-tried it forever. We walk the wrapper chain down to
+ * the file instead: at each level take the child whose name matches `basename`, else the only child. Callers
+ * record the resolved CID back into the manifest so the wrong CID stops being retried (self-healing).
+ *
+ * Returns `cid` unchanged when it is already a file (or the node type can't be read — then the caller's own
+ * `cat`/`pin` reports the real fault). THROWS only when the node IS a directory but no single file can be
+ * picked out of it — an honest "this recorded CID does not denote one file".
+ */
+export async function resolveFileCid(cid: string, basename?: string): Promise<string> {
+  let cur = cid;
+  for (let depth = 0; depth < MAX_WRAPPER_DEPTH; depth++) {
+    if ((await dagNodeType(cur)) !== "directory") return cur; // a file (or unreadable) — nothing to unwrap
+    const links = await lsLinks(cur);
+    const named = basename ? links.find((l) => l.name === basename) : undefined;
+    const next = named ?? (links.length === 1 ? links[0] : undefined);
+    if (!next) {
+      throw new Error(
+        `CID ${cid} is a directory node with ${links.length} entries and no child named ${basename ?? "(unknown)"} — cannot resolve it to a single file`,
+      );
+    }
+    cur = next.hash;
+  }
+  throw new Error(`CID ${cid} nests directories deeper than ${MAX_WRAPPER_DEPTH} levels — refusing to descend further`);
+}
+
+/**
+ * Materialize a file's bytes by CID to `destPath` — the byte side of "fetch" (pin_process.mdx / storage.mdx
+ * §9). Streams the HTTP RPC `cat` to a temp file, then renames it into place atomically, creating parent
+ * dirs. No 15s abort: large media legitimately take a while; the caller bounds concurrency via the pin
+ * limiter. A partial download is cleaned up, never left as a truncated final file.
+ *
+ * The CID is resolved through `resolveFileCid` first, so a legacy WRAPPER-directory CID fetches the file
+ * inside it instead of failing "this dag node is a directory" on every sync forever. RETURNS the CID whose
+ * bytes actually landed — callers persist it back into the manifest to heal the bad record.
+ */
+const CAT_STALL_MS = 10 * 60_000; // 10 min with no bytes arriving ⇒ the transfer is dead, not slow
+
+export async function catToFile(cid: string, destPath: string): Promise<string> {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}.tmp`;
+  let guard: StallGuard | undefined;
   try {
-    const url = `${apiBase()}/cat?arg=${encodeURIComponent(cid)}`;
-    const res = await fetch(url, { method: "POST" });
+    // Unwrap a legacy wrapper-directory CID to the file inside it (see resolveFileCid). Inside the try so a
+    // resolution failure still lands in the fault trail like any other fetch failure.
+    const fileCid = await resolveFileCid(cid, path.basename(destPath));
+    if (fileCid !== cid) log.info("ipfs", `cid ${cid} is a wrapper directory — fetching file ${fileCid} for ${destPath}`);
+    const url = `${apiBase()}/cat?arg=${encodeURIComponent(fileCid)}`;
+    // Stall watchdog, NOT a wall clock (see stallGuard): a 4 GB video may stream for an hour and must not
+    // be aborted for taking long — but a transfer whose peer vanished must not hold a limiter slot forever.
+    guard = stallGuard(CAT_STALL_MS);
+    guard.touch();
+    const res = await fetch(url, { method: "POST", signal: guard.signal });
     if (!res.ok || !res.body) {
-      throw new Error(`ipfs cat ${cid} -> ${res.status} ${res.ok ? "empty body" : await res.text()}`);
+      throw new Error(`ipfs cat ${fileCid} -> ${res.status} ${res.ok ? "empty body" : await res.text()}`);
     }
     // res.body is a WHATWG ReadableStream; adapt it to a Node stream and pipe to disk without buffering.
-    await pipeline(Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]), fs.createWriteStream(tmp));
+    // The pass-through in the middle exists only to feed the stall guard on every chunk that lands.
+    const ticker = new Transform({
+      transform(chunk, _enc, cb) {
+        guard?.touch();
+        cb(null, chunk);
+      },
+    });
+    await pipeline(
+      Readable.fromWeb(res.body as Parameters<typeof Readable.fromWeb>[0]),
+      ticker,
+      fs.createWriteStream(tmp),
+      { signal: guard.signal },
+    );
     fs.renameSync(tmp, destPath);
+    return fileCid;
   } catch (e) {
     try {
       fs.unlinkSync(tmp);
     } catch {
       /* temp already gone — ignore */
     }
-    log.error("ipfs", `cat ${cid} -> ${destPath} failed: ${(e as Error).message}`);
+    const why = guard?.stalled ? ` (no bytes for ${CAT_STALL_MS}ms — transfer stalled)` : "";
+    log.error("ipfs", `cat ${cid} -> ${destPath} failed${why}: ${(e as Error).message}`);
     throw e;
+  } finally {
+    guard?.clear();
   }
 }
 
-export async function pinAdd(cid: string): Promise<void> {
+// `pin/add` is NOT a control call. When the CID's blocks are not already local it FETCHES the entire DAG
+// from a peer over the network — for the videos this product exists to sync that is hundreds of MB and
+// many minutes. It was running on the 15s control-call cap, which aborted it mid-transfer: "pin add
+// failed … This operation was aborted", i.e. the file was NOT held on this computer while the pin pass
+// moved on. No wall clock now; a stall watchdog fed by Kubo's own progress stream instead.
+const PIN_ADD_STALL_MS = 10 * 60_000; // 10 min with ZERO progress ⇒ genuinely wedged, not merely slow
+const PIN_ADD_ATTEMPTS = 3; // an aborted/stalled pin is RETRIED — never silently accepted
+const PIN_ADD_RETRY_MS = 5_000;
+
+/**
+ * One `pin/add` attempt with progress-based liveness.
+ *
+ * `progress=true` makes Kubo stream `{"Progress":N}` records while it fetches, which is what feeds the
+ * stall guard — and the terminal `{"Pins":[…]}` record is the ONLY evidence the pin actually landed.
+ * The old code discarded the body entirely, so a mid-stream Kubo failure (reported as a trailer record
+ * on an already-200 response) was read as success and the CID was recorded as pinned here when it was
+ * not. Absence of the `Pins` record is now a failure.
+ */
+async function pinAddOnce(cid: string): Promise<void> {
+  const guard = stallGuard(PIN_ADD_STALL_MS);
+  guard.touch();
   try {
-    await rpc("pin/add", { args: [cid], query: { recursive: "true" } });
-    bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
-  } catch (e) {
-    log.error("ipfs", `pin add failed for ${cid}: ${(e as Error).message}`);
-    throw e;
+    const url = `${apiBase()}/pin/add?arg=${encodeURIComponent(cid)}&recursive=true&progress=true`;
+    const res = await fetch(url, { method: "POST", signal: guard.signal });
+    if (!res.ok) throw new Error(`ipfs pin/add -> ${res.status} ${await res.text()}`);
+    let confirmed = false;
+    for await (const line of ndjsonLines(res, guard)) {
+      let rec: { Pins?: string[]; Progress?: number; Message?: string };
+      try {
+        rec = JSON.parse(line) as typeof rec;
+      } catch {
+        continue; // a partial/garbage line is not evidence either way
+      }
+      // Kubo signals a failure DISCOVERED AFTER the 200 header as a trailing {"Message":…} record.
+      if (rec.Message && !rec.Pins) throw new Error(`ipfs pin/add: ${rec.Message}`);
+      if (Array.isArray(rec.Pins) && rec.Pins.length > 0) confirmed = true;
+    }
+    if (!confirmed) throw new Error(`ipfs pin/add gave no confirmation for ${cid} (pin not established)`);
+  } finally {
+    guard.clear();
+  }
+}
+
+/**
+ * Pin a CID recursively, fetching its bytes if needed. Retries an abort/stall (a peer that went away, a
+ * daemon busy with GC) before giving up, and THROWS when the pin did not land — callers must treat that
+ * as "not pinned here" and never record a pin claim for it (see pin.service `runUnitPin`/`pullMissing`).
+ */
+export async function pinAdd(cid: string): Promise<void> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await pinAddOnce(cid);
+      bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
+      return;
+    } catch (e) {
+      const stalledOrAborted = isAbortError(e);
+      if (stalledOrAborted && attempt < PIN_ADD_ATTEMPTS) {
+        log.info(
+          "ipfs",
+          `pin add ${cid} stalled (no progress for ${PIN_ADD_STALL_MS}ms) on attempt ${attempt} — retrying`,
+        );
+        await delay(retryDelayMs(PIN_ADD_RETRY_MS, attempt));
+        continue;
+      }
+      log.error("ipfs", `pin add failed for ${cid} after ${attempt} attempt(s): ${(e as Error).message}`);
+      throw e;
+    }
   }
 }
 
@@ -367,19 +602,53 @@ export interface Pin {
 }
 
 // `pin/ls` ENUMERATES the whole pinset in one RPC, so its duration scales with pin count (and it can
-// stall behind daemon GC or startup) — the short 15s control-call cap mis-fires once the node holds many
-// pins. Give enumeration its own generous cap, and retry once on an abort before giving up.
-const PIN_LS_TIMEOUT_MS = 120_000;
+// stall behind daemon GC or startup). ANY fixed wall clock is wrong here — it mis-fires precisely on the
+// big pinsets this product produces, and an aborted enumeration makes the app's view of what is pinned
+// WRONG, which drives every pin-truth surface in the UI. So: no total cap, a stall watchdog on the
+// streamed records instead, and retries on an abort.
+const PIN_LS_STALL_MS = 120_000; // 2 min with not one record arriving ⇒ the daemon is wedged
+const PIN_LS_ATTEMPTS = 3;
+const PIN_LS_RETRY_MS = 2_000;
 
-const isAbortError = (e: unknown): boolean =>
-  (e as Error)?.name === "AbortError" || /abort/i.test((e as Error)?.message ?? "");
+/**
+ * Enumerate ONE pin type with progress-based liveness. Asks Kubo for `stream=true` so pins arrive as
+ * NDJSON records (`{"Cid":…,"Type":…}`) instead of one giant blob at the end — that is what lets the
+ * stall guard tell "still enumerating" from "hung". Older daemons ignore `stream` and answer with a
+ * single `{"Keys":{…}}` object, which this parses too.
+ */
+async function listPinsOfType(type: "recursive" | "direct"): Promise<Map<string, IpfsPinType>> {
+  const guard = stallGuard(PIN_LS_STALL_MS);
+  guard.touch();
+  const out = new Map<string, IpfsPinType>();
+  try {
+    const url = `${apiBase()}/pin/ls?type=${type}&stream=true`;
+    const res = await fetch(url, { method: "POST", signal: guard.signal });
+    if (!res.ok) throw new Error(`ipfs pin/ls -> ${res.status} ${await res.text()}`);
+    for await (const line of ndjsonLines(res, guard)) {
+      let rec: { Cid?: string; Keys?: Record<string, { Type?: string }>; Message?: string };
+      try {
+        rec = JSON.parse(line) as typeof rec;
+      } catch {
+        continue;
+      }
+      // A trailing {"Message":…} after a 200 is Kubo reporting a failure mid-enumeration. Never let that
+      // return a PARTIAL list that reads as "these are all the pins" — the caller must see a failure.
+      if (rec.Message && !rec.Cid && !rec.Keys) throw new Error(`ipfs pin/ls: ${rec.Message}`);
+      if (rec.Cid) out.set(rec.Cid, type);
+      for (const cid of Object.keys(rec.Keys ?? {})) out.set(cid, type); // legacy non-streaming shape
+    }
+  } finally {
+    guard.clear();
+  }
+  return out;
+}
 
 /**
  * The local pinset as ground truth (`ipfs pin ls`). Lists only ROOT pins — recursive + direct —
  * and never the indirect blocks kept under a recursive root (ipfs.mdx §1). Metadata only: it names
  * CIDs and their pin type; it opens no file and moves no bytes.
  *
- * THROWS when either enumeration fails (after one retry on timeout). It must never swallow a failure
+ * THROWS when either enumeration fails (after retries on a stall). It must never swallow a failure
  * and return a partial/empty list — a timeout masquerading as "no pins" made consumers (pin pass,
  * scanner, pull prompt) treat everything as pin-lost. Callers degrade to "pinset UNKNOWN", not empty.
  */
@@ -387,28 +656,26 @@ export async function listPins(): Promise<Pin[]> {
   const out = new Map<string, IpfsPinType>();
   for (const type of ["recursive", "direct"] as const) {
     const started = Date.now();
-    let done = false;
-    for (let attempt = 1; !done; attempt++) {
+    for (let attempt = 1; ; attempt++) {
       try {
-        const res = await rpc("pin/ls", { query: { type }, timeoutMs: PIN_LS_TIMEOUT_MS });
-        const json = (await res.json()) as { Keys?: Record<string, { Type?: string }> };
-        for (const cid of Object.keys(json.Keys ?? {})) if (!out.has(cid)) out.set(cid, type);
-        done = true;
+        for (const [cid, t] of await listPinsOfType(type)) if (!out.has(cid)) out.set(cid, t);
+        break;
       } catch (e) {
         const elapsedMs = Date.now() - started;
-        // One retry, only on an abort/timeout (a slow enumeration or a GC pause can clear up); any
-        // other fault (daemon down, RPC error) won't improve on a retry — fail fast.
-        if (isAbortError(e) && attempt === 1) {
+        // Retry only on an abort/stall (a slow enumeration or a GC pause can clear up); any other fault
+        // (daemon down, RPC error) won't improve on a retry — fail fast.
+        if (isAbortError(e) && attempt < PIN_LS_ATTEMPTS) {
           log.info(
             "ipfs",
-            `pin ls (${type}) timed out after ${elapsedMs}ms (cap ${PIN_LS_TIMEOUT_MS}ms) — retrying once`,
+            `pin ls (${type}) stalled after ${elapsedMs}ms (no records for ${PIN_LS_STALL_MS}ms) — retry ${attempt + 1}/${PIN_LS_ATTEMPTS}`,
           );
+          await delay(retryDelayMs(PIN_LS_RETRY_MS, attempt));
           continue;
         }
         log.warn(
           "ipfs",
           `pin ls (${type}) failed after ${elapsedMs}ms on attempt ${attempt} ` +
-            `(cap ${PIN_LS_TIMEOUT_MS}ms; ${out.size} pins read from earlier types): ${(e as Error).message}`,
+            `(stall cap ${PIN_LS_STALL_MS}ms; ${out.size} pins read from earlier types): ${(e as Error).message}`,
         );
         throw new Error(`ipfs pin ls (${type}) failed: ${(e as Error).message}`);
       }

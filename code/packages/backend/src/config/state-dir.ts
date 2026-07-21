@@ -13,6 +13,11 @@ export function resolveStateDir(): string {
 }
 
 export function resolveLogDir(): string {
+  // NOTE: a test run must never write into the production fault trail — the bus spec deliberately
+  // subscribes a throwing listener ("this stream's socket is half-closed") to prove a bad subscriber
+  // cannot fail a write, and those fake WARNs used to land in error.err reading like live clients being
+  // dropped. That redirect is enforced ONCE, in packages/backend/vitest.config.ts (`env.LFB_LOG_DIR` /
+  // `env.LFB_STATE_DIR` temp dirs) — deliberately not duplicated here.
   const dir = process.env.LFB_LOG_DIR || resolveStateDir();
   ensureDir(dir);
   return dir;

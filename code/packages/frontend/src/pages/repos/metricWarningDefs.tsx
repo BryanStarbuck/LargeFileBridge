@@ -74,6 +74,144 @@ export function buildIpfsDownWarning(_detail: RepoDetail, repoId: string): Warni
   };
 }
 
+/** The last scan of this repo was TRUNCATED — the walk hit its hard candidate backstop and stopped
+ *  recording rows, so every count and the file list below are an UNDER-report (scan.mdx §4.5). Null when
+ *  the census is complete, which is the normal case. Ranked above everything else because it is the only
+ *  warning that says the other numbers cannot be trusted. */
+export function buildScanTruncatedWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const n = detail.scanDroppedCandidates ?? 0;
+  if (n <= 0) return null;
+  const headline = `This repo's file list is incomplete — ${n.toLocaleString()} file${n === 1 ? "" : "s"} could not be recorded`;
+  const sub = "Every count on this page is an under-report until the scan can finish completely.";
+  return {
+    id: "repo-scan-truncated",
+    state: "bad",
+    headline,
+    sub,
+    popup: {
+      whatThisIs: `Large File Bridge walks this repo to find large files. To protect the app from running out of memory the walk stops recording after a very large number of files, and this repo's last scan reached that point — exactly ${n.toLocaleString()} file${n === 1 ? " was" : "s were"} found but not recorded.`,
+      whyItMatters:
+        "The file list and every count on this page — big files, compressible videos and images, git-ignore nudges — are missing those files. They are not tracked, not pinned, and not synced to your other computers. Excluding generated or dependency folders you don't need synced (in this repo's scan settings) shrinks the walk so it can finish; then scan again.",
+      options: [],
+      actionLabel: "Scan this repo again",
+      progress: { kind: "configure", target: "Scan", doneLabel: "Scan started", invalidate: [["repo", repoId]] },
+      apply: async () => {
+        const r = await api.rescan();
+        if (!r.started) toast.info("A scan is already running");
+      },
+    },
+  };
+}
+
+/**
+ * THIS REPO HAS STOPPED RECEIVING YOUR OTHER COMPUTERS' WORK (bug #15B, backbone_resilience.mdx §6.4).
+ *
+ * Large File Bridge converges a tracked repo with fetch + fast-forward-only merge and, when git refuses,
+ * it deliberately leaves the repo alone — it will never rewrite, rebase, reset or discard a user's work.
+ * The consequence, though, is that a repo stuck this way never converges again: transcripts, AI
+ * descriptions and decisions finished on another computer simply never arrive, forever, with no sign of it
+ * anywhere the user looks. This warning IS that sign. Null when the repo is converging normally.
+ *
+ * The only action offered is a re-check — safe by construction (the same fetch + fast-forward-only merge).
+ * Resolving the block itself stays the user's call, because only they know what their uncommitted changes
+ * or local commits are for.
+ */
+export function buildSyncBlockedWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const block = detail.syncBlocked;
+  if (!block) return null;
+  const localChanges = block.kind === "local-changes";
+  const named = block.paths.slice(0, 5).join(", ");
+  const more = block.paths.length > 5 ? ` and ${block.paths.length - 5} more` : "";
+  return {
+    id: "repo-sync-blocked",
+    state: "bad",
+    scope: "repo",
+    headline: "This repo has stopped receiving work from your other computers",
+    sub: localChanges
+      ? "Uncommitted changes in this repo are in the way of the incoming update — commit or stash them, then check again."
+      : "This computer has commits your remote doesn't, so the update can't be applied on its own — reconcile the branch, then check again.",
+    popup: {
+      whatThisIs: localChanges
+        ? `Large File Bridge keeps this repo up to date by fetching from its remote and fast-forwarding the "${block.branch}" branch — a strictly additive update that can never overwrite your work. Git refused it because uncommitted changes in the working tree sit exactly where the incoming update writes${named ? `: ${named}${more}` : ""}.`
+        : `Large File Bridge keeps this repo up to date by fetching from its remote and fast-forwarding the "${block.branch}" branch. It can't do that right now because this computer has commits the remote does not, so the two histories have to be joined — and only you can decide how.`,
+      whyItMatters: (
+        <ul className="list-disc space-y-0.5 pl-4">
+          <li>
+            Until this is resolved, transcripts, AI descriptions and decisions finished on your other
+            computers never arrive here — and this page keeps re-offering work that is already done.
+          </li>
+          <li>
+            Nothing is lost and nothing here has been changed. Large File Bridge never rewrites, rebases or
+            discards anything in your repo — it stops and tells you instead.
+          </li>
+          <li>
+            {localChanges
+              ? "Commit or stash the files listed above in this repo, then use Check again below."
+              : "Merge, rebase or push this branch however you normally would, then use Check again below."}
+          </li>
+        </ul>
+      ),
+      details: (
+        <pre className="whitespace-pre-wrap break-words text-xs text-black/70">{block.detail}</pre>
+      ),
+      options: [],
+      actionLabel: "Check again",
+      progress: {
+        kind: "configure",
+        target: detail.name,
+        doneLabel: "Checked",
+        invalidate: [["repo", repoId]],
+      },
+      apply: async () => {
+        const r = await api.repoSyncCheck(repoId);
+        if (r.syncBlocked) {
+          toast.warning("Still blocked — this repo can't fast-forward yet. See the details in the popup.");
+        } else {
+          toast.success("This repo is receiving your other computers' work again");
+        }
+      },
+    },
+  };
+}
+
+/** The last build of this repo's per-file fingerprint index was TRUNCATED — it hit its size backstop and
+ *  stopped recording entries, so exactly this many large files are unfingerprinted and therefore never
+ *  pinned, never synced to the user's other computers, and missing from every rollup on this page
+ *  (storages.mdx §4.1a). Null when the index is complete, which is the normal case. Ranked beside the
+ *  scan-truncation warning and for the same reason: it is a statement that the other numbers are short. */
+export function buildIndexTruncatedWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const n = detail.indexDroppedFiles ?? 0;
+  if (n <= 0) return null;
+  const headline = `This repo's file index is incomplete — ${n.toLocaleString()} large file${n === 1 ? " is" : "s are"} not tracked`;
+  const sub = "Untracked files are never pinned or synced, and they are missing from the counts on this page.";
+  return {
+    id: "repo-index-truncated",
+    state: "bad",
+    headline,
+    sub,
+    popup: {
+      whatThisIs: `Large File Bridge keeps a fingerprint index of every large file in this repo — that index is how it knows what to pin, what has changed, and what to sync to your other computers. To protect the app from running out of memory the index stops recording after a very large number of files, and this repo's last build reached that point: exactly ${n.toLocaleString()} large file${n === 1 ? " was" : "s were"} found but not recorded.`,
+      whyItMatters: `Those ${n.toLocaleString()} file${n === 1 ? " is" : "s are"} invisible to Large File Bridge. ${n === 1 ? "It is" : "They are"} not fingerprinted, not pinned, not synced to your other computers, and not counted in the compression, big-file, or git-ignore numbers on this page — so every one of those counts is an under-report. Moving part of this repo's content into its own repo, or excluding folders you don't need synced, brings it back under the limit; then rebuild the index.`,
+      options: [],
+      actionLabel: "Rebuild the file index",
+      progress: {
+        kind: "configure",
+        target: "File index",
+        doneLabel: "File index rebuilt",
+        invalidate: [["repo", repoId]],
+      },
+      apply: async () => {
+        const r = await api.indexRepo(repoId);
+        if (r.dropped > 0) {
+          toast.warning(
+            `The file index is still incomplete — ${r.dropped.toLocaleString()} large file(s) could not be recorded`,
+          );
+        }
+      },
+    },
+  };
+}
+
 /** Files a peer computer pinned that aren't here yet — the two-pane "pull them down" popup
  *  (warnings.mdx §10.8.12). Null when nothing is missing. */
 export function buildPullDownWarning(detail: RepoDetail, repoId: string): WarningDef | null {
@@ -567,7 +705,20 @@ export function topRecommendation(
   detail: RepoDetail,
   repoId: string,
 ): { metricId?: MetricId; warning: WarningDef } | null {
+  // FIRST, above even a down engine: a truncated scan means the numbers behind every other recommendation
+  // are an under-report (scan.mdx §4.5). A truncated census must never be presented as authoritative.
+  const truncated = buildScanTruncatedWarning(detail, repoId);
+  if (truncated) return { warning: truncated };
+  // Same rank, same reason, different walk: a truncated fingerprint INDEX means files that exist are
+  // untracked — never pinned, never synced, never counted (storages.mdx §4.1a).
+  const indexTruncated = buildIndexTruncatedWarning(detail, repoId);
+  if (indexTruncated) return { warning: indexTruncated };
   if (detail.ipfs === "unreachable") return { warning: buildIpfsDownWarning(detail, repoId) };
+  // A repo that can no longer fast-forward from its remote will NEVER converge again on its own, and the
+  // user cannot see that anywhere else (bug #15B). Ranked with the other "the pipe is broken" faults, above
+  // every per-file recommendation — the counts below it are computed from work that can't arrive.
+  const syncBlocked = buildSyncBlockedWarning(detail, repoId);
+  if (syncBlocked) return { warning: syncBlocked };
   const pull = buildPullDownWarning(detail, repoId);
   if (pull) return { metricId: "pullDown", warning: pull };
   const addToIpfs = buildAddToIpfsWarning(detail, repoId);

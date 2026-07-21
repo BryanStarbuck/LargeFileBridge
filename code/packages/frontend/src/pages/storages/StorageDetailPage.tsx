@@ -187,9 +187,36 @@ export function StorageDetailPage() {
           {s.companyName && <Fact label="Company" value={s.companyName} />}
           {s.communityId && <Fact label="Community" value={s.communityId} />}
           <Fact label="Initialized" value={s.initialized ? "yes" : "no"} />
-          <Fact label="Files tracked" value={s.fileCount ?? "—"} />
+          <Fact
+            label="Files tracked"
+            value={
+              <span className="flex items-center gap-1.5">
+                {s.fileCount ?? "—"}
+                {s.indexDroppedFiles > 0 && (
+                  <span className="rounded bg-red-100 px-1.5 py-0.5 text-[10px] text-red-800">incomplete</span>
+                )}
+              </span>
+            }
+          />
           <Fact label="Google Drive clone" value={d?.clones.googleDrive ?? "—"} />
           <Fact label="Dropbox clone" value={d?.clones.dropbox ?? "—"} />
+        </div>
+      )}
+
+      {/* A truncated index is stated in full, above the table it invalidates (storages.mdx §4.1a). The
+          count below — and the compression / big-file rollups derived from it — are an UNDER-report by
+          exactly this many files, and those files are not fingerprinted, pinned, or synced anywhere. */}
+      {s && s.indexDroppedFiles > 0 && (
+        <div className="mb-3 rounded-lg border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-900">
+          <div className="font-medium">
+            This storage&rsquo;s file index is incomplete — {s.indexDroppedFiles.toLocaleString()} large file
+            {s.indexDroppedFiles === 1 ? "" : "s"} could not be recorded.
+          </div>
+          <div className="mt-1 text-red-800">
+            Large File Bridge stops recording once an index reaches its size limit, so the file list and count
+            below are missing those files. They are not fingerprinted, not pinned, and not synced to your other
+            computers. Move some content into its own storage, then use Index files to rebuild.
+          </div>
         </div>
       )}
 

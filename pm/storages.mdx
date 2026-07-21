@@ -347,6 +347,48 @@ concurrently under the same budget rather than one storage after another.
 Parallelizing the per-file fingerprint (head+tail read + sha256) across files under the responsive budget, and parallelizing across storages when several are indexed, is to be implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles` (the walk collects the large-file paths, then `mapLimit(paths, responsiveBudget(), fingerprint)`), drawing `responsiveBudget()` + `mapLimit()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
 
+### 4.1a The index is bounded — and when the bound bites, the product says so
+
+The index build holds one entry per large file, so it needs a bound. **A file this bound drops is a file
+that does not exist as far as the product is concerned**: it is never fingerprinted, so it is never pinned,
+never synced to the user's other computers, and never counted in the compression / big-file / git-ignore
+rollups the charter requires. **Silently under-reporting the user's own data is the one failure this
+product must not have**, so the bound obeys three rules.
+
+* **The cap is a crash backstop, not a routine limit — 200,000 entries.** It exists only so a pathological
+  tree (a runaway generated directory, a mounted archive) cannot exhaust the web-app process; a real
+  storage must never reach it. Sized from measurement on this machine: **275 B of YAML per entry**
+  (measured over 411 real entries with a mean 48-character relative path, rendered in the exact shape §4.1
+  writes) and ~400 B live per walk entry, so 200,000 entries is ≈55 MB of YAML and ≈80 MB of peak heap —
+  bounded, while being **~2.6× the total file count of the largest tree on this machine**
+  (`~/BGit/all/jfk`, 76,825 files — the ceiling that tree could produce even at a zero big-file threshold)
+  and **~37× the largest real candidate set measured** (5,364 files in `~/BGit/Bryan_git/UAP_Murder_Docus`).
+  It is deliberately the same number as the scanner's hard cap ([scan.mdx §4.5](./scan.mdx)) so both walks
+  fail in the same place for the same reason. *The previous 5,000 was BELOW a real repo on this machine —
+  it was truncating live data, not protecting against anything.*
+* **A heads-up line at 50,000 drops nothing.** Crossing it logs once, so a storage growing toward the
+  backstop is noticed long before truncation could start. It sits ~10× above the largest tree measured,
+  because a soft line a normal storage crosses on every re-index is noise nobody reads.
+* **Truncation is EXACT, PERSISTED, and VISIBLE.** The walk never aborts at the backstop — it keeps
+  descending and keeps counting, so the shortfall is a number, never "some files". That number is written
+  into the index itself as a top-level **`dropped_files`** (absent when the index is complete, which is the
+  norm) and is read back cheaply — a head-of-file read, never a parse — so every surface that shows a count
+  derived from this index can mark it incomplete: the one-repo page raises it as its **highest-priority
+  recommendation** alongside a truncated scan, and the Storages list and Storage detail badge the file
+  count **incomplete** rather than presenting a short number as final.
+
+Bounding the index, counting the exact shortfall, and persisting it in `files.yaml` is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles()` (`MAX_FILES` / `SOFT_NOTICE_FILES`, the `dropped` counter and the `dropped_files` write), read back by `storageIndexDroppedFiles()`.
+
+Carrying it to the client is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`indexDroppedFiles`) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `buildRow()` (`StorageRow.indexDroppedFiles`).
+
+Showing the user that the numbers are short, and offering the rebuild, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildIndexTruncatedWarning()`, ranked at the top by `topRecommendation()`; the badge/banner in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx`.
+
+Rebuilding one repo's index on demand (the recommendation's action) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/index`.
+
 ---
 
 ## 5. Cloud clones (Google Drive / Dropbox)

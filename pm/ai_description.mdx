@@ -312,6 +312,18 @@ Verified end-to-end on the real refusing slide: `status=rejected`, a `.ai_descri
 Google's copyright `finishMessage` and full `provider_response`, **no** `.ai_description`, and a second run
 that does **not** re-ask the provider.
 
+**A recorded refusal must be VISIBLE, or it is only half a record.** The viewer showed a refused file the
+same empty *"No AI description yet"* pane it shows a file nobody has ever asked about — so the verdict was
+durable on disk and invisible in the product, and the user had no way to tell *"we have not asked"* from
+*"we asked and were told no."* The AI-description column now reads the record and states the outcome:
+**"AI description unavailable — &lt;reason&gt;"**, with the provider's own explanation, the record's filename,
+and an **Ask the provider again** button (an explicit overwrite, the one sanctioned way to reconsider).
+
+Reading the record back for the UI is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readRejection()`, surfaced through `readDescription()` as the `DescribeView.rejection` field.
+Rendering the unavailable-with-a-reason state is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — the analysis band's `descriptionColumn`, with `describeRejectionLabel()` turning the provider's reason code into a readable phrase.
+
 Capturing every detail of a refusal and deciding which empty response IS one are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ProviderRejection` / `attachRejection()` / `rejectionOf()` / `isRefusalFinishReason()` (the `gemini` adapter's `describe()` builds the evidence; `classifyProviderFault()` reads the object, never the prose).
 Writing the record, superseding it on a later success, and never re-offering a settled refusal are implemented in code:
@@ -637,14 +649,30 @@ The transient/permanent split, the jittered backoff, the `Retry-After` honor, th
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (the retry loop) with `isTransient()`, `retryAfterMs()`, `timeoutForBytes()`, and `postJsonOnce()` (one attempt + the honest timeout rename); applied around `adapter.describe()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`. Shared by **all** adapters, since every provider call funnels through that one seam.
 
 The refusal-vs-blip split of the empty `200` is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error, and `classifyProviderFault()` sorts the refusing reasons to **`transient`** (§3.5 rule 2 — generation is **sampled**, so a refusing `finishReason` is a coin toss worth 4 rolls, not a verdict; only a `promptFeedback.blockReason` is `permanent`). Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error and attaches the refusal evidence, and `classifyProviderFault()` sorts any structured refusal to **`permanent`** (rule 2 above — attempt 1, no repeat of the identical request). Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
 
-> **This line used to say `permanent`** — the exact inverse of the code, of §3.5 rule 2 four paragraphs
-> above, and of the spec file's own regression test. It appears to have survived from a pre-correction
-> draft. It is called out rather than quietly fixed because a citation that inverts its own spec is worse
-> than no citation: it reads as permission to "fix" the code back into the bug it documents. Measured on one
-> slide, **10 identical calls → 6 described, 4 `RECITATION`**: classifying that permanent strands a file
-> that describes ~60% of the time and writes it a rejection record it never earned.
+#### 3.5.1 The ONE deliberate `RECITATION` re-ask (NEW, LOCKED)
+
+Rule 2 above says a refusal is never *retried*. That is right, and it is not the whole answer for
+`RECITATION`, because `RECITATION` is not the same **kind** of "no" as the others:
+
+* `SAFETY`, `PROHIBITED_CONTENT`, `BLOCKLIST`, `SPII`, `IMAGE_SAFETY`, and any `blockReason` are verdicts
+  about **the file**. No rewording moves them, and trying to reword our way past a safety verdict is not
+  something Large File Bridge does. **One call, then the record.**
+* `RECITATION` is a verdict about **the response text**: the model generated an answer and then suppressed
+  it because the words resembled recited training material. The file was acceptable; the wording was not.
+  A **differently-worded ask at a higher temperature is a genuinely different question**, which is why the
+  sampled generator described the same slide 6 times in 10.
+
+So `RECITATION` — and only `RECITATION` — earns **exactly one** re-ask, which asks for original phrasing
+and no reproduction of text visible in the media, at `temperature: 1.0`. It is a **single deliberate
+re-ask inside the adapter**, not the generic retry loop: the identical request is never sent twice, the
+already-encoded upload is reused (no second read/encode), and a doomed file costs **2 provider calls
+total** instead of the 4-plus-backoff `error.err` recorded. If the re-ask is refused too, the refusal
+escapes on attempt 1 exactly as rule 2 requires and earns its `.ai_description_rejected`.
+
+Deciding which refusals are re-askable, and the re-ask itself, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isRecitationFinishReason()` and `RECITATION_REASK_SUFFIX`, applied in the `gemini` adapter's `describe()`. Regression-covered (with `fetch` stubbed — **no live provider call**) in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/recitation-reask.spec.ts`.
 
 ---
 

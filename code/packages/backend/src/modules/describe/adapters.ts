@@ -182,6 +182,36 @@ export function isRefusalFinishReason(reason: string | null | undefined): boolea
   return !!reason && REFUSAL_FINISH_REASONS.has(reason.toUpperCase());
 }
 
+// ── RECITATION is the ONE refusal that a DIFFERENT ASK can still answer (ai_description.mdx §3.5) ─────
+//
+// The refusals are not all the same shape of "no":
+//   * SAFETY / PROHIBITED_CONTENT / BLOCKLIST / SPII / IMAGE_SAFETY — a verdict about the FILE. Asking
+//     again, however phrased, gets the same verdict. Re-asking is pure waste (and, for a safety verdict,
+//     is us trying to talk the model out of its own policy — we do not do that).
+//   * RECITATION — a verdict about the RESPONSE TEXT: the model generated something that looked like
+//     recited training data and suppressed it. The file was fine; the words were the problem. A DIFFERENT
+//     wording is genuinely a different question, and the sampled generator will usually take a different
+//     path when asked for original phrasing at a higher temperature (measured on this corpus: one slide,
+//     10 identical calls → 6 described, 4 RECITATION).
+//
+// So RECITATION — and ONLY RECITATION — earns exactly ONE deliberate re-ask with a VARIED prompt. This is
+// emphatically NOT the generic retry loop that was removed on 2026-07-20: that loop re-sent the IDENTICAL
+// request up to 4 times and could not do anything but reproduce the same suppression. Budget: 1 extra call,
+// once, inside the adapter. If the re-ask is refused too, the refusal escapes on attempt 1 exactly as
+// before and earns its `.ai_description_rejected` record.
+export function isRecitationFinishReason(reason: string | null | undefined): boolean {
+  return !!reason && reason.toUpperCase() === "RECITATION";
+}
+
+/** Appended to the prompt for the single RECITATION re-ask. It changes what we are ASKING FOR (original
+ *  wording, no quoting of text visible in the media) rather than repeating the same request louder — the
+ *  suppression was triggered by the response text resembling existing material, so the fix has to live in
+ *  the instruction. Kept short so it can never crowd out the user's own (possibly customized) prompt. */
+export const RECITATION_REASK_SUFFIX =
+  "\n\nImportant: describe this in your own original wording. Do not quote or reproduce any wording, lyrics, " +
+  "poetry, code, or passages of text that appear in the media or that resemble an existing published work — " +
+  "paraphrase and summarize them instead. Write plain, factual, original prose.";
+
 /** Everything the provider told us about a refusal. `raw` is the provider's ENTIRE response, so a detail we
  *  never thought to parse is still on disk for the user to read (§2.3). */
 export interface ProviderRejection {
@@ -551,6 +581,28 @@ function looksLikeThinkingRejected(e: unknown): boolean {
 }
 
 // ── Gemini (Google) — the only adapter that describes VIDEO as well as images ──────────────────────
+
+/** The slice of `generateContent`'s response this adapter reads. The WHOLE object is still what lands in
+ *  `ProviderRejection.raw`, so a field absent here is never a field lost from the record (§2.3). */
+interface GeminiResponse {
+  candidates?: Array<{
+    content?: { parts?: Array<{ text?: string }> };
+    finishReason?: string;
+    finishMessage?: string;
+    safetyRatings?: unknown;
+  }>;
+  promptFeedback?: { blockReason?: string; safetyRatings?: unknown };
+  usageMetadata?: unknown;
+  modelVersion?: string;
+  responseId?: string;
+}
+
+/** The description text in a Gemini response — "" when the candidate carried none (the empty-200 / refusal
+ *  shape). Parts are concatenated because a long answer arrives split across several of them. */
+function geminiText(json: GeminiResponse): string {
+  return (json.candidates?.[0]?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
+}
+
 const gemini: DescribeAdapter = {
   id: "gemini",
   label: "Google Gemini",
@@ -590,44 +642,66 @@ const gemini: DescribeAdapter = {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`;
     // The base64 goes STRAIGHT into the body — no `data` local held alongside it, so the encoded bytes have
     // exactly one root and the raw Buffer is already gone by the time we get here (memory.mdx P-29).
+    // `promptPart` is held by reference so the RECITATION re-ask below can vary the WORDS without rebuilding
+    // (i.e. re-reading and re-encoding) the payload — the uploaded bytes are the same file either way.
+    const promptPart: { text: string } = { text: prompt };
     const body: Record<string, unknown> = {
-      contents: [{ parts: [{ text: prompt }, { inline_data: { mime_type: mimeType, data: await readBase64Capped(absPath) } }] }],
+      contents: [{ parts: [promptPart, { inline_data: { mime_type: mimeType, data: await readBase64Capped(absPath) } }] }],
     };
-    if (!thinkingBudgetRejected) body.generationConfig = NO_THINKING;
-    let json: {
-      candidates?: Array<{
-        content?: { parts?: Array<{ text?: string }> };
-        finishReason?: string;
-        finishMessage?: string;
-        safetyRatings?: unknown;
-      }>;
-      promptFeedback?: { blockReason?: string; safetyRatings?: unknown };
-      usageMetadata?: unknown;
-      modelVersion?: string;
-      responseId?: string;
-    };
-    try {
-      json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
-    } catch (e) {
-      // This model won't take a zero thinking budget — latch it off and serve the file plain (§5.2).
-      if (!thinkingBudgetRejected && looksLikeThinkingRejected(e)) {
-        thinkingBudgetRejected = true;
-        log.warn("describe", `Gemini model "${model}" rejected thinkingBudget:0 — describing without it for the rest of this run`);
-        delete body.generationConfig;
-        try {
-          json = (await postJson(url, body, {}, { provider: "gemini", model, parent })) as typeof json;
-        } catch (retryErr) {
-          // The replayed call reaches the same model, so it can fail the same actionable way — a retired-model
-          // 404 escaping raw here would be the ONE path that skips §5.1's explanation (the `else` below wraps
-          // every other throw). Same treatment, whichever attempt surfaced it.
-          throw explainModelError(retryErr as Error, model, "Gemini");
+    if (!thinkingBudgetRejected) body.generationConfig = { ...NO_THINKING };
+
+    // ONE round-trip, including the self-healing thinking-budget fallback. Factored out because the
+    // RECITATION re-ask sends the same body a second time and must get the identical treatment.
+    const send = async (): Promise<GeminiResponse> => {
+      try {
+        return (await postJson(url, body, {}, { provider: "gemini", model, parent })) as GeminiResponse;
+      } catch (e) {
+        // This model won't take a zero thinking budget — latch it off and serve the file plain (§5.2).
+        if (!thinkingBudgetRejected && looksLikeThinkingRejected(e)) {
+          thinkingBudgetRejected = true;
+          log.warn("describe", `Gemini model "${model}" rejected thinkingBudget:0 — describing without it for the rest of this run`);
+          const cfg = { ...((body.generationConfig as Record<string, unknown>) ?? {}) };
+          delete cfg.thinkingConfig;
+          if (Object.keys(cfg).length > 0) body.generationConfig = cfg;
+          else delete body.generationConfig;
+          try {
+            return (await postJson(url, body, {}, { provider: "gemini", model, parent })) as GeminiResponse;
+          } catch (retryErr) {
+            // The replayed call reaches the same model, so it can fail the same actionable way — a retired-model
+            // 404 escaping raw here would be the ONE path that skips §5.1's explanation (the `else` below wraps
+            // every other throw). Same treatment, whichever attempt surfaced it.
+            throw explainModelError(retryErr as Error, model, "Gemini");
+          }
         }
-      } else {
         // Turn Google's raw 404 ("... is no longer available ... NOT_FOUND") into an actionable message
         // that names the retired model and the current recommended one (ai_description.mdx §5.1).
         throw explainModelError(e as Error, model, "Gemini");
       }
+    };
+
+    let json = await send();
+    let text = geminiText(json);
+    if (text) return { text, model };
+
+    // ── the single deliberate RECITATION re-ask (§3.5) ────────────────────────────────────────────────
+    // Only when the model suppressed its OWN OUTPUT for recitation, and only when the INPUT was accepted
+    // (a `blockReason` is a verdict on the upload — nothing about the wording can move it). Exactly one
+    // extra call, with a varied prompt and a raised temperature so the sampler cannot walk the same path
+    // it just suppressed. Everything else — SAFETY, BLOCKLIST, PROHIBITED_CONTENT, and the blank `STOP`
+    // empty-200 — falls straight through to the throw below, unchanged.
+    if (!json.promptFeedback?.blockReason && isRecitationFinishReason(json.candidates?.[0]?.finishReason)) {
+      promptPart.text = prompt + RECITATION_REASK_SUFFIX;
+      // Temperature is the knob that makes the re-ask a different draw rather than a rerun of the same one.
+      body.generationConfig = { ...((body.generationConfig as Record<string, unknown>) ?? {}), temperature: 1.0 };
+      log.info("describe", `Gemini suppressed its answer for ${path.basename(absPath)} (RECITATION) — re-asking ONCE for original phrasing`);
+      json = await send();
+      text = geminiText(json);
+      if (text) {
+        log.info("describe", `the RECITATION re-ask for ${path.basename(absPath)} succeeded (${text.length} chars)`);
+        return { text, model };
+      }
     }
+
     // Everything Google said about this refusal, kept whole for the `.ai_description_rejected` record (§2.3).
     const rejection = (): ProviderRejection => ({
       provider: "gemini",
@@ -646,23 +720,19 @@ const gemini: DescribeAdapter = {
     if (json.promptFeedback?.blockReason) {
       throw attachRejection(new Error(`Gemini blocked the request: ${json.promptFeedback.blockReason}`), rejection());
     }
-    const candidate = json.candidates?.[0];
-    const text = (candidate?.content?.parts ?? []).map((p) => p.text ?? "").join("").trim();
-    // NAME the finishReason when there is no text. The empty-200 retry above is right for a candidate that
+    const finishReason = json.candidates?.[0]?.finishReason;
+    // NAME the finishReason when there is no text. The empty-200 retry policy is right for a candidate that
     // simply came back blank (finishReason STOP) — but Gemini also returns an empty candidate to REFUSE, and
     // a refusal is permanent. Without the reason in the message every refusal read as "returned no
     // description" → transient → 4 attempts × ~30s of certain failure per file, and those wasted failures
     // counted toward the batch ceiling (jobqueue §2.7) that halted the rest of the batch. Measured at ~3% of
     // calls on this corpus (RECITATION on slide/document images, the odd PROHIBITED_CONTENT).
-    // classifyProviderFault() reads this text and sorts the permanent reasons from the retryable ones.
-    if (!text) {
-      const err = new Error(`Gemini returned no description (finishReason: ${candidate?.finishReason ?? "none"})`);
-      // ONLY a refusing finishReason earns the rejection record. A blank candidate with `STOP` is the
-      // provider having a bad moment (§3.5) — it retries and usually succeeds, so writing it a rejection
-      // file would record a verdict the provider never reached.
-      throw isRefusalFinishReason(candidate?.finishReason) ? attachRejection(err, rejection()) : err;
-    }
-    return { text, model };
+    // classifyProviderFault() reads the ATTACHED evidence and sorts the permanent reasons from the retryable ones.
+    const err = new Error(`Gemini returned no description (finishReason: ${finishReason ?? "none"})`);
+    // ONLY a refusing finishReason earns the rejection record. A blank candidate with `STOP` is the
+    // provider having a bad moment (§3.5) — it retries and usually succeeds, so writing it a rejection
+    // file would record a verdict the provider never reached.
+    throw isRefusalFinishReason(finishReason) ? attachRejection(err, rejection()) : err;
   },
 };
 

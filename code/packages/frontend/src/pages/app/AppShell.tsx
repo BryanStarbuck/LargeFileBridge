@@ -9,6 +9,7 @@ import { HoverInfoBridge } from "../repos/HoverInfoRegion.js";
 import { OptionImagePreviewLayer } from "../../components/preview/OptionImagePreview.js";
 import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
+import { LiveUpdatesBanner } from "../../components/LiveUpdatesBanner.js";
 import { useSessionPing } from "../../lib/useSessionPing.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { useHotkeys } from "../../lib/hotkeys.js";
@@ -76,6 +77,9 @@ export function AppShell() {
     <div className="flex h-full">
       <Sidebar user={user ?? FALLBACK} />
       <main className="flex-1 overflow-y-auto">
+        {/* Live updates stopping is a TRUTH problem, not a cosmetic one — say it before the page's own
+            content, so a user watching a sync never mistakes a dead stream for a quiet one. */}
+        <LiveUpdatesBanner />
         <IpfsStatusBanner />
         {/* min-h-full + flex column so a full-page-height table (repos.mdx §3.3.1) can flex its body
             down to the bottom of the viewport; long/normal pages still grow and let <main> scroll. */}

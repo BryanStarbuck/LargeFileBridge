@@ -2,6 +2,7 @@
 import type {
   RepoRow,
   RepoDetail,
+  RepoSyncBlock,
   PinNowResult,
   FileRow,
   RepoSettings,
@@ -139,6 +140,10 @@ export const api = {
   toggleBookmark: (repoId: string, bookmarked: boolean) =>
     unwrap<RepoRow>(http.post(`/repos/${repoId}/bookmark`, { bookmarked })),
   rescan: () => unwrap<RescanResult>(http.post("/repos/rescan")),
+  // (Re)build one repo's per-file fingerprint index (storages.mdx §4.1a) — the fix behind the
+  // "the file index is incomplete" recommendation. `dropped` > 0 means it is STILL incomplete.
+  indexRepo: (repoId: string) =>
+    unwrap<{ indexed: number; dropped: number }>(http.post(`/repos/${repoId}/index`)),
   // Stop a batch (processing_batches.mdx §6.2): its QUEUED files become "Not attempted" and can be
   // re-run for free; anything already in flight finishes.
   stopBatch: (batchId: string) => unwrap<{ halted: number }>(http.post(`/progress/batches/${batchId}/stop`)),
@@ -165,6 +170,13 @@ export const api = {
   // Returns the refreshed repo detail so the "pull them down" banner re-derives and leaves the page.
   pull: (repoId: string, paths: string[], opts?: { compress?: boolean }) =>
     unwrap<RepoDetail>(http.post(`/repos/${repoId}/pull`, { paths, ...(opts ?? {}) })),
+  // Re-attempt convergence for a repo that has stopped fast-forwarding from its remote (bug #15B). Same
+  // fetch + ff-only merge the background pass runs — it never rewrites or discards anything of the user's.
+  // `syncBlocked: null` in the answer means the repo is converging again.
+  repoSyncCheck: (repoId: string) =>
+    unwrap<{ converged: boolean; syncBlocked: RepoSyncBlock | null }>(
+      http.post(`/repos/${repoId}/sync-check`),
+    ),
   // Shared decision policy (decisions.mdx §9/§14): read / patch the per-repo default-decision + attribution
   // policy. Both return { policy, shareStatus } (the doc + whether this computer shares decisions).
   decisionPolicy: (repoId: string) =>

@@ -15,7 +15,7 @@ import type { ProgressJob, ProgressKind, QueuedItemView, FailedItemView } from "
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { formatBytes, relativeTime } from "../../lib/format.js";
-import { verb } from "../../progress/ProgressContext.js";
+import { verb } from "../../progress/progress-context.js";
 
 // HALTED is its own state, never a flavour of Failed (to_fix.mdx §2.4/§7.3). A halted item was NEVER
 // ATTEMPTED — the provider's circuit opened (credits depleted, key revoked) and the queue dropped it rather

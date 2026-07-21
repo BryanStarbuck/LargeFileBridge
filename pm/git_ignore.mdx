@@ -259,6 +259,33 @@ Deciding **which** paths that refusal covers for a given owning repo — `<root>
 Writing the planned lines into each owning repo's root `.gitignore` (append-only, idempotent, preserve trailing newline) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `applyGitIgnore()` / `appendIgnoreLines()` (mirrors the existing `ensureLfbridgeIgnored()` append pattern in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`).
 
+#### 5.4.1 Asking git is THREE-valued: ignored / not ignored / **unknown** (LOCKED)
+
+`git check-ignore` is the source of truth for the ⊘ axis, so when it cannot answer, the honest verdict is
+**unknown** — never "not ignored". Folding a failure into `false` mis-files every affected file into the
+**big-files-not-git-ignored** nudge ([§3](#3-the-dialog), the category rollup) on nothing but a spawn error.
+A row whose verdict is unknown carries **no** `gitignore` value at all: the ⊘ column, the `bigNotIgnored`
+metric, and the `ignore` category all skip it.
+
+Two failure modes are guarded explicitly rather than being allowed to surface as an opaque spawn error:
+
+* **The repo is gone, or is not a git repository at all.** Checked before spawning; the batch is answered
+  as unknown with a named warning.
+* **The path list is bigger than the OS pipe buffer (64 KiB).** `check-ignore --stdin` stops reading stdin
+  the instant it hits a fatal (classically *"Pathspec … is in submodule …"*). On a small feed the write has
+  already landed in the pipe, so we get a readable exit-128 + stderr and split the batch at the submodule
+  boundary; on a large feed the write is still in flight and dies with **`EPIPE`**, stderr is lost, the split
+  has nothing to parse, and the WHOLE repo went blind (observed live: 89 failures on one repo with three
+  submodules and ~1,800 candidates). The feed is therefore **batched below the pipe buffer**, and any batch
+  that still fails is **bisected** so one poison path costs only its own verdict.
+
+Batching the `--stdin` feed, splitting on the submodule fatal, bisecting a failed batch, and reporting the
+unanswered paths as unknown is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `runCheckIgnore()` / `runCheckIgnoreBatch()` / `checkIgnoreRepoUsable()`, surfaced through `checkIgnoreDetailed()` / `checkIgnoreVerboseDetailed()` (and their async twins) as `CheckIgnoreResult.unknown`.
+
+Leaving an unknown row's git-ignore axis undecided, and keeping unknown rows out of the nudge count, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()` (returns `{}` for an unknown path) and the `bigNotIgnored` tally in `computeTaskMetrics()` (counts `gitignore === false`, never `undefined`).
+
 ### 5.5 UN-ignore: the OFF direction, and the only line LFB may delete (LOCKED)
 
 Turning the **⊘ toggle off** ([decision_toggles.mdx](./decision_toggles.mdx)) must actually un-ignore the

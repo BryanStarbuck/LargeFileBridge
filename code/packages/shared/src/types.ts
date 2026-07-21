@@ -217,6 +217,22 @@ export interface TaskMetrics {
   bigNotIgnored: number; // large files not yet git-ignored (the git-ignore nudge)
 }
 
+// WHY THIS REPO HAS STOPPED RECEIVING THE USER'S OTHER COMPUTERS' WORK (backbone_resilience.mdx §6.4).
+//
+// Large File Bridge converges a tracked working repo with `fetch` + `merge --ff-only` and, when git refuses,
+// it leaves the repo ALONE — that is the guest rule and it is correct. But a repo stuck that way never
+// converges again, so the refusal has to be visible instead of living only in the log. Absent ⇒ nothing is
+// blocking this repo.
+export interface RepoSyncBlock {
+  // "local-changes" — uncommitted edits sit where the incoming commit writes (commit or stash them).
+  // "diverged"      — this computer has commits the remote does not (only the user can decide how to join).
+  kind: "local-changes" | "diverged";
+  branch: string; // the branch that could not fast-forward, e.g. "main"
+  paths: string[]; // the working-tree files git named as being in the way (empty for a plain divergence)
+  detail: string; // git's own first lines, for the disclosure — never paraphrased
+  at: string; // ISO time the block was last observed
+}
+
 // The One-repo detail payload: header/status strip + file rows.
 export interface RepoDetail {
   repoId: string;
@@ -233,12 +249,19 @@ export interface RepoDetail {
   // Candidates the last scan's HARD candidate cap dropped for this unit (scan.mdx §4.5).
   // Absent/0 = the file list below is the complete census; >0 = the list is truncated by exactly this many.
   scanDroppedCandidates?: number;
+  // Large files the last tracking-index build found but could not record (storages.mdx §4.1a).
+  // Absent/0 = the fingerprint index is complete; >0 = exactly this many files are unindexed, therefore
+  // never fingerprinted, pinned, synced, or counted in this page's rollups.
+  indexDroppedFiles?: number;
   ipfs: IpfsHealth;
   counts: RepoCounts;
   files: FileRow[];
   // Files a peer computer of yours pinned that this computer lacks — drives the "pull them down" warning
   // (warnings.mdx §10.8.12). Empty/absent when there is nothing to pull.
   missingPinned?: MissingPinnedFile[];
+  // Set when this repo can no longer fast-forward from its remote, so your other computers' finished work
+  // can never arrive here until you resolve it. Absent = converging normally.
+  syncBlocked?: RepoSyncBlock;
   // Per-tab "what could be done" metric counts for the task-tab MetricsStrip (task_tabs.mdx §2).
   taskMetrics?: TaskMetrics;
   // Company/personal mapping (repo_company_mapping.mdx §7) — drives the Ownership section + grouping.
@@ -765,6 +788,22 @@ export interface RepoSettings {
 // ── Scheduled workers — the transparency contract (scan.mdx §7, storage.mdx §13)
 export type WorkerKind = "scan" | "pin" | "device";
 
+// Why a scheduled fire never reached the backend (worker-misses.service.ts). Three genuinely different
+// states that used to be reported as one wrong thing ("app not running? Skipping this interval."):
+//   * app-not-running — the connection was REFUSED / the app wasn't listening. Expected between sessions.
+//   * ack-timeout     — the backend was reachable but did not acknowledge the kick in time. NOT app-down.
+//   * socket-error    — the connection was torn down mid-flight (UND_ERR_SOCKET & friends); retried.
+//   * http-error      — the backend answered, but refused the job.
+export type WorkerMissReason = "app-not-running" | "ack-timeout" | "socket-error" | "http-error";
+
+/** A scheduled fire that could not be delivered — written by the launchd trigger, read by the app. */
+export interface WorkerMiss {
+  at: string; // ISO time of the most recent missed fire
+  reason: WorkerMissReason;
+  detail: string; // the underlying cause, in the trigger's words
+  consecutive: number; // how many fires in a row have gone undelivered since the last good run
+}
+
 export interface WorkerState {
   kind: WorkerKind;
   installed: boolean;
@@ -773,6 +812,13 @@ export interface WorkerState {
   label: string;
   lastRunAt: string | null;
   lastRunOk: boolean | null;
+  // True while this worker's pass is actually executing right now (run-job.ts / scan-job.ts). A long pass
+  // is NOT a stall: the UI must not read "running for 3 minutes" as "overdue".
+  running: boolean;
+  // The last scheduled fire that never reached the backend, or null when every fire has landed since the
+  // last successful run. This is the charter's background-process transparency for the case the app could
+  // not see on its own — a cycle that was triggered and lost.
+  lastMiss: WorkerMiss | null;
   // Derived (backbone_resilience.mdx §7): true when the worker is installed + enabled but its last
   // successful run is older than 2× its interval (or it has never run) — the "an automatic job has
   // silently stalled" signal, distinct from off (disabled) and failed (ran with an error). Computed on
@@ -790,6 +836,20 @@ export interface WatcherState {
   pending: number;
 }
 
+// A storage backbone whose git push keeps being REJECTED — i.e. this computer's tracking state is sitting
+// in local commits that the user's other computers cannot see (git_backbone.mdx §6.1; the "giving up this
+// cycle" defect). Written by the backend's push-health service; only OUTSTANDING failures are surfaced, and
+// a single successful push clears the entry. Silence here means every backbone pushed.
+export interface BackbonePushState {
+  storageId: string;
+  repoName: string; // the backbone working copy's folder name — what the user recognizes
+  lastPushAt: string | null; // ISO time of the last push that landed, or null if one never has
+  lastFailureAt: string | null; // ISO time of the most recent cycle that gave up
+  consecutiveFailures: number; // cycles in a row that could not push
+  unpushedCommits: number; // commits the branch is ahead of the remote by
+  problem: string | null; // the last remote error, in the git layer's words
+}
+
 export interface JobsPageData {
   scan: WorkerState;
   pin: WorkerState;
@@ -798,6 +858,9 @@ export interface JobsPageData {
   computerLabel: string;
   ipfs: IpfsHealth;
   peers: PeerRow[];
+  // Backbones that are failing to share this computer's state (empty = everything is reaching the other
+  // computers). The charter's transparency rule applied to the sync itself, not just to the schedule.
+  backbonePush: BackbonePushState[];
 }
 
 // ── The on-demand scan job (scan.mdx §10) ───────────────────────────────────
@@ -1592,13 +1655,37 @@ export interface ProviderResumeResult {
   reason: string | null;
   health: ProviderHealthView;
 }
+/**
+ * Why a media file has NO description (ai_description.mdx §2.3) — read back from its
+ * `.ai_description_rejected` sidecar.
+ *
+ * This exists so the viewer can say "AI description unavailable — <reason>" instead of showing the same
+ * empty "No AI description yet" pane a never-asked file shows. Those two states are NOT the same thing:
+ * one is work not yet done, the other is a settled answer the provider already gave and Large File Bridge
+ * already recorded, and a user staring at a blank field has no way to tell them apart.
+ */
+export interface DescribeRejectionView {
+  /** The provider's reason CODE — e.g. "RECITATION", "SAFETY", "PROHIBITED_CONTENT", or a block reason. */
+  reason: string;
+  /** The provider's own prose explaining which rule fired, when it sent any. */
+  message: string | null;
+  provider: string | null; // "gemini" | "grok" | "openai"
+  /** The `.ai_description_rejected` record holding the provider's untouched response. */
+  recordPath: string;
+  rejectedAt: string | null; // ISO
+}
 // An existing generated description read back for a media file (GET /api/describe/file).
 export interface DescribeView {
   mediaPath: string;
   descriptionPath: string; // the sidecar beside the media at <root>/<rel-without-ext>.ai_description
-  text: string; // the human-readable description body
+  text: string; // the human-readable description body — "" when `rejection` is set (there IS no description)
   model: string | null; // the model id used (e.g. "gemini-flash-latest")
   generatedAt: string | null; // ISO
+  /** Set ONLY when there is no description because the provider REFUSED this file (§2.3). `text` is then
+   *  empty and `descriptionPath` points at the `.ai_description_rejected` record. Absent/null on a normal
+   *  description — so `view.rejection ? …` is the one check that tells "unavailable, and here is why"
+   *  apart from "here is the description". */
+  rejection?: DescribeRejectionView | null;
 }
 // The result of generating one description (POST /api/describe/file). Reports truthfully per file.
 export interface DescribeResult {
@@ -1820,6 +1907,10 @@ export interface StorageRow {
   initialized: boolean;    // has a storage.yaml (false = a detected candidate not yet set up)
   hasLfbridge: boolean;    // has the hidden .lfbridge/ tracking area
   fileCount: number | null;// large files in the fingerprint index (null until indexed)
+  // Large files the last index build found but could not record — 0 when the index is complete
+  // (storages.mdx §4.1a). While > 0, `fileCount` is an under-report by exactly this many and must never be
+  // shown on its own as if it were the whole truth.
+  indexDroppedFiles: number;
   clones: StorageClones;
   route: string;           // where the row / left-bar child links
 }

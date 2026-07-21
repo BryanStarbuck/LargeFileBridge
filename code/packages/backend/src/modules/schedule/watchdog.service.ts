@@ -9,8 +9,8 @@
 // it so the OS cadence resumes on its own. While the app runs, a dead OS trigger can never silently halt
 // the flow.
 import type { WorkerKind } from "@lfb/shared";
-import { workerState, reconcileWorkerSchedules, stampRun } from "./schedule.service.js";
-import { pinAll, pushDeviceBackbone } from "../pin/pin.service.js";
+import { workerState, reconcileWorkerSchedules } from "./schedule.service.js";
+import { startRun, runIsActive } from "./run-job.js";
 import { startScan, scanIsRunning } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
@@ -26,19 +26,14 @@ const WATCHED: WorkerKind[] = ["device", "pin", "scan"];
 let timer: ReturnType<typeof setInterval> | null = null;
 let ticking = false; // single-flight: never let two ticks overlap
 
-/** Run the same work the OS worker would have, in-process, and stamp it (mirrors internal.router `/run/:worker`). */
-async function runWorkerInProcess(kind: WorkerKind): Promise<void> {
-  if (kind === "scan") {
-    startScan("scheduled"); // detached job; it stamps its own last-run on completion (scan-job.ts)
-    return;
-  }
-  if (kind === "device") {
-    await pushDeviceBackbone();
-    await stampRun("device", true);
-    return;
-  }
-  await pinAll();
-  await stampRun("pin", true);
+/**
+ * Run the same work the OS worker would have, in-process (mirrors internal.router `/run/:worker`). Every
+ * kind is now a DETACHED job that stamps its own last-run on completion (scan-job.ts / run-job.ts), so this
+ * starts the pass and returns — it never holds the watchdog tick open for the length of a pin pass.
+ */
+function runWorkerInProcess(kind: WorkerKind): boolean {
+  if (kind === "scan") return startScan("scheduled").started;
+  return startRun(kind as "pin" | "device", "watchdog").started;
 }
 
 /** One heartbeat: run and repair any overdue worker. Single-flighted; never throws (a fault is logged). */
@@ -55,7 +50,32 @@ async function tick(): Promise<void> {
         log.warn("watchdog", `could not read ${kind} worker state: ${(e as Error).message}`);
         continue;
       }
-      if (!st.installed || !st.enabled || !st.overdue) continue;
+      if (!st.installed || !st.enabled) continue;
+
+      // RECOVER A MISSED CYCLE. The launchd trigger records any fire it could not deliver — the app was
+      // down, or it never acknowledged (worker-misses.service.ts). Those cycles are lost work the charter
+      // says must not vanish silently, and waiting for the 2×-interval "overdue" threshold would sit on
+      // them for another half hour. If a fire went undelivered and no pass is in flight, run it NOW; the
+      // completed run clears the record (stampRun).
+      const missed = st.lastMiss !== null && !st.running;
+      if (!missed && !st.overdue) continue;
+      if (missed && !st.overdue) {
+        log.info(
+          "watchdog",
+          `${kind} worker: ${st.lastMiss?.consecutive ?? 1} scheduled fire(s) went undelivered (${st.lastMiss?.reason}: ${st.lastMiss?.detail}) — running the missed cycle now`,
+        );
+        runWorkerInProcess(kind);
+        continue; // a missed delivery is not evidence the OS schedule is broken — no reconcile needed
+      }
+
+      // A pin/device pass already executing is not a stalled worker — leave it to finish and stamp itself.
+      if ((kind === "pin" || kind === "device") && runIsActive(kind)) {
+        log.debug(
+          "watchdog",
+          `${kind} worker overdue (last ok ${st.lastRunAt ?? "never"}) but its pass is already running — leaving it to finish`,
+        );
+        continue;
+      }
 
       // A scan already in flight isn't a dead trigger — scanAll() can legitimately run longer than the
       // scan interval on a big filesystem, and startScan() is single-flight (scan-job.ts): calling it
@@ -77,14 +97,9 @@ async function tick(): Promise<void> {
         "watchdog",
         `${kind} worker overdue (last ok ${st.lastRunAt ?? "never"}, every ${Math.round(st.intervalSeconds / 60)} min) — running it in-process and repairing its OS schedule`,
       );
-      try {
-        await runWorkerInProcess(kind);
-        log.info("watchdog", `${kind} worker: in-process run complete`);
-      } catch (e) {
-        // stamp the in-process failure so the overdue signal (and the next tick) reflect reality
-        if (kind === "device" || kind === "pin") await stampRun(kind, false).catch(() => {});
-        log.error("watchdog", `${kind} worker in-process run failed: ${(e as Error).message}`);
-      }
+      // Starting is all this does — the pass is detached and reports its own outcome (a failure is logged
+      // and stamped by the runner itself), so there is nothing to await or catch here.
+      runWorkerInProcess(kind);
       overdueKinds.push(kind);
     }
     // If any worker was overdue, its launchd job is likely dead/stale — rewrite + reload the plists so the

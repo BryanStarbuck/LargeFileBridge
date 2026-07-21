@@ -449,8 +449,11 @@ edge case ([storage_company.mdx §11.4](./storage_company.mdx#114-push-retries))
 [storage_personal.mdx §17.4](./storage_personal.mdx#174-stage-4--push-changed) already asked for; that rule
 is now **built**, and this section is where the engine states it.
 
-* **Backoff `0s / 2s / 8s`.** The first attempt is immediate; a peer's push usually lands within seconds,
-  so a short then longer wait costs nothing when it works and buys the race when it does not.
+* **Backoff `0s / ~2s / ~8s`, JITTERED.** The first attempt is immediate; a peer's push usually lands
+  within seconds, so a short then longer wait costs nothing when it works and buys the race when it does
+  not. Each wait carries **±40% randomness**, because a *fixed* ladder is the same ladder on **every one of
+  the user's computers**: two machines that collide once then retry in lockstep and collide again. Jitter is
+  the only thing that can break that phase lock — no local lock can exclude another **computer's** push.
 * **Every retry re-pulls first**, so we are always pushing on top of the newest remote state — running the
   full §4 merge including §4.3.1's per-file resolution. If that re-pull leaves something genuinely
   unresolvable, LFB **stops and surfaces** rather than pushing blindly.
@@ -459,11 +462,50 @@ is now **built**, and this section is where the engine states it.
   failure** and a routine **non-fast-forward race** were indistinguishable in the log — and if a later
   retry succeeded, the fact that anything went wrong vanished entirely. Each attempt now logs its
   classification and its attempt number; a later success **clears** the earlier attempt's problem.
+* **An authentication rejection is not retried at all.** Re-pulling cannot produce a credential, so the
+  remaining attempts only widen the window in which other cycles queue behind this storage's lock. It is
+  recorded and surfaced immediately (§6.4).
 * **Exhausting the budget is not data loss.** The commit stays local, the fault is reported, and the
-  always-push-when-ahead rule (§6.1) sends it on the next cycle.
+  always-push-when-ahead rule (§6.1) sends it on the next cycle — plus the re-arm and the user-visible
+  record in §6.4.
 
 The three-attempt push budget with backoff, its per-attempt re-pull, and its per-attempt logging are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `BACKOFF_MS = [0, 2000, 8000]` loop, each iteration calling `GitBackbone.pull()` before the next attempt).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `ATTEMPTS` loop, each iteration calling `GitBackbone.pull()` before the next attempt); the jittered wait itself is `pushRetryDelayMs()` in the same file.
+
+---
+
+### 6.4 "Giving up this cycle" must never mean giving up (LOCKED)
+
+A cycle that exhausts its budget has left this computer's tracking state **committed but unshared**: the
+user's other computers do not learn about the new or changed large files, and every screen still looks
+healthy. **A machine that has silently stopped sharing is the worst outcome this product has** — it is the
+exact drift LFBridge exists to prevent. So exhaustion is a **fact**, not a log line:
+
+* **It is recorded durably** in the state root (`~/T/_large_files_bridge/backbone-push-health.json`) with
+  the storage, the backbone folder, the last push that *did* land, the consecutive-failure count, how many
+  commits are waiting, and the remote's own complaint. Machine-local; it never travels.
+* **The push is re-armed** on a jittered exponential backoff (≈1 min, doubling, capped at 15 min) for that
+  one storage, so the queued commits leave minutes later instead of waiting on the 10–15-minute workers or
+  on a page load.
+* **A single successful push erases the record** and cancels the re-arm, so the warning self-clears the
+  moment the machine is sharing again — the same rule as a missed worker cycle.
+* **The user sees it.** The Scans page leads with *"This computer hasn't shared its file list with your
+  other computers"*, names the backbone, says how long it has been, and says plainly that nothing is lost
+  and Large File Bridge is still retrying.
+
+The durable record, the jittered re-arm and the self-clearing rule are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/push-health.service.ts` — `recordPushFailure()`, `armUnpushedRetry()` / `unpushedRetryDelayMs()`, and `recordPushSuccess()`; the git cycle calls them from `GitBackbone.noteUnpushed()` in `git.service.ts`.
+
+Surfacing it to the user is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (the `backbonePush` field), rendered by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `BackbonePushCard` / `unsharedNote()`.
+
+**Why there is no cross-process file lock for the git cycle.** Only one Large File Bridge backend can run
+per computer (`shared/single-instance.ts`, `backend.lock`), and the launchd worker does no git of its own —
+it POSTs a kick and the work runs inside that one backend
+(`code/deploy/launchd/run-worker.mjs`). The in-process per-storage lock (`git-lock.ts`) and the working-tree
+gate (`worktree-gate.ts`) therefore already serialize every git cycle on this machine. The pushes we lose
+to come from the user's **other computers**, which no local lock can exclude.
 
 ---
 

@@ -12,6 +12,9 @@ import type { SchedulerInstaller } from "./os/installer.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { watcherState } from "../watcher/watcher.service.js";
+import { isWorkerActive } from "./worker-activity.js";
+import { workerMiss, clearWorkerMiss } from "./worker-misses.service.js";
+import { backbonePushStates } from "../git/push-health.service.js";
 import { log } from "../../shared/logging.js";
 
 // Mac launchd is the shipped path; other platforms fall back to a no-op installer
@@ -114,6 +117,7 @@ export async function workerState(kind: WorkerKind): Promise<WorkerState> {
   const enabled = installed ? await inst.isEnabled(block.label) : block.enabled;
   const on = enabled || block.enabled;
   const intervalSeconds = intervalFor(kind);
+  const running = isWorkerActive(kind);
   return {
     kind,
     installed,
@@ -122,8 +126,15 @@ export async function workerState(kind: WorkerKind): Promise<WorkerState> {
     label: block.label,
     lastRunAt: block.last_run_at,
     lastRunOk: block.last_run_ok,
-    // Only a worker that is supposed to be running can be "overdue"; an off/uninstalled worker isn't.
-    overdue: installed && on ? isWorkerOverdue(intervalSeconds, block.last_run_at) : false,
+    running,
+    // The charter's background-process transparency for the cycles the app could not see: a scheduled fire
+    // that the launchd trigger could not deliver (worker-misses.service.ts). Cleared by the next good run.
+    lastMiss: workerMiss(kind),
+    // Only a worker that is supposed to be running can be "overdue"; an off/uninstalled worker isn't. And a
+    // pass EXECUTING right now is not overdue no matter how long it has been going — a pin/device pass is
+    // detached and may legitimately outlast its own interval (run-job.ts). Calling that "overdue" would
+    // send the watchdog to kick a worker that is already working.
+    overdue: installed && on && !running ? isWorkerOverdue(intervalSeconds, block.last_run_at) : false,
   };
 }
 
@@ -137,6 +148,9 @@ export async function jobsPageData(): Promise<JobsPageData> {
     computerLabel: c.computer.label,
     ipfs: await ipfs.health(),
     peers: peerRows(),
+    // Backbones whose push keeps being rejected — this computer's tracking state is committed but has NOT
+    // reached the user's other computers (push-health.service.ts, bug #16). Empty when all is well.
+    backbonePush: backbonePushStates(),
   };
 }
 
@@ -378,4 +392,7 @@ export async function stampRun(kind: WorkerKind, ok: boolean): Promise<void> {
     block.last_run_ok = ok;
     return c;
   });
+  // A completed pass means every previously-undelivered fire has now been made good — drop the missed-cycle
+  // record so the transparency surface reflects a recovered worker rather than an old scare.
+  if (ok) clearWorkerMiss(kind);
 }

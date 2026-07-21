@@ -43,7 +43,14 @@ eventsRouter.get("/stream", (req, res) => {
   res.setHeader("X-Accel-Buffering", "no"); // never let a reverse proxy buffer a live stream
 
   const write = (ev: StateStreamEvent): void => {
-    if (res.writableEnded) return;
+    // A socket the client already closed is NOT a broken subscriber — it is a client that is about to
+    // reconnect. Check every "this is gone" signal Node gives us (not just `writableEnded`, which stays
+    // false when the peer vanished without us calling end()) so we tear down quietly instead of throwing
+    // out into the bus and being dropped as if we had misbehaved.
+    if (closed || res.writableEnded || res.destroyed || res.socket?.destroyed) {
+      cleanup();
+      return;
+    }
     try {
       res.write(JSON.stringify(ev) + "\n");
       (res as unknown as { flush?: () => void }).flush?.();
@@ -66,20 +73,47 @@ eventsRouter.get("/stream", (req, res) => {
     unsubscribe = null;
     if (heartbeat) clearInterval(heartbeat);
     heartbeat = null;
-    if (!res.writableEnded) res.end();
+    // Ending a response whose socket is already gone can itself throw (ERR_STREAM_DESTROYED / EPIPE).
+    // Cleanup runs from inside the bus's fan-out, so a throw here is exactly what got a healthy
+    // subscriber logged as "threw and was dropped". Nothing about teardown is worth propagating.
+    try {
+      if (!res.writableEnded && !res.destroyed) res.end();
+    } catch {
+      /* socket already gone — nothing to close */
+    }
     log.debug("events", `state stream closed (${subscriberCount()} remaining)`);
   }
 
   // The client going away is the ONLY normal end of this stream — always unsubscribe, or the subscriber
-  // set grows without bound for the life of the process.
+  // set grows without bound for the life of the process. Listen on BOTH req and res: `req.close` covers
+  // the request stream ending, while `res.close`/`res.error` are what actually fire when the peer resets
+  // a long-lived response (the SSE/NDJSON case). Unregistering here means the subscriber is gone BEFORE
+  // any write can fail, instead of being discovered by a throwing write mid-broadcast.
   req.on("close", cleanup);
   req.on("error", cleanup);
+  res.on("close", cleanup);
+  // An 'error' on the response with no listener is an unhandled 'error' event — it would take the whole
+  // backend down when a browser tab dies at the wrong moment.
+  res.on("error", (e) => {
+    log.debug("events", `state stream socket error, closing: ${(e as Error).message}`);
+    cleanup();
+  });
 
   // `hello` first, so a reconnecting client can compare revisions and tell "nothing moved while I was
   // gone" from "I missed something" without a special-case protocol.
   write({ type: "hello", revisions: currentRevisions() });
 
-  unsubscribe = subscribe((bump) => write({ type: "bump", topic: bump.topic, revision: bump.revision }));
+  // Belt and braces: the bus DROPS a subscriber that throws (it has to — a notification must never fail
+  // the write that persisted data). This stream must therefore never let anything escape, or a live client
+  // silently stops receiving bumps while its socket is still perfectly open.
+  unsubscribe = subscribe((bump) => {
+    try {
+      write({ type: "bump", topic: bump.topic, revision: bump.revision });
+    } catch (e) {
+      log.debug("events", `stream delivery failed, closing: ${(e as Error).message}`);
+      cleanup();
+    }
+  });
   heartbeat = setInterval(() => write({ type: "heartbeat" }), HEARTBEAT_MS);
   // Never let the heartbeat timer hold the process open at shutdown.
   heartbeat.unref?.();

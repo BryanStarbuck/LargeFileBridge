@@ -6,7 +6,7 @@ import { Toaster } from "sonner";
 import { queryClient } from "./api/queryClient.js";
 import { router } from "./router.js";
 import { api } from "./api/client.js";
-import { authCore } from "./api/authCore.js";
+import { authCore, startSessionKeepAlive } from "./api/authCore.js";
 import { SignInPage } from "./pages/sign-in/SignInPage.js";
 import { SsoCallbackPage } from "./pages/sign-in/SsoCallbackPage.js";
 import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
@@ -233,6 +233,12 @@ function Root() {
 // auth gate (the user isn't "authenticated" per /auth/me yet). Branch here — not inside Root — so
 // Root's hooks always run in the same order (Rules of Hooks).
 const isSsoCallback = window.location.pathname === "/sso-callback";
+
+// Keep the 15-minute Bearer renewed while this tab is open and active (authentication.mdx §4). The
+// SDK's own one-shot timer is paused by sleep and is disarmed for good by a single failed mint; this
+// watchdog re-derives the answer every minute (and on wake / tab-visible / back-online), so a token can
+// never lapse under an open page and surface as a failed fetch. Started once, at mount.
+startSessionKeepAlive();
 
 // Wrap the initial mount: a failure here (missing #root, a throw during the first render) would leave
 // a blank page with nothing in the fault trail — log it (fatal: the app never came up) then rethrow.

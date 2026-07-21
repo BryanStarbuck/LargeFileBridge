@@ -1,8 +1,7 @@
 // Loopback-only trigger the launchd workers hit (code_plan §6). Not for browsers.
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { startScan } from "../scanner/scan-job.js";
-import { pinAll, pushDeviceBackbone } from "../pin/pin.service.js";
-import { stampRun } from "../schedule/schedule.service.js";
+import { startRun } from "../schedule/run-job.js";
 import { log } from "../../shared/logging.js";
 
 export const internalRouter = Router();
@@ -14,37 +13,35 @@ function loopbackOnly(req: Request, res: Response, next: NextFunction): void {
 }
 internalRouter.use(loopbackOnly);
 
-internalRouter.post("/run/:worker", async (req, res) => {
+// FIRE-AND-ACKNOWLEDGE — every worker kick ACCEPTS the job and returns immediately; the work runs detached.
+//
+// This route must never hold the request open for the duration of the work. A pin pass walks every repo and
+// a device pass git-pulls/commits/pushes every storage — minutes, routinely longer than any sane client
+// timeout. When `pin`/`device` awaited their pass here, the launchd trigger aborted the socket at 60s and
+// logged "backend unreachable … app not running? Skipping this interval." while the pass carried on
+// perfectly well behind it: a false fault, a false diagnosis, and a false claim that the cycle was skipped
+// (nothing was skipped — Express cannot cancel an async handler because the client hung up). `scan` was
+// always shaped this way; `pin` and `device` now match it via run-job.ts, which stamps last_run on
+// COMPLETION so the record still reflects the work rather than the accept.
+internalRouter.post("/run/:worker", (req, res) => {
   const worker = req.params.worker;
   try {
     if (worker === "scan") {
-      // Start the detached scan job and return immediately. The full-filesystem walk can far exceed
-      // the run-worker's 60s fetch timeout; blocking here would make launchd abort the request and log
-      // a phantom failure while the scan actually keeps running. The job runner stamps last_run on
-      // completion (scan-job.ts), so we do NOT stamp here.
       const { started } = startScan("scheduled");
-      return res.json({ ok: true, data: { ran: worker, started } });
+      return res.json({ ok: true, data: { ran: worker, accepted: true, started } });
     }
-    // The every-10-min DEVICE-REGISTRATION worker (devices.mdx §12): make sure THIS computer's device
-    // info is written & pushed to each Git-backed storage's repo, pulling first even with nothing to
-    // change. Decoupled from the IPFS opt-in.
-    if (worker === "device") {
-      await pushDeviceBackbone();
-      await stampRun("device", true);
-      return res.json({ ok: true, data: { ran: worker } });
-    }
-    if (worker === "pin") await pinAll();
-    else return res.status(400).json({ ok: false, error: "unknown worker" });
-    await stampRun("pin", true);
-    res.json({ ok: true, data: { ran: worker } });
-  } catch (e) {
-    log.error("internal", `${worker} run failed: ${(e as Error).message}`);
-    // Stamp the failed run best-effort — a stamp write error here must not mask the original failure.
+    // `pin` (the IPFS sync pass) and `device` (the every-10-min device-registration write-back,
+    // devices.mdx §12). `started: false` means a pass of that kind was already in flight and this kick
+    // coalesced onto it — a normal, successful outcome for the caller, not an error.
     if (worker === "pin" || worker === "device") {
-      await stampRun(worker as "pin" | "device", false).catch((se) =>
-        log.error("internal", `stamping failed ${worker} run failed: ${(se as Error).message}`),
-      );
+      const { started } = startRun(worker, "scheduled");
+      return res.json({ ok: true, data: { ran: worker, accepted: true, started } });
     }
+    return res.status(400).json({ ok: false, error: "unknown worker" });
+  } catch (e) {
+    // Only an ACCEPT failure can land here now (the work itself reports through run-job.ts) — so there is
+    // no run to stamp: nothing started.
+    log.error("internal", `${worker} run could not be accepted: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
