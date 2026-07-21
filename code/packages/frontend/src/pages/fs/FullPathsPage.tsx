@@ -1,7 +1,8 @@
 // Full paths (full_paths.mdx) — a FLAT, recursive TanStack table of the LARGE files under a chosen
 // root. Lead columns Name + full absolute Path, per-row checkbox, trailing ⋯ kebab. The control row is
-// built from three SEGMENTED CONTROLS (compressed / sort / IPFS) plus the house search + sort/filter
-// icons; the action row (Select all / IPFS pin / Unpin) drives the one_repo.mdx decision model
+// the house search + a sort segmented + the sort/filter icons; filtering lives in the Filter ⛛
+// dropdown's §2.11 panel (tables.mdx §2.11 — the old compressed/IPFS segmented quick-filters are
+// retired into it); the action row (Select all / IPFS pin / Unpin) drives the one_repo.mdx decision model
 // (the pin ⇄ ignore decision) via the per-entity endpoint — files outside a registered repo (or with Never IPFS on)
 // are reported as skipped, never silently dropped, and no bytes ever move.
 import {
@@ -50,6 +51,19 @@ import { clientLog } from "../../lib/clientLog.js";
 import { useDebounced } from "../../lib/useDebounced.js";
 import { useWindowedRows } from "../../components/table/useWindowedRows.js";
 import { useStreamedFlatListing } from "../../components/table/useStreamedFlatListing.js";
+import { useTableView } from "../../api/useTableView.js";
+// The §2.11 file filter (tables.mdx §2.11) — expression model + the segmented panel UI.
+import {
+  evalFileFilter,
+  parseFileFilter,
+  selectionsFromAst,
+  setFieldInExpr,
+  type FileFilterFieldId,
+  type FileFilterRowValue,
+  type FilterNode,
+} from "../../components/table/fileFilter.js";
+import { FileFilterClauseBar, FileFilterPanel } from "../../components/table/FileFilterPanel.js";
+import { Popover } from "../../components/table/Popover.js";
 import { setOptionPreviewTarget } from "../../components/preview/OptionImagePreview.js";
 import { FsTabs } from "./FsTabs.js";
 
@@ -62,12 +76,39 @@ const ROW_STYLE: CSSProperties = {
   containIntrinsicSize: `${ROW_H}px`,
 };
 
-type CompressFilter = "both" | "compressed" | "uncompressed";
-type IpfsFilter = "both" | "in" | "not";
-
-const compressStateOf = (e: FsEntry): CompressFilter | "none" =>
+const compressStateOf = (e: FsEntry): "compressed" | "uncompressed" | "none" =>
   e.badges.includes("compressed") ? "compressed" : e.badges.includes("compress") ? "uncompressed" : "none";
 const inIpfs = (e: FsEntry): boolean => e.badges.includes("pin");
+
+// The §2.11 file filter (tables.mdx §2.11.6 — the Full-paths subset). This page's old
+// `Both · Compressed · Uncompressed` and `In IPFS · Not · Both` segmented quick-filters are RETIRED
+// into this dropdown panel (completing tables.mdx §2.6): the per-kind compressible trio and
+// `add_to_ipfs` express both, plus git_ignore. No size field — every row here is already large.
+const FS_PATHS_FF_FIELDS: FileFilterFieldId[] = [
+  "add_to_ipfs",
+  "git_ignore",
+  "compressible_videos",
+  "compressible_images",
+  "compressible_audio",
+];
+
+const ffRowValue = (e: FsEntry, f: FileFilterFieldId): FileFilterRowValue => {
+  const uncompressed = compressStateOf(e) === "uncompressed";
+  switch (f) {
+    case "add_to_ipfs":
+      return inIpfs(e) ? "done" : "not_yet";
+    case "git_ignore":
+      return e.badges.includes("git_ignored") ? "done" : "not_yet";
+    case "compressible_videos":
+      return uncompressed && fileTypeForName(e.name) === "video" ? "yes" : "no";
+    case "compressible_images":
+      return uncompressed && fileTypeForName(e.name) === "image" ? "yes" : "no";
+    case "compressible_audio":
+      return uncompressed && fileTypeForName(e.name) === "audio" ? "yes" : "no";
+    default:
+      return "na";
+  }
+};
 
 // Optimistic badge flip for the pin/unpin action (P-08) — add or remove the "pin" badge without a
 // filesystem re-walk. Preserves the backend's rightmost-first ordering closely enough for the chip row.
@@ -93,10 +134,40 @@ export function FullPathsPage() {
 
   // Filters
   const [search, setSearch] = useState("");
-  const [compressed, setCompressed] = useState<CompressFilter>("both");
-  const [ipfs, setIpfs] = useState<IpfsFilter>("both");
   const [minSizeMB, setMinSizeMB] = useState("");
   const [pathContains, setPathContains] = useState("");
+
+  // The §2.11 file filter (tables.mdx §2.11): ONE expression string is the state — the segmented
+  // controls and the clause bar are two views of it, and it persists per user as
+  // tables.views["fs-paths"].file_filter. Invalid text keeps the LAST VALID expression applied.
+  const [fileFilterText, setFileFilterText] = useState("");
+  const ffParsed = useMemo(() => parseFileFilter(fileFilterText, FS_PATHS_FF_FIELDS), [fileFilterText]);
+  const [ffApplied, setFfApplied] = useState<FilterNode | null>(null);
+  useEffect(() => {
+    if (ffParsed.ok) setFfApplied(ffParsed.ast);
+  }, [ffParsed]);
+  const ffSelections = useMemo(
+    () => selectionsFromAst(ffParsed.ok ? ffParsed.ast : ffApplied),
+    [ffParsed, ffApplied],
+  );
+  const setFfField = useCallback(
+    (field: FileFilterFieldId, value: string) =>
+      setFileFilterText((t) => setFieldInExpr(t, field, value, FS_PATHS_FF_FIELDS)),
+    [],
+  );
+  // Persistence (tables.mdx §2.11.5) — this page renders its own table (not the shared DataTable), so
+  // it hydrates/saves the same per-user tables.views record directly. The hydrated gate keeps the
+  // first render from writing the default over a stored view.
+  const { view: storedView, loaded: viewLoaded, save: saveView } = useTableView("fs-paths");
+  const [ffHydrated, setFfHydrated] = useState(false);
+  useEffect(() => {
+    if (!viewLoaded || ffHydrated) return;
+    if (storedView && typeof storedView.file_filter === "string") setFileFilterText(storedView.file_filter);
+    setFfHydrated(true);
+  }, [viewLoaded, ffHydrated, storedView]);
+  useEffect(() => {
+    if (ffHydrated) saveView({ file_filter: fileFilterText });
+  }, [ffHydrated, fileFilterText, saveView]);
 
   // Shared sort state (segmented control + house sort icon) — Size ▼ (biggest on top) by default.
   const [sorting, setSorting] = useState<SortingState>([{ id: "size", desc: true }]);
@@ -125,7 +196,7 @@ export function FullPathsPage() {
   const pathContainsD = useDebounced(pathContains, 200);
   const minSizeMBD = useDebounced(minSizeMB, 200);
 
-  // Client-side filters (search + the two segmented quick-filters + the icon-dropdown finers).
+  // Client-side filters (search + the §2.11 expression + the icon-dropdown finers).
   const filtered = useMemo(() => {
     const q = searchD.trim().toLowerCase();
     const pc = pathContainsD.trim().toLowerCase();
@@ -134,12 +205,10 @@ export function FullPathsPage() {
       if (q && !(`${e.name} ${e.path}`.toLowerCase().includes(q))) return false;
       if (pc && !e.path.toLowerCase().includes(pc)) return false;
       if (minBytes && (e.sizeBytes ?? 0) < minBytes) return false;
-      if (compressed !== "both" && compressStateOf(e) !== compressed) return false;
-      if (ipfs === "in" && !inIpfs(e)) return false;
-      if (ipfs === "not" && inIpfs(e)) return false;
+      if (ffApplied && !evalFileFilter(ffApplied, (f) => ffRowValue(e, f))) return false;
       return true;
     });
-  }, [files, searchD, pathContainsD, minSizeMBD, compressed, ipfs]);
+  }, [files, searchD, pathContainsD, minSizeMBD, ffApplied]);
 
   const columns = useMemo<ColumnDef<FsEntry>[]>(
     () => [
@@ -366,15 +435,8 @@ export function FullPathsPage() {
           />
         </div>
 
-        <Segmented
-          value={compressed}
-          onChange={setCompressed}
-          options={[
-            { value: "both", label: "Both" },
-            { value: "compressed", label: "Compressed" },
-            { value: "uncompressed", label: "Uncompressed" },
-          ]}
-        />
+        {/* The old Compressed / IPFS segmented quick-filters lived here — retired into the Filter ⛛
+            dropdown's §2.11 panel (tables.mdx §2.11.6, completing §2.6). */}
 
         {/* Sort segmented control — shares state with the sort icon below */}
         <div className="inline-flex items-center gap-1.5">
@@ -403,23 +465,13 @@ export function FullPathsPage() {
           </div>
         </div>
 
-        <Segmented
-          value={ipfs}
-          onChange={setIpfs}
-          options={[
-            { value: "in", label: "In IPFS" },
-            { value: "not", label: "Not" },
-            { value: "both", label: "Both" },
-          ]}
-        />
-
         <div className="flex-1" />
 
         <IconButton active={sorting.length > 0} title="Sort" onClick={() => { setShowSort((s) => !s); setShowFilter(false); }}>
           <ArrowUpDown className="h-4 w-4" />
         </IconButton>
         <IconButton
-          active={!!minSizeMB || !!pathContains}
+          active={!!minSizeMB || !!pathContains || ffApplied !== null}
           title="Filter"
           onClick={() => { setShowFilter((s) => !s); setShowSort(false); }}
         >
@@ -428,7 +480,7 @@ export function FullPathsPage() {
       </div>
 
       {showSort && (
-        <Popover>
+        <Popover onClose={() => setShowSort(false)}>
           {SORT_COLS.map((c) => {
             const active = sorting[0]?.id === c.id;
             return (
@@ -446,7 +498,13 @@ export function FullPathsPage() {
       )}
 
       {showFilter && (
-        <Popover>
+        // Two columns wide — "wider, not taller" (tables.mdx §2.11.3). Changes apply live; Apply and
+        // any click outside the window both collapse it.
+        <Popover wide onClose={() => setShowFilter(false)} showApply>
+          {/* The §2.11 file filter — the segmented All/Not-yet/Done rows. The boolean clause bar sits
+              at the very bottom of the dropdown, right above Clear filters. */}
+          <FileFilterPanel fields={FS_PATHS_FF_FIELDS} selections={ffSelections} onSelect={setFfField} />
+          <div className="my-1 border-t border-[var(--lfb-border)]" />
           <div className="flex items-center gap-2 px-3 py-1.5 text-sm">
             <span className="w-24 shrink-0 text-black/70">Min size (MB)</span>
             <input
@@ -465,9 +523,16 @@ export function FullPathsPage() {
               onChange={(e) => setPathContains(e.target.value)}
             />
           </div>
+          {/* The boolean clause bar — the very bottom of the dropdown, right above Clear filters. */}
+          <div className="my-1 border-t border-[var(--lfb-border)]" />
+          <FileFilterClauseBar
+            text={fileFilterText}
+            error={ffParsed.ok ? null : ffParsed.error}
+            onText={setFileFilterText}
+          />
           <button
             className="w-full px-3 py-1.5 text-sm text-[var(--lfb-primary)]"
-            onClick={() => { setMinSizeMB(""); setPathContains(""); }}
+            onClick={() => { setMinSizeMB(""); setPathContains(""); setFileFilterText(""); }}
           >
             Clear filters
           </button>
@@ -505,7 +570,7 @@ export function FullPathsPage() {
         <EmptyState
           hasFiles={files.length > 0}
           root={root}
-          onClear={() => { setCompressed("both"); setIpfs("both"); setSearch(""); setMinSizeMB(""); setPathContains(""); }}
+          onClear={() => { setFileFilterText(""); setSearch(""); setMinSizeMB(""); setPathContains(""); }}
         />
       ) : (
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto">
@@ -653,31 +718,8 @@ export function FullPathsPage() {
 }
 
 // ── Small building blocks ──────────────────────────────────────────────────────
-function Segmented<T extends string>({
-  value,
-  onChange,
-  options,
-}: {
-  value: T;
-  onChange: (v: T) => void;
-  options: { value: T; label: string }[];
-}) {
-  return (
-    <div className="inline-flex overflow-hidden rounded-md border border-[var(--lfb-border)]">
-      {options.map((o) => (
-        <button
-          key={o.value}
-          onClick={() => onChange(o.value)}
-          className={`px-2.5 py-1 text-xs ${
-            value === o.value ? "bg-[var(--lfb-primary)] text-white" : "bg-white text-black/70 hover:bg-slate-100"
-          }`}
-        >
-          {o.label}
-        </button>
-      ))}
-    </div>
-  );
-}
+// (The generic Segmented control moved into the shared FileFilterPanel when the Compressed / IPFS
+// quick-filters were retired into the Filter ⛛ dropdown — tables.mdx §2.11.6.)
 
 function IconButton({
   children,
@@ -691,23 +733,16 @@ function IconButton({
   onClick: () => void;
 }) {
   return (
+    // data-popover-toggle: the shared Popover's click-outside close skips these — each icon's own
+    // onClick owns opening/closing its window.
     <button
       title={title}
       onClick={onClick}
+      data-popover-toggle
       className={`rounded-md p-1.5 hover:bg-slate-100 ${active ? "text-[var(--lfb-primary)]" : "text-black/70"}`}
     >
       {children}
     </button>
-  );
-}
-
-function Popover({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative">
-      <div className="absolute right-0 z-10 mt-1 w-72 rounded-lg border border-[var(--lfb-border)] bg-white py-1 shadow-lg">
-        {children}
-      </div>
-    </div>
   );
 }
 

@@ -10,6 +10,8 @@ import { listRepoFolders, getRepoConfig, computeRepoDetail } from "../store-mode
 import { listStoragesPage } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { collectFilesRecursive } from "../../shared/fs-walk.js";
+import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
 
 export const FILES_LIST_CATEGORY_KEYS: FilesListCategoryKey[] = [
@@ -154,4 +156,54 @@ export async function listFilesByCategory(
     .map((key) => ({ key, title: TITLES[key], paths: [...buckets.get(key)!].sort() }))
     .filter((c) => c.paths.length > 0);
   return { scope: scope === "all" ? "all" : scope, unitsSearched, categories };
+}
+
+// Soft cap for the everything walk (cli.mdx §4.2): the response is marked `truncated` and the CLI
+// announces it — caps are never silent.
+export const EVERYTHING_PATH_CAP = 200_000;
+
+/**
+ * The bare-`lfb` / --everything listing (cli.mdx §4.0/§4.2): EVERY file under the scope,
+ * recursively, regardless of category — a plain filesystem walk, so it works on tracked and
+ * untracked paths alike (an untracked scope is NOT an error here). scope "all" walks every tracked
+ * root instead. Skip rules are the product's one shared contract: the scanner's hard-skip set,
+ * dot-dirs/dot-files, and opaque macOS bundles — via the cooperative walker so the event loop
+ * keeps breathing on huge trees. Implements cli.mdx §4.0 — `listEverything()`.
+ */
+export async function listEverything(rawScope: string): Promise<FilesListResult> {
+  const scope = rawScope === "all" ? ("all" as const) : expandHome(rawScope);
+  const roots: string[] = [];
+  if (scope === "all") {
+    for (const folder of listRepoFolders()) {
+      const cfg = getRepoConfig(folder);
+      if (cfg.repo.path) roots.push(expandHome(cfg.repo.path));
+    }
+    const page = listStoragesPage();
+    for (const r of [page.personal, ...page.companies]) {
+      if (r && r.root) roots.push(expandHome(r.root));
+    }
+  } else {
+    roots.push(scope);
+  }
+
+  const paths = new Set<string>();
+  for (const root of roots) {
+    const remaining = EVERYTHING_PATH_CAP - paths.size;
+    if (remaining <= 0) break;
+    const found = await collectFilesRecursive(root, (name) => !name.startsWith("."), HARD_SKIP, {
+      skipDir: isMacPackageDir,
+      maxFiles: remaining,
+    });
+    for (const p of found) paths.add(p);
+  }
+  const truncated = paths.size >= EVERYTHING_PATH_CAP;
+
+  return {
+    scope: scope === "all" ? "all" : scope,
+    unitsSearched: roots.length,
+    categories: paths.size
+      ? [{ key: "everything", title: "All files", paths: [...paths].sort() }]
+      : [],
+    ...(truncated ? { truncated: true } : {}),
+  };
 }

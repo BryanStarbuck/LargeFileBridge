@@ -25,6 +25,17 @@ import { setOptionPreviewTarget } from "../preview/OptionImagePreview.js";
 import { useWindowedRows } from "./useWindowedRows.js";
 import { useTableView } from "../../api/useTableView.js";
 import type { LfbColumn } from "./types.js";
+import {
+  evalFileFilter,
+  parseFileFilter,
+  selectionsFromAst,
+  setFieldInExpr,
+  type FileFilterFieldId,
+  type FileFilterRowValue,
+  type FilterNode,
+} from "./fileFilter.js";
+import { FileFilterClauseBar, FileFilterPanel } from "./FileFilterPanel.js";
+import { Popover } from "./Popover.js";
 
 interface DataTableProps<T> {
   data: T[];
@@ -69,6 +80,16 @@ interface DataTableProps<T> {
   // listed so the user can filter to them without expanding; a "More types…" disclosure reveals the rest
   // (Other). An "All kinds" checkbox clears the filter. Images/Videos/Audio/PDFs start checked; Other unchecked.
   fileTypeFacet?: { valueOf: (row: T) => string };
+  // The §2.11 file filter (tables.mdx §2.11) — segmented All/Not-yet/Done controls in a two-column-wide
+  // Filter ⛛ dropdown plus the editable boolean clause bar, persisted per user as the ONE expression
+  // string. `fields` is this surface's honest subset in display order, each with the row's answer for
+  // that axis; `defaultExpr` seeds a fresh view (e.g. "size = only_large" — the §2.9 default; the OCR
+  // tab seeds ""). When a `size` field is present the rail "Large files only" checkbox becomes its
+  // shortcut (checked ⇔ only_large) instead of the separate `largeOnly` state.
+  fileFilter?: {
+    fields: { id: FileFilterFieldId; valueOf: (row: T) => FileFilterRowValue }[];
+    defaultExpr?: string;
+  };
   // Option-key floating image preview (option_image_preview.mdx §5): return the row's ABSOLUTE path when
   // the row is an image whose bytes are on this computer, else null. When provided, hovering a row
   // publishes that target so holding Option floats the image preview; the whole row is the hover surface.
@@ -98,6 +119,18 @@ const FILE_TYPE_COMMON = ["image", "video", "audio", "pdf"];
 const FILE_TYPE_EXTRA = FILE_TYPE_ORDER.filter((t) => !FILE_TYPE_COMMON.includes(t));
 const FILE_TYPE_DEFAULT_OFF = ["other"]; // the opt-in "add other types" bucket (product owner's rule)
 
+// Which per-column enum filter a §2.11 field supersedes (the column keeps existing; only its
+// duplicate select in the Filter popover is dropped — tables.mdx §2.11).
+const FF_COVERED_COLUMN_BY_FIELD: Partial<Record<FileFilterFieldId, string>> = {
+  transcribe: "transcribe",
+  ai_description: "describe",
+  ocr: "ocr",
+  // The bare "compressible" field is retired — the per-kind trio covers the compress column instead.
+  compressible_videos: "compress",
+  compressible_images: "compress",
+  compressible_audio: "compress",
+};
+
 const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
 const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
 
@@ -118,6 +151,7 @@ export function DataTable<T>({
   defaultSort,
   largeOnly,
   fileTypeFacet,
+  fileFilter,
   hoverPreview,
   tableId,
 }: DataTableProps<T>) {
@@ -145,6 +179,49 @@ export function DataTable<T>({
   // kinds show without expanding (tables.mdx §2.10).
   const [showMoreTypes, setShowMoreTypes] = useState(false);
 
+  // ── The §2.11 file filter (tables.mdx §2.11) ──────────────────────────────────
+  // ONE expression string is the whole state: the segmented controls and the clause bar are two views
+  // of it, it drives the row predicate, and it is what persists (§2.11.5). Invalid text keeps the LAST
+  // VALID expression applied (§2.11.4) — `ffApplied` trails `ffParsed` only on successful parses.
+  const ffFieldIds = useMemo<FileFilterFieldId[]>(
+    () => (fileFilter ? fileFilter.fields.map((f) => f.id) : []),
+    [fileFilter],
+  );
+  const [fileFilterText, setFileFilterText] = useState(() => fileFilter?.defaultExpr ?? "");
+  const ffParsed = useMemo(() => parseFileFilter(fileFilterText, ffFieldIds), [fileFilterText, ffFieldIds]);
+  const [ffApplied, setFfApplied] = useState<FilterNode | null>(null);
+  useEffect(() => {
+    if (ffParsed.ok) setFfApplied(ffParsed.ast);
+  }, [ffParsed]);
+  // The segmented controls' highlights — from the current text when it parses, else the applied one.
+  const ffSelections = useMemo(
+    () => selectionsFromAst(ffParsed.ok ? ffParsed.ast : ffApplied),
+    [ffParsed, ffApplied],
+  );
+  // A segmented click rewrites ONLY that field's clause (canonical while canonical, surgical once
+  // hand-edited — tables.mdx §2.11.4).
+  const setFfField = useCallback(
+    (field: FileFilterFieldId, value: string) =>
+      setFileFilterText((t) => setFieldInExpr(t, field, value, ffFieldIds)),
+    [ffFieldIds],
+  );
+  const ffValueOf = useMemo(
+    () => new Map(fileFilter ? fileFilter.fields.map((f) => [f.id, f.valueOf] as const) : []),
+    [fileFilter],
+  );
+  const ffHasSize = ffFieldIds.includes("size");
+  // Per-column enum selects duplicated by a §2.11 field are dropped from the popover's long tail —
+  // one control per axis (the enum columns keep filtering via the expression instead).
+  const ffCoveredCols = useMemo(
+    () =>
+      new Set(
+        ffFieldIds
+          .map((f) => FF_COVERED_COLUMN_BY_FIELD[f])
+          .filter((c): c is string => c !== undefined),
+      ),
+    [ffFieldIds],
+  );
+
   // The file-type classes actually present in the data — only these render as chips (tables.mdx §2.8/§2.10).
   const presentTypes = useMemo(() => {
     if (!fileTypeFacet) return [] as string[];
@@ -161,8 +238,12 @@ export function DataTable<T>({
     if (largeOnly && largeOnlyOn) d = d.filter(largeOnly.rowIsLarge);
     if (fileTypeFacet && hiddenTypes.size > 0)
       d = d.filter((r) => !hiddenTypes.has(fileTypeFacet.valueOf(r)));
+    // The §2.11 file-filter expression (tables.mdx §2.11.4) — the last VALID expression, so a
+    // half-typed clause in the bar never blanks the table.
+    if (fileFilter && ffApplied)
+      d = d.filter((r) => evalFileFilter(ffApplied, (fid) => ffValueOf.get(fid)?.(r) ?? "na"));
     return d;
-  }, [data, largeOnly, largeOnlyOn, fileTypeFacet, hiddenTypes]);
+  }, [data, largeOnly, largeOnlyOn, fileTypeFacet, hiddenTypes, fileFilter, ffApplied, ffValueOf]);
 
   // Toggle a file-type class, honoring the last-value rule (tables.mdx §2.1): the final CHECKED present
   // class can't be unchecked (that would only ever blank the table).
@@ -246,9 +327,17 @@ export function DataTable<T>({
       if (hc.length) setHiddenCols(new Set(hc));
       if (typeof v.large_only === "boolean") setLargeOnlyOn(v.large_only);
       if (Array.isArray(v.hidden_types)) setHiddenTypes(new Set(v.hidden_types));
+      // §2.11.5: a stored "" is a deliberate cleared state and is restored as such; an ABSENT key
+      // leaves the surface's seed (defaultExpr) in place — except the one migration below.
+      if (typeof v.file_filter === "string") setFileFilterText(v.file_filter);
+      // Migration: a view saved before §2.11 has no file_filter but may carry the old promoted
+      // "Large files only" boolean — honor it once as the equivalent size clause so nobody's saved
+      // "show me the small files too" silently reverts to the seed.
+      else if (ffHasSize && typeof v.large_only === "boolean")
+        setFileFilterText(v.large_only ? "size = only_large" : "");
     }
     setHydrated(true);
-  }, [tableId, viewLoaded, hydrated, storedView, columns]);
+  }, [tableId, viewLoaded, hydrated, storedView, columns, ffHasSize]);
 
   useEffect(() => {
     if (!tableId || !hydrated) return;
@@ -259,6 +348,7 @@ export function DataTable<T>({
       hidden_columns: [...hiddenCols],
       ...(largeOnly ? { large_only: largeOnlyOn } : {}),
       ...(fileTypeFacet ? { hidden_types: [...hiddenTypes] } : {}),
+      ...(fileFilter ? { file_filter: fileFilterText } : {}),
     });
   }, [
     tableId,
@@ -271,6 +361,8 @@ export function DataTable<T>({
     hiddenTypes,
     largeOnly,
     fileTypeFacet,
+    fileFilter,
+    fileFilterText,
     saveView,
   ]);
 
@@ -336,7 +428,9 @@ export function DataTable<T>({
   // (Large-only on, or any present file-type class unchecked), so the icon stays the single honest
   // "something is filtered" indicator (tables.mdx §2.3/§2.9).
   const facetActive =
-    (!!largeOnly && largeOnlyOn) || (!!fileTypeFacet && presentTypes.some((t) => hiddenTypes.has(t)));
+    (!!largeOnly && largeOnlyOn) ||
+    (!!fileTypeFacet && presentTypes.some((t) => hiddenTypes.has(t))) ||
+    (!!fileFilter && ffApplied !== null); // any §2.11 clause lights the icon (tables.mdx §2.11.4)
   const filtersActive = columnFilters.length > 0 || facetActive;
   const sortActive = sorting.length > 0;
   const columnsActive = hiddenCols.size > 0; // the Columns icon lights when any column is hidden
@@ -448,9 +542,11 @@ export function DataTable<T>({
       </div>
 
       {/* The facet rail (tables.mdx §2.2/§2.9) — the always-visible promoted "Large files only" toggle above
-          the table (the File-type facet now lives inside the Filter ⛛ dropdown, §2.10). Rendered only for
-          file tables (which pass largeOnly). Off is quiet (muted); on is emphasized. */}
-      {largeOnly && (
+          the table (the File-type facet now lives inside the Filter ⛛ dropdown, §2.10). On a §2.11 table
+          the checkbox is the SHORTCUT for the three-way `size` field (checked ⇔ size = only_large,
+          unchecked ⇔ All; "Not large" is set from the dropdown/clause bar and renders unchecked here) —
+          the state lives in the ONE expression. Off is quiet (muted); on is emphasized. */}
+      {(largeOnly || ffHasSize) && (
         <div className="flex shrink-0 flex-wrap items-center gap-x-5 gap-y-1 pb-2 text-sm">
           <label
             className="flex cursor-pointer items-center gap-1.5"
@@ -458,10 +554,22 @@ export function DataTable<T>({
           >
             <input
               type="checkbox"
-              checked={largeOnlyOn}
-              onChange={(e) => setLargeOnlyOn(e.target.checked)}
+              checked={ffHasSize ? ffSelections.size === "only_large" : largeOnlyOn}
+              onChange={(e) =>
+                ffHasSize
+                  ? setFfField("size", e.target.checked ? "only_large" : "all")
+                  : setLargeOnlyOn(e.target.checked)
+              }
             />
-            <span className={largeOnlyOn ? "text-black/70" : "text-black/40"}>Large files only</span>
+            <span
+              className={
+                (ffHasSize ? ffSelections.size === "only_large" : largeOnlyOn)
+                  ? "text-black/70"
+                  : "text-black/40"
+              }
+            >
+              Large files only
+            </span>
           </label>
         </div>
       )}
@@ -471,7 +579,7 @@ export function DataTable<T>({
           at that slot and cascade-demotes the rest (no two columns share a priority, list capped at 3).
           Clear sort falls back to the caller's defaultSort (§3.2/§3.4). */}
       {showSort && (
-        <Popover>
+        <Popover onClose={() => setShowSort(false)}>
           <div className="flex items-center justify-between px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">
             <span>Column</span>
             <span>Priority</span>
@@ -520,7 +628,9 @@ export function DataTable<T>({
       )}
 
       {showFilter && (
-        <Popover>
+        // A §2.11 table's dropdown grows WIDER, not taller (tables.mdx §2.11.3 — the two-column grid).
+        // Changes apply live; Apply and any click outside the window both collapse it.
+        <Popover wide={!!fileFilter} onClose={() => setShowFilter(false)} showApply>
           {bookmarkColId && (
             <>
               <label className="flex cursor-pointer items-center gap-2 px-3 py-1.5 text-sm font-medium">
@@ -534,36 +644,36 @@ export function DataTable<T>({
               <div className="my-1 border-t border-[var(--lfb-border)]" />
             </>
           )}
+          {/* The §2.11 file filter — the segmented All/Not-yet/Done rows. The boolean clause bar sits
+              at the very BOTTOM of this dropdown, right above "Clear filters". */}
+          {fileFilter && (
+            <>
+              <FileFilterPanel fields={ffFieldIds} selections={ffSelections} onSelect={setFfField} />
+              <div className="my-1 border-t border-[var(--lfb-border)]" />
+            </>
+          )}
           {/* The File-type facet (tables.mdx §2.10) — the common kinds up front, an "All kinds" reset, and a
               "More types…" disclosure for the rest. OCR "is often done with PDFs also", so PDFs sit alongside
               Images/Videos/Audio without expanding. Present classes drive the last-visible guard; a common
-              kind absent from the data is still listed (unchecking it is a harmless no-op). */}
+              kind absent from the data is still listed (unchecking it is a harmless no-op). Laid out as a
+              FOUR-COLUMN grid — wider, not taller (product owner, 2026-07-21). */}
           {fileTypeFacet && (
             <>
               <div className="px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">File type</div>
-              <label className="flex cursor-pointer items-center gap-2 px-3 py-1 text-sm">
-                <input
-                  type="checkbox"
-                  checked={hiddenTypes.size === 0}
-                  // A reset affordance: checking it shows everything. It can't be UNCHECKED directly (that
-                  // would blank the table) — the user unchecks individual kinds below instead.
-                  onChange={(e) => {
-                    if (e.target.checked) setHiddenTypes(new Set());
-                  }}
-                />
-                <span className={hiddenTypes.size === 0 ? "text-black/70" : "text-black/50"}>All kinds</span>
-              </label>
-              {FILE_TYPE_COMMON.map((t) => (
-                <FileTypeRow
-                  key={t}
-                  t={t}
-                  checked={!hiddenTypes.has(t)}
-                  disabled={isLastVisibleType(t)}
-                  onToggle={() => toggleType(t)}
-                />
-              ))}
-              {showMoreTypes &&
-                FILE_TYPE_EXTRA.map((t) => (
+              <div className="grid grid-cols-4 gap-x-3 px-3">
+                <label className="flex cursor-pointer items-center gap-2 py-1 text-sm">
+                  <input
+                    type="checkbox"
+                    checked={hiddenTypes.size === 0}
+                    // A reset affordance: checking it shows everything. It can't be UNCHECKED directly (that
+                    // would blank the table) — the user unchecks individual kinds instead.
+                    onChange={(e) => {
+                      if (e.target.checked) setHiddenTypes(new Set());
+                    }}
+                  />
+                  <span className={hiddenTypes.size === 0 ? "text-black/70" : "text-black/50"}>All kinds</span>
+                </label>
+                {FILE_TYPE_COMMON.map((t) => (
                   <FileTypeRow
                     key={t}
                     t={t}
@@ -572,6 +682,17 @@ export function DataTable<T>({
                     onToggle={() => toggleType(t)}
                   />
                 ))}
+                {showMoreTypes &&
+                  FILE_TYPE_EXTRA.map((t) => (
+                    <FileTypeRow
+                      key={t}
+                      t={t}
+                      checked={!hiddenTypes.has(t)}
+                      disabled={isLastVisibleType(t)}
+                      onToggle={() => toggleType(t)}
+                    />
+                  ))}
+              </div>
               {FILE_TYPE_EXTRA.length > 0 && (
                 <button
                   className="w-full px-3 py-1 text-left text-sm text-[var(--lfb-primary)]"
@@ -584,7 +705,7 @@ export function DataTable<T>({
             </>
           )}
           {columns
-            .filter((c) => (c.filterable ?? true) && c.id !== bookmarkColId)
+            .filter((c) => (c.filterable ?? true) && c.id !== bookmarkColId && !ffCoveredCols.has(c.id))
             .map((c) => {
               const current = columnFilters.find((f) => f.id === c.id)?.value ?? "";
               return (
@@ -614,7 +735,25 @@ export function DataTable<T>({
                 </div>
               );
             })}
-          <button className="w-full px-3 py-1.5 text-sm text-[var(--lfb-primary)]" onClick={() => setColumnFilters([])}>
+          {/* The boolean clause bar — the very bottom of the dropdown, right above Clear filters
+              (product owner, 2026-07-21). */}
+          {fileFilter && (
+            <>
+              <div className="my-1 border-t border-[var(--lfb-border)]" />
+              <FileFilterClauseBar
+                text={fileFilterText}
+                error={ffParsed.ok ? null : ffParsed.error}
+                onText={setFileFilterText}
+              />
+            </>
+          )}
+          <button
+            className="w-full px-3 py-1.5 text-sm text-[var(--lfb-primary)]"
+            onClick={() => {
+              setColumnFilters([]);
+              if (fileFilter) setFileFilterText(""); // "" = the deliberate cleared state (§2.11.5)
+            }}
+          >
             Clear filters
           </button>
         </Popover>
@@ -625,7 +764,7 @@ export function DataTable<T>({
           still appears in the Sort/Filter dropdowns. The last visible column can't be hidden (that would
           only ever blank the table). "Show all columns" clears every manual hide. */}
       {showColumns && (
-        <Popover>
+        <Popover onClose={() => setShowColumns(false)}>
           <div className="flex items-center justify-between px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">
             <span>Show columns</span>
             <span>
@@ -943,8 +1082,8 @@ function setColumnFilter(
   });
 }
 
-// One File-type checkbox row inside the Filter dropdown (tables.mdx §2.10). Disabled only when it is the last
-// visible PRESENT class (the last-value rule) — with a title that says why.
+// One File-type checkbox cell inside the Filter dropdown's four-column grid (tables.mdx §2.10). Disabled
+// only when it is the last visible PRESENT class (the last-value rule) — with a title that says why.
 function FileTypeRow({
   t,
   checked,
@@ -958,7 +1097,7 @@ function FileTypeRow({
 }) {
   return (
     <label
-      className={`flex items-center gap-2 px-3 py-1 text-sm ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
+      className={`flex items-center gap-2 py-1 text-sm ${disabled ? "cursor-not-allowed" : "cursor-pointer"}`}
       title={disabled ? "At least one file type must be shown." : undefined}
     >
       <input type="checkbox" checked={checked} disabled={disabled} onChange={onToggle} />
@@ -979,23 +1118,16 @@ function IconButton({
   onClick: () => void;
 }) {
   return (
+    // data-popover-toggle: the Popover's click-outside close skips these — each icon's own onClick
+    // owns opening/closing its window.
     <button
       title={title}
       onClick={onClick}
+      data-popover-toggle
       className={`p-1.5 rounded-md hover:bg-slate-100 ${active ? "text-[var(--lfb-primary)]" : "text-black/70"}`}
     >
       {children}
     </button>
-  );
-}
-
-function Popover({ children }: { children: ReactNode }) {
-  return (
-    <div className="relative">
-      <div className="absolute right-0 z-10 mt-1 w-72 rounded-lg border border-[var(--lfb-border)] bg-white shadow-lg py-1">
-        {children}
-      </div>
-    </div>
   );
 }
 

@@ -975,6 +975,10 @@ export const TableViewSchema = z.object({
   large_only: z.boolean().optional(),
   // The File-type facet's UNCHECKED (hidden) class keys, when the table carries the facet.
   hidden_types: z.array(z.string()).optional(),
+  // The §2.11 file-filter boolean expression (tables.mdx §2.11.5) — the segmented All/Not-yet/Done
+  // controls and the clause bar are two views of THIS one string, so persisting it persists the whole
+  // filter. "" is a deliberate cleared state; an ABSENT key falls back to the surface's seed.
+  file_filter: z.string().optional(),
   updated_at: iso.optional(),
 });
 export type TableView = z.infer<typeof TableViewSchema>;

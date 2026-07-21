@@ -5,7 +5,7 @@ import { Router } from "express";
 import { z } from "zod";
 import type { FilesListCategoryKey } from "@lfb/shared";
 import { requireAllowListed } from "../auth/identify.js";
-import { listFilesByCategory, FILES_LIST_CATEGORY_KEYS } from "./files-query.service.js";
+import { listFilesByCategory, listEverything, FILES_LIST_CATEGORY_KEYS } from "./files-query.service.js";
 import { log } from "../../shared/logging.js";
 
 const QuerySchema = z.object({
@@ -13,6 +13,9 @@ const QuerySchema = z.object({
   scope: z.string().min(1),
   // Comma-separated category keys; absent/empty = ALL categories (the no-flag default, cli.mdx §4.2).
   categories: z.string().optional(),
+  // "everything" = the bare-`lfb` / --everything full recursive listing (cli.mdx §4.0/§4.2);
+  // absent/"categories" = the category query. everything rejects a categories parameter.
+  mode: z.enum(["categories", "everything"]).optional(),
 });
 
 export const filesQueryRouter = Router();
@@ -23,9 +26,22 @@ filesQueryRouter.get("/list", requireAllowListed, async (req, res) => {
     res.status(400).json({ ok: false, error: parsed.error.issues[0]?.message ?? "bad query" });
     return;
   }
-  const { scope, categories } = parsed.data;
+  const { scope, categories, mode } = parsed.data;
   if (scope !== "all" && !scope.startsWith("/") && !scope.startsWith("~")) {
     res.status(400).json({ ok: false, error: `scope must be "all" or an absolute path, got: ${scope}` });
+    return;
+  }
+  if (mode === "everything") {
+    if (categories) {
+      res.status(400).json({ ok: false, error: "mode=everything does not take categories (cli.mdx §4.2)" });
+      return;
+    }
+    try {
+      res.json({ ok: true, data: await listEverything(scope) });
+    } catch (e) {
+      log.warn("files-query", `everything walk failed for scope ${scope}: ${(e as Error).message}`);
+      res.status(500).json({ ok: false, error: (e as Error).message });
+    }
     return;
   }
   const keys = (categories ?? "")

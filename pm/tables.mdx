@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Tables (bookmarks, filters, multi-level sort & persistence)
-description: The cross-cutting spec for the shared TanStack DataTable control row that every table screen references instead of restating, applied everywhere (Repos, the one-repo files table, Full-paths, Communities, IPFS, Devices, Storages, Processing, and every future table). (1) BOOKMARKS — every primary table has a leading ribbon bookmark (favorite) toggle; the flag is a local per-computer preference stored with the entity. (2) FILTERING — no filter is ever a <select>. A facet is its VALUES, each with a checkbox, ALL CHECKED BY DEFAULT (all-checked = inactive, no "any" pseudo-value); checkboxes within a facet OR, facets AND. Facets live on an always-visible FACET RAIL above the table so the vocabulary is readable without opening anything; the filter icon keeps only free-text contains, numeric thresholds, and overflow. PIN (IPFS) AND GIT-IGNORE ARE ALWAYS TWO SEPARATE FACETS, NEVER ONE — no facet may be named "Decision" — because they are two independent axes with two sources of truth (the decision ledger vs. live `git check-ignore`); the same split governs sort keys and kebab-menu groups. Checkbox is the default control; radio/segmented only for genuine one-of-N modes; every "Both · X · Y" segmented filter is retired to a two-value facet whose all-checked state IS "Both". "Bookmarked only" stays a single promoted checkbox — the one documented exception. (3) MULTI-LEVEL SORT — an ordered list of up to three keys (primary / secondary / tertiary); the sort dropdown lists sortable columns with asc/desc and priority slots (1st / 2nd / 3rd); assigning a priority inserts and cascade-demotes so no two columns share one; the active sort also renders as a live chip run and shift-click-a-header appends a key; the default is Bookmarked first, then the table's natural secondary, and it is user-changeable. (4) PERSISTENCE — each page's sort AND filter state is saved per-user, per-page in users/<email>/config.yaml and restored on load; facets persist as `hidden:` (the unchecked values), never `shown:`, so newly-added enum values stay visible to existing users. All tables are TanStack tables (charter).
+description: The cross-cutting spec for the shared TanStack DataTable control row that every table screen references instead of restating, applied everywhere (Repos, the one-repo files table, Full-paths, Communities, IPFS, Devices, Storages, Processing, and every future table). (1) BOOKMARKS — every primary table has a leading ribbon bookmark (favorite) toggle; the flag is a local per-computer preference stored with the entity. (2) FILTERING — no filter is ever a <select>. A facet is its VALUES, each with a checkbox, ALL CHECKED BY DEFAULT (all-checked = inactive, no "any" pseudo-value); checkboxes within a facet OR, facets AND. Facets live on an always-visible FACET RAIL above the table so the vocabulary is readable without opening anything; the filter icon keeps only free-text contains, numeric thresholds, and overflow. PIN (IPFS) AND GIT-IGNORE ARE ALWAYS TWO SEPARATE FACETS, NEVER ONE — no facet may be named "Decision" — because they are two independent axes with two sources of truth (the decision ledger vs. live `git check-ignore`); the same split governs sort keys and kebab-menu groups. Checkbox is the default control; radio/segmented only for genuine one-of-N modes; every "Both · X · Y" segmented filter is retired to a two-value facet whose all-checked state IS "Both". "Bookmarked only" stays a single promoted checkbox — the one documented exception. (3) MULTI-LEVEL SORT — an ordered list of up to three keys (primary / secondary / tertiary); the sort dropdown lists sortable columns with asc/desc and priority slots (1st / 2nd / 3rd); assigning a priority inserts and cascade-demotes so no two columns share one; the active sort also renders as a live chip run and shift-click-a-header appends a key; the default is Bookmarked first, then the table's natural secondary, and it is user-changeable. (4) PERSISTENCE — each page's sort AND filter state is saved per-user, per-page in users/<email>/config.yaml and restored on load; facets persist as `hidden:` (the unchecked values), never `shown:`, so newly-added enum values stay visible to existing users. (5) THE FILE FILTER (§2.11, product-owner revision 2026-07-21) — on file tables the task/status axes (Transcribe, AI description, OCR, Pull down, Add to IPFS, Git ignore, Compressible videos/images/audio, Size) filter via segmented All · Not yet · Done controls in a two-column-wide Filter ⛛ dropdown (N/A retired), mirrored by an EDITABLE BOOLEAN CLAUSE BAR (ORs between task clauses, AND for size, parentheses supported, two-way sync) and persisted per user per table as `file_filter` in users/<email>/config.yaml. All tables are TanStack tables (charter).
 ---
 
 # LargeFileBridge — Tables (bookmarks, filters, multi-level sort & persistence)
@@ -217,7 +217,7 @@ Deriving the git-ignore axis from git itself (never from the ledger), which is w
 | --- | --- | --- |
 | **Checkbox set** (§2.1) — **the default for every filter facet** | The question is *"which values do I want to see?"* and any combination is meaningful. This is nearly always true of a filter, because a filter is a predicate over a value set. | Pin (IPFS), Git-ignore, Status, Kind, Mode, Tracked, Compressed |
 | **Radio set** | The question is genuinely **one-of-N** — the options are *modes*, not row values, and "both" is meaningless. | A view mode; a sort **direction** (asc ⇄ desc) |
-| **Segmented control** | A radio set of **2–3 short options** where the choice is a *mode* and horizontal space is cheap. A segmented control is a radio in different clothes — **it does not qualify as a filter facet.** | (none remaining after §2.6) |
+| **Segmented control** | A radio set of **2–3 short options** where the choice is a *mode* and horizontal space is cheap. A segmented control is a radio in different clothes — **it does not qualify as a filter facet**, with the ONE dated exception below. | **The §2.11 file-filter fields** (product-owner revision 2026-07-21) — All · Not yet · Done task axes inside the Filter ⛛ dropdown, backed by the editable boolean clause bar. |
 
 **The rule of thumb:** if the user could ever plausibly want to see **two of the options at once**, it
 is a **checkbox set** — full stop. Every existing "Both · X · Y" segmented *filter* fails this test:
@@ -306,6 +306,10 @@ Every table whose rows are **files** — the one-repo task tabs ([one_repo.mdx](
   exception to §2.1 (§2.7 is the first), and the last.
 * **Persistence** — the toggle's state is saved per-user, per-page (and, on the task-tab page, seeded by
   the active tab's default) alongside the rest of the filter state (§4).
+* **2026-07-21 revision:** on tables that carry the §2.11 file filter, this checkbox is now the **rail
+  shortcut for the three-way `size` field** (All · Only large · Not large): checked ⇔ `size = only_large`,
+  unchecked ⇔ All; **Not large** is set from the §2.11 segmented control or the clause bar. Same seeds,
+  same persistence — the state now lives in the §2.11 expression (`file_filter`), not a separate boolean.
 
 The backend flag that this toggle reads — `analysisOnly` on each `FileRow`, set for a small,
 not-git-ignored media file admitted purely so it can be OCR'd / described / transcribed — is produced in code:
@@ -341,6 +345,11 @@ The section, top to bottom:
   archives, data files). Collapsed by default; the label toggles to **Fewer types**. This is the *"thing to
   click to get access to more types than that"*.
 
+**Layout (product-owner revision 2026-07-21): the section is a FOUR-COLUMN grid.** The `All kinds`
+reset and the kind checkboxes flow left-to-right across **four columns** instead of one per line —
+*"multiple columns wide … that would make it far less tall."* The `More types…` disclosure stays a
+full-width row beneath the grid; revealed extra kinds join the grid.
+
 Values, defaults, and rules:
 
 * **Values (each a checkbox):** **Images · Videos · Audio · PDFs · Other.** A row's value is derived from its
@@ -363,6 +372,153 @@ The shared classifier both the facet and the media viewer route on lives in code
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName()` (image | video | audio | pdf | other), beside `mediaKindForName()`; `isPdfName()` is the PDF discriminator.
 The facet is rendered inside the shared table's Filter dropdown:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileTypeFacet` prop; `FILE_TYPE_COMMON` / `FILE_TYPE_EXTRA`, the `showMoreTypes` disclosure, the `FileTypeRow` component, and the `All kinds` reset).
+
+### 2.11 The file filter — segmented All · Not yet · Done controls + the editable boolean clause bar (LOCKED — product-owner revision 2026-07-21)
+
+**This section is a dated product-owner revision.** For **file tables**, the per-file *task and status
+axes* are filtered with **segmented controls inside the Filter ⛛ dropdown**, and the whole filter is
+also readable and editable as a **boolean clause bar** at the bottom of the dropdown. Where this
+section conflicts with §2.5 ("a segmented control does not qualify as a filter facet"), §2.6, or
+§2.9's promoted checkbox, **this section wins for the fields it names** — those earlier rules keep
+governing everything else (the File-type facet §2.10, Bookmarked-only §2.7, and every non-file
+enum facet stay checkbox-model).
+
+#### 2.11.1 The control — a left-to-right segmented row, one segment highlighted (LOCKED)
+
+Each field is one **labelled row**: the label on the left, then a **horizontal segmented control** —
+a run of short options left to right, **exactly one highlighted** as selected; clicking another
+segment moves the highlight. No dropdown-inside-a-dropdown; the whole vocabulary is visible at rest.
+This is the classic segmented/radio-run UX control the product owner asked for.
+
+For every **task axis** the options are, in this order:
+
+* **All** — no constraint from this field (the resting state; emits **no clause**).
+* **Not yet** — the task applies but has not been done.
+* **Done** — the task is complete. *(The transcript named both "Completed" and "Done"; they are the
+  same terminal state and render as the ONE segment labelled **Done**.)*
+
+**N/A is retired as an option (LOCKED).** There is no "N/A" segment — **All** covers it. A row where
+the axis does not apply (e.g. a `.txt` file on the Transcribe axis) matches **only All**: selecting
+**Not yet** or **Done** hides it, which is what the user filtering for that axis means.
+
+#### 2.11.2 The field vocabulary (LOCKED)
+
+The full field set, in display order. Each surface renders **only the subset its row model can
+honestly answer** (§2.11.6). The expression name is the token used in the clause bar (§2.11.4).
+
+| Field (label) | Expression name | Options | What Done / Yes / Only large means |
+| --- | --- | --- | --- |
+| **Transcribe** | `transcribe` | All · Not yet · Done | A transcript artifact exists (`FileRow.transcribe`, or `analysis[]` on storage/IPFS rows). |
+| **AI description** | `ai_description` | All · Not yet · Done | An AI description exists (`FileRow.describe` / `analysis[]`). |
+| **OCR** | `ocr` | All · Not yet · Done | OCR text exists — including legitimately-empty text ([ocr.mdx §2.3](./ocr.mdx)). |
+| **Pull down** | `pull_down` | All · Not yet · Done | **Done** = the bytes are on this computer; **Not yet** = a remote-only row (§4e) still to pull down. |
+| **Add to IPFS** | `add_to_ipfs` | All · Not yet · Done | **Done** = the pin decision is `sync` — the **intent** axis, same source as the Pin icon. |
+| **Git ignore** | `git_ignore` | All · Not yet · Done | **Done** = `git check-ignore` says ignored — the **live git** axis. Still a separate field from Add to IPFS, always (§2.4). |
+| **Compressible videos** | `compressible_videos` | All · Yes · No | The file looks uncompressed and could be compressed (the `could` compress verdict) AND is a video. |
+| **Compressible images** | `compressible_images` | All · Yes · No | Compressible AND an image. |
+| **Compressible audio** | `compressible_audio` | All · Yes · No | Compressible AND audio. |
+| **Size** | `size` | All · Only large · Not large | **Only large** = hide the small `analysisOnly` rows (the §2.9 predicate); **Not large** = ONLY the small rows; **All** = both. |
+
+* **The bare `compressible` field is RETIRED (product-owner revision 2026-07-21).** The per-kind trio
+  (videos / images / audio) already expresses it — *"we don't need the other compressible without
+  anything else behind it."* Ten fields remain.
+* **Size defaults per surface, exactly as §2.9 seeded its checkbox**: file-table task tabs seed
+  **Only large**; the OCR tab seeds **All** ([task_tabs.mdx §4.7](./task_tabs.mdx)). **All emits no
+  clause** — it is the resting state, not a value.
+* §2.9's promoted **"Large files only" rail checkbox survives as a SHORTCUT for this field**: checked
+  ⇔ `size = only_large`, unchecked ⇔ All. **Not large** is reachable only from the segmented control
+  or the clause bar (the checkbox then renders unchecked). One state, two affordances.
+
+#### 2.11.3 The dropdown grows WIDER, not taller (LOCKED)
+
+With this many fields a single column would scroll off the screen. The Filter ⛛ dropdown renders the
+segmented rows in a **two-column grid** — the product owner's rule verbatim: *"we can be two columns
+wide … we should make it wider, not taller."* The other dropdown residents (Bookmarked only, the
+File-type facet §2.10, free-text `contains`, numeric thresholds) keep their place above/below the grid.
+
+#### 2.11.4 The boolean clause bar — the filter as an editable expression (LOCKED)
+
+The **very bottom of the dropdown, directly above the `Clear filters` / Apply footer** (its position —
+product-owner revision 2026-07-21: below the segmented grid, the File-type facet, and the per-column
+filters, so the whole window reads controls-first, expression-last), shows the whole filter as a
+**boolean expression in an edit box** the user can type into:
+
+```
+ ( transcribe = not_yet OR ai_description = not_yet OR ocr = not_yet ) AND size = only_large
+```
+
+* **Canonical generation.** Task/status clauses (everything except `size`) join with **OR** — the
+  default the product owner set — wrapped in **one paren group** when there are two or more; the
+  `size` clause joins with **AND**. Fields at All emit nothing.
+* **Grammar.** `field = value` clauses, `AND`, `OR`, and **parentheses** (nesting allowed);
+  case-insensitive keywords; `not yet` and `not_yet` (and `only large` / `only_large`) are the same
+  token. Unknown fields and unknown values are errors.
+* **Two-way sync, control → text.** Changing a segmented control **rewrites only that field's
+  clause**: while the text is still canonical it is regenerated in canonical form; once the user has
+  hand-edited (custom ANDs/ORs/parens), the edit is **surgical** — that field's clause value is
+  replaced in place, a field set back to All has its clause removed, and a newly-activated field is
+  appended (task fields join the existing OR group; `size` ANDs on).
+* **Two-way sync, text → controls.** Typing a parseable expression updates the segmented controls to
+  match (a field's highlight follows its first clause; a field with no clause shows All).
+* **Invalid text never breaks the table.** An unparseable expression renders the box in an error
+  state with the reason; the **last valid expression stays applied** until the text parses again.
+* The Filter ⛛ icon **lights whenever the expression has any clause**, same as every other filter.
+
+#### 2.11.5 Persistence — the expression IS the state, saved to the per-user YAML (LOCKED)
+
+The expression string is the **single source of truth** for this filter, and it is **persisted per
+user, per table** as `tables.views.<tableId>.file_filter` in `users/<email>/config.yaml` — the same
+§4 record, same debounced write, restored on load. **Any option the user changes in the filter is
+saved and reloads when they return to the page — these settings are never lost.** (A stored empty
+string is a deliberate "cleared" state and is restored as such; an absent key falls back to the
+surface's seed, per §4.1's deviation-from-default principle.)
+
+* **Migration.** A view saved before this revision has no `file_filter` but may carry the old promoted
+  `large_only` boolean (§2.9). On first load it is honored once as the equivalent clause
+  (`true` → `size = only_large`, `false` → cleared), then the expression is what persists — nobody's
+  saved "show me the small files too" reverts to the seed.
+
+#### 2.11.6 Anywhere and everywhere files are filtered (LOCKED)
+
+The panel appears on **every surface that lists files**, each with the honest subset of fields:
+
+| Surface | Fields |
+| --- | --- |
+| **One-repo files** (all task tabs, [one_repo.mdx](./one_repo.mdx)) | all ten |
+| **Storage detail** ([storages.mdx](./storages.mdx)) | Transcribe · AI description · OCR · Compressible videos/images |
+| **IPFS pins** ([ipfs_ui.mdx](./ipfs_ui.mdx)) | Transcribe · AI description · OCR |
+| **File System → Full paths** ([full_paths.mdx](./full_paths.mdx)) | Add to IPFS · Git ignore · Compressible videos/images/audio |
+
+* On **Full paths** this panel **completes §2.6**: the old `Both · Compressed · Uncompressed` and
+  `In IPFS · Not · Both` segmented quick-filters on the control row are **retired into this dropdown**
+  (as the per-kind compressible trio and `add_to_ipfs`), so the page filters the same way as every
+  other file table.
+* The File System **column browser** ([file_system.mdx](./file_system.mdx)) is a column view, not a
+  flat file table (§4c's exclusion) — its header checkboxes are unchanged.
+
+The expression model — tokenizer, parser, evaluator, canonical builder, and the surgical
+clause-rewrite — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/fileFilter.ts` — `parseFileFilter()`, `evalFileFilter()`, `canonicalExpr()`, `setFieldInExpr()`, `FILE_FILTER_FIELDS`.
+The two-column segmented panel and the bottom clause bar UI are rendered in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/FileFilterPanel.tsx` — `FileFilterPanel` (with `SegmentedField`) and `FileFilterClauseBar`.
+The shared table wires state, row predicate, rail-checkbox shortcut, and persistence in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileFilter` prop), persisted via
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `TableViewSchema.file_filter`.
+
+### 2.12 The control-row pop-up windows — visible edge, click-outside, Apply (LOCKED — product-owner revision 2026-07-21)
+
+The **Filter ⛛**, **Sort**, and **Columns** pop-up windows share one window behavior:
+
+* **A 1-pixel near-white light-gray edge line** around the pop-up rectangle — *"no more than one
+  pixel … near white, light gray"* — so the user can see the bounds of the window against the page.
+* **Click anywhere outside the window and it collapses.** Every change made inside is already applied
+  live, so clicking away **applies and closes** — the window never lingers. (Clicks on the ⛛ / sort /
+  columns icon buttons are exempt: each icon's own click toggles its window.)
+* **The Filter window additionally has an `Apply` button** in its footer — the explicit way to
+  collapse it. It applies nothing new (changes are live); it simply closes the window.
+
+The shared pop-up window (edge line, click-outside collapse, Apply footer) is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/Popover.tsx` — `Popover` (used by `DataTable` and the Full-paths page).
 
 ---
 
@@ -1010,6 +1166,16 @@ The remote-only row's `gitignore: false` value, and the disabled Ignore toggle w
     rendering `—` and sorting **last** in either direction and its `na` icon states sorting last per §3.6;
     and it supplies **`rowHref: ""`** — no fabricated route to bytes that are not here (§4d.1). `presence` is
     a row property only: it is **never** a column, never a facet, and changes no persisted view (§4).
+17. **The file filter (§2.11) is live on every file surface.** The Filter ⛛ dropdown on the One-repo files
+    table (all tabs), Storage detail, IPFS pins, and the File System **Full paths** tab renders that
+    surface's field subset as **segmented All · Not yet · Done rows in a two-column grid** (no N/A segment
+    anywhere); the **boolean clause bar** at the bottom shows the filter as an editable expression —
+    canonical form ORs the task clauses in one paren group and ANDs `size`; control changes rewrite only
+    their clause (surgically once hand-edited), parseable text drives the controls back, and unparseable
+    text errors visibly while the last valid expression stays applied. The expression persists per user per
+    table as `tables.views.<tableId>.file_filter` and is restored on return. On Full paths the old
+    Compressed / IPFS segmented quick-filters are **gone from the control row** (retired into the dropdown,
+    completing §2.6/AC 5), and on §2.11 tables the rail "Large files only" checkbox drives `size = only_large`.
 
 ## 6. Tab-scoped column sets (LOCKED)
 
@@ -1107,6 +1273,27 @@ Applied in code:
   returns "" (§4d.1's documented no-destination answer) — never invent a route to bytes that aren't here;
   the row's one action is pull-it-down. presence is a ROW property: never a column, never a facet, changes
   no persisted view. AC 16 added.
+
+  §2.11 (NEW, LOCKED, product-owner revision 2026-07-21) THE FILE FILTER: on FILE tables the task/status
+  axes filter via SEGMENTED controls INSIDE the Filter ⛛ dropdown — a labelled left-to-right run with ONE
+  segment highlighted; task fields = All · Not yet · Done ("Completed" in the transcript = the same Done
+  segment; N/A RETIRED — All covers it, a row where the axis doesn't apply matches ONLY All). Fields:
+  transcribe, ai_description, ocr, pull_down (Done = bytes here / Not yet = remote-only), add_to_ipfs
+  (intent axis), git_ignore (live git axis — still NEVER merged with add_to_ipfs, §2.4), compressible +
+  compressible_videos/_images/_audio (All · Yes · No), size (All · Only large · Not large; seeds keep the
+  §2.9 per-surface defaults; the §2.9 rail checkbox survives as the size shortcut). Dropdown goes TWO
+  COLUMNS WIDE (wider not taller). BOOLEAN CLAUSE BAR at the bottom: the filter as an editable expression,
+  canonical = task clauses OR'd in one paren group AND size — e.g. "(transcribe = not_yet OR ocr =
+  not_yet) AND size = only_large"; grammar = field = value, AND, OR, parens, case-insensitive, spaces ok
+  in tokens; control→text rewrites only that clause (canonical while canonical, SURGICAL once hand-
+  edited); text→controls syncs back; invalid text = visible error, LAST VALID expression stays applied.
+  PERSISTED per user per table as tables.views.<tableId>.file_filter (the expression string IS the state)
+  — settings reload on return, never lost. Surfaces: One-repo (all 11 fields), Storage detail (analysis +
+  compressible), IPFS pins (analysis), File System Full-paths tab (add_to_ipfs/git_ignore/compressible
+  family) — Full-paths' old Compressed/IPFS segmented quick-filters RETIRED into the dropdown (completes
+  §2.6). §2.5 amended: this is segmented-as-filter's ONE dated exception. Code: table/fileFilter.ts
+  (parse/eval/canonical/setFieldInExpr), table/FileFilterPanel.tsx, DataTable.tsx (fileFilter prop),
+  shared schemas.ts TableViewSchema.file_filter. AC 17 added.
 
   CHARTER NOTE: CLAUDE.md's Tables rule still says the filter/sort icons "open a dropdown to filter /
   sort the table." §2.2 and §3.5 move the common path OUT of those dropdowns onto always-visible

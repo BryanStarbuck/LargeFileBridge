@@ -9,6 +9,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { backendHealthy } from "./client";
+import { Spinner } from "./progress";
 
 /** Repo root, derived from this file's build location: <root>/cli/code/dist/bringup.js → three up. */
 export function repoRoot(): string {
@@ -24,12 +25,20 @@ function haveJust(): boolean {
 }
 
 async function waitHealthy(totalMs: number): Promise<boolean> {
-  const deadline = Date.now() + totalMs;
-  while (Date.now() < deadline) {
-    if (await backendHealthy()) return true;
-    await new Promise((r) => setTimeout(r, 1000));
+  // The up-to-60 s health wait is exactly where a user would assume a hang — show the live
+  // progress line while we poll (cli.mdx §4.7; TTY-gated, erased before any further output).
+  const spinner = new Spinner();
+  spinner.start("Waiting for the Large File Bridge backend (/api/health)…");
+  try {
+    const deadline = Date.now() + totalMs;
+    while (Date.now() < deadline) {
+      if (await backendHealthy()) return true;
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+    return false;
+  } finally {
+    spinner.stop();
   }
-  return false;
 }
 
 /**

@@ -2208,10 +2208,15 @@ export type FilesListCategoryKey =
   | "describe" // video/image with no .ai_description artifact yet
   | "ocr"; // image/video/PDF with no OCR artifact yet
 
+// The block keys a response may carry: the seven flag-selectable categories plus "everything" —
+// the bare-`lfb` / --everything full recursive listing (cli.mdx §4.0). "everything" is a listing
+// MODE, not a selectable category, so it stays out of FilesListCategoryKey.
+export type FilesListBlockKey = FilesListCategoryKey | "everything";
+
 // One category block of GET /api/files/list — the paths are ABSOLUTE (full_paths.mdx interchange
 // rule) so the CLI can print them verbatim or fold them into its --tree rendering.
 export interface FilesListCategory {
-  key: FilesListCategoryKey;
+  key: FilesListBlockKey;
   title: string; // plain-English header the CLI prints above the block (cli.mdx §4.4)
   paths: string[]; // absolute paths, sorted
 }
@@ -2222,4 +2227,7 @@ export interface FilesListResult {
   scope: string; // the resolved absolute scope, or "all"
   unitsSearched: number;
   categories: FilesListCategory[];
+  /** everything mode only: the walk stopped at the soft path cap — the CLI must say so on stderr
+   *  (cli.mdx §4.2, no-silent-caps rule). */
+  truncated?: boolean;
 }

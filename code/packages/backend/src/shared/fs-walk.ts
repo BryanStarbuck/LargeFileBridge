@@ -23,6 +23,9 @@ export interface CollectOpts {
    *  `isMacPackageDir` so a walk never descends into `.app`/`.framework` bundles (compress must never touch
    *  bundle-internal assets — the bundles-opaque rule). Omitted → no extra pruning. */
   skipDir?: (name: string) => boolean;
+  /** Stop the walk once this many files have been collected (the caller announces the truncation —
+   *  cli.mdx §4.2 everything-mode soft cap; caps are never silent). Omitted → unbounded. */
+  maxFiles?: number;
 }
 
 /**
@@ -49,6 +52,7 @@ export async function collectFilesRecursive(
       return; // unreadable subdir → skip (best-effort), matching the sync walks this replaces
     }
     for (const ent of entries) {
+      if (opts.maxFiles !== undefined && out.length >= opts.maxFiles) return;
       // Yield BEFORE recursing/collecting so a deep tree can never run to completion without letting the
       // loop breathe. Counts every entry (dir or file) — one heavy directory must still force a breather.
       if ((sinceYield += 1) >= WALK_YIELD_EVERY) {

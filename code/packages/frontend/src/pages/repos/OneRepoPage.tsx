@@ -25,6 +25,8 @@ import { confirmModal } from "../../lib/modals.js";
 // The five leading icon control columns share ONE kit (tables.mdx icon-columns): Pin, Ignore, Transcribe,
 // AI description, OCR — unique-color box icons with icon-only headers + hover-region explanations.
 import { TaskIconCell, TaskIconHeader, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
+// The §2.11 file filter (tables.mdx §2.11): the TaskStatus → not_yet/done/na row-value mapper.
+import { taskRowValue } from "../../components/table/fileFilter.js";
 import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
 import { runDescribeFile } from "../../lib/describe.js";
 import { runOcrFile } from "../../lib/ocr.js";
@@ -60,6 +62,10 @@ const remoteOnlyTooltip = (f: FileRow): string =>
 // describable, OCR-able and compressible; its bytes simply aren't here. Without this the icons fall back to
 // the column's generic explanation and tell the user something untrue (one_repo.mdx §4.10).
 const ABSENT_BYTES_REASON = "The bytes aren't on this computer yet — pull it down first.";
+
+// The row's File-type class (video/image/audio/pdf/other) from its name — used by the §2.11
+// compressible_videos / _images / _audio filter fields.
+const rowFileType = (f: FileRow) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
 
 /** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state. */
 function fileSummary(f: FileRow): string {
@@ -692,11 +698,38 @@ export function OneRepoPage() {
         data={tabRows}
         columns={visibleColumns}
         defaultSort={tab.defaultSort}
-        // The two promoted rail controls every file table carries (tables.mdx §2.9/§2.10). "Large files
-        // only" defaults ON (OFF on OCR — ocr.mdx §11.1.1) and hides the small analysis-only media; the
-        // File-type facet classifies each row by name. Together they let the user reach a small JPG to OCR.
-        largeOnly={{ rowIsLarge: (f) => !f.analysisOnly, defaultOn: tab.largeOnlyDefault }}
+        // The File-type facet classifies each row by name (tables.mdx §2.10); together with the §2.11
+        // filter below it lets the user reach a small JPG to OCR.
         fileTypeFacet={{ valueOf: (f) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1)) }}
+        // The §2.11 file filter (tables.mdx §2.11) — this is the full-vocabulary surface: all ten
+        // fields. `size` carries the old "Large files only" default (ON everywhere but the OCR tab —
+        // ocr.mdx §11.1.1) as its seed expression; the rail checkbox is now its shortcut. The two
+        // decision axes stay separate fields (add_to_ipfs = the ledger's intent; git_ignore = live
+        // `git check-ignore` — tables.mdx §2.4), and pull_down reads presence (§4e).
+        fileFilter={{
+          defaultExpr: tab.largeOnlyDefault ? "size = only_large" : "",
+          fields: [
+            { id: "transcribe", valueOf: (f) => taskRowValue(f.transcribe) },
+            { id: "ai_description", valueOf: (f) => taskRowValue(f.describe) },
+            { id: "ocr", valueOf: (f) => taskRowValue(f.ocr) },
+            { id: "pull_down", valueOf: (f) => (f.presence === "remote-only" ? "not_yet" : "done") },
+            { id: "add_to_ipfs", valueOf: (f) => (f.decision === "sync" ? "done" : "not_yet") },
+            { id: "git_ignore", valueOf: (f) => (f.gitignore ? "done" : "not_yet") },
+            {
+              id: "compressible_videos",
+              valueOf: (f) => (f.compress === "could" && rowFileType(f) === "video" ? "yes" : "no"),
+            },
+            {
+              id: "compressible_images",
+              valueOf: (f) => (f.compress === "could" && rowFileType(f) === "image" ? "yes" : "no"),
+            },
+            {
+              id: "compressible_audio",
+              valueOf: (f) => (f.compress === "could" && rowFileType(f) === "audio" ? "yes" : "no"),
+            },
+            { id: "size", valueOf: (f) => (f.analysisOnly ? "small" : "large") },
+          ],
+        }}
         // Option-key floating image preview (option_image_preview.mdx §5 / one_repo.mdx §4.12): hovering
         // an image row with Option held floats the preview. Remote-only rows are excluded — their bytes
         // aren't on this computer (§4.10), so a grant could never stream them.

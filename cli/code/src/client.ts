@@ -30,6 +30,8 @@ export interface FilesListResult {
   scope: string;
   unitsSearched: number;
   categories: FilesListCategory[];
+  /** everything mode only: the walk stopped at the backend's soft path cap — announce it (cli.mdx §4.2). */
+  truncated?: boolean;
 }
 
 /**

@@ -21,6 +21,8 @@ import { usePinCid } from "../../components/usePinCid.js";
 // The shared icon control-column kit (tables.mdx icon-columns): the unified Pin box + the Transcribe /
 // AI-description / OCR icons, derived from each pin's analysis[] + resolved file kind.
 import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, boolStatus, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
+// The §2.11 file filter (tables.mdx §2.11): the TaskStatus → not_yet/done/na row-value mapper.
+import { taskRowValue } from "../../components/table/fileFilter.js";
 import { runTranscribeFile } from "../../lib/transcribe.js";
 import { runDescribeFile } from "../../lib/describe.js";
 import { runOcrFile } from "../../lib/ocr.js";
@@ -391,6 +393,16 @@ export function IpfsPage() {
             fillHeight={false}
             data={rows}
             columns={columns}
+            // The §2.11 file filter (tables.mdx §2.11.6 — the IPFS-pins subset): the three analysis
+            // axes, derived from the pin's analysis[] + resolved file name (a path-less pin reads na
+            // and so matches only All).
+            fileFilter={{
+              fields: [
+                { id: "transcribe", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).transcribe) },
+                { id: "ai_description", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).describe) },
+                { id: "ocr", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).ocr) },
+              ],
+            }}
             searchKeys={(p) => `${p.file ?? ""} ${p.path ?? ""} ${p.cid} ${p.unit ?? ""}`}
             getRowId={(p) => p.cid}
             onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}

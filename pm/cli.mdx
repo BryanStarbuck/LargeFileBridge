@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The CLI (`lfb`)
-description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. CLI code lives in ~/BGit/Bryan_git/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
+description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. Bare `lfb` with no arguments is the zero-setup default: it lists EVERY file under the current directory recursively — all file types, whether the directory is a tracked repo or not — so the command is useful with zero flags anywhere; help moves behind `lfb help` / `-h` / `--help`. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines; --everything switches to the bare-`lfb` full listing. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. Anything slow shows a live spinner + elapsed-seconds progress line on stderr (TTY only) so the CLI never looks hung. CLI code lives in ~/BGit/Bryan_git/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
 ---
 
 # LargeFileBridge — The CLI (`lfb`)
@@ -195,8 +195,34 @@ The first and most important command family. The dictated name for the category 
 **"get file list"**; the command surface is:
 
 ```
-lfb files [PATH] [--all] [CATEGORY FLAGS…] [--tree] 
+lfb [PATH] [--tree]                                                    # zero-argument default (§4.0)
+lfb files [PATH] [--all] [CATEGORY FLAGS…] [--everything] [--tree] [--bare]
 ```
+
+### 4.0 The zero-argument default — bare `lfb` (LOCKED)
+
+Running **`lfb` with no arguments at all** must do something immediately useful, with no setup and
+no reading of help:
+
+* Bare `lfb` lists **every file** under the **current working directory**, recursively — **all
+  file types**, not just category matches. One absolute path per line on stdout, count on stderr.
+* It works **anywhere**: inside a tracked repo, inside an untracked directory, a personal media
+  tree, a random folder. The "not a tracked area" error of §4.1 applies to *category* queries
+  only — the full listing never requires the scope to be tracked.
+* It is exactly equivalent to `lfb files --everything` scoped to the cwd (§4.2 defines
+  `--everything`). Bare `lfb <PATH>` scopes the same listing to `PATH`.
+* **Flag pass-through without the `files` word.** A bare invocation whose first argument is a flag
+  or a path routes to the `files` machinery: `lfb --tree` is the cwd listing as a tree;
+  `lfb --compress` is `lfb files --compress` (giving any category flag switches the bare form into
+  category mode — the everything default applies only when no category flag is present).
+* **Help therefore moves off the bare invocation.** `lfb help`, `lfb -h`, and `lfb --help` print
+  help; an unknown command prints help and exits non-zero. Help text leads with the zero-argument
+  default so the first line a user reads describes what plain `lfb` just did / will do.
+* No header is printed above the everything listing (there is only one block — headers exist to
+  separate categories); `--tree` and the stderr count behave as in §4.3/§4.4.
+
+Default routing implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` —
+`main()` (bare/flag/path dispatch), `cmdFiles()` (`defaultEverything`).
 
 ### 4.1 Scope — what part of the filesystem
 
@@ -239,6 +265,20 @@ Rules:
   the To-Do batches would target ([to_do_batches.mdx](./to_do_batches.mdx)). Eligibility honors
   the same gates the UI honors (analysis-candidate rules, `nudgeOnly`/`analysisOnly` semantics,
   bundle exclusion) so CLI and UI can never disagree.
+* **`--everything` — the full listing, not a category.** It selects a different *mode*: every file
+  under the scope, regardless of category, straight from a recursive filesystem walk. This is what
+  bare `lfb` runs (§4.0). Rules:
+  * Mutually exclusive with the seven category flags — combining them is an argument error.
+  * Works on **untracked** scopes (any absolute path) as well as tracked ones; `--all
+    --everything` walks every tracked root instead.
+  * Still computed **server-side** (thin-client rule, §1.1): the backend walks, the CLI prints.
+    The walk uses the product's one shared skip contract — the scanner's hard-skip set (`.git`,
+    `node_modules`, build outputs, cloud-backbone scratch dirs), dot-directories and dot-files,
+    and opaque macOS bundles — via the shared cooperative walker, so the event loop keeps
+    breathing on huge trees.
+  * **Soft cap, never silent:** the walk stops at 200,000 paths; the response is marked
+    `truncated` and the CLI prints a loud stderr note telling the user to narrow the scope
+    (no-silent-caps rule).
 
 ### 4.3 Output formats
 
@@ -289,9 +329,10 @@ Transcribable:
 
 One endpoint powers the whole family — a **query, not an action** (it changes nothing on disk):
 
-* `GET /api/files/list?scope=<abs path>|all&categories=compress,ocr,…&format=flat|tree`
-  (exact route to be settled in the backend's router conventions; it composes the existing
-  per-category calc engines rather than inventing a new scanner).
+* `GET /api/files/list?scope=<abs path>|all&categories=compress,ocr,…&mode=categories|everything`
+  (exact route to be settled in the backend's router conventions; category mode composes the
+  existing per-category calc engines rather than inventing a new scanner; `mode=everything` is
+  the §4.0/§4.2 full recursive walk and rejects a `categories` parameter).
 * The response carries, per category: the category key, display title, and the matching absolute
   paths (plus enough parent structure for the CLI to render `--tree` without touching the disk).
 * Long scopes reuse the backend's existing walk/caching machinery (fsindex, scan output); the
@@ -300,8 +341,10 @@ One endpoint powers the whole family — a **query, not an action** (it changes 
 
 Server side implemented in:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/files-query/files-query.service.ts`
-— `listFilesByCategory()` (scope resolution, category predicates over `FileRow`), route in
-`files-query.router.ts` (`GET /api/files/list`), mounted at `/api/files` in `src/main.ts`.
+— `listFilesByCategory()` (scope resolution, category predicates over `FileRow`) and
+`listEverything()` (the §4.0/§4.2 full walk over `collectFilesRecursive` + the scanner's shared
+skip filters), route in `files-query.router.ts` (`GET /api/files/list`), mounted at `/api/files`
+in `src/main.ts`.
 CLI side implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` — `cmdFiles()`,
 renderers in `render.ts` — `renderFlat()` / `renderTree()`.
 Response types in: `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` —
@@ -320,6 +363,33 @@ Response types in: `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/ty
   tracker for that parity gap.
 * `unitsSearched` in the response (and the CLI's stderr diagnostics) is the transparency count of
   repos + storages actually consulted, so a surprising zero always has an explanation.
+* In everything mode `unitsSearched` counts the roots walked (1 for a path scope, every tracked
+  root for `--all`); a `0`-tracked path scope is **not** an error there (§4.0).
+
+### 4.7 Progress UI — the CLI must never look hung (LOCKED)
+
+Some answers take real time (a cold server bring-up; a category query over a large tree; an
+everything walk of a big directory). The dictated requirement: **while the CLI is calculating, it
+shows a live indication that it is working — never a silent, hung-looking pause.**
+
+* **What it looks like:** a single self-updating line on **stderr** — a spinner frame, a
+  plain-English phase description, and elapsed seconds, e.g.
+  `⠹ Asking Large File Bridge for the file list… 12s`. One line, redrawn in place (`\r` + erase);
+  never a scrolling wall of dots.
+* **Phases that show it:** (a) waiting for `/api/health` during server bring-up (§2 — the up-to-60 s
+  wait is exactly where a user would otherwise assume a hang), and (b) the `/api/files/list` call
+  itself. Any future slow verb adopts the same component.
+* **TTY-gated:** the spinner renders only when **stderr is a TTY**. Piped/captured stderr (scripts,
+  cron, CI) gets no animation — the ordinary one-line status messages remain the record. stdout is
+  **never** touched by progress output: `lfb … | wc -l` stays pure paths (§4.3), spinner or not.
+* **Cleanup contract:** the progress line is fully erased before any result, error, or log tail
+  prints — no spinner residue ever prefixes real output, including on failure paths.
+* Elapsed time is the honest signal (we do not know a percentage and must not fake one); the
+  phase text names what we are waiting on so a stuck phase is diagnosable at a glance.
+
+Implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/progress.ts` — class `Spinner`
+(`start()` / `stop()`); wired around the health wait in `bringup.ts` — `ensureServerUp()` and
+around the list call in `main.ts` — `cmdFiles()`.
 
 ---
 
@@ -384,3 +454,9 @@ These verbs are out of scope for v1 and each gets its own spec section when buil
    flags; no flags ⇒ all matching categories, headers + two blank lines between blocks; full
    absolute paths by default; `--tree` prints a pruned hierarchy of only the matching set.
 6. Category verdicts come from the backend verbatim — CLI and UI can never disagree.
+7. Bare `lfb` (no arguments) lists EVERY file under the cwd recursively — all types, tracked or
+   not — and never errors on an untracked directory; help prints only via `help`/`-h`/`--help` or
+   an unknown command. `--everything` is the same mode by flag and never combines with category
+   flags; its walk truncation (200k soft cap) is always announced, never silent.
+8. Anything slow shows the stderr progress line (spinner + phase + elapsed) when stderr is a TTY;
+   progress never touches stdout and is fully erased before real output.

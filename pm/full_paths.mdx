@@ -120,6 +120,18 @@ for the grammar (a facet is its values; every box checked by default; all-checke
 checkboxes OR within a facet, facets AND; no `any`/`Both` pseudo-value; the last checked box cannot be
 unchecked). Only what is **page-specific** is below.
 
+> **2026-07-21 product-owner revision — the §2.11 file filter supersedes the facet plan for this
+> page's compress/IPFS/git-ignore filtering ([tables.mdx §2.11](./tables.mdx)).** The retired
+> segmented quick-filters did NOT come back as rail facets; they moved **into the Filter ⛛ dropdown**
+> as the §2.11 segmented fields — `add_to_ipfs`, `git_ignore`,
+> `compressible_videos` / `_images` / `_audio` (the bare `compressible` field is retired —
+> tables.mdx §2.11.2) — with the editable **boolean clause bar** at the very bottom of the dropdown,
+> right above Clear filters (tables.mdx §2.11.4/§2.12),
+> persisted per user as `tables.views["fs-paths"].file_filter`. This is **implemented**. Where
+> §3.1/§3.3's checkbox-facet sketches conflict with it, tables.mdx §2.11 wins.
+> Rendered in code:
+> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (`FS_PATHS_FF_FIELDS`, `ffRowValue()`, the `FileFilterPanel` + `FileFilterClauseBar` in its ⛛ popover).
+
 ```
  ┌──────────────────────────────────────────────────────────────────────────────────┐
  │ [ 🔍 search name + path…    ]        Sort: [1 Bookmarked ↓] [2 Size ↓]    ⇅   ⛛  │ ← control row
