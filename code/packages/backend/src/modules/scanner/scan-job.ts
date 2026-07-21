@@ -13,6 +13,7 @@ import type { ScanJob, ScanPhase } from "@lfb/shared";
 import { scanAll, type ProgressSink } from "./scanner.service.js";
 import { stampRun } from "../schedule/schedule.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
+import { bumpTopic, SCANS_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 
 const IDLE: ScanJob = {
@@ -62,6 +63,7 @@ export function startScan(source: "manual" | "scheduled"): { started: boolean; j
     startedAt: new Date().toISOString(),
     phase: "discovering",
   };
+  bumpTopic(SCANS_TOPIC); // scan-status readers (progress bar, Repos/Scans pages) learn a run started
   // Detach: do NOT await. The walk outlives the request that asked for it. A rejection here would be
   // an unhandled promise (runJob is fire-and-forget) — catch it so it lands in the fault trail.
   runJob().catch((e) => log.error("scan", `scan job crashed: ${(e as Error).message}`));
@@ -127,6 +129,7 @@ async function runJob(): Promise<void> {
   job.phase = "done";
   job.currentUnit = null;
   job.finishedAt = new Date().toISOString();
+  bumpTopic(SCANS_TOPIC); // …and that it finished — the last-scan stamp and counts just changed
   // Stamp last_run_at/last_run_ok here — for BOTH manual and scheduled runs — so the record reflects
   // the actual completion, not the moment the (now non-blocking) trigger route returned (scan.mdx §5).
   try {
@@ -144,6 +147,7 @@ async function runJob(): Promise<void> {
       startedAt: new Date().toISOString(),
       phase: "discovering",
     };
+    bumpTopic(SCANS_TOPIC); // the queued rerun flips status back to running
     runJob().catch((e) => log.error("scan", `queued rerun scan job crashed: ${(e as Error).message}`));
   }
 }

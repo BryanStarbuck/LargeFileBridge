@@ -7,6 +7,7 @@ import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { IpfsHealth, IpfsPinType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
+import { bumpTopicThrottled, IPFS_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 
 function apiBase(): string {
@@ -135,6 +136,7 @@ export async function catToFile(cid: string, destPath: string): Promise<void> {
 export async function pinAdd(cid: string): Promise<void> {
   try {
     await rpc("pin/add", { args: [cid], query: { recursive: "true" } });
+    bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
   } catch (e) {
     log.error("ipfs", `pin add failed for ${cid}: ${(e as Error).message}`);
     throw e;
@@ -144,6 +146,7 @@ export async function pinAdd(cid: string): Promise<void> {
 export async function pinRm(cid: string): Promise<void> {
   try {
     await rpc("pin/rm", { args: [cid], query: { recursive: "true" } });
+    bumpTopicThrottled(IPFS_TOPIC);
   } catch (e) {
     log.warn("ipfs", `pin rm failed for ${cid}: ${(e as Error).message}`);
   }

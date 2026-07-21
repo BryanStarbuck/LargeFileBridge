@@ -6,6 +6,7 @@ import { AppConfigSchema, type AppConfig, type FileFlags, defaultDeviceName } fr
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { appConfigPath } from "../../shared/store/scopes.js";
 import { collectHardware } from "../storage/hardware.service.js";
+import { bumpTopicThrottled, SETTINGS_TOPIC } from "../events/state-events.service.js";
 import { RETIRED_GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from "../describe/models.js";
 
 // ── config.yaml read cache (mtime-keyed) ─────────────────────────────────────────────────────────────
@@ -118,10 +119,14 @@ export function computerLabel(): string {
 }
 
 export async function updateAppConfig(mutate: (c: AppConfig) => AppConfig): Promise<AppConfig> {
-  return updateYaml(appConfigPath(), AppConfigSchema, (c) => {
+  const out = await updateYaml(appConfigPath(), AppConfigSchema, (c) => {
     if (c.scanner.roots.length === 0) c.scanner.roots = defaultRoots();
     return mutate(c);
   });
+  // The one choke point every app-config write passes through (settings, flags, AI config, run stamps) —
+  // open Settings pages learn live (performance.mdx Aspect 6b). Throttled: a pass may stamp in bursts.
+  bumpTopicThrottled(SETTINGS_TOPIC);
+  return out;
 }
 
 function defaultRoots(): string[] {

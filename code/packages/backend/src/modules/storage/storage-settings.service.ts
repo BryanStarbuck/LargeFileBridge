@@ -16,6 +16,7 @@ import { trackingBaseDir, legacyTrackingBaseDir, RESERVED_SDL_ROOT_NAMES, usesLf
 // storage.service <-> storage-settings.service form a lazy import cycle (used only inside functions,
 // never at module-eval time), which is safe under NodeNext ESM.
 import { getStorageRow, readDescriptor, writeDescriptor } from "./storage.service.js";
+import { bumpTopic, STORAGES_TOPIC } from "../events/state-events.service.js";
 // units.service is imported the same way (called only inside getOwnedRepos, never at module-eval) — the
 // storage.service ↔ units.service ↔ storage-settings.service cycle is already established (owner-propagation
 // .service imports both). Reuses ownerForRepoConfig so a manual company owner carries its friendly name.
@@ -211,6 +212,7 @@ export async function writeStorageSettings(storageId: string, patch: StorageSett
     }
   }
 
+  bumpTopic(STORAGES_TOPIC);
   return readStorageSettings(storageId);
 }
 
@@ -368,6 +370,7 @@ export function setMappedDirs(storageId: string, list: Array<Partial<MappedDir>>
     };
   });
   writeYaml(mappedDirsPath(row.root), { schema_version: 1, mapped });
+  bumpTopic(STORAGES_TOPIC);
   return readMappedDirsForRoot(row.root);
 }
 
@@ -422,6 +425,7 @@ export async function patchMappedDirs(
     for (const [key, localPath] of Object.entries(patch.graft)) {
       setSelfGraftPath(row.root, key, localPath);
     }
+    bumpTopic(STORAGES_TOPIC);
   }
   return getMappedDirsView(storageId);
 }

@@ -36,7 +36,8 @@ import { classifyRemoteVisibility } from "../git/git.service.js";
 import { classifySpecial } from "../scanner/special-file.service.js";
 import { effectiveFlags, getAppConfig } from "../store-model/config.service.js";
 import { repoUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
-import { getRepoConfig, updateRepoConfig } from "../store-model/units.service.js";
+import { getRepoConfig, updateRepoConfig, repoBumpTopics } from "../store-model/units.service.js";
+import { bumpTopics } from "../events/state-events.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { log } from "../../shared/logging.js";
 
@@ -331,6 +332,10 @@ export async function recordDecision(
       log.warn("decisions", `${repoRoot}: git-ignore removal failed: ${(e as Error).message}`);
     }
   }
+
+  // The local decision write is a state change an already-open page must learn about (performance.mdx
+  // Aspect 6b) — the receiving side (reconcile after a backbone pull) bumps, and so must this side.
+  bumpTopics(repoBumpTopics(folder));
 }
 
 /**
@@ -409,6 +414,7 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
     }
     return c;
   });
+  if (changed.length > 0) bumpTopics(repoBumpTopics(folder)); // teammates' folded decisions just landed
   return { changed };
 }
 
@@ -489,6 +495,7 @@ export function setDecisionPolicy(folder: string, patch: Partial<DecisionPolicyD
   } else {
     log.info("decisions", `${repoRoot}: policy not shared (keep-.lfbridge consent off); kept in memory only`);
   }
+  bumpTopics(repoBumpTopics(folder));
   return merged;
 }
 

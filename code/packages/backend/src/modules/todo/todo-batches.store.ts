@@ -6,6 +6,7 @@ import path from "node:path";
 import { TodoBatchDocSchema, type TodoBatchDoc } from "@lfb/shared";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { resolveTodoBatchesDir } from "../../config/state-dir.js";
+import { bumpTopicThrottled, TODO_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 
 /** Filesystem-safe slug for a storage name (to_do_batches.mdx §1). */
@@ -33,6 +34,8 @@ function isTranscribeFile(file: string): boolean {
 /** Write one batch doc, atomically, to its `_do_batches/` file. */
 export function writeBatch(doc: TodoBatchDoc, fileName: string): void {
   writeYaml(path.join(resolveTodoBatchesDir(), fileName), doc as unknown as Record<string, unknown>);
+  // Throttled — a recalc writes one file per scope in a burst (performance.mdx Aspect 6b).
+  bumpTopicThrottled(TODO_TOPIC);
 }
 
 /** Every `*_2_do.yaml` file currently on disk. */
@@ -95,6 +98,7 @@ export function removeStaleTodoBatches(keep: Set<string>): void {
     if (keep.has(file)) continue;
     try {
       fs.unlinkSync(path.join(resolveTodoBatchesDir(), file));
+      bumpTopicThrottled(TODO_TOPIC);
     } catch (e) {
       log.warn("todo", `could not remove stale batch ${file}: ${(e as Error).message}`);
     }
@@ -106,6 +110,7 @@ export function removeStaleTodoBatches(keep: Set<string>): void {
 export function removeBatchFile(file: string): void {
   try {
     fs.unlinkSync(path.join(resolveTodoBatchesDir(), file));
+    bumpTopicThrottled(TODO_TOPIC);
   } catch (e) {
     if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
       log.warn("todo", `could not remove batch ${file}: ${(e as Error).message}`);
@@ -124,6 +129,7 @@ export function removeStaleTranscribeBatches(keep: Set<string>): void {
     if (keep.has(file)) continue;
     try {
       fs.unlinkSync(path.join(resolveTodoBatchesDir(), file));
+      bumpTopicThrottled(TODO_TOPIC);
     } catch (e) {
       log.warn("todo", `could not remove stale transcribe batch ${file}: ${(e as Error).message}`);
     }

@@ -24,6 +24,7 @@ import { expandHome } from "../fs/badges.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { readStorageIndex, countStorageIndex, indexStorageFiles, LFBRIDGE_DIR } from "./tracking.service.js";
+import { bumpTopic, STORAGES_TOPIC } from "../events/state-events.service.js";
 import { trackingBaseDir, clearStorageTypeCache } from "./storage-type.service.js";
 import { analyzeFile } from "./analysis.service.js";
 // Lazy import cycles with storage-settings.service (ensureBackingLocations) and devices.service
@@ -140,6 +141,9 @@ export function writeDescriptor(root: string, desc: StorageDescriptor): void {
   if (desc.personal) out.personal = desc.personal;
   out.clones = { google_drive: desc.clones.googleDrive, dropbox: desc.clones.dropbox };
   fs.writeFileSync(path.join(root, STORAGE_YAML), YAML.stringify(out), "utf8");
+  // The one choke point every descriptor write passes through — the Storages pages learn live
+  // (performance.mdx Aspect 6b).
+  bumpTopic(STORAGES_TOPIC);
 }
 
 function omit(o: Record<string, any>, keys: string[]): Record<string, unknown> {
@@ -585,6 +589,7 @@ export async function setBookmark(storageId: string, relPath: string, on: boolea
     b.bookmarked = [...set];
     return b;
   });
+  bumpTopic(STORAGES_TOPIC);
   return { storageId: row.id, bookmarked: next.bookmarked };
 }
 

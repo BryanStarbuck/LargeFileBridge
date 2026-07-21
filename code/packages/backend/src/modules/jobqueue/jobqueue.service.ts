@@ -25,6 +25,7 @@ import { describeOne } from "../describe/describe.service.js";
 import { ocrOne } from "../ocr/ocr.service.js";
 import { compressFile } from "../compress/compression.service.js";
 import { track } from "../progress/progress.registry.js";
+import { bumpTopic, bumpTopicThrottled, JOBS_TOPIC } from "../events/state-events.service.js";
 import type { ProviderId } from "../describe/adapters.js";
 import { selectAdapter } from "../describe/adapters.js";
 // The provider-account circuit (to_fix.mdx §2.4). The adapter CLASSIFIES a fault, provider-health HOLDS the
@@ -237,6 +238,7 @@ export function enqueue(tasks: QueueTask[]): { queued: number; deduped: number; 
   // request that must return immediately, and per-task appends here are forbidden.
   if (admitted.length) appendEnqueued(admitted.map(toJournalTask));
   pending.push(...admitted);
+  if (admitted.length) bumpTopic(JOBS_TOPIC); // an open Processing/Scans page learns the queue moved (performance.mdx Aspect 6b)
 
   if (refused) {
     log.warn(
@@ -366,6 +368,7 @@ export function createBatch(input: {
     finishedAt: null,
     manifestPath: input.manifestPath,
   });
+  bumpTopic(JOBS_TOPIC);
   return input.batchId;
 }
 
@@ -428,6 +431,7 @@ export function stopBatch(batchId: string): number {
     const settled = b.ok + b.rejected + b.failed + b.halted;
     if (settled >= b.total && !b.finishedAt) b.finishedAt = new Date().toISOString();
   }
+  bumpTopic(JOBS_TOPIC);
   return n;
 }
 
@@ -503,6 +507,7 @@ export function recordQuarantined(tasks: Array<{ op: string; path: string; attem
       reason: `Quarantined — this file crashed Large File Bridge ${t.attempts === 1 ? "once" : `${t.attempts} times`} and was not retried.`,
     });
   }
+  if (tasks.length) bumpTopicThrottled(JOBS_TOPIC);
 }
 
 /** Recently-failed items, pruned past the retention window (so failures stay readable after a run). */
@@ -880,6 +885,8 @@ async function runTask(t: QueueTask): Promise<void> {
       // outcome is the one that trips the ceiling, the halted remainder settles into a manifest whose
       // earlier outcomes are already recorded.
       noteBatchOutcome(t.batchId, reason);
+      // Throttled: a 1,440-task batch must not become 1,440 stream lines + 1,440 client refetches.
+      bumpTopicThrottled(JOBS_TOPIC);
     }
   });
 }

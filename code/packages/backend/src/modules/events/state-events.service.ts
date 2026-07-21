@@ -34,6 +34,14 @@ export function repoTopic(folder: string): StateTopic {
 }
 export const REPOS_TOPIC: StateTopic = "repos";
 export const STORAGES_TOPIC: StateTopic = "storages";
+// Sitewide topics (performance.mdx Aspect 6b) — every UI page has a topic that its server state bumps.
+export const JOBS_TOPIC: StateTopic = "jobs"; // job queue + batches (Processing page, Scans page)
+export const SCANS_TOPIC: StateTopic = "scans"; // scan-job lifecycle (scan-status readers)
+export const PROGRESS_TOPIC: StateTopic = "progress"; // the progress dock registry
+export const TODO_TOPIC: StateTopic = "todo"; // TO DO batch store
+export const DEVICES_TOPIC: StateTopic = "devices"; // device registry / peers
+export const SETTINGS_TOPIC: StateTopic = "settings"; // app config, AI config, flags
+export const IPFS_TOPIC: StateTopic = "ipfs"; // node status, install/upgrade, pinset
 
 export interface StateBump {
   topic: StateTopic;
@@ -73,6 +81,35 @@ export function bumpTopic(topic: StateTopic): number {
 /** Bump several topics at once (one write often changes a repo AND the list rollup above it). */
 export function bumpTopics(topics: readonly StateTopic[]): void {
   for (const t of new Set(topics)) bumpTopic(t);
+}
+
+/**
+ * Trailing-edge coalesced bump for HIGH-FREQUENCY write paths (a per-task batch settle, a progress
+ * tick, a per-file pin during a pass). A batch of 1,440 tasks must not turn into 1,440 NDJSON lines
+ * and 1,440 client refetches — the client only needs "this moved recently", so bumps inside the
+ * window fold into one bump at the window's end. The FIRST call in a quiet period fires immediately
+ * (a lone event must not wait out the window), later calls coalesce.
+ */
+const THROTTLE_MS = 1_000;
+const throttleTimers = new Map<StateTopic, ReturnType<typeof setTimeout>>();
+const throttlePending = new Set<StateTopic>();
+
+export function bumpTopicThrottled(topic: StateTopic, windowMs: number = THROTTLE_MS): void {
+  if (throttleTimers.has(topic)) {
+    throttlePending.add(topic); // inside the window — fold into the trailing bump
+    return;
+  }
+  bumpTopic(topic); // leading edge — a lone event is delivered at once
+  const timer = setTimeout(() => {
+    throttleTimers.delete(topic);
+    if (throttlePending.delete(topic)) bumpTopic(topic);
+  }, windowMs);
+  timer.unref?.(); // never hold the process open at shutdown
+  throttleTimers.set(topic, timer);
+}
+
+export function bumpTopicsThrottled(topics: readonly StateTopic[], windowMs: number = THROTTLE_MS): void {
+  for (const t of new Set(topics)) bumpTopicThrottled(t, windowMs);
 }
 
 /**

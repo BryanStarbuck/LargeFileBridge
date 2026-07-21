@@ -5,6 +5,7 @@
 // outlives a restart is not "in flight" anymore, so persistence would be wrong.
 import { randomUUID } from "node:crypto";
 import type { ProgressJob, ProgressKind } from "@lfb/shared";
+import { bumpTopic, bumpTopicThrottled, PROGRESS_TOPIC } from "../events/state-events.service.js";
 
 // Internal record — the public GET shape is ProgressJob (id/kind/target/startedAt/done?/total?/unit?).
 const jobs = new Map<string, ProgressJob>();
@@ -13,6 +14,7 @@ const jobs = new Map<string, ProgressJob>();
 export function begin(kind: ProgressKind, target: string): string {
   const id = randomUUID();
   jobs.set(id, { id, kind, target, startedAt: new Date().toISOString() });
+  bumpTopic(PROGRESS_TOPIC); // the dock learns a card exists without waiting for its poll
   return id;
 }
 
@@ -23,11 +25,12 @@ export function report(id: string, p: { done?: number; total?: number; unit?: st
   if (p.done !== undefined) j.done = p.done;
   if (p.total !== undefined) j.total = p.total;
   if (p.unit !== undefined) j.unit = p.unit;
+  bumpTopicThrottled(PROGRESS_TOPIC); // ticks arrive many times a second — coalesce them
 }
 
 /** Remove a job (it finished — success OR error). Idempotent. */
 export function end(id: string): void {
-  jobs.delete(id);
+  if (jobs.delete(id)) bumpTopic(PROGRESS_TOPIC); // the card must leave at once, not on the next poll
 }
 
 /** Snapshot of every in-flight registry job (excludes the scan-job, folded in by the router). */

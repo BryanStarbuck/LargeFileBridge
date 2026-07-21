@@ -53,6 +53,7 @@ import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
+import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 
 // One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
@@ -567,7 +568,12 @@ async function pinStorageUnitInner(id: string): Promise<void> {
  * on the same repo.
  */
 export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
-  return withStorageGitLock(id, () => syncStorageTextInner(id, "device-reg"));
+  return withStorageGitLock(id, () => syncStorageTextInner(id, "device-reg")).then((r) => {
+    // The cycle's pull may have landed other computers' device files — the Devices page learns live.
+    // Throttled: the device pass runs one cycle per storage in a burst.
+    bumpTopicThrottled(DEVICES_TOPIC);
+    return r;
+  });
 }
 
 /**
