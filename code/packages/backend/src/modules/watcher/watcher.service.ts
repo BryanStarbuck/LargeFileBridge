@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WatcherState } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
-import { HARD_SKIP, isMediaFile } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isMediaFile, isTransientDownloadFile } from "../../shared/scan-filters.js";
 import { startScan } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
@@ -158,6 +158,11 @@ function flushPending(): void {
  */
 function isQualifying(abs: string, threshold: number): boolean {
   const name = path.basename(abs);
+  // A downloader's in-flight temp file churns add/delete every few seconds while a download runs. Waking
+  // on it kicks a rescan at exactly the moment the fragment exists, which is how a vanished yt-dlp
+  // fragment became a permanent row (scan.mdx §4.3.1). The final merged file's own appearance still
+  // qualifies, so the rescan that matters is never lost.
+  if (isTransientDownloadFile(name)) return false;
   if (isMediaFile(name)) return true; // video/image/audio — add or delete both matter
   try {
     const st = fs.statSync(abs); // present → this is an add/appear; size decides

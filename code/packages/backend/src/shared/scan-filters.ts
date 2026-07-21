@@ -98,6 +98,31 @@ export function isMediaFile(name: string): boolean {
   return VIDEO_EXT.has(ext) || AUDIO_EXT.has(ext) || IMAGE_EXT.has(ext);
 }
 
+// Transient downloader temp files — in-flight artifacts a downloader writes while fetching and deletes
+// seconds later when the download completes. They live exactly long enough for the watcher-kicked rescan
+// (§2.2 debounce ≈ 1.5 s) to walk mid-download and admit them as candidates; the row then outlives the
+// file, and every downstream action on it (describe, OCR, pin, auto-decide) fails on a path that no
+// longer exists. Never candidates, and never a reason to wake the watcher.
+//   * `*.part` / `*.ytdl` / `*.crdownload` / `*.partial` / `*.opdownload` / `*.aria2` — partial-download
+//     markers from yt-dlp, Chrome, Firefox, Opera, aria2.
+//   * yt-dlp per-format intermediates before the merge step: `<name>.f<format_id>.<ext>` where format_id
+//     is numeric (`.f137.mp4`) or protocol-tagged (`.fhls-662.mp4`, `.fdash-audio….m4a`, `.fhttp-720.mp4`).
+//   * ffmpeg fixup temps `<name>.temp.<ext>` and HLS fragment scratch `<name>.part-Frag12`.
+const TRANSIENT_DOWNLOAD_EXT = new Set([
+  ".part", ".ytdl", ".crdownload", ".partial", ".opdownload", ".aria2",
+]);
+const YTDLP_FORMAT_RE = /\.f(?:\d+|(?:hls|dash|http)[\w.-]*)\.[a-z0-9]+$/i;
+const TEMP_SUFFIX_RE = /\.temp\.[a-z0-9]+$/i;
+const PART_FRAG_RE = /\.part-frag\d+/i;
+
+/** True when `name` is a transient in-flight download artifact (yt-dlp fragment, browser .part, ffmpeg
+ *  fixup temp) — a file that exists only for the seconds a download is running. Skipped by the scan walk
+ *  and by the watcher's qualifying test so a mid-download rescan can never index it as a row. */
+export function isTransientDownloadFile(name: string): boolean {
+  if (TRANSIENT_DOWNLOAD_EXT.has(path.extname(name).toLowerCase())) return true;
+  return YTDLP_FORMAT_RE.test(name) || TEMP_SUFFIX_RE.test(name) || PART_FRAG_RE.test(name);
+}
+
 // Documents that are not media (no player, no IPFS payload) but ARE analysis targets — today just PDF, which
 // the OCR tab reads by rasterizing each page (ocr.mdx §1.7.1). Kept SEPARATE from isMediaFile on purpose: a
 // PDF must never be treated as pin payload or a compress candidate, only admitted for analysis (rule 5).

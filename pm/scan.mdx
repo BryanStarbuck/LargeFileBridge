@@ -459,6 +459,27 @@ main performance lever on large trees.
 The single-source-of-truth hard-skip directory set, shared with the FS-browser badge pass, lives in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
 
+#### 4.3.1 Transient downloader temp files (never candidates) — added 2026-07-21
+
+A downloader's **in-flight temp files** are never scan candidates, and never wake the live watcher
+(§2.2). While yt-dlp (or a browser, or ffmpeg's fixup step) is fetching a video it writes per-format
+intermediates like `<name>.fhls-662.mp4`, `<name>.f137.mp4`, fixup temps `<name>.temp.mp4`, and
+partial markers `*.part` / `*.ytdl` / `*.crdownload` — then deletes them seconds later when the merge
+completes. Those files live exactly as long as the watcher's debounce window, so the watcher-kicked
+rescan used to walk **mid-download** and admit the fragment as a row; the row then outlived the file.
+Every downstream action on the phantom row failed truthfully but uselessly — describe/OCR returned
+`file_not_found`, and the auto-decide policy could mark a nonexistent path `sync` and mirror that
+decision to every computer. (Root-cause note: this is exactly what happened on 2026-07-21 with
+`videos/2079684519762993659.fhls-662.mp4` in the charlie-kirk repo.)
+
+The filter is filename-shape only (no stat, no content read — §1), applied at BOTH choke points so a
+transient can neither be indexed nor trigger the walk that would index it. The **final merged file's**
+own appearance still qualifies in the watcher, so the rescan that matters is never lost.
+
+Drops transient temp files in the scan walk and refuses to wake on them in the watcher, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `isTransientDownloadFile()`
+(applied in `scanner.service.ts` `walkUnit` file loop and `watcher.service.ts` `isQualifying()`)
+
 ### 4.4 Preflight — required tools before a scan (brew-install)
 
 Charter: the scan *"can and will use brew-install tools … Before it does a scan, see if any are missing

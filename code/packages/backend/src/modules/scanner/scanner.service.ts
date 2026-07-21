@@ -38,7 +38,7 @@ import {
 import { compressInfo } from "../fs/badges.js";
 import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
-import { HARD_SKIP, isMacPackageDir, isMediaFile, isAnalysisCandidate } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isMacPackageDir, isMediaFile, isAnalysisCandidate, isTransientDownloadFile } from "../../shared/scan-filters.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
 
@@ -443,6 +443,9 @@ async function walkUnit(
         continue;
       }
       if (!ent.isFile()) continue;
+      // A downloader's in-flight temp file (yt-dlp fragment, browser .part, ffmpeg fixup temp) is gone
+      // seconds after it appears — indexing it creates a row that outlives the file (scan.mdx §4.3.1).
+      if (isTransientDownloadFile(ent.name)) continue;
       const rel = path.relative(root, abs);
       const relForIgnore = opts.rootLabelAbsolute ? abs : rel;
       if (excl.ignores(rel)) continue;
