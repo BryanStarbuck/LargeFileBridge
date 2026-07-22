@@ -821,7 +821,17 @@ function rollupStatus(
 // ── git helpers (no shell for scanning; git metadata read from files) ───────
 export function isGitWorkingTree(dir: string): boolean {
   try {
-    return fs.existsSync(path.join(dir, ".git"));
+    const gitPath = path.join(dir, ".git");
+    const st = fs.statSync(gitPath);
+    if (st.isDirectory()) return true;
+    // A .git FILE is a worktree/submodule pointer ("gitdir: <path>"). When the pointed-at gitdir no
+    // longer exists (the parent repo moved, or `git worktree prune` never ran — the stale
+    // .claude/worktrees/* case), every git command in this dir fatals "not a git repository: (null)".
+    // That is not a usable working tree, so require the target to actually exist.
+    const target = resolveGitdir(gitPath);
+    // The gitdir target is always a DIRECTORY when healthy; resolveGitdir's ".git" fallback on a
+    // malformed pointer file resolves back to the pointer file itself, which isDirectory() rejects.
+    return fs.statSync(path.isAbsolute(target) ? target : path.join(dir, target)).isDirectory();
   } catch {
     return false;
   }

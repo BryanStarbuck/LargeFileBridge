@@ -17,6 +17,10 @@ export const HARD_SKIP = new Set([
   ".Trash",
   ".cache",
   "Caches",
+  // Claude Code's per-repo dir: settings/commands (never payload) plus .claude/worktrees/* — transient
+  // agent worktrees that are FULL COPIES of the repo, so walking them double-counts every media file;
+  // stale ones (parent repo moved, worktree never pruned) also fatal every git command run inside them.
+  ".claude",
   // cloud-backbone bookkeeping — Dropbox/Google-Drive metadata that must never be walked or pinned
   // (dropbox.mdx §4, google_drive.mdx §5). These are the vendors' own scratch dirs, not payload.
   ".dropbox",

@@ -445,9 +445,17 @@ Some directories are never walked at all — regenerated build output and depend
 are listed once in `shared/scan-filters.ts` as `HARD_SKIP` and shared with the FS browser:
 
 ```
-.git  node_modules  .Trash  .cache  Caches            ← vcs / deps / os junk
+.git  node_modules  .Trash  .cache  Caches  .claude   ← vcs / deps / os / tool junk
 build  dist  out  .docusaurus  .next  .nuxt  .svelte-kit  .turbo  coverage   ← build outputs
 ```
+
+**Why `.claude` is skipped (added 2026-07-22):** Claude Code keeps per-repo settings there, and
+`.claude/worktrees/*` holds transient **agent worktrees — full copies of the repo** — so walking them
+double-counts every media file the repo already reports. A stale worktree (parent repo moved before
+`git worktree prune` ran) additionally makes every git command inside it fatal
+(`not a git repository: (null)`), which spammed `error.err` on every scan cycle.
+Skip is implemented in the shared walk-filter set: code
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`.
 
 **Why build outputs are skipped (second root-cause note):** a Docusaurus/Next build **copies** the
 source media into its output dir, so before this list the scan reported `Intel_Murder_Docus`'s hero

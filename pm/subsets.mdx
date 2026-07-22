@@ -1,0 +1,416 @@
+---
+title: LargeFileBridge — Subsets (videos only — review screen, scan pop-up, calc engine, subsets.csv)
+description: The full spec for the Subsets review screen — the SECOND level-2 child under the Videos left-bar item (route /videos/subsets — videos.mdx owns nav placement; Duplicates is the first child). VIDEOS ONLY — images are out of scope on this page, unlike Duplicates. A SUBSET is a video whose content is a contiguous segment cut out of a longer video: a 3-minute clip taken from somewhere in the middle of a 10-minute SUPERSET. The page mirrors duplicates.mdx section-for-section — the same 60/40 review layout (Repos-style TanStack table on the left 60% with the small column set: icon control columns, File as name-without-path, Size — no checkbox; a reserved right review column on the remaining 40% that scrolls independently, with the action-links row on top, the "All files are the same:" common-attributes block, and one full-column-width aspect-kept preview block per member with the DIFFERING attributes comma-separated beneath) — with these deltas: each group has exactly one SUPERSET plus its subsets, the superset's preview block renders first and is labeled, and each subset block carries a containment line ("Contained at {start}–{end} of {superset}"). It has its OWN pop-up ("Start Subset Scan", same 4-day staleness rule, Skip hyperlink left of the dominant "Start scan ›" button), its OWN dedicated scan and calc engine (a subset_scan Processing batch — separate from the duplicate scan), and its OWN output file subsets.csv in Local Storage. Contains the WEB-RESEARCHED evaluation of segment-containment fingerprint libraries and the choice (LOCKED): the MPEG-7 Video Signature via the BUNDLED ffmpeg `signature` filter — the ISO standard built precisely to detect whether one video sequence appears inside another and WHERE (frame offsets), zero new dependencies, fully local — cross-checked by Meta vPDQ contiguous-frame-run containment (which reuses the per-frame PDQ fingerprints the duplicate engine already computes); TMK+PDQF and whole-video hashes are disqualified because they only match whole same-length videos. The fingerprint value stored for this page is therefore DIFFERENT from the duplicates one: a per-video MPEG-7 signature file reference plus the matched offset range. Sibling of videos.mdx, duplicates.mdx, perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx, tables.mdx, and storage_local.mdx.
+---
+
+# LargeFileBridge — Subsets
+
+The **Subsets** page answers: *which of my videos are really just a piece of another, longer
+video?* The canonical case: a **10-minute video** and a **3-minute video** where the 3-minute one
+was **cut out of the middle** of the 10-minute one. The 3-minute file is a **subset**; the
+10-minute file is its **superset**. The user reviews these pairs side-by-side — previews, where
+the clip sits inside the parent, what differs — and then decides what to do with them (typically:
+delete the clip and keep the superset, or keep both on purpose). **LFB never deletes on its own**
+(charter: detect, surface, offer — never act).
+
+**Videos only.** Unlike [Duplicates](./duplicates.mdx), images are out of scope here — "a segment
+somewhere inside a longer timeline" is a video concept. This page narrows the hub's scope
+([videos.mdx §2](./videos.mdx)) to video files exclusively.
+
+This page **mirrors [duplicates.mdx](./duplicates.mdx) section-for-section** — same layout, same
+table rules, same right-column mechanics, same pop-up shape, same progress model, same CSV-in-state-root
+pattern — and states only its deltas, plus the parts that are genuinely its own: the
+**segment-containment fingerprint library** (§7, web-researched) and the **subset calc engine +
+`subsets.csv`** (§8–§9). Exact SHA-256 matching plays no role here — a subset is by definition
+**not** byte-identical to its superset; everything rides on fingerprints.
+
+> **HONEST STATUS — spec ahead of code.** Nothing on this page exists yet; code pointers name the
+> **planned** homes.
+
+Siblings this spec builds on and does not repeat:
+
+* [videos.mdx](./videos.mdx) — the Videos hub: nav placement, the 60/40 review layout shell.
+* [duplicates.mdx](./duplicates.mdx) — the twin screen; the base spec this one mirrors.
+* [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) — PDQ/vPDQ; the cross-check engine
+  reuses its per-frame fingerprints.
+* [scan.mdx](./scan.mdx) — detached background jobs, single-flight.
+* [processing.mdx](./processing.mdx) — batches, the Processing page, dock, conditional nav item.
+* [dialogs.mdx](./dialogs.mdx) — in-app HTML modals only.
+* [tables.mdx](./tables.mdx) — house table rules.
+* [storage_local.mdx](./storage_local.mdx) — the state root the CSV lives in.
+
+---
+
+## 1. The Subsets left bar (LOCKED)
+
+**Subsets** is the **second level-2 child** under the **Videos** left-bar item — directly below
+**Duplicates**. Route **`/videos/subsets`**; label **"Subsets"**; a static child in
+`pm/left_bar.yaml` ([videos.mdx §1](./videos.mdx) owns the yaml shape and the expand-on-select
+behavior). Selecting Videos lands on Duplicates; the user clicks **Subsets** to come here. The
+child highlights as active while this route is current, in addition to the parent Videos highlight.
+
+---
+
+## 2. Vocabulary (LOCKED)
+
+| Term | Definition |
+| --- | --- |
+| **Superset** | The longer video that **contains** the other's content — exactly **one per group**. |
+| **Subset** | A video whose content is a **contiguous segment** of the superset's timeline (any position — start, middle, end). ≥ 1 per group. |
+| **Subset group** | One superset plus every detected subset of it, identified by a `subset_group` id in `subsets.csv` (§9). |
+| **Member** | Any file in a group (the superset or a subset) — one CSV row, one table row, one preview block. |
+| **Containment range** | Where the subset's content sits inside the superset: `{start}–{end}` in superset time, derived from the signature match offsets (§8). |
+| **Common / differing attribute** | Same meaning and same print rules as [duplicates.mdx §2/§4](./duplicates.mdx). Duration **always differs** in a subset group by definition. |
+
+A video can appear in more than one group (a clip cut from a clip); groups are kept flat — each
+`subset_group` has one superset, and a middle-length video may be the superset of one group and a
+subset in another.
+
+---
+
+## 3. User interface — the table (left 60%) (LOCKED)
+
+Identical to [duplicates.mdx §3](./duplicates.mdx) — the shared 60/40 review layout, house
+TanStack table, control row, 500-per-page, full-page-height body scroll, and the **same
+deliberately small column set**: the **icon control columns** (Pin · Ignore · Transcribe ·
+AI description · OCR), **File** (**name without path**, basename only, full path via hover-info
+panel), and **Size**. **No leading checkbox, no bookmark, no path column.** Deltas:
+
+* **Group header rows** read: superset name, subset count, and basis — e.g.
+  `─ Group a71f · trees_full.mov · 2 subsets · mpeg7 ─`.
+* **Within a group, the superset row renders first**, then its subsets sorted by containment
+  start time. Groups sort by **reclaimable bytes descending** (sum of subset sizes — what
+  deleting the clips would free) by default.
+* The `⛛` filter has **no file-type facet** (videos only); it carries a match-basis facet
+  (`mpeg7` · `vpdq` — §8), value-checkbox model, all checked by default.
+* Clicking any member row selects its **whole group** into the right review column (§4).
+
+The table rows are served by the backend in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subsets.router.ts` — `subsetsRouter` → `GET /api/videos/subsets` (reads `subsets.csv`, §9).
+Rendering is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/SubsetsPage.tsx` — `SubsetsPage` (mounts the same `ReviewSplitLayout` + `GroupReviewColumn` as Duplicates).
+
+---
+
+## 4. User interface — the right review column (right 40%) (LOCKED)
+
+Identical mechanics to [duplicates.mdx §4](./duplicates.mdx): the reserved right 40%, **scrolling
+independently** of the table and page; the **action-links row** on top (**exactly "Done"** for
+now); the **"All files are the same:"** common-attributes block (comma-space separated — here
+typically resolution, codec, fingerprint-region match; **never duration**, which differs by
+definition); then **one preview block per member** — preview at **full column width, aspect ratio
+kept** — with the member's **differing attributes comma-separated beneath it**, using the same
+print rules (resolution `{w}x{h} (720p)` only for known classes 480p/720p/1080p/2K/4K; codec as
+`codec (h264)`; [duplicates.mdx §4.4–§4.5](./duplicates.mdx)). Deltas:
+
+```
+┌──────────────────────────────┐
+│  Done                        │
+├──────────────────────────────┤
+│  All files are the same:     │
+│  resolution 1920x1080        │
+│  (1080p), codec (h264)       │
+├──────────────────────────────┤
+│  SUPERSET · trees_full.mov   │ ← superset block FIRST, labeled
+│  ┌────────────────────────┐  │
+│  │   [video preview]      │  │
+│  └────────────────────────┘  │
+│  duration 10:04, 1.9 GB      │
+├──────────────────────────────┤
+│  trees_clip.mp4              │
+│  Contained at 03:10–06:12    │ ← containment line (subset blocks only)
+│  of trees_full.mov           │
+│  ┌────────────────────────┐  │
+│  │   [video preview]      │  │
+│  └────────────────────────┘  │
+│  duration 3:02, 412 MB       │
+└──────────────────────────────┘
+```
+
+* **The superset block renders first** and is labeled **`SUPERSET`** on its header line, so the
+  parent/child relationship is never ambiguous.
+* **Each subset block carries a containment line** directly under its file name:
+  **"Contained at {start}–{end} of {superset name}"** — the §2 containment range in `mm:ss`
+  (or `h:mm:ss` past an hour), from the engine's match offsets (§8). The superset block has no
+  containment line.
+* Both video previews are playable; the subset's containment range lets the user seek the
+  superset to the same content and confirm with their eyes.
+
+The right review column is the shared component in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (a `variant: "subsets"` adds the SUPERSET label + containment line).
+
+---
+
+## 5. The pop-up window — "Start Subset Scan" (LOCKED)
+
+Same shape and rules as the Duplicates pop-up ([duplicates.mdx §5](./duplicates.mdx)) with its
+**own scan and its own staleness clock** — the two scans are **separate**; running one never
+satisfies the other:
+
+* Opens on entering the page when the **subset scan** has **never run** or last completed **4+
+  days ago**; an in-app modal on `ModalHost`, never native ([dialogs.mdx §1](./dialogs.mdx)).
+* **Title:** literally **"Start Subset Scan"**. Status line: **"Never scanned."** or
+  **"Last scanned {timestamp} ({relative})."** — reading the **subset** run stamp (§9), not the
+  duplicates one.
+* Button row: **"Skip"** hyperlink immediately to the **left** of the dominant primary
+  **"Start scan ›"** button (label + right chevron). Skip shows the page from the existing CSV
+  (or the empty state with an inline Start-scan link); Start enqueues §6 and the page
+  live-refreshes when results land.
+* Never opens while a subset scan is already running — the page shows the running state instead.
+
+Handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartSubsetScanModal.tsx` — `StartSubsetScanModal` (reads `GET /api/videos/subsets/status`).
+
+---
+
+## 6. The progress user interface (LOCKED)
+
+Same model as [duplicates.mdx §6](./duplicates.mdx): **Start scan** goes **asynchronous** as a
+batch on the standard Processing surfaces — no private progress machinery.
+
+* **Batch kind:** **`subset_scan`** — its own kind, registered in the batch-kind vocabulary
+  everywhere at once (batches table Kind facet, items table, dock cards —
+  [processing_batches.mdx](./processing_batches.mdx)), distinct from `dedupe_scan`.
+* **Items:** one per candidate video for the signature phase, then one per compared pair in the
+  match phase — the items table shows real per-file/per-pair progress; the batch row shows
+  `{done}/{total}` and the honest-or-absent ETA.
+* Conditional **Processing** left-bar item + bottom-left dock card while it runs; detached from
+  the request and single-flight ([scan.mdx §10](./scan.mdx)).
+* On completion: write `subsets.csv` (§9), stamp the run, bump the live-refresh topic.
+
+Handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-scan.service.ts` — `enqueueSubsetScan()`.
+
+---
+
+## 7. The fingerprint library — web-researched evaluation & choice (LOCKED)
+
+Detecting "video A is a segment of video B" needs a fingerprint that matches **subsequences with
+offsets**, not just whole files — a harder problem than duplicate matching, and one the duplicate
+engine's same-content thresholds don't answer. The same **four hard requirements** as the
+duplicate libraries apply ([duplicates.mdx §7.1](./duplicates.mdx)): **open-source and
+embeddable** in our TypeScript/Node app; a **storable fingerprint block** we can reference from
+the CSV; a **compare/lookup function that takes previously stored fingerprints back in** (never
+re-reading the media to compare); and **no phone-home** — no network to do the work or to report
+anything.
+
+**Per media type:** the choice below is **for videos, to detect subsets** — the only choice this
+page needs. **Images: not applicable** — this page is videos-only (§ intro); there is no image
+subset detection, and image *duplicate* matching is [duplicates.mdx §7.4](./duplicates.mdx)'s
+territory.
+
+### 7.1 Options compared
+
+| Option | Containment (clip-inside-longer-video)? | Offsets reported? | Robust to codec/size/resolution change? | Local, no network | Integration cost |
+| --- | --- | --- | --- | --- | --- |
+| **MPEG-7 Video Signature — ffmpeg `signature` filter** (ISO/IEC 15938-3) | ✅ **designed for exactly this** — partial-match lookup of one sequence inside another | ✅ matching frame ranges / where the match starts | ✅ (standardized fine + coarse signatures, resistant to lossy re-encode) | ✅ (a filter inside the **ffmpeg we already bundle**) | **Zero new dependencies** — `-filter_complex signature=detectmode=full` on two inputs; export per-video signatures as binary/XML |
+| **vPDQ** (Meta ThreatExchange) | ✅ matches subsequences/clips within videos (per Meta: TMK optimizes for identical videos, **vPDQ can match clips**) | ⚠️ derivable — a contiguous run of matched per-frame PDQ hashes gives the offset | ✅ (inherits PDQ transform-robustness) | ✅ | Low — the duplicate engine **already computes per-frame PDQ** ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)); containment = longest-common-run over Hamming-matched frames; linear O(n·Fc·Fq) comparison |
+| **TMK+PDQF** (Meta) | ⛔ whole-video, fixed-length signature; optimizes for **identical same-length** videos | ⛔ | ✅ | ✅ | **Disqualified** — cannot see a clip inside a longer video |
+| **Whole-video hashes** (videohash et al.) | ⛔ collapse the whole timeline into one hash | ⛔ | ⚠️ | ✅ | **Disqualified** — same reason |
+
+Sources: [FFmpeg signature filter source (MPEG-7 video signature)](https://www.ffmpeg.org/doxygen/3.4/vf__signature_8c_source.html) ·
+[American Archive — Adventures in Perceptual Hashing (ffmpeg signature locating a matched segment ~80 s into a longer video)](https://blog.americanarchive.org/2017/04/20/adventures-in-perceptual-hashing/) ·
+[Meta ThreatExchange README (TMK = identical videos; vPDQ = clips/subsequences)](https://github.com/facebook/ThreatExchange/blob/main/README.md) ·
+[vPDQ](https://github.com/facebook/ThreatExchange/tree/main/vpdq) ·
+[Tech Coalition — PHVSpec benchmark of video perceptual hash systems](https://technologycoalition.org/wp-content/uploads/Tech-Coalition-Video-Hash-Benchmark-Paper.pdf).
+
+### 7.2 The choice (LOCKED)
+
+* **Primary: MPEG-7 Video Signature via the bundled ffmpeg `signature` filter.** It is the ISO
+  standard built precisely for "is this sequence contained in that one, and where" — fine
+  per-frame signatures plus coarse segment signatures, with a two-input detect mode that reports
+  the matching ranges. It costs **zero new dependencies** (the same bundled ffmpeg the
+  fingerprint and compression paths already shell out to), is fully offline, and its per-video
+  signature exports to a compact binary file we cache per video.
+* **Cross-check: vPDQ contiguous-frame-run containment.** We already hold per-frame PDQ hashes
+  for every scanned video (the duplicate engine, [duplicates.mdx §7–§8](./duplicates.mdx)). A
+  candidate pair from the MPEG-7 pass is confirmed when the subset's frame sequence Hamming-matches
+  a **contiguous run** inside the superset's frame sequence — and the run's position independently
+  corroborates the reported offset. Two independent algorithms agreeing is what lets the UI state
+  a containment range with confidence.
+* **TMK+PDQF and whole-video hashes are disqualified** — they only answer "are these the same
+  whole video," which is the Duplicates page's question, not this one.
+* **Consequence for storage:** the fingerprint value this page records is **different from the
+  duplicates one** — a **per-video MPEG-7 signature file reference** (plus the reused `.vpdq`
+  frame list), not a single PDQ hash (§9).
+
+### 7.3 How to use the algorithm
+
+* **Signature generation (per video, once):** run the bundled ffmpeg with the `signature` filter
+  over the file and export the signature to a binary file —
+  `ffmpeg -i <video> -vf signature=format=binary:filename=<out>.mpeg7sig -f null -` — producing
+  fine per-frame signatures plus coarse signatures over ~90-frame segments. Cache the file (§7.4);
+  never recompute unless the video's `sha256` changed.
+* **Containment lookup (per candidate pair):** run the filter in its two-input detect mode over
+  the **stored** signatures (`signature=detectmode=full` semantics, wrapped by
+  `findContainment()`), which reports whether the shorter sequence appears in the longer one and
+  the **matching frame ranges** — converted to `start_offset_s`/`end_offset_s` in superset time.
+* **Cross-check:** align the subset's stored `.vpdq` frame lines against the superset's, looking
+  for a **contiguous Hamming-matched run**; the run's position must corroborate the MPEG-7 offset.
+
+### 7.4 Where the fingerprint values are stored
+
+* **`~/T/_large_files_bridge/videos/signatures/<sha256>.mpeg7sig`** — the cached per-video MPEG-7
+  signature (binary; keyed by content hash, so a re-encode gets a fresh signature).
+* The **`fingerprint` column of `subsets.csv`** carries the **relative reference** to that
+  signature file (§9) — the signature block itself is binary, so the reference (a path string) is
+  what keeps the CSV text-clean; the `.vpdq` cross-check lists are plain text lines and live in
+  the per-file sidecar area ([perceptual_fingerprint.mdx §5](./perceptual_fingerprint.mdx)).
+* Category-B computed state: state root only, never a working repo.
+
+### 7.5 How comparisons run later — stored values back into the library (LOCKED)
+
+Re-grouping and future re-scans compare **stored artifacts only** — two cached `.mpeg7sig` files
+into `findContainment()`, two stored `.vpdq` frame lists into the run matcher. The media bytes
+are re-read only when a fingerprint is missing or its `sha256` invalidated — never to compare.
+
+### 7.6 When to run it
+
+Only inside the dedicated subset scan (§8): signature generation in phase 2 (missing/stale files
+only), containment lookups in phase 4. Never on page load, never on a request path, never in the
+15-minute/4-hour scheduleTasks.
+
+The library boundary is one module so the algorithm can be swapped without touching the engine, in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/mpeg7-signature.service.ts` — `computeSignature(path)` (ffmpeg `signature` export, cached) / `findContainment(subsetSig, supersetSig)` (returns matched ranges + confidence).
+
+---
+
+## 8. The calc engine — the dedicated subset scan (LOCKED)
+
+Its **own dedicated scan** — separate from the duplicate scan, its own batch kind, its own run
+stamp — run on demand from the pop-up (§5). Pipeline:
+
+1. **Candidate set.** All **video files** LFB knows on this computer (every scanned unit —
+   [scan.mdx §4](./scan.mdx)). Videos only; no images.
+2. **Signature phase.** For each candidate without a cached signature (or whose content hash
+   changed since it was computed): run the ffmpeg `signature` filter and cache the binary
+   signature file in Local Storage (§9). One item per video in the Processing batch.
+3. **Pair pruning.** Only ordered pairs `(shorter, longer)` where
+   `shorter.duration ≤ 0.9 × longer.duration` are compared — equal-length same-content pairs are
+   the **Duplicates** page's territory and are excluded here; members of an existing duplicate
+   group are collapsed to one representative before pairing so a duplicate never masquerades as a
+   subset.
+4. **Match phase.** For each surviving pair, run the MPEG-7 containment lookup
+   (`findContainment`); a hit yields the containment range in superset time plus a confidence
+   score. **Cross-check** each hit with the vPDQ contiguous-run test (§7.2); hits failing the
+   cross-check are dropped (precision over recall — a wrong "this is inside that" claim invites a
+   wrong delete).
+5. **Group assembly.** Confirmed hits fold into groups: one superset + all its confirmed subsets
+   under one `subset_group` id.
+6. **Write** `subsets.csv` atomically (temp + rename), stamp `subset_run.yaml` for the §5
+   staleness clock, bump the live-refresh topic.
+
+**Signal only.** The engine records relations; it never deletes, replaces, or alters a file. All
+computation is local — ffmpeg and the PDQ matcher, no sockets (charter;
+[perceptual_fingerprint.mdx §6](./perceptual_fingerprint.mdx)).
+
+The engine is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-scan.service.ts` — `runSubsetScan()` (phases 1–6), on `mpeg7-signature.service.ts` (§7) and `perceptual.service.ts` (cross-check).
+
+---
+
+## 9. The file format — `subsets.csv` (LOCKED)
+
+Durable output in **Local Storage** (state root — never a working repo), beside the duplicates
+outputs:
+
+```
+~/T/_large_files_bridge/videos/subsets.csv
+~/T/_large_files_bridge/videos/subset_run.yaml     # last-run stamp + counts (drives §5 staleness)
+~/T/_large_files_bridge/videos/signatures/<sha256>.mpeg7sig   # cached per-video MPEG-7 signatures (§7.4, §8 phase 2)
+```
+
+**One row per member file**; rows sharing a `subset_group` value form one group. Exactly one row
+per group carries `role: superset`. Columns:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `subset_group` | string | **Unique id of the group** (short hash). Shared by the superset and all its subsets. |
+| `full_path` | string | Absolute path of this member. |
+| `role` | enum | `superset` \| `subset` — exactly one superset per group. |
+| `sha256` | string | Exact content hash of this member (identity/change detection only — never the match basis here). |
+| `fingerprint` | string | **This page's fingerprint is a reference, not a single hash**: the cached MPEG-7 signature file (`signatures/<sha256>.mpeg7sig`, §7.4), with the `.vpdq` frame-list sidecar reused for the cross-check ([perceptual_fingerprint.mdx §5](./perceptual_fingerprint.mdx)). |
+| `match_basis` | enum | `mpeg7` (primary) \| `vpdq` (cross-check-only confirmations, if the primary ever yields none). |
+| `start_offset_s` / `end_offset_s` | float | **Subset rows only:** the containment range in **superset** time — feeds the §4 "Contained at {start}–{end}" line. Empty on the superset row. |
+| `confidence` | float 0–1 | Match confidence from §8 phase 4. |
+| `size_bytes` | int | File size — Size column + same/different split. |
+| `duration_s` | float | Duration — always differs between superset and subset. |
+| `width` / `height` | int | Pixel dimensions — §4 resolution print. |
+| `codec` | string | Codec — §4 codec print. |
+| `detected_at` | ISO datetime | When this run recorded the row. |
+
+```csv
+subset_group,full_path,role,sha256,fingerprint,match_basis,start_offset_s,end_offset_s,confidence,size_bytes,duration_s,width,height,codec,detected_at
+a71f30d2,/Users/bryan/Movies/trees_full.mov,superset,3c9e1a…,signatures/3c9e1a.mpeg7sig,mpeg7,,,0.97,2040109466,604.0,1920,1080,h264,2026-07-22T10:02:11Z
+a71f30d2,/Users/bryan/Movies/clips/trees_clip.mp4,subset,77bd02…,signatures/77bd02.mpeg7sig,mpeg7,190.0,372.0,0.97,432013312,182.0,1920,1080,h264,2026-07-22T10:02:11Z
+```
+
+* **Rewritten whole** each run (atomic temp + rename) — a computed artifact, not an append log.
+  The signature cache under `signatures/` persists across runs (invalidated per file by `sha256`).
+* The UI reads **only** this CSV (via the router, §3); the page never re-derives relations.
+* Category-B computed state ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
+  state root only, never committed anywhere.
+
+Reading/writing is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-store.ts` — `writeSubsetsCsv()` / `readSubsetsCsv()`.
+
+---
+
+## 10. Acceptance criteria
+
+1. **Left bar:** Subsets is the second level-2 child under Videos (below Duplicates), route
+   `/videos/subsets`, yaml-driven (§1).
+2. **Videos only:** images never appear on this page, in its scan, or in its CSV (§ intro, §8).
+3. **Table:** identical to Duplicates — left 60%, icon control columns + File (name without path)
+   + Size, no checkbox — with superset-first group ordering and superset-named group headers (§3).
+4. **Right column:** identical mechanics to Duplicates (independent scroll, "Done" action link,
+   "All files are the same:" block, full-width aspect-kept previews, differing attributes
+   comma-separated beneath each block, same resolution/codec print rules), plus: the **superset
+   block renders first labeled SUPERSET**, and every subset block carries **"Contained at
+   {start}–{end} of {superset}"** (§4).
+5. **Pop-up:** "Start Subset Scan" with its **own 4-day staleness clock** — never-scanned /
+   last-scanned timestamp line, Skip hyperlink left of the dominant "Start scan ›" button; in-app
+   modal only (§5).
+6. **Progress:** an async **`subset_scan`** batch (its own kind, distinct from `dedupe_scan`) on
+   the standard Processing surfaces; detached, single-flight (§6).
+7. **Library (LOCKED):** MPEG-7 Video Signature via the **bundled ffmpeg `signature` filter** as
+   the primary containment matcher (offsets reported, zero new dependencies, fully local),
+   cross-checked by **vPDQ contiguous-frame-run** containment; TMK+PDQF and whole-video hashes are
+   disqualified as whole-video-only. The choice satisfies the four hard requirements
+   ([duplicates.mdx §7.1](./duplicates.mdx)) — open-source/embeddable, storable fingerprint
+   (cached `signatures/<sha256>.mpeg7sig`, referenced from the CSV `fingerprint` column), later
+   comparisons feed **stored** signatures/frame lists back into `findContainment()` and the run
+   matcher, and **no phone-home**. Images: not applicable — videos only (§7).
+8. **Engine:** signature phase (cached per-video signatures) → duration-pruned ordered pairs
+   (duplicates excluded) → MPEG-7 containment lookup → vPDQ cross-check → groups; signal only,
+   never mutates files (§8).
+9. **CSV:** `~/T/_large_files_bridge/videos/subsets.csv` — one row per member, shared unique
+   `subset_group`, exactly one `role: superset` per group, fingerprint as a signature-file
+   reference, `start_offset_s`/`end_offset_s` on subset rows; rewritten atomically; the UI reads
+   only this file (§9).
+
+<!--
+  Subsets review screen — 2nd child under Videos (duplicates.mdx is the base spec; this file =
+  deltas + its own library/engine/CSV). VIDEOS ONLY (no images — narrows videos.mdx §2 scope).
+  SUBSET = contiguous segment cut from a longer SUPERSET (3-min clip from the middle of a 10-min
+  video). SHA-256 plays NO matching role here (a subset is never byte-identical).
+  UI: same 60/40 layout, same small column set (icon cols + File basename + Size, NO checkbox);
+  group header = superset name + subset count; superset row/block FIRST, labeled SUPERSET; every
+  subset preview block carries "Contained at {start}-{end} of {superset}" from the match offsets.
+  OWN pop-up "Start Subset Scan" (own 4-day staleness clock, subset_run.yaml — the duplicate scan
+  never satisfies it), OWN batch kind subset_scan, OWN engine, OWN subsets.csv.
+  LIBRARY CHOICE (web-researched, LOCKED): MPEG-7 Video Signature via the BUNDLED ffmpeg
+  `signature` filter — the ISO standard for detecting one sequence inside another WITH offsets;
+  zero new deps, fully local. Cross-check = vPDQ contiguous-frame-run over the per-frame PDQ
+  hashes the duplicate engine already computes (Meta: TMK = identical whole videos, vPDQ = clips
+  — TMK+PDQF and whole-video hashes DISQUALIFIED). Fingerprint stored is therefore a REFERENCE:
+  signatures/<hash>.mpeg7sig (cached, sha256-invalidated) + .vpdq sidecar — DIFFERENT from the
+  duplicates fingerprint value.
+  ENGINE: signature phase → pair pruning (shorter ≤ 0.9 × longer; duplicate-group members
+  collapsed to one representative) → MPEG-7 containment → vPDQ cross-check (drop on disagree —
+  precision over recall) → groups → atomic CSV write.
+  CSV cols: subset_group, full_path, role (ONE superset per group), sha256, fingerprint,
+  match_basis (mpeg7|vpdq), start/end_offset_s (subset rows, in SUPERSET time), confidence,
+  size_bytes, duration_s, width, height, codec, detected_at.
+  SPEC-AHEAD-OF-CODE: nothing built; code pointers = planned homes.
+-->

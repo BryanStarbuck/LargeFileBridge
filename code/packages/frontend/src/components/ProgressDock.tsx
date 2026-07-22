@@ -10,10 +10,14 @@
 // cards up the screen. So the dock shows at most MAX_DOCK_CARDS live cards plus a single "+ N more
 // running" summary line — the full picture stays one click away on the Processing page.
 import { RefreshCw } from "lucide-react";
-import { useNavigate } from "@tanstack/react-router";
 import type { ProgressJob } from "@lfb/shared";
 import { useProgress, verb } from "../progress/progress-context.js";
 import { leftBar } from "../config/left_bar.js";
+// The dock is mounted OUTSIDE <RouterProvider> (main.tsx renders it as a sibling so it overlays every
+// screen), so router HOOKS are off-limits here — useNavigate() fired "useRouter must be used inside a
+// <RouterProvider> component!" on every render with active jobs. Navigate through the router instance
+// directly instead; it needs no React context.
+import { router } from "../router.js";
 
 // 256px bar + 16px gutter. Parsed from the yaml-driven width so the dock never sits over the nav.
 const DOCK_LEFT = `calc(${leftBar.sidebarWidth} + 16px)`;
@@ -63,13 +67,12 @@ function Card({ job }: { job: ProgressJob }) {
 
 export function ProgressDock() {
   const { jobs, queued } = useProgress();
-  const navigate = useNavigate();
   if (jobs.length === 0 && queued <= 0) return null; // absent from the DOM while idle — no empty box
   // Cap the live cards; the overflow becomes one summary line so the stack never covers the screen.
   const visible = jobs.slice(0, MAX_DOCK_CARDS);
   const moreRunning = jobs.length - visible.length;
   // The whole dock is a shortcut into the Processing page (processing.mdx §3) — click or Enter/Space opens it.
-  const openProcessing = () => void navigate({ to: "/processing" });
+  const openProcessing = () => void router.navigate({ to: "/processing" });
   return (
     <div
       className="fixed z-40 flex cursor-pointer flex-col-reverse gap-1.5"

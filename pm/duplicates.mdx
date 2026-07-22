@@ -1,0 +1,570 @@
+---
+title: LargeFileBridge — Duplicates (review screen, scan pop-up, calc engine, duplicates.csv)
+description: The full spec for the Duplicates review screen under the Videos left-bar item (route /videos/duplicates — videos.mdx owns the nav placement). Defines — in dedicated sections, one per concern — (1) the LEFT-BAR entry (level-2 child of Videos); (2) the USER INTERFACE — the 60/40 review layout — a Repos-style TanStack table on the left 60% of the content width with a deliberately SMALL column set (the icon control columns, a File column showing the file NAME WITHOUT PATH, and Size — no leading checkbox, no bookmark), and the reserved RIGHT REVIEW COLUMN on the remaining 40% that scrolls independently: an action-links row on top (just "Done" for now), then an "All files are the same:" block listing the attributes ALL group members share (file size, SHA-256 hash, fingerprint, duration for videos, resolution, codec — comma-space separated), then one full-column-width aspect-ratio-preserving preview block per duplicate with the attributes that DIFFER printed comma-separated under each preview so the user can compare and contrast; the resolution print rule (width x height, plus a parenthesized class like (480p) ONLY when it snaps to a known common class — 480p/720p/1080p/2K/4K) and the codec print rule (the codec name in parentheses after the word codec); (3) the POP-UP WINDOW — the "Start Duplicate Scan" modal shown on entering the page, recommending a scan when it has never run or is 4+ days stale, with a Skip hyperlink to the LEFT of the dominant "Start scan ›" button and a never-scanned / last-scanned-at timestamp line; (4) the PROGRESS UI — the scan goes asynchronous as a batch on the Processing page; (5) the CALC ENGINE — the dedicated duplicate-detection scan that groups files first by exact SHA-256 and then by perceptual fingerprint (PDQ/vPDQ per perceptual_fingerprint.mdx — PhotoDNA-STYLE, explicitly not PhotoDNA), so duplicates are found even when the copies differ in codec, file size, or pixel depth; and (6) the FILE FORMAT of duplicates.csv in Local Storage — one row per member file, rows sharing a duplicate_group id, with full_path, sha256, fingerprint, and the display attributes. Also contains the WEB-RESEARCHED FINGERPRINT-LIBRARY section (§7) with the four hard requirements (open-source and embeddable in our Node/TypeScript app; a TEXT-ENCODABLE fingerprint value storable in the CSV fingerprint column; an OFFLINE COMPARE FUNCTION that stored values can be fed back into later without re-reading media bytes; and absolutely NO PHONE-HOME — no network to do the work or report anything), the candidate lists for IMAGES and for VIDEOS, and the LOCKED per-media choices FOR DUPLICATE DETECTION — images: PDQ 256-bit (64-hex) via a local binding, with blockhash-core + sharp-phash as the pure-JS MIT fallback; videos: vPDQ per-frame PDQ (text lines frame_number,hex,quality,timestamp) — plus how to use each algorithm, when to run it, where the values are stored, and how later comparisons feed the stored values back into the library's compare functions. Sibling of videos.mdx (hub + layout shell), subsets.mdx (the twin screen with its OWN subset scan, calc engine, fingerprint choice, and subsets.csv), perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx (no native dialogs — ModalHost), tables.mdx, and storage_local.mdx (the state root the CSV lives in).
+---
+
+# LargeFileBridge — Duplicates
+
+The **Duplicates** page answers: *which of my videos and images exist more than once on this
+computer — and are the copies truly the same, so I can safely delete the extras?* It shows
+duplicate **groups** in a table and lets the user review each group's members **side-by-side** in a
+right review column with real previews, so "same or not" is judged with eyes, not faith.
+
+Two copies of the same content are often **not byte-identical**: they may differ in **codec**, in
+**file size**, and in **pixel depth / resolution** — a ProRes master and its H.264 export, a PNG
+and its heavily-compressed JPEG. That is why grouping runs on **two identities**: the exact
+**SHA-256** hash (byte-identical copies) and the **perceptual fingerprint**
+([perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) — PhotoDNA-style capability, PDQ/vPDQ,
+**not** PhotoDNA, entirely local).
+
+**LFB never deletes on its own.** The page surfaces groups and gives the user the evidence; any
+delete is an explicit user action per file (charter: detect, surface, offer — never act).
+
+> **HONEST STATUS — spec ahead of code.** Nothing on this page exists yet; code pointers name the
+> **planned** homes.
+
+This spec builds on the siblings and does not repeat them:
+
+* [videos.mdx](./videos.mdx) — the Videos hub: nav placement, the 60/40 review layout shell, scope
+  (videos first, images second).
+* [subsets.mdx](./subsets.mdx) — the twin screen; it mirrors this spec's sections but has its
+  **own** dedicated subset scan, calc engine, fingerprint choice, and `subsets.csv`.
+* [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) — the fingerprint and its
+  Hamming-distance thresholds; this page only consumes them.
+* [scan.mdx](./scan.mdx) — the scanning service conventions (detached background jobs, single-flight).
+* [processing.mdx](./processing.mdx) — batches, the Processing page, the dock, the conditional nav item.
+* [dialogs.mdx](./dialogs.mdx) — in-app HTML modals only; the Start-Scan pop-up rides `ModalHost`.
+* [tables.mdx](./tables.mdx) — house table rules (control row, icon columns, pagination, facets).
+* [storage_local.mdx](./storage_local.mdx) — the state root `~/T/_large_files_bridge/` the CSV lives in.
+
+---
+
+## 1. The Duplicates left bar (LOCKED)
+
+**Duplicates** is the **first level-2 child** under the **Videos** left-bar item — the entry the
+Videos item lands on when selected. Route **`/videos/duplicates`**; label **"Duplicates"**; content
+lives in `pm/left_bar.yaml` as a static child ([videos.mdx §1](./videos.mdx) owns the yaml shape,
+ordering, and the expand-on-select behavior — this page does not restate it). The child highlights
+as active while this route is current, in addition to the parent Videos highlight.
+
+---
+
+## 2. Vocabulary (LOCKED)
+
+| Term | Definition |
+| --- | --- |
+| **Duplicate group** | A set of ≥ 2 files judged to be **the same content**, identified by a `duplicate_group` id in `duplicates.csv` (§9). |
+| **Member** | One file in a group — one CSV row, one table row (when its group is open), one preview block in the right column. |
+| **Common attribute** | An attribute whose value is identical across **every** member of the group (§4.2). |
+| **Differing attribute** | An attribute with ≥ 2 distinct values across the group's members (§4.3). |
+| **Match basis** | *How* the group was formed: `sha256` (byte-identical) or `fingerprint` (perceptually identical). Stored per group (§9). |
+
+---
+
+## 3. User interface — the table (left 60%) (LOCKED)
+
+The page uses the shared **60/40 review layout** ([videos.mdx §3](./videos.mdx)): the table owns
+the left **60%** of the content width; the right **40%** is the review column (§4). The table is a
+house TanStack `DataTable` with the standard control row (search + `⛛` filter + `⇅` sort) and
+**500-per-page** pagination. Nothing renders beneath it, so it is a **full-page-height** table —
+the body scrolls inside, header and count/pagination footer stay pinned (charter table rule).
+
+```
+┌───────────────────────────────────────────────────────┐
+│  search…                                    ⇅   ⛛     │ ← control row
+├───────────────────────────────────────────────────────┤
+│  ⚲ ⊘ T A O   File               Size                  │ ← icon cols + File + Size. That's it.
+│  ─ Group 4f2a · 3 files · same content (fingerprint) ─│ ← group header row
+│  ⚲ · T · ·   trees.mov          734 MB            ›   │
+│  ⚲ · T · ·   trees_h264.mp4     118 MB            ›   │
+│  · ⊘ · · ·   trees_old.mov      734 MB            ›   │
+│  ─ Group 9c81 · 2 files · same content (sha256) ──────│
+│  · · · · ·   beach.mp4          1.2 GB            ›   │
+│  · · · · ·   beach copy.mp4     1.2 GB            ›   │
+├───────────────────────────────────────────────────────┤
+│  212 groups · 471 files            page 1 / 1  [500 ▾]│
+└───────────────────────────────────────────────────────┘
+```
+
+### 3.1 The column set — deliberately small (LOCKED)
+
+This table has **fewer columns** than the file tables elsewhere. Exactly:
+
+| Column | Content | Rules |
+| --- | --- | --- |
+| **Icon control columns** | The house leading icon columns ([tables.mdx §4c](./tables.mdx)) — Pin · Ignore · Transcribe · AI description · OCR — showing at a glance whether each member is pinned, transcribed, described, etc. | Same `StatusActionIcon` grammar as everywhere; **never** set `width` on an icon column; headers stay strings. |
+| **File** | The **file name without its path** (`basename` only). | The full path is NOT a column — it lives in the right column's preview blocks and the hover-info panel. Truncate with ellipsis; hover publishes the full path to the left-bar hover-info panel ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). |
+| **Size** | Human-readable file size. | Right-aligned, house size formatting. |
+
+**Explicitly absent (LOCKED):** there is **no leading checkbox column** (no multi-select on this
+table), **no bookmark column**, no Path, no counts, no status rollup. The icon columns + File +
+Size — that is the whole table.
+
+### 3.2 Rows, grouping, and selection (LOCKED)
+
+* Rows are **grouped by `duplicate_group`**: a slim group-header row (group id short-hash, member
+  count, match basis) precedes its member rows. Groups sort by **reclaimable bytes descending**
+  (sum of member sizes minus the largest member) by default — the most disk-winning groups first;
+  the `⇅` dropdown and header-clicks re-sort per house rules.
+* **Clicking any member row selects its whole group** and loads that group into the right review
+  column (§4). The selected group's rows carry the house selected-row tint. Keyboard ↑/↓ moves
+  between groups.
+* Search matches on file name and path (server-filtered); the `⛛` filter carries the File-type
+  facet (Videos · Images — [tables.mdx §2.10](./tables.mdx) subset) and a match-basis facet
+  (sha256 · fingerprint), value-checkbox model, all checked by default.
+
+The table rows are served by the backend in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/duplicates.router.ts` — `duplicatesRouter` → `GET /api/videos/duplicates` (reads `duplicates.csv`, §9).
+Rendering the grouped table and selection is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/DuplicatesPage.tsx` — `DuplicatesPage`.
+
+---
+
+## 4. User interface — the right review column (right 40%) (LOCKED)
+
+The right column shows the **selected group's members for side-by-side review**. It is its own
+scroll region — **the user scrolls it down independently of the table and the page**, because a
+group can hold many duplicates and each gets a full preview block.
+
+Top-to-bottom structure:
+
+```
+┌──────────────────────────────┐
+│  Done                        │ ← 4.1 action links (just "Done" for now)
+├──────────────────────────────┤
+│  All files are the same:     │ ← 4.2 common-attributes block
+│  File size, SHA-256 hash,    │
+│  fingerprint, duration,      │
+│  resolution 1280x720 (720p)  │
+├──────────────────────────────┤
+│  trees.mov                   │ ← 4.3 one preview block per member
+│  ┌────────────────────────┐  │
+│  │   [video preview]      │  │   full column width, aspect kept
+│  └────────────────────────┘  │
+│  codec (prores), 734 MB      │ ← the DIFFERING attributes, comma-separated
+├──────────────────────────────┤
+│  trees_h264.mp4              │
+│  ┌────────────────────────┐  │
+│  │   [video preview]      │  │
+│  └────────────────────────┘  │
+│  codec (h264), 118 MB        │
+│           …                  │   (scrolls independently)
+└──────────────────────────────┘
+```
+
+### 4.1 The action-links row (top) (LOCKED)
+
+A row of text action links pinned at the top of the column. **For now it contains exactly one
+link: "Done"** — it deselects the group and clears the column. More actions will join this row in
+the future (e.g. per-group delete flows); the row is the reserved home for them. House action-link
+styling ([page_actions.mdx](./page_actions.mdx)).
+
+### 4.2 The "All files are the same:" block — common attributes (LOCKED)
+
+Directly under the action links, **at the top of the column**, a block headed with the literal
+sentence **"All files are the same:"** followed by the list of attributes whose values are
+identical across **every** member, **comma-space separated** on as few lines as wrap requires.
+The attribute vocabulary:
+
+| Attribute | Printed as | When listed |
+| --- | --- | --- |
+| **File size** | `File size` | byte sizes identical |
+| **SHA-256 hash** | `SHA-256 hash` | exact hashes identical (byte-identical copies) |
+| **Fingerprint** | `Fingerprint` | perceptual fingerprints match within threshold (§7.8) |
+| **Duration** (videos only) | `duration` | durations equal within tolerance (±0.5 s) |
+| **Resolution** | `resolution 1280x720 (720p)` | pixel dimensions identical — printed per §4.4 |
+| **Codec** | `codec (h264)` | codec identical — printed per §4.5 |
+
+An attribute appears **either** here (same everywhere) **or** under the preview blocks (differs
+somewhere) — **never both**. Example render:
+`All files are the same: Fingerprint, duration, resolution 1920x1080 (1080p)`.
+
+### 4.3 The preview blocks — one per member, differences underneath (LOCKED)
+
+Below the common block, **one preview block per member**, in table order:
+
+* **Header line:** the file name (basename, bold); the full path in small muted type beneath it.
+* **The preview:** the image, or a playable video preview (poster + play — the house media
+  preview, [media_viewer.mdx](./media_viewer.mdx) conventions). It takes the **full width the
+  right column gives it** and **always keeps the file's aspect ratio** — width is fixed to the
+  column, height follows the aspect. Never cropped, never stretched, never a fixed-height thumb.
+* **The differing-attributes line (bottom of the block):** the attributes that **differ** across
+  the group, printed for **this** member, **comma-space delimited on one wrapping text line** —
+  text, not a grid: fewer columns, more compactness (e.g. `codec (h264), 118 MB, 1280x720 (720p)`).
+  Same vocabulary and print rules as §4.2/§4.4/§4.5; only differing attributes appear here.
+
+Because the common attributes are hoisted to the top and each block shows **only** what differs,
+the user compares and contrasts by scanning one short line under each preview.
+
+### 4.4 The resolution print rule (LOCKED)
+
+Resolution prints as **`{width}x{height}`**, and **only when the dimensions snap to a known common
+class** is the class appended in parentheses: **`1280x720 (720p)`**. The known classes:
+**480p, 720p, 1080p, 2K, 4K** (extendable — the list is a named constant, not scattered literals).
+Dimensions that match no class print bare: `1442x1080`. Snapping tolerates the usual encode
+variance (±8 px per axis; portrait matches by the transposed dimensions).
+
+The class-snapping helper is one shared function in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media/resolutionClass.ts` — `resolutionLabel(width, height)`.
+
+### 4.5 The codec print rule (LOCKED)
+
+The codec — the compression-algorithm format of the file (h264, hevc, prores, av1, vp9; png, jpeg,
+heic, webp for images) — prints as the word **`codec`** followed by the value **in parentheses**:
+**`codec (h264)`**. Same form in the common block and in the differing lines.
+
+The right review column is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, preview blocks; its own `overflow-y-auto` region).
+
+---
+
+## 5. The pop-up window — "Start Duplicate Scan" (LOCKED)
+
+Entering the Duplicates page evaluates staleness and, when warranted, opens a modal. (The Subsets
+page has its **own, separate** pop-up, scan, and staleness clock — [subsets.mdx §5](./subsets.mdx);
+running one scan never satisfies the other.)
+
+* **When it opens.** The scan has **never run**, or its last completed run is **4 days old or
+  more**. Fresher than 4 days → no pop-up, the page renders straight from the CSV.
+* **It is an in-app HTML modal** on the one `ModalHost` — never a native browser dialog
+  ([dialogs.mdx §1](./dialogs.mdx)).
+
+```
+┌──────────────────────────────────────────────┐
+│  Start Duplicate Scan                        │
+│                                              │
+│  Never scanned.                              │   ← or: "Last scanned 2026-07-15 09:14 (7 days ago)."
+│  We recommend scanning now to find           │
+│  duplicate videos and images.                │
+│                                              │
+│              Skip    ┌─────────────────┐     │
+│                      │  Start scan  ›  │     │
+│                      └─────────────────┘     │
+└──────────────────────────────────────────────┘
+```
+
+* **Title:** literally **"Start Duplicate Scan"**.
+* **The status line** is the first body line: **"Never scanned."** when no run has ever completed,
+  otherwise **"Last scanned {timestamp} ({relative})."** — an absolute time-based stamp plus the
+  relative age.
+* **The recommendation line** states why we suggest scanning (4+ days / never).
+* **The button row:** the **dominant primary button "Start scan ›"** (label + right chevron) on
+  the right, and a **"Skip" hyperlink** (plain text link, not a button) immediately to its
+  **left**. Skip closes the modal and shows the page with whatever CSV data exists (possibly an
+  empty state: *"No duplicate scan yet — start one from here"*, with an inline Start-scan link
+  that reopens this modal).
+* **Start scan** closes the modal, enqueues the scan (§6), and leaves the user on the page — the
+  table live-refreshes when results land ([sitewide live-refresh](./processing.mdx)).
+* While a duplicate scan is **already running**, the pop-up never opens; the page shows the
+  running state (§6) instead.
+
+Staleness evaluation and the modal are handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartDuplicateScanModal.tsx` — `StartDuplicateScanModal` (reads last-run from `GET /api/videos/dedupe/status`).
+
+---
+
+## 6. The progress user interface (LOCKED)
+
+Pressing **Start scan** makes the work **asynchronous** — it is a **batch** in the house
+background-processing model, and the **Processing** surfaces track all of it
+([processing.mdx](./processing.mdx)); this page adds no private progress machinery.
+
+* **Batch kind:** `dedupe_scan` — registered in the batch-kind vocabulary **everywhere at once**
+  (batches table Kind facet, items table, dock cards) like every other kind
+  ([processing_batches.mdx](./processing_batches.mdx)).
+* **Items:** one item per candidate file (hash + fingerprint + probe), so the Processing items
+  table shows per-file progress; the batch row shows `{done}/{total}` and the honest-or-absent ETA.
+* The conditional **Processing** left-bar item appears while the batch runs and the bottom-left
+  dock shows its card, exactly per [processing.mdx §2–§3](./processing.mdx).
+* The scan is **detached from the request and single-flight** — navigation never cancels it, and a
+  second Start while one runs coalesces ([scan.mdx §10](./scan.mdx)).
+* On completion the engine writes `duplicates.csv` (§9), bumps the live-refresh topic, and the
+  page re-renders with fresh groups.
+
+Enqueueing the batch is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `enqueueDedupeScan()` (registers the `dedupe_scan` batch with the job queue).
+
+---
+
+## 7. The fingerprint libraries — evaluation & choices (web-researched, LOCKED)
+
+Duplicate grouping beyond byte-identity runs on perceptual fingerprints. The platform-level
+algorithm family is owned by [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx); this
+section pins **which library detects duplicates on this page, per media type** — one choice for
+**images**, one for **videos** (they turn out to share one primitive) — and the operational
+contract around them. ([subsets.mdx §7](./subsets.mdx) makes its own, different choice for
+detecting **subsets** — segment containment is a different problem.)
+
+### 7.1 The four hard requirements (LOCKED)
+
+Any library used here must satisfy **all four**; failing any one disqualifies it:
+
+1. **Open source and embeddable.** A library we include and ship inside our TypeScript/Node app
+   (npm package, WASM, or a local native binding we build) — never an external service, and under
+   a permissive license (MIT/BSD/Apache; GPL is avoided — [perceptual_fingerprint.mdx §2.1](./perceptual_fingerprint.mdx)).
+2. **A storable, text-encodable fingerprint.** The computed value must serialize to a compact
+   **text string** (hex or hex lines) so it can sit **in the `fingerprint` column of
+   `duplicates.csv`** (§9) and in the per-file YAML sidecar.
+3. **A compare function that takes stored values back.** Later comparisons must be a pure function
+   over two **previously stored** fingerprint strings (Hamming distance / match score) — grouping
+   must **never** require re-decoding the media bytes.
+4. **No phone-home (charter).** No network call of any kind — not to do the work, not to report
+   anything. Enforced by the no-network guard test
+   ([perceptual_fingerprint.mdx §6](./perceptual_fingerprint.mdx)).
+
+### 7.2 Image libraries evaluated (for duplicate detection)
+
+| Library | Fingerprint (text-encodable?) | Compare function (stored values in?) | Local / no phone-home | License | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| **PDQ** (Meta; Rust `pdqhash` crate via napi-rs or WASM) | ✅ 256-bit → **64-hex string** + a quality score | ✅ in-library **Hamming distance** over two hashes | ✅ pure computation | BSD / Apache-2.0 | **CHOSEN (primary)** |
+| **blockhash-core** (npm) | ✅ 256-bit → hex string (`bits: 16`) | ✅ Hamming over the two hex strings | ✅ pure JS | MIT | **CHOSEN (fallback #1)** |
+| **sharp-phash** (npm) | ✅ 64-bit DCT pHash string | ✅ ships its own **`sharp-phash/distance`** compare | ✅ pure JS on `sharp` | MIT | **CHOSEN (fallback cross-check)** |
+| **imghash** (npm) | ✅ hex output | ⚠️ no bundled distance helper (external Hamming) | ✅ | MIT | viable, redundant with the above |
+| **node-phash** (pHash.org binding) | ✅ 64-bit | ✅ `hammingDistance` | ✅ | **GPLv3 ⚠ + stale binding** | rejected (license + maintenance) |
+| **PhotoDNA** (Microsoft) | ⛔ proprietary block | ⛔ service-side | **⛔ cloud service + reporting model** | proprietary, gated | **disqualified** (fails #1, #4) |
+
+### 7.3 Video libraries evaluated (for duplicate detection)
+
+| Library | Fingerprint (text-encodable?) | Compare function (stored values in?) | Local / no phone-home | License | Verdict |
+| --- | --- | --- | --- | --- | --- |
+| **vPDQ** (Meta ThreatExchange) | ✅ **per-frame text lines** `frame_number,hex,quality,timestamp` — its native output is already CSV-shaped | ✅ shared-frame matcher takes two stored frame lists | ✅ (frames via our bundled ffmpeg) | BSD | **CHOSEN** |
+| **TMK+PDQF** (Meta) | ⚠️ ~256 KB **binary** signature — not text-friendly | ✅ cosine/level-2 score | ✅ | BSD | rejected (fails #2; no Node path) |
+| **MPEG-7 Video Signature** (ffmpeg `signature`) | ⚠️ binary/XML export, verbose | ✅ two-input detect | ✅ | LGPL (ffmpeg) | overkill here — built for **containment**; it is the **subsets** choice ([subsets.mdx §7](./subsets.mdx)) |
+| **Whole-video single hashes** (videohash et al.) | ✅ small hex | ✅ Hamming | ✅ | MIT | rejected — too coarse; collapses the timeline, weak on codec/length variance |
+
+Sources: [Meta ThreatExchange README](https://github.com/facebook/ThreatExchange/blob/main/README.md) ·
+[vPDQ (output format: per-frame `frame_number,hex,quality,timestamp` lines)](https://github.com/facebook/ThreatExchange/tree/main/vpdq) ·
+[vpdq on PyPI](https://pypi.org/project/vpdq/) ·
+[darwinium-com/pdqhash (Rust)](https://github.com/darwinium-com/pdqhash) ·
+[blockhash-core (MIT)](https://www.npmjs.com/package/blockhash-core) ·
+[sharp-phash (MIT, bundled distance helper)](https://www.npmjs.com/package/sharp-phash) ·
+[imghash (npm)](https://www.npmjs.com/package/imghash) ·
+[Perceptual hashing in Node with sharp-phash](https://www.context.dev/blog/perceptual-hashing-in-node-js-with-sharp-phash-for-developers) ·
+[Tech Coalition — PHVSpec video perceptual-hash benchmark](https://technologycoalition.org/wp-content/uploads/Tech-Coalition-Video-Hash-Benchmark-Paper.pdf).
+
+### 7.4 The choices, per media type (LOCKED)
+
+* **Images — to detect duplicates: PDQ (256-bit).** Transform-robust (survives resize,
+  re-compression, PNG→JPEG conversion, pixel-depth change), a compact **64-hex** CSV-friendly
+  value, an in-library Hamming compare, and a quality score to gate junk images. Run via the Rust
+  `pdqhash` crate wrapped napi-rs/WASM. **Until that binding lands:** **blockhash-core** (256-bit
+  hex, MIT, pure JS) cross-checked by **sharp-phash** (64-bit, MIT, own `distance` helper) — both
+  values can be stored side-by-side during the transition
+  ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)).
+* **Videos — to detect duplicates: vPDQ (per-frame PDQ).** The same PDQ primitive over frames
+  sampled by the **bundled ffmpeg**; two videos are duplicates when a high fraction of frames
+  match. Its fingerprint is **natively text lines**, and matching feeds two **stored** frame lists
+  back in — requirements #2 and #3 exactly. One primitive covers both media types.
+* These choices are **for duplicate detection on this page**. Subset detection needs
+  offset-reporting containment and picks differently — MPEG-7 Video Signature primary
+  ([subsets.mdx §7](./subsets.mdx)).
+
+### 7.5 How to use the algorithm
+
+* **Images:** decode with `sharp` → internal bounded downscale (`resize(512, 512, { fit: "inside"
+  })` on a throwaway buffer — [perceptual_fingerprint.mdx §1](./perceptual_fingerprint.mdx)) → RGB
+  pixel buffer → `pdq.hash(buffer)` → `{ hash: <64-hex>, quality: 0–100 }`. Fallback path:
+  `blockhash-core` at `bits: 16` → 64-hex; `sharp-phash` → 64-bit string.
+* **Videos:** bundled ffmpeg samples frames (~1 fps) → each frame through the **same** image
+  pipeline → an ordered list of `frame_number,hex,quality,timestamp` lines (the vPDQ format).
+* Everything is a pure local computation; the only external process is the bundled ffmpeg.
+
+### 7.6 When to run it
+
+* **During the dedicated duplicate scan only** (§8, phase 2 of the engine) — never on page load,
+  never on a request path, never in the 15-minute/4-hour scheduleTasks.
+* **Compute only what is missing or stale:** a file is (re)fingerprinted only when it has no
+  stored fingerprint or its `sha256` changed since the fingerprint was computed. A warm re-scan
+  hashes almost nothing.
+* Freshly computed fingerprints are **also written back to the per-file sidecar** so every other
+  consumer (compression before/after verify, decisions matching) shares them
+  ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)).
+
+### 7.7 Where the fingerprint values are stored
+
+* **Canonical home:** the per-file `<name>.yaml` sidecar in Local Storage
+  (`~/T/_large_files_bridge/repos/<repoKey>/files/…` — [perceptual_fingerprint.mdx §5](./perceptual_fingerprint.mdx)).
+* **In `duplicates.csv` (§9), the `fingerprint` column:** for **images**, the 64-hex value
+  **inline**; for **videos**, the frame list is too large for one cell, so the column carries the
+  **relative reference to the `.vpdq` sidecar file** — itself plain text lines
+  (`frame_number,hex,quality,timestamp`), so the whole chain stays text-encodable.
+* Fingerprints are Category-B computed state — state root only, never a working repo
+  ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)).
+
+### 7.8 How comparisons run later — stored values back into the library (LOCKED)
+
+Grouping (§8, pass 2) and any later re-grouping read **only stored fingerprints** and feed them
+back into the library's compare functions — media bytes are never re-read to compare:
+
+* **Images:** `hammingDistance(hexA, hexB)` over the two stored 64-hex strings; same-content at
+  **≤ 32/256**, with the stricter **≤ 24** used for automatic de-dup grouping, plus the PDQ
+  **quality gate** (fallback: Hamming over blockhash hexes, cross-checked by
+  `sharp-phash/distance ≤ ~10`) — thresholds owned by
+  [perceptual_fingerprint.mdx §4](./perceptual_fingerprint.mdx).
+* **Videos:** the vPDQ matcher takes **two stored frame lists** and returns the fraction of
+  frames matching within the image threshold; the pair is a duplicate when the shared-frame
+  fraction clears the high bar **in both directions** (symmetric — this is what distinguishes a
+  duplicate from a mere subset).
+* The compare boundary is one module so the fallback→PDQ swap never touches the engine.
+
+The hash + compare boundary is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage()` / `fingerprintVideo()` / `hammingDistance()` / `sameContent()` ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)).
+
+---
+
+## 8. The calc engine — the dedicated duplicate-detection scan (LOCKED)
+
+A **dedicated scan** — its own pass, not a rider on the 15-minute or 4-hour scheduleTasks — run
+**on demand from the pop-up** (§5). It computes **duplicate groups only**; subset relations have
+their **own** scan and engine ([subsets.mdx §8](./subsets.mdx)).
+
+### 8.1 Candidate set
+
+All **video and image files** LFB knows on this computer — every scanned unit (repos and the
+computer pin unit, [scan.mdx §4](./scan.mdx)), videos first, images second
+([videos.mdx §2](./videos.mdx)). The engine reuses hashes and fingerprints already recorded in the
+per-file sidecars ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) and computes only what
+is missing — a warm re-scan is cheap.
+
+### 8.2 Grouping — exact first, then perceptual (LOCKED)
+
+1. **Pass 1 — SHA-256.** Bucket by exact content hash. Any bucket with ≥ 2 files is a duplicate
+   group with `match_basis: sha256`. Byte-identical copies never need the fingerprint.
+2. **Pass 2 — perceptual fingerprint.** For files not already grouped byte-identically: compute
+   any missing/stale fingerprints (§7.5–§7.6), then compare **stored values only** (§7.8) —
+   images by PDQ Hamming distance within the strict de-dup threshold + quality gate, videos by
+   the symmetric vPDQ shared-frame fraction. Connected components of matches become groups with
+   `match_basis: fingerprint`. **This is the pass that catches copies differing in codec, file
+   size, and pixel depth / resolution** — the transform-robust identity is exactly what the
+   fingerprint exists for.
+3. **Attribute probe.** For every grouped member, probe the display attributes (size, duration,
+   width×height, codec) via the bundled ffprobe/sharp — all local, no network (charter).
+4. **Write** `duplicates.csv` atomically (temp + rename), stamp the run timestamp for the 4-day
+   staleness check, bump the live-refresh topic.
+
+**Signal only.** The engine groups and records; it never deletes, replaces, or alters a file
+(charter + [perceptual_fingerprint.mdx §4](./perceptual_fingerprint.mdx)).
+
+The engine is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (passes 1–4), using `perceptual.service.ts` — `sameContent()` for pass 2.
+
+---
+
+## 9. The file format — `duplicates.csv` (LOCKED)
+
+The scan's durable output lives in **Local Storage** (the state root — never a working repo):
+
+```
+~/T/_large_files_bridge/videos/duplicates.csv
+~/T/_large_files_bridge/videos/subsets.csv      # the twin file — written by the SEPARATE subset scan (subsets.mdx §9)
+~/T/_large_files_bridge/videos/dedupe_run.yaml  # last-run stamp + counts (drives §5 staleness)
+```
+
+**One row per member file.** Files in the same duplicate group share the same `duplicate_group`
+value — a group with N duplicates is N rows. Columns:
+
+| Column | Type | Meaning |
+| --- | --- | --- |
+| `duplicate_group` | string | **Unique id of the group** (short hash). All members of one group carry the same value. |
+| `full_path` | string | Absolute path of this member file. |
+| `sha256` | string | Exact content hash of this member. Differs across members when the copies are not byte-identical. |
+| `fingerprint` | string | Perceptual fingerprint, **text-encoded** (§7.7): images = the PDQ **64-hex inline**; videos = the relative reference to the `.vpdq` text frame list ([perceptual_fingerprint.mdx §5](./perceptual_fingerprint.mdx)). |
+| `match_basis` | enum | `sha256` \| `fingerprint` — how this group was formed (uniform within a group). |
+| `size_bytes` | int | File size — feeds the Size column and the same/different split (§4). |
+| `duration_s` | float | Video duration in seconds; empty for images. |
+| `width` / `height` | int | Pixel dimensions — feed the §4.4 resolution print. |
+| `codec` | string | Codec name — feeds the §4.5 codec print. |
+| `detected_at` | ISO datetime | When this run recorded the row. |
+
+```csv
+duplicate_group,full_path,sha256,fingerprint,match_basis,size_bytes,duration_s,width,height,codec,detected_at
+4f2a91c8,/Users/bryan/Movies/trees.mov,e3b0c4…,a1b2c3…,fingerprint,734003200,93.4,1920,1080,prores,2026-07-22T09:14:02Z
+4f2a91c8,/Users/bryan/Movies/exports/trees_h264.mp4,9f86d0…,a1b2c9…,fingerprint,118489088,93.4,1280,720,h264,2026-07-22T09:14:02Z
+```
+
+* The CSV is **rewritten whole** each run (atomic temp + rename) — it is a computed artifact, not
+  an append log; history is not kept here.
+* The UI reads **only** this CSV (via the router, §3.2) — the page never re-derives groups itself.
+* Category-B computed state ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
+  state root only, never committed anywhere.
+
+Reading/writing the CSV is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe-store.ts` — `writeDuplicatesCsv()` / `readDuplicatesCsv()`.
+
+---
+
+## 10. Acceptance criteria
+
+1. **Left bar:** Duplicates is the first level-2 child under Videos, route `/videos/duplicates`,
+   yaml-driven ([videos.mdx §1](./videos.mdx)); it is where selecting Videos lands (§1).
+2. **Table:** left 60% of the content width; TanStack, control row, 500-page, full-page-height.
+   Columns are exactly the icon control columns + **File (name without path)** + **Size** — **no
+   leading checkbox**, no bookmark, no path column (§3).
+3. **Grouping & selection:** rows group under `duplicate_group` headers; clicking a member selects
+   its group into the right column (§3.2).
+4. **Right column:** the reserved right 40%, scrolling **independently**; top action-links row
+   holding exactly **"Done"** for now; then the **"All files are the same:"** block listing the
+   attributes common to every member (file size, SHA-256 hash, fingerprint, duration for videos,
+   resolution, codec) comma-space separated; then one preview block per member — preview at
+   **full column width with aspect ratio kept** — with that member's **differing** attributes
+   comma-separated beneath it. An attribute appears in the common block or the differing lines,
+   never both (§4).
+5. **Print rules:** resolution as `{w}x{h}` with a parenthesized class **only** for the known
+   classes 480p/720p/1080p/2K/4K (§4.4); codec as `codec (h264)` — the value in parentheses (§4.5).
+6. **Pop-up:** entering the page with no run ever, or a run 4+ days old, opens the in-app
+   **"Start Duplicate Scan"** modal — status line ("Never scanned." or "Last scanned {timestamp}
+   ({relative}).") + recommendation, **Skip** hyperlink to the **left** of the dominant
+   **"Start scan ›"** button. Never a native dialog (§5).
+7. **Progress:** Start scan enqueues an async `dedupe_scan` batch tracked by the standard
+   Processing surfaces (page, dock, conditional nav item); detached and single-flight (§6).
+8. **Fingerprint libraries (LOCKED):** every library used satisfies the four requirements —
+   open-source & embeddable, **text-encodable fingerprint** storable in the CSV column, a compare
+   function that takes **stored values** back in, **no phone-home**. For duplicate detection the
+   choices are: **images → PDQ 256-bit / 64-hex** (fallback blockhash-core + sharp-phash, both
+   MIT pure-JS), **videos → vPDQ** per-frame text lines; PhotoDNA, TMK+PDQF, GPL pHash bindings,
+   and whole-video hashes are rejected for the reasons in §7.2–§7.3. Fingerprints are computed
+   only during the dedicated scan for missing/stale files (§7.6), stored per §7.7, and all later
+   comparisons are pure functions over stored values (§7.8).
+9. **Engine:** the dedicated scan groups by **SHA-256 first, perceptual fingerprint second**, so
+   copies differing in codec, file size, or pixel depth still group; probes display attributes;
+   never mutates a file; computes **duplicates only** — subsets have their own scan
+   ([subsets.mdx](./subsets.mdx)) (§8).
+10. **CSV:** `~/T/_large_files_bridge/videos/duplicates.csv`, one row per member, groups keyed by
+    a shared unique `duplicate_group`, with `full_path`, `sha256`, `fingerprint` (text-encoded per
+    §7.7), and the display attributes; rewritten atomically per run; the UI reads only this file
+    (§9).
+
+<!--
+  Duplicates review screen under the Videos hub (videos.mdx owns nav + 60/40 shell).
+  LOCKED: table = icon control cols + File (BASENAME ONLY) + Size, NO checkbox/bookmark/path;
+  rows grouped by duplicate_group, click selects whole group into the right column.
+  RIGHT COLUMN (40%, INDEPENDENT scroll): action links top (just "Done" for now) → "All files are
+  the same:" block (common attrs, comma-space: file size, SHA-256 hash, fingerprint, duration
+  [video], resolution, codec) → one preview block per member (FULL column width, ASPECT KEPT) with
+  the DIFFERING attrs comma-separated under each block. An attr is common OR differing, never both.
+  PRINT RULES: resolution "{w}x{h} (720p)" — parenthesized class ONLY for known classes
+  480p/720p/1080p/2K/4K (±8px snap, resolutionLabel()); codec "codec (h264)".
+  POP-UP: "Start Duplicate Scan" via ModalHost (dialogs.mdx — NEVER native) when never-run or 4+
+  days stale; "Never scanned." / "Last scanned {ts} ({rel})."; Skip HYPERLINK left of dominant
+  "Start scan ›" button.
+  PROGRESS: async dedupe_scan batch → processing.mdx surfaces; detached + single-flight (scan.mdx §10).
+  LIBRARIES (§7, web-researched, LOCKED): 4 hard requirements — open-source embeddable, TEXT-ENCODABLE
+  fingerprint (fits the CSV column), compare function that takes STORED values back in (never re-read
+  media to compare), NO PHONE-HOME. Choices FOR DUPLICATES: images = PDQ 256-bit 64-hex (fallback
+  blockhash-core + sharp-phash, MIT pure-JS, sharp-phash ships its own distance fn); videos = vPDQ
+  (per-frame text lines frame_number,hex,quality,timestamp; symmetric shared-frame fraction = duplicate,
+  which distinguishes from subset). REJECTED: PhotoDNA (cloud+reporting), TMK+PDQF (binary 256KB,
+  whole-video), node-phash (GPL+stale), whole-video hashes (too coarse). MPEG-7 signature = the SUBSETS
+  choice, not this page's. When to run: dedicated scan only, missing/stale (sha256-invalidated) files
+  only, write-back to sidecars. Storage: sidecar canonical; CSV column inline 64-hex (images) /
+  .vpdq text-file reference (videos).
+  ENGINE (§8): dedicated scan, DUPLICATES ONLY (subsets.mdx has its OWN scan/engine — the scans are
+  SEPARATE, one never satisfies the other's staleness clock); pass 1 SHA-256 exact, pass 2 stored-value
+  perceptual compare (catches codec/size/pixel-depth variants; thresholds owned by
+  perceptual_fingerprint.mdx), attribute probe (ffprobe/sharp, all local), atomic CSV write +
+  dedupe_run.yaml stamp. Signal only — never deletes/alters files.
+  CSV (§9): ~/T/_large_files_bridge/videos/duplicates.csv — one row per member, shared duplicate_group id,
+  cols: duplicate_group, full_path, sha256, fingerprint, match_basis, size_bytes, duration_s,
+  width, height, codec, detected_at. Rewritten whole, Category B (state root only).
+  SPEC-AHEAD-OF-CODE: nothing built; code pointers = planned homes.
+-->

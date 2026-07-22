@@ -1217,6 +1217,10 @@ function runCheckIgnoreBatch(
       encoding: "utf8",
       env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
       maxBuffer: 64 * 1024 * 1024,
+      // Explicit stdio: without it execFileSync ALSO mirrors the child's stderr to our console, so every
+      // handled submodule fatal ("Pathspec … is in submodule …") spammed the launcher log as raw noise.
+      // The fatal is still fully captured on err.stderr for splitOnSubmoduleFatal.
+      stdio: ["pipe", "pipe", "pipe"],
     });
     return { out, unknown: [] };
   } catch (e) {

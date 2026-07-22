@@ -1,0 +1,198 @@
+---
+title: LargeFileBridge — Videos (left-bar hub for Duplicates & Subsets)
+description: The hub spec for the new "Videos" left-bar item — a level-1 nav entry placed ABOVE Scans and BELOW IPFS that, when selected, expands to a level-2 disclosure with exactly two children — Duplicates (duplicates.mdx) and Subsets (subsets.mdx). Owns the left-bar placement and yaml shape (static children like Storages, NOT runtime-injected), the routes (/videos → /videos/duplicates default, /videos/subsets), the shared review-screen layout both children use (a Repos-style TanStack table that takes 60% of the content width with a reserved, independently-scrolling right review column on the remaining 40%), and the shared machinery PATTERN both children follow — a Start-Scan pop-up (4-day staleness recommendation), a dedicated scan run as a Processing batch, a calc engine, and a CSV output in Local Storage — while each child has its OWN scan, engine, fingerprint choice, and CSV (the duplicate scan/dedupe_scan/duplicates.csv vs the subset scan/subset_scan/subsets.csv; the two scans are separate and one never satisfies the other's staleness clock). The pattern is specified in full in duplicates.mdx and mirrored with deltas by subsets.mdx. Sibling of left_bar.mdx / left_bar.yaml (nav content source of truth), duplicates.mdx, subsets.mdx, perceptual_fingerprint.mdx (the PDQ/vPDQ fingerprint family), scan.mdx (the scheduleTask family these dedicated scans join), processing.mdx (where the async scans are tracked), and tables.mdx (house table rules).
+---
+
+# LargeFileBridge — Videos (hub)
+
+**Videos** is a new level-1 item in the left bar. It is the home of the two media-comparison
+review screens:
+
+* **[Duplicates](./duplicates.mdx)** — groups of files that are *the same content* (byte-identical
+  or perceptually identical), reviewed side-by-side so the user can confirm they are truly the same
+  and decide which copies to delete.
+* **[Subsets](./subsets.mdx)** — pairs/groups where one file's content is *contained inside*
+  another (a clip cut from a longer video, a cropped or downscaled variant), reviewed the same way.
+
+Both screens share one layout (the 60/40 review layout, §3) and one machinery **pattern** — a
+Start-Scan pop-up, a dedicated scan tracked as a Processing batch, a calc engine, and a CSV in
+Local Storage — but **each child has its own scan, engine, fingerprint choice, and CSV**: the
+duplicate scan writes `duplicates.csv`; the separate subset scan writes `subsets.csv`. The
+pattern is specified **once**, in [duplicates.mdx](./duplicates.mdx) §5–§9;
+[subsets.mdx](./subsets.mdx) mirrors it and specifies its deltas.
+
+> **HONEST STATUS — spec ahead of code.** This hub and both children are specification-first
+> ([spec-ahead-of-code is the house pattern](./to_fix.mdx)); no nav entry, route, engine, or CSV
+> exists yet. Code pointers below name the **planned** homes.
+
+This spec builds on the siblings and does not repeat them:
+
+* [left_bar.mdx](./left_bar.mdx) / `pm/left_bar.yaml` — the bar's styling spec and the machine
+  source of truth for nav content. The Videos item is a **content** change, so it lands in the yaml.
+* [repos.mdx](./repos.mdx) — the Repos landing table whose look-and-feel the review tables copy.
+* [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) — the local-only PDQ/vPDQ fingerprint
+  (PhotoDNA-style capability, explicitly **not** PhotoDNA) that powers non-byte-identical matching.
+* [scan.mdx](./scan.mdx) — the scanning service; the duplicate-detection scan is a new **dedicated**
+  scan alongside the existing scheduleTasks.
+* [processing.mdx](./processing.mdx) — the async progress surface the scan reports into.
+
+---
+
+## 1. The left-bar entry — Videos, above Scans, below IPFS (LOCKED)
+
+A new nav item **Videos** is inserted into the app bar **between IPFS and Scans** — i.e. **below
+IPFS, above Scans** in the rendered list. The app bar order becomes:
+
+| Order | Item | Route | Notes |
+| --- | --- | --- | --- |
+| 1–6 | Repos … IPFS | — | unchanged ([left_bar.mdx §3](./left_bar.mdx)) |
+| **7** | **Videos** | **`/videos`** | **NEW — this spec.** Icon: `Clapperboard` (lucide). |
+| 8 | Scans | `/scans` | was order 7 |
+| 9 | To Do | `/todo` | was order 8 |
+| 10 | Settings | `/settings` | was order 9 |
+
+* **Content source of truth stays the yaml.** The item, its two children, labels, icon, routes and
+  order are added to `pm/left_bar.yaml` `nav_items` — never hard-coded in a component
+  ([left_bar.mdx §AC4](./left_bar.mdx)). The renumbering of Scans / To Do / Settings is part of the
+  same yaml edit.
+* **Static children, like Storages.** Unlike the runtime-injected per-Company children, the Videos
+  children are a **fixed, static `children:` list** in the yaml — they never depend on live state:
+
+```yaml
+# pm/left_bar.yaml (excerpt — the new entry, inserted after ipfs / before scans)
+- id: videos
+  label: "Videos"
+  icon: "Clapperboard"
+  route: "/videos"
+  order: 7
+  description: "Review duplicate and subset media files side-by-side — confirm they are the same content and decide which copies to keep. Fed by the dedicated duplicate-detection scan. See pm/videos.mdx."
+  children:
+    - id: videos_duplicates
+      label: "Duplicates"
+      route: "/videos/duplicates"
+      description: "Groups of files that are the same content — byte-identical or perceptually identical (pm/duplicates.mdx)."
+    - id: videos_subsets
+      label: "Subsets"
+      route: "/videos/subsets"
+      description: "Files whose content is contained inside another file — clips, crops, downscales (pm/subsets.mdx)."
+```
+
+* **Select → expand + land on Duplicates.** Clicking **Videos** expands the level-2 disclosure
+  (same indented disclosure-group treatment as Storages' children) **and** routes to
+  **`/videos/duplicates`** — the first child. `/videos` is an alias that redirects there; the hub
+  never renders an empty landing page of its own.
+* **Active state.** The Videos item is active (accent + tint) whenever the route is under
+  `/videos`; the specific child (Duplicates or Subsets) additionally highlights, exactly like the
+  Storages children.
+* All color, width, hover, and truncation rules are [left_bar.mdx §2/§5](./left_bar.mdx) —
+  nothing new here.
+
+Rendering the Videos item and its static children from the yaml is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (the same `children:` disclosure path Storages uses; no new mechanism).
+
+---
+
+## 2. Naming — "Videos" is the label, images are included (LOCKED)
+
+The nav label is **Videos** because videos are the primary, most valuable target (they are the
+biggest files and the costliest duplicates). The **Duplicates** screen covers **video files
+first, image files second** — the same primary/secondary scope as compression
+([compression.mdx](./compression.mdx), charter). The **Subsets** screen is **videos only** —
+"a segment inside a longer timeline" is a video concept ([subsets.mdx](./subsets.mdx)). Audio and
+other media are **out of scope for v1** (they carry no perceptual fingerprint —
+[perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)).
+
+---
+
+## 3. The shared 60/40 review layout (LOCKED — defined here, used by both children)
+
+Both children render the same screen shape — **"the Repos page with a reserved right column"**:
+
+```
+┌────────────┬──────────────────────────────────────────────┬──────────────────────────┐
+│            │  Duplicates                                  │  Done                    │ ← action links
+│  LEFT BAR  │  (page title, like Repos)                    ├──────────────────────────┤
+│            │──────────────────────────────────────────────│  All files are the same: │
+│ …          │  search…                          ⇅   ⛛      │  File size, SHA-256,     │
+│ IPFS       │──────────────────────────────────────────────│  fingerprint, duration   │
+│ Videos ◀   │   ⚲ ⊘ T A O   File            Size           │──────────────────────────│
+│  Duplicates│   · · · · ·   trees.mov       734 MB    ›    │  ┌────────────────────┐  │
+│  Subsets   │   · · · · ·   trees_copy.mov  118 MB    ›    │  │  [video preview]   │  │
+│ Scans      │   · · · · ·   beach.mp4       1.2 GB    ›    │  │  full col width,   │  │
+│ …          │               …                              │  │  aspect kept       │  │
+│            │──────────────────────────────────────────────│  └────────────────────┘  │
+│  [account] │  212 groups                page 1/1  [500 ▾] │  codec (h264), 118 MB    │ ← differing attrs
+└────────────┴──────────────────────────────────────────────┴──────────────────────────┘
+                       ← 60% of the content width →           ← 40%, scrolls on its own →
+```
+
+* **The table takes 60% of the main content width** (the area right of the left bar). It does
+  **not** run to the right edge as the Repos table does — the remaining **40% is a reserved right
+  review column**, part of the main area (never the left bar).
+* **The right review column scrolls independently** of the table and the page — its own
+  `overflow-y` region, so a group with many duplicates can be scrolled through while the table
+  stays put.
+* The table is a house-style TanStack `DataTable` ([tables.mdx](./tables.mdx)): control row
+  (search + `⛛` filter + `⇅` sort), 500-per-page pagination, full-page-height body scroll
+  (nothing renders beneath the table, so it fills to the viewport bottom — charter table rule).
+* Column set, right-column content model, and every behavioral detail are owned by
+  [duplicates.mdx §3–§4](./duplicates.mdx); [subsets.mdx](./subsets.mdx) states its deltas.
+
+The 60/40 split view both pages mount is handled in code (planned):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (table slot + independently-scrolling right column slot).
+
+---
+
+## 4. The scan machinery — one pattern, two separate scans (LOCKED reference)
+
+Each child has its **own dedicated scan**, following one shared pattern: entering a page whose
+scan is stale (4+ days) or has never run opens that page's **Start-Scan pop-up**; starting it
+enqueues an async batch tracked on the **Processing** page; the engine writes that page's CSV
+into Local Storage. **The two scans are separate** — running the duplicate scan never satisfies
+the subset scan's staleness clock, or vice versa — and each has its own batch kind
+(`dedupe_scan` / `subset_scan`), engine, and fingerprint choice. The pattern is specified in
+[duplicates.mdx](./duplicates.mdx) and mirrored by [subsets.mdx](./subsets.mdx):
+
+* duplicates.mdx §5 / subsets.mdx §5 — the Start-Scan pop-up windows ("Start Duplicate Scan" /
+  "Start Subset Scan").
+* duplicates.mdx §6 / subsets.mdx §6 — the progress UI (Processing tab, dock, conditional
+  left-bar item).
+* duplicates.mdx §7 / subsets.mdx §7 — the fingerprint libraries (web-researched choices:
+  PDQ/vPDQ for duplicates; MPEG-7 Video Signature + vPDQ cross-check for subsets).
+* duplicates.mdx §8 / subsets.mdx §8 — the calc engines.
+* duplicates.mdx §9 / subsets.mdx §9 — the `duplicates.csv` / `subsets.csv` file formats.
+
+---
+
+## 5. Acceptance criteria
+
+1. The app bar shows **Videos** (icon `Clapperboard`, route `/videos`) **directly below IPFS and
+   directly above Scans**; Scans/To Do/Settings renumber to 8/9/10. Content lives in
+   `pm/left_bar.yaml`, not in a component (§1).
+2. Selecting Videos **expands** a level-2 disclosure with exactly two children — **Duplicates**
+   (`/videos/duplicates`) and **Subsets** (`/videos/subsets`) — and lands on Duplicates. `/videos`
+   redirects to `/videos/duplicates` (§1).
+3. Both children render the **60/40 review layout**: a Repos-style TanStack table on the left 60%
+   of the content width, and a reserved right review column on the remaining 40% that **scrolls
+   independently** (§3).
+4. Scope: Duplicates is **videos first, images second**; Subsets is **videos only**; audio and
+   other media are out of v1 (§2).
+5. Each child has its **own dedicated scan, engine, fingerprint choice, and CSV** following the
+   one machinery pattern; the pattern is specified in [duplicates.mdx](./duplicates.mdx) and
+   mirrored — not re-invented — by [subsets.mdx](./subsets.mdx); the two scans' staleness clocks
+   are independent (§4).
+
+<!--
+  HUB for the Videos nav item. LOCKED: placement BELOW IPFS / ABOVE Scans (order 7; Scans→8, To Do→9,
+  Settings→10); STATIC children Duplicates + Subsets in left_bar.yaml (like Storages' static children,
+  NOT runtime-injected); /videos redirects to /videos/duplicates; select = expand + land on first child.
+  Shared 60/40 review layout (table 60%, right review column 40%, right column scrolls INDEPENDENTLY)
+  defined here, detailed in duplicates.mdx §3-§4. ONE machinery PATTERN, TWO SEPARATE scans: each child
+  has its OWN scan/engine/fingerprint-choice/CSV (dedupe_scan→duplicates.csv, subset_scan→subsets.csv;
+  independent 4-day staleness clocks). Pattern specified once in duplicates.mdx §5-§9; subsets.mdx =
+  mirror + deltas (incl. its own library choice: MPEG-7 Video Signature + vPDQ cross-check).
+  Scope: Duplicates = videos primary + images secondary; Subsets = VIDEOS ONLY; audio OUT of v1.
+  SPEC-AHEAD-OF-CODE: nothing built yet;
+  code pointers are planned homes. Siblings: left_bar, duplicates, subsets, perceptual_fingerprint,
+  scan, processing, tables.
+-->
