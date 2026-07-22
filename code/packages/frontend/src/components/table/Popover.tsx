@@ -39,7 +39,11 @@ export function Popover({
     <div className="relative">
       <div
         ref={panelRef}
-        className={`absolute right-0 z-10 mt-1 ${wide ? "w-[36rem] max-w-[90vw]" : "w-72"} rounded-lg border border-[#e8e8e8] bg-white py-1 shadow-lg`}
+        // max-h + its own scroll: the panel is absolutely positioned IN FLOW, so on a viewport-anchored
+        // page (duplicates.mdx §3.0a) a dropdown taller than the space beneath it would be clipped by the
+        // shell with no page scroll left to reveal it. Bounded here, the window scrolls inside itself and
+        // stays fully reachable on any screen height; overscroll-contain keeps that from moving the page.
+        className={`absolute right-0 z-10 mt-1 max-h-[70vh] overflow-y-auto overscroll-contain ${wide ? "w-[36rem] max-w-[90vw]" : "w-72"} rounded-lg border border-[#e8e8e8] bg-white py-1 shadow-lg`}
       >
         {children}
         {showApply && onClose && (

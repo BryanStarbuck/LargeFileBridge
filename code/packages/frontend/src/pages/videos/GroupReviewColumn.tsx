@@ -120,8 +120,9 @@ export function GroupReviewColumn({
         />
       </div>
 
-      {/* The column's OWN scroll region (§4) — the table and page never move while this scrolls. */}
-      <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+      {/* The column's OWN scroll region (§4) — the table and page never move while this scrolls.
+          overscroll-contain keeps a trackpad flick that reaches the end from chaining out to the page. */}
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pr-1">
         {common.length > 0 && (
           <div className="border-b border-[var(--lfb-border)] py-3 text-sm text-black/70">
             <span className="font-medium text-black">All files are the same:</span> {common.join(", ")}

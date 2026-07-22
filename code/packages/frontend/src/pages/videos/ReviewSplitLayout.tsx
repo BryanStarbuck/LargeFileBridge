@@ -7,6 +7,11 @@
 // The `controls` slot is the table's control row (search + ⇅ + ⛛ + ⚏), hoisted OUT of the table and
 // rendered FULL WIDTH above the split (duplicates.mdx §3, revised 2026-07-22). The bar governs the whole
 // page, so it spans the whole page; the right review column starts BENEATH it, never beside it.
+//
+// EVERY node here is min-h-0 + flex on purpose (duplicates.mdx §3.0a): this layout's only job is to pass
+// the viewport-bounded height the shell gives it (AppShell's `anchored` routes) down to the two panes
+// UNBROKEN. One auto-height link in the chain and both panes size to their content instead, the page
+// starts scrolling, and the title bar and the top of the right column ride off the screen.
 import type { ReactNode } from "react";
 
 export function ReviewSplitLayout({

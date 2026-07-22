@@ -73,17 +73,39 @@ export function AppShell() {
     pathname === "/audio" ||
     pathname === "/devices" ||
     pathname.startsWith("/device/");
+
+  // VIEWPORT-ANCHORED ROUTES (duplicates.mdx §3, revised 2026-07-22). The default shell lets <main>
+  // scroll and sizes the content wrapper by its content (min-h-full) — right for a long page, WRONG for
+  // a two-pane review screen: nothing ever bounds the panes, so their own overflow regions never engage,
+  // the page itself scrolls, and the title bar / control row / the top of the right review column all
+  // slide off the top. On these routes the shell instead pins the wrapper to the viewport
+  // (overflow-hidden + h-full via min-h-0 flex-1): the page NEVER scrolls, and the only scroll regions
+  // are the ones the page declares — the DataTable body and the right review column — each driven by
+  // whichever the pointer happens to be over.
+  const anchored = pathname === "/videos/duplicates" || pathname === "/videos/subsets";
   return (
     <div className="flex h-full">
       <Sidebar user={user ?? FALLBACK} />
-      <main className="flex-1 overflow-y-auto">
+      {/* The default shell is UNCHANGED — a plain block scroller — because a flex column here would let
+          a long page's wrapper SHRINK inside the scroll container and clip its own tail. Only the
+          anchored routes become a flex column, and there nothing may overflow by design. */}
+      <main className={anchored ? "flex min-h-0 flex-1 flex-col overflow-hidden" : "flex-1 overflow-y-auto"}>
         {/* Live updates stopping is a TRUTH problem, not a cosmetic one — say it before the page's own
-            content, so a user watching a sync never mistakes a dead stream for a quiet one. */}
-        <LiveUpdatesBanner />
-        <IpfsStatusBanner />
+            content, so a user watching a sync never mistakes a dead stream for a quiet one.
+            shrink-0 so the banners keep their full height when the anchored layout squeezes the column. */}
+        <div className="shrink-0">
+          <LiveUpdatesBanner />
+          <IpfsStatusBanner />
+        </div>
         {/* min-h-full + flex column so a full-page-height table (repos.mdx §3.3.1) can flex its body
-            down to the bottom of the viewport; long/normal pages still grow and let <main> scroll. */}
-        <div className={`mx-auto flex min-h-full flex-col px-8 py-6 ${fullWidth ? "max-w-none" : "max-w-6xl"}`}>
+            down to the bottom of the viewport; long/normal pages still grow and let <main> scroll.
+            Anchored routes swap that for min-h-0 flex-1 — a DEFINITE height the panes can bound
+            themselves against, which is what makes their inner overflow regions do the scrolling. */}
+        <div
+          className={`mx-auto flex w-full flex-col px-8 py-6 ${anchored ? "min-h-0 flex-1" : "min-h-full"} ${
+            fullWidth ? "max-w-none" : "max-w-6xl"
+          }`}
+        >
           <Outlet />
         </div>
       </main>

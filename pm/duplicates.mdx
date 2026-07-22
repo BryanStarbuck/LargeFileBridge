@@ -114,6 +114,43 @@ with **one of the group's file names**.
         ← 60% of the content width →              ← 40%, scrolls on its own →
 ```
 
+### 3.0a The page is ANCHORED to the browser window — it never scrolls (LOCKED — added 2026-07-22)
+
+This screen is **pinned to the viewport**. The **page itself does not scroll.** Everything that frames
+the work — the title and its `N groups · N files` count, the `Scan for duplicates` action-links row,
+the running banner, the full-width control row, the table's header and its count/pagination footer, and
+the right column's `Done` row — is **always on screen, in the same place**, no matter how many groups or
+members there are.
+
+There are **exactly two scroll regions**, and which one moves is decided by **where the pointer is**:
+
+1. **The table body.** Trackpad over the rows → the rows scroll; nothing else moves.
+2. **The right review column.** Trackpad over the right column → that column scrolls; nothing else
+   moves.
+
+Neither region **chains** its momentum: a flick that reaches the end of the rows stops at the end of the
+rows instead of dragging the page (or rubber-banding the document) behind it.
+
+> **WHAT THIS FIXES.** The shell's default is a page-level scroller sized by its content, which on a
+> two-pane screen means *nothing* bounds the panes — so their own overflow regions never engage and the
+> whole page moves instead. Scrolling the list then carried the toolbar off the top, and the right
+> column, having been pushed down the long page, lost its own top (the `Done` row and the "All files are
+> the same" block) the moment the user went looking for a group further down. The two panes must be able
+> to scroll **past each other**, which is only possible when the page behind them holds still.
+
+Implemented as a per-route opt-in in the app shell, which swaps its page-height scroller for a
+viewport-bounded flex column: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`,
+`AppShell()` — the `anchored` flag.
+The two scroll regions and their no-chaining rule live in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`fillHeight` body region) and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx`,
+`GroupReviewColumn()`; the pane geometry that passes the bounded height down is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx`,
+`ReviewSplitLayout()`.
+
+Subsets ([subsets.mdx](./subsets.mdx)) shares this behaviour — it is the same layout component.
+
 ### 3.1 The column set — deliberately small (LOCKED)
 
 This table has **fewer columns** than the file tables elsewhere. Exactly:

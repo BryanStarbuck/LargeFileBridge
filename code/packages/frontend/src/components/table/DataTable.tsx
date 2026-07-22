@@ -910,7 +910,10 @@ export function DataTable<T>({
           // row's leave before the new row's enter, so a per-row clear would blink the consumer through
           // `null` between every adjacent pair (duplicates.mdx §3.3).
           onMouseLeave={onRowHover ? () => onRowHover(null) : undefined}
-          className={`overflow-auto ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
+          // overscroll-contain: a trackpad flick that hits the end of the rows stops THERE. Without it
+          // the momentum chains to the ancestor scroller (or rubber-bands the document on macOS), which
+          // is exactly the "the whole page moved when I only meant to scroll the table" complaint.
+          className={`overflow-auto overscroll-contain ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
         >
           <table className={`w-full text-sm border-collapse ${hasWidths ? "table-fixed" : ""}`}>
             {hasWidths && (
