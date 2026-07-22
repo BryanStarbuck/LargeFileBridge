@@ -23,7 +23,7 @@ import crypto from "node:crypto";
 import fsp from "node:fs/promises";
 import path from "node:path";
 import type { MediaKind, VideosScanStatus } from "@lfb/shared";
-import { VIDEOS_SCAN_STALE_DAYS } from "@lfb/shared";
+import { VIDEOS_SCAN_PROMPT_QUIET_DAYS, VIDEOS_SCAN_STALE_DAYS } from "@lfb/shared";
 import { createBatch, settleExternalItem, recordExternalFailure } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch, settleOne } from "../jobqueue/batch-manifest.service.js";
 import { begin, end } from "../progress/progress.registry.js";
@@ -83,27 +83,52 @@ interface ConfirmedHit {
 
 let running = false;
 
-/** Staleness status for the "Start Subset Scan" pop-up (subsets.mdx §5) — its OWN 4-day clock. */
+/**
+ * Status for this page's scan controls (subsets.mdx §5 → duplicates.mdx §5.2) — its OWN two clocks:
+ * the 4-day staleness RECOMMENDATION and the 2-day QUIET window that suppresses the entry pop-up
+ * entirely (complete or partial). The duplicate scan never satisfies either of them.
+ */
 export function subsetStatus(): VideosScanStatus {
   const stamp = readSubsetRunStamp();
   const lastRunAt = stamp?.lastRunAt ?? null;
-  const staleMs = VIDEOS_SCAN_STALE_DAYS * 24 * 60 * 60 * 1000;
-  const stale = !lastRunAt || !Number.isFinite(Date.parse(lastRunAt)) || Date.now() - Date.parse(lastRunAt) >= staleMs;
-  return { lastRunAt, running, recommend: !running && stale };
+  const lastRunMs = lastRunAt && Number.isFinite(Date.parse(lastRunAt)) ? Date.parse(lastRunAt) : null;
+  const ageMs = lastRunMs == null ? Infinity : Date.now() - lastRunMs;
+  const stale = ageMs >= VIDEOS_SCAN_STALE_DAYS * 24 * 60 * 60 * 1000;
+  const quiet = ageMs < VIDEOS_SCAN_PROMPT_QUIET_DAYS * 24 * 60 * 60 * 1000;
+  const complete = stamp?.complete !== false;
+  const recommend = !running && (stale || !complete);
+  return {
+    lastRunAt,
+    running,
+    recommend,
+    promptOnEntry: recommend && !quiet,
+    // The subset scan is a single-phase engine (subsets.mdx §8) — it has no progressive publish, so it
+    // reports the one phase it has while running.
+    phase: running ? "fingerprint" : "idle",
+    phaseDone: 0,
+    phaseTotal: 0,
+    lastRunComplete: complete,
+  };
 }
 
-/** Start the subset scan detached; single-flight — `started: false` while one is already running. */
+/**
+ * Start the subset scan detached; single-flight — `started: false` while one is already running.
+ * The latch is set SYNCHRONOUSLY and the run deferred past the response flush (duplicates.mdx §5.4):
+ * no enumeration or walk may happen on the HTTP request's stack, or the page looks hung.
+ */
 export function startSubsetScan(): { started: boolean } {
   if (running) {
     log.info("videos", "subset scan requested while one is running — coalesced (single-flight)");
     return { started: false };
   }
   running = true;
-  runSubsetScan()
-    .catch((e) => log.error("videos", `subset scan crashed: ${(e as Error).message}`))
-    .finally(() => {
-      running = false;
-    });
+  setImmediate(() => {
+    runSubsetScan()
+      .catch((e) => log.error("videos", `subset scan crashed: ${(e as Error).message}`))
+      .finally(() => {
+        running = false;
+      });
+  });
   return { started: true };
 }
 
@@ -123,7 +148,10 @@ async function runSubsetScan(): Promise<void> {
     log.error("videos", "subset scan cannot run: ffmpeg is not installed (brew install ffmpeg)");
     return;
   }
-  const candidates = await collectKnownMedia(new Set<MediaKind>(["video"]));
+  // Freshened against the disk for the same reason the duplicate scan is (duplicates.mdx §8.4): the
+  // persisted rows are the last repo SCAN's census, so a video added since then would be invisible to a
+  // scan the user just asked for — and containment, like duplication, needs BOTH files in hand.
+  const candidates = await collectKnownMedia(new Set<MediaKind>(["video"]), { freshen: true });
   log.info("videos", `subset scan: ${candidates.length} candidate video(s)`);
 
   const caches = new VideosCaches();
@@ -184,6 +212,7 @@ async function runSubsetScan(): Promise<void> {
     writeSubsetRunStamp({
       lastRunAt: detectedAt,
       ok: true,
+      complete: true,
       counts: { candidates: candidates.length, files: 0, pairs: 0, groups: 0, subsets: 0 },
       durationMs: Date.now() - t0,
     });
@@ -327,6 +356,7 @@ async function runSubsetScan(): Promise<void> {
     writeSubsetRunStamp({
       lastRunAt: detectedAt,
       ok: true,
+      complete: true,
       counts: {
         candidates: candidates.length,
         files: infos.length,

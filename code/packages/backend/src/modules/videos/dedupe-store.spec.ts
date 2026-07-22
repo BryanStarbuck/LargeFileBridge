@@ -103,6 +103,8 @@ describe("dedupe-store", () => {
     store.writeDedupeRunStamp({
       lastRunAt: "2026-07-22T09:14:02.000Z",
       ok: true,
+      complete: true,
+      phase: "fingerprint",
       counts: { candidates: 12, groups: 3, files: 7 },
       durationMs: 4200,
     });
@@ -110,7 +112,23 @@ describe("dedupe-store", () => {
     expect(stamp).not.toBeNull();
     expect(stamp!.lastRunAt).toBe("2026-07-22T09:14:02.000Z");
     expect(stamp!.ok).toBe(true);
+    expect(stamp!.complete).toBe(true);
     expect(stamp!.counts.groups).toBe(3);
     expect(stamp!.durationMs).toBe(4200);
+  });
+
+  it("round-trips a PARTIAL (phase-1) stamp — an interrupted run must not read as complete", async () => {
+    const store = await import("./dedupe-store.js");
+    store.writeDedupeRunStamp({
+      lastRunAt: "2026-07-22T09:14:02.000Z",
+      ok: true,
+      complete: false,
+      phase: "hash",
+      counts: { candidates: 12, groups: 1, files: 2 },
+      durationMs: 900,
+    });
+    const stamp = store.readDedupeRunStamp();
+    expect(stamp!.complete).toBe(false);
+    expect(stamp!.phase).toBe("hash");
   });
 });

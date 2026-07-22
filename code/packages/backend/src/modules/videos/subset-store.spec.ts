@@ -92,7 +92,13 @@ describe("subset-store", () => {
   it("keeps its run stamp separate from the duplicate scan's (independent staleness clocks)", async () => {
     const subsetStore = await import("./subset-store.js");
     const dedupeStore = await import("./dedupe-store.js");
-    subsetStore.writeSubsetRunStamp({ lastRunAt: "2026-07-20T00:00:00Z", ok: true, counts: {}, durationMs: 1 });
+    subsetStore.writeSubsetRunStamp({
+      lastRunAt: "2026-07-20T00:00:00Z",
+      ok: true,
+      complete: true,
+      counts: {},
+      durationMs: 1,
+    });
     expect(subsetStore.readSubsetRunStamp()?.lastRunAt).toBe("2026-07-20T00:00:00Z");
     // Writing the subset stamp must NOT create/satisfy the dedupe stamp (videos.mdx §4).
     expect(dedupeStore.readDedupeRunStamp()).toBeNull();

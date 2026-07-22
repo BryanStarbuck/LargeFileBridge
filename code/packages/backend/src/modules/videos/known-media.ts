@@ -12,6 +12,7 @@
 // tables' leading icon columns need — decision, gitIgnored, hasTranscription/Description/Ocr — reusing
 // the backend-computed FileRow verdicts (never re-derived here). For storage-index files only the
 // analysis flags exist; the rest default to null/false (best-effort by design).
+import fsp from "node:fs/promises";
 import path from "node:path";
 import { mediaKindForName } from "@lfb/shared";
 import type { FileRow, IpfsHealth, MediaKind } from "@lfb/shared";
@@ -19,6 +20,8 @@ import { listRepoFolders, getRepoConfig, computeRepoDetail } from "../store-mode
 import { listStoragesPage } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { collectFilesRecursive } from "../../shared/fs-walk.js";
+import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
 
 /** The icon-control-column state for one file (shared/videos.ts row fields). */
@@ -59,13 +62,37 @@ function iconStateFromRow(row: FileRow): IconState {
   };
 }
 
+export interface CollectMediaOpts {
+  /**
+   * Also sweep every unit root on DISK for media files the persisted rows do not know yet
+   * (duplicates.mdx §8.4 — candidate freshness).
+   *
+   * THE BUG THIS FIXES: the persisted rows below are the last repo SCAN's census. A file copied in
+   * after that scan — the exact "I just duplicated a file, now find it" case — is simply absent, so
+   * the duplicate engine never had both copies in hand and could not possibly group them. The Start
+   * Scan button promised a fresh answer and silently computed over a stale candidate set.
+   *
+   * The sweep is media-extension-only (no git check-ignore, no sidecar reads — the two dominant
+   * per-file costs of a real scan), async and cooperatively yielding, so it is a small fraction of a
+   * full repo scan. Freshly discovered files get default icon state: they are real candidates that
+   * have not been scanned yet, and a blank icon is honest.
+   */
+  freshen?: boolean;
+}
+
 /**
  * Every video/image file LFB already knows on this computer, with its icon state. Remote-only rows are
  * excluded (no local bytes to hash or preview). Never throws — a unit whose composition fails is logged
  * and skipped, so one bad repo cannot blank the whole feature.
+ *
+ * With `freshen`, the persisted census is unioned with a live media sweep of the same roots (§8.4).
  */
-export async function collectKnownMedia(kinds: ReadonlySet<MediaKind>): Promise<KnownMediaFile[]> {
+export async function collectKnownMedia(
+  kinds: ReadonlySet<MediaKind>,
+  opts: CollectMediaOpts = {},
+): Promise<KnownMediaFile[]> {
   const byAbs = new Map<string, KnownMediaFile>();
+  const roots = new Set<string>();
 
   // Live IPFS health fetched once — computeRepoDetail requires it (same pattern as files-query; a down
   // node degrades pin detail we do not use here anyway).
@@ -81,6 +108,7 @@ export async function collectKnownMedia(kinds: ReadonlySet<MediaKind>): Promise<
       const cfg = getRepoConfig(folder);
       if (!cfg.repo.path) continue;
       const root = expandHome(cfg.repo.path);
+      roots.add(root);
       const rows = computeRepoDetail(folder, health).files;
       for (const row of rows) {
         if (row.presence === "remote-only") continue;
@@ -102,6 +130,7 @@ export async function collectKnownMedia(kinds: ReadonlySet<MediaKind>): Promise<
     );
     for (const storage of sdlRows) {
       const root = expandHome(storage.root);
+      roots.add(root);
       try {
         for (const f of readStorageIndex(root, storage.type)) {
           const kind = mediaKindForName(f.path);
@@ -128,7 +157,59 @@ export async function collectKnownMedia(kinds: ReadonlySet<MediaKind>): Promise<
     log.warn("videos", `storage enumeration skipped: ${(e as Error).message}`);
   }
 
+  if (opts.freshen) await freshenFromDisk(byAbs, roots, kinds);
+
   return [...byAbs.values()];
+}
+
+/** Directories a media sweep must never descend into — the house skip set plus our own artifact homes. */
+const SWEEP_SKIP = new Set([...HARD_SKIP, ".lfbridge", ".transcribe"]);
+
+/**
+ * Union the persisted census with a live media sweep of the same roots (duplicates.mdx §8.4). Only files
+ * MISSING from `byAbs` are stat'ed, so a warm tree costs one readdir per directory and nothing else.
+ * Never throws — an unreadable root contributes nothing and the scan proceeds on the persisted rows.
+ */
+export async function freshenFromDisk(
+  byAbs: Map<string, KnownMediaFile>,
+  roots: ReadonlySet<string>,
+  kinds: ReadonlySet<MediaKind>,
+): Promise<void> {
+  const t0 = Date.now();
+  let added = 0;
+  for (const root of roots) {
+    try {
+      const found = await collectFilesRecursive(
+        root,
+        (name) => {
+          const kind = mediaKindForName(name);
+          return kind !== null && kinds.has(kind);
+        },
+        SWEEP_SKIP,
+        { skipDir: isMacPackageDir },
+      );
+      for (const abs of found) {
+        if (byAbs.has(abs)) continue; // the persisted row is richer — never downgrade it
+        const kind = mediaKindForName(abs);
+        if (!kind || !kinds.has(kind)) continue;
+        try {
+          const st = await fsp.stat(abs);
+          if (!st.isFile()) continue;
+          byAbs.set(abs, { abs, sizeBytes: st.size, kind, icon: { ...EMPTY_ICON_STATE } });
+          added += 1;
+        } catch {
+          // Vanished between readdir and stat — not a candidate, not an error.
+        }
+      }
+    } catch (e) {
+      log.warn("videos", `media sweep failed for ${root}: ${(e as Error).message}`);
+    }
+  }
+  log.info(
+    "videos",
+    `candidate freshen: ${added} media file(s) found on disk that the last repo scan did not know, ` +
+      `across ${roots.size} root(s) in ${Math.round((Date.now() - t0) / 1000)}s`,
+  );
 }
 
 /**

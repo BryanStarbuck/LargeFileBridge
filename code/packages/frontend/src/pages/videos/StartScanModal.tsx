@@ -4,8 +4,13 @@
 // AddRepoDialog): fixed overlay, backdrop click + Esc = Skip, inner stopPropagation.
 //
 // Body: first the status line ("Never scanned." or "Last scanned {absolute} ({relative})."), then the
-// recommendation line. Button row: a plain "Skip" HYPERLINK immediately LEFT of the dominant primary
-// "Start scan ›" button (label + right chevron).
+// recommendation line, then the background-work line — which sets the expectation BEFORE the click so
+// the instant dismissal in §5.4 reads as success rather than as the dialog being swallowed. Button row:
+// a plain "Skip" HYPERLINK immediately LEFT of the dominant primary "Start scan ›" button (label +
+// right chevron).
+//
+// The primary button is FIRE-AND-FORGET (duplicates.mdx §5.4, LOCKED): onStart() closes this modal on
+// the CLICK — it must NEVER wait on, or show a spinner for, the POST it kicks off.
 import { useEffect, useRef } from "react";
 import type { VideosScanStatus } from "@lfb/shared";
 import { absoluteTime, relativeTime } from "../../lib/format.js";
@@ -25,17 +30,17 @@ const COPY: Record<ReviewVariant, { title: string; recommend: string }> = {
 export function StartScanModal({
   variant,
   status,
-  starting,
   onSkip,
   onStart,
 }: {
   variant: ReviewVariant;
   status: VideosScanStatus | undefined;
-  /** True while the start POST is in flight — disables the primary button. */
-  starting?: boolean;
   /** Skip (hyperlink / Esc / backdrop): close and show the page from whatever data exists. */
   onSkip: () => void;
-  /** Start scan: POST the scan endpoint, close, stay on the page. */
+  /**
+   * Start scan: fires the scan and closes this modal IMMEDIATELY (§5.4) — the caller confirms with a
+   * toast, so there is no in-modal pending state to render.
+   */
   onStart: () => void;
 }) {
   const copy = COPY[variant];
@@ -68,6 +73,10 @@ export function StartScanModal({
         <div className="mt-2 text-sm text-black/70">
           <p>{statusLine}</p>
           <p className="mt-1">{copy.recommend}</p>
+          {/* Expectation-setting before the click (§5.3/§5.4): the work is background work. */}
+          <p className="mt-1 text-black/55">
+            It runs in the background — you can keep using the app while it works.
+          </p>
         </div>
         <div className="mt-5 flex items-center justify-end gap-4">
           {/* Skip is a plain text hyperlink, NOT a button — immediately LEFT of the primary (§5). */}
@@ -80,8 +89,7 @@ export function StartScanModal({
           <button
             ref={startRef}
             onClick={onStart}
-            disabled={starting}
-            className="rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
           >
             Start scan ›
           </button>

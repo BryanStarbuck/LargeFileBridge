@@ -146,25 +146,34 @@ The right review column is the shared component in code:
 
 ---
 
-## 5. The pop-up window — "Start Subset Scan" (LOCKED)
+## 5. Starting a scan — the action-links row and the entry pop-up (LOCKED)
 
-Same shape and rules as the Duplicates pop-up ([duplicates.mdx §5](./duplicates.mdx)) with its
-**own scan and its own staleness clock** — the two scans are **separate**; running one never
-satisfies the other:
+Same two surfaces, same shape, and the same rules as Duplicates
+([duplicates.mdx §5](./duplicates.mdx)) — with this page's **own scan and its own clocks**; the two
+scans are **separate**, and running one never satisfies the other:
 
-* Opens on entering the page when the **subset scan** has **never run** or last completed **4+
-  days ago**; an in-app modal on `ModalHost`, never native ([dialogs.mdx §1](./dialogs.mdx)).
+* **The page action-links row** ([duplicates.mdx §5.1](./duplicates.mdx)) sits under the title on
+  **every** visit: **Scan for subsets · Refresh results · View progress**. No confirmation dialog;
+  **Scan for subsets** is disabled with a stated reason while a subset scan runs.
+* **The pop-up is a nudge, not the control**, and obeys the same **first-match** rules
+  ([duplicates.mdx §5.2](./duplicates.mdx)) against the **subset** run stamp (§9): running → never;
+  **within 2 days** (`VIDEOS_SCAN_PROMPT_QUIET_DAYS`, complete *or* partial) → **never**;
+  never-scanned → open; 2+ days old and incomplete → open; **4+ days** (`VIDEOS_SCAN_STALE_DAYS`) →
+  open. At most **once per page entry**. An in-app modal on `ModalHost`, never native
+  ([dialogs.mdx §1](./dialogs.mdx)).
 * **Title:** literally **"Start Subset Scan"**. Status line: **"Never scanned."** or
-  **"Last scanned {timestamp} ({relative})."** — reading the **subset** run stamp (§9), not the
-  duplicates one.
+  **"Last scanned {timestamp} ({relative})."** — reading the **subset** run stamp, not the
+  duplicates one. Then the recommendation line and the background-work line.
 * Button row: **"Skip"** hyperlink immediately to the **left** of the dominant primary
   **"Start scan ›"** button (label + right chevron). Skip shows the page from the existing CSV
-  (or the empty state with an inline Start-scan link); Start enqueues §6 and the page
-  live-refreshes when results land.
-* Never opens while a subset scan is already running — the page shows the running state instead.
+  (or the empty state with an inline Start-scan link).
+* **Start is fire-and-forget** ([duplicates.mdx §5.4](./duplicates.mdx)): the modal closes **on the
+  click**, a bottom toast says *"Subset scan started — it runs in the background."* with a **View
+  progress** action into `/processing`, the page flips to its running state immediately, and the
+  server flushes the response **before** the engine touches any work. The page never blocks.
 
 Handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (the shared component, `variant: "subsets"`); the auto-open logic in `VideosReviewPage.tsx` reads `GET /api/videos/subsets/status` (backend: `subset-scan.service.ts` — `subsetStatus()`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (the shared component, `variant: "subsets"`); the action row, the auto-open latch, and the fire-and-forget start all live in `VideosReviewPage.tsx`, reading `GET /api/videos/subsets/status` (backend: `subset-scan.service.ts` — `subsetStatus()` for the two clocks, `startSubsetScan()` for the synchronous latch + `setImmediate()` deferral).
 
 ---
 
@@ -384,9 +393,13 @@ Reading/writing is handled in code:
    comma-separated beneath each block, same resolution/codec print rules), plus: the **superset
    block renders first labeled SUPERSET**, and every subset block carries **"Contained at
    {start}–{end} of {superset}"** (§4).
-5. **Pop-up:** "Start Subset Scan" with its **own 4-day staleness clock** — never-scanned /
-   last-scanned timestamp line, Skip hyperlink left of the dominant "Start scan ›" button; in-app
-   modal only (§5).
+5. **Starting a scan:** the always-visible action row (**Scan for subsets · Refresh results · View
+   progress**) plus the "Start Subset Scan" pop-up on its **own** clocks — suppressed entirely
+   inside the **2-day quiet window**, opening only when never-scanned / 2+ days old and incomplete /
+   4+ days stale, at most once per page entry; never-scanned / last-scanned timestamp line, Skip
+   hyperlink left of the dominant "Start scan ›" button; in-app modal only; the start is
+   **fire-and-forget** — modal closes on the click, toast + View-progress action, response flushed
+   before any work (§5).
 6. **Progress:** an async **`subset_scan`** batch (its own kind, distinct from `dedupe_scan`) on
    the standard Processing surfaces; detached, single-flight (§6).
 7. **Library (LOCKED):** MPEG-7 Video Signature via the **bundled ffmpeg `signature` filter** as
@@ -413,8 +426,11 @@ Reading/writing is handled in code:
   UI: same 60/40 layout, same small column set (icon cols + File basename + Size, NO checkbox);
   group header = superset name + subset count; superset row/block FIRST, labeled SUPERSET; every
   subset preview block carries "Contained at {start}-{end} of {superset}" from the match offsets.
-  OWN pop-up "Start Subset Scan" (own 4-day staleness clock, subset_run.yaml — the duplicate scan
-  never satisfies it), OWN batch kind subset_scan, OWN engine, OWN subsets.csv.
+  OWN action-row link "Scan for subsets" (always visible, under the title) + OWN pop-up "Start Subset
+  Scan" (own clocks, subset_run.yaml — the duplicate scan never satisfies it): 2-DAY QUIET WINDOW
+  suppresses the prompt entirely, 4-day staleness recommends; start is FIRE-AND-FORGET (modal closes
+  on the click, toast + View progress, response flushed before any work) — see duplicates.mdx §5.1–§5.4.
+  OWN batch kind subset_scan, OWN engine, OWN subsets.csv.
   LIBRARY CHOICE (web-researched, LOCKED): MPEG-7 Video Signature via the BUNDLED ffmpeg
   `signature` filter — the ISO standard for detecting one sequence inside another WITH offsets;
   zero new deps, fully local. Cross-check = vPDQ contiguous-frame-run over the per-frame PDQ

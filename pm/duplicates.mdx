@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Duplicates (review screen, scan pop-up, calc engine, duplicates.csv)
-description: The full spec for the Duplicates review screen under the Videos left-bar item (route /videos/duplicates — videos.mdx owns the nav placement). Defines — in dedicated sections, one per concern — (1) the LEFT-BAR entry (level-2 child of Videos); (2) the USER INTERFACE — the 60/40 review layout — a Repos-style TanStack table on the left 60% of the content width with a deliberately SMALL column set (the icon control columns, a File column showing the file NAME WITHOUT PATH, and Size — no leading checkbox, no bookmark), and the reserved RIGHT REVIEW COLUMN on the remaining 40% that scrolls independently: an action-links row on top (just "Done" for now), then an "All files are the same:" block listing the attributes ALL group members share (file size, SHA-256 hash, fingerprint, duration for videos, resolution, codec — comma-space separated), then one full-column-width aspect-ratio-preserving preview block per duplicate with the attributes that DIFFER printed comma-separated under each preview so the user can compare and contrast; the resolution print rule (width x height, plus a parenthesized class like (480p) ONLY when it snaps to a known common class — 480p/720p/1080p/2K/4K) and the codec print rule (the codec name in parentheses after the word codec); (3) the POP-UP WINDOW — the "Start Duplicate Scan" modal shown on entering the page, recommending a scan when it has never run or is 4+ days stale, with a Skip hyperlink to the LEFT of the dominant "Start scan ›" button and a never-scanned / last-scanned-at timestamp line; (4) the PROGRESS UI — the scan goes asynchronous as a batch on the Processing page; (5) the CALC ENGINE — the dedicated duplicate-detection scan that groups files first by exact SHA-256 and then by perceptual fingerprint (PDQ/vPDQ per perceptual_fingerprint.mdx — PhotoDNA-STYLE, explicitly not PhotoDNA), so duplicates are found even when the copies differ in codec, file size, or pixel depth; and (6) the FILE FORMAT of duplicates.csv in Local Storage — one row per member file, rows sharing a duplicate_group id, with full_path, sha256, fingerprint, and the display attributes. Also contains the WEB-RESEARCHED FINGERPRINT-LIBRARY section (§7) with the four hard requirements (open-source and embeddable in our Node/TypeScript app; a TEXT-ENCODABLE fingerprint value storable in the CSV fingerprint column; an OFFLINE COMPARE FUNCTION that stored values can be fed back into later without re-reading media bytes; and absolutely NO PHONE-HOME — no network to do the work or report anything), the candidate lists for IMAGES and for VIDEOS, and the LOCKED per-media choices FOR DUPLICATE DETECTION — images: PDQ 256-bit (64-hex) via a local binding, with blockhash-core + sharp-phash as the pure-JS MIT fallback; videos: vPDQ per-frame PDQ (text lines frame_number,hex,quality,timestamp) — plus how to use each algorithm, when to run it, where the values are stored, and how later comparisons feed the stored values back into the library's compare functions. Sibling of videos.mdx (hub + layout shell), subsets.mdx (the twin screen with its OWN subset scan, calc engine, fingerprint choice, and subsets.csv), perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx (no native dialogs — ModalHost), tables.mdx, and storage_local.mdx (the state root the CSV lives in).
+description: The full spec for the Duplicates review screen under the Videos left-bar item (route /videos/duplicates — videos.mdx owns the nav placement). Defines — in dedicated sections, one per concern — (1) the LEFT-BAR entry (level-2 child of Videos); (2) the USER INTERFACE — the 60/40 review layout — a Repos-style TanStack table on the left 60% of the content width with a deliberately SMALL column set (the icon control columns, a File column showing the file NAME WITHOUT PATH, and Size — no leading checkbox, no bookmark), and the reserved RIGHT REVIEW COLUMN on the remaining 40% that scrolls independently: an action-links row on top (just "Done" for now), then an "All files are the same:" block listing the attributes ALL group members share (file size, SHA-256 hash, fingerprint, duration for videos, resolution, codec — comma-space separated), then one full-column-width aspect-ratio-preserving preview block per duplicate with the attributes that DIFFER printed comma-separated under each preview so the user can compare and contrast; the resolution print rule (width x height, plus a parenthesized class like (480p) ONLY when it snaps to a known common class — 480p/720p/1080p/2K/4K) and the codec print rule (the codec name in parentheses after the word codec); (3) STARTING A SCAN — the always-visible PAGE ACTION-LINKS ROW under the page title (whose first link is "Scan for duplicates") plus the "Start Duplicate Scan" entry pop-up, which is a NUDGE and not the control: it is suppressed entirely by a 2-DAY QUIET WINDOW (a scan inside two days never prompts, complete or partial), opens only when never-scanned / 2+ days old and incomplete / 4+ days stale, carries a Skip hyperlink to the LEFT of the dominant "Start scan ›" button and a never-scanned / last-scanned-at timestamp line, and starts FIRE-AND-FORGET — the modal closes on the CLICK (never on the response), a bottom toast confirms with a "View progress" action into the Processing page, and the server flushes the HTTP response before the engine touches any work so the page can never hang; (4) the PROGRESS UI — the scan goes asynchronous as a batch on the Processing page; (5) the CALC ENGINE — the dedicated duplicate-detection scan that groups files first by exact SHA-256 and then by perceptual fingerprint (PDQ/vPDQ per perceptual_fingerprint.mdx — PhotoDNA-STYLE, explicitly not PhotoDNA), so duplicates are found even when the copies differ in codec, file size, or pixel depth — and, per the §8.3–§8.8 rules added after a real field defect, runs PROGRESSIVELY (phase 1 hash publishes duplicates.csv before phase 2 fingerprinting even starts, so the fast answer is never held hostage to the slow pass), over a FRESHENED candidate set (§8.4 — the persisted census unioned with a live media sweep, because a file copied minutes before pressing Start scan was absent from the census and the pair could therefore never group), with CHECKPOINTED caches so an interrupted run keeps its work (§8.5), grouping on the HASH ALONE with size pre-filtering explicitly rejected (§8.6), an EXACT no-false-negative LSH banding compare that took the fingerprint pass from O(N²) brute force to near-linear (§8.7), and mandatory START/PHASE/FINISH logging (§8.8); and (6) the FILE FORMAT of duplicates.csv in Local Storage — one row per member file, rows sharing a duplicate_group id, with full_path, sha256, fingerprint, and the display attributes. Also contains the WEB-RESEARCHED FINGERPRINT-LIBRARY section (§7) with the four hard requirements (open-source and embeddable in our Node/TypeScript app; a TEXT-ENCODABLE fingerprint value storable in the CSV fingerprint column; an OFFLINE COMPARE FUNCTION that stored values can be fed back into later without re-reading media bytes; and absolutely NO PHONE-HOME — no network to do the work or report anything), the candidate lists for IMAGES and for VIDEOS, and the LOCKED per-media choices FOR DUPLICATE DETECTION — images: PDQ 256-bit (64-hex) via a local binding, with blockhash-core + sharp-phash as the pure-JS MIT fallback; videos: vPDQ per-frame PDQ (text lines frame_number,hex,quality,timestamp) — plus how to use each algorithm, when to run it, where the values are stored, and how later comparisons feed the stored values back into the library's compare functions. Sibling of videos.mdx (hub + layout shell), subsets.mdx (the twin screen with its OWN subset scan, calc engine, fingerprint choice, and subsets.csv), perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx (no native dialogs — ModalHost), tables.mdx, and storage_local.mdx (the state root the CSV lives in).
 ---
 
 # LargeFileBridge — Duplicates
@@ -223,16 +223,102 @@ The right review column is handled in code:
 
 ---
 
-## 5. The pop-up window — "Start Duplicate Scan" (LOCKED)
+## 5. Starting a scan — the action-links row and the entry pop-up (LOCKED)
 
-Entering the Duplicates page evaluates staleness and, when warranted, opens a modal. (The Subsets
-page has its **own, separate** pop-up, scan, and staleness clock — [subsets.mdx §5](./subsets.mdx);
-running one scan never satisfies the other.)
+A duplicate scan can start **two** ways, and the two are deliberately different in character:
 
-* **When it opens.** The scan has **never run**, or its last completed run is **4 days old or
-  more**. Fresher than 4 days → no pop-up, the page renders straight from the CSV.
-* **It is an in-app HTML modal** on the one `ModalHost` — never a native browser dialog
-  ([dialogs.mdx §1](./dialogs.mdx)).
+| Surface | Character | When the user sees it |
+| --- | --- | --- |
+| **The page action-links row** (§5.1) | **Always available, non-modal** — the user's own initiative, one click, no dialog | **Every** visit, directly under the page title |
+| **The entry pop-up** (§5.3) | **A recommendation of ours** — a one-time nudge that interrupts | Only when the data is old enough to be worth interrupting for (§5.2) |
+
+> **The design principle (LOCKED): a modal is an interruption, and an interruption has to earn its
+> place.** The **row** is the durable, discoverable home of the control — it is always there, so the
+> pop-up never has to be. The **pop-up** exists only to catch the case where the user does not yet
+> know the page's data is old. The moment the data is fresh, the pop-up must get out of the way
+> completely; the row alone is enough.
+
+(The Subsets page has its **own, separate** row link, pop-up, scan, and clocks —
+[subsets.mdx §5](./subsets.mdx); running one scan never satisfies the other.)
+
+### 5.1 The page action-links row (LOCKED)
+
+Directly under the page title sits the house **page action-links row**
+([page_actions.mdx §0/§3](./page_actions.mdx)) — a single horizontal row of blue text hyperlinks,
+each with a leading ~14 px icon, `·` separated, underline on hover. It renders on **every** visit,
+running or not, empty CSV or not.
+
+```
+Duplicates                                                    212 groups · 471 files
+⌕ Scan for duplicates  ·  ⟳ Refresh results  ·  ◷ View progress
+```
+
+| Link | Behaviour |
+| --- | --- |
+| **Scan for duplicates** | Starts the duplicate scan — the **same fire-and-forget start** the pop-up's primary button performs (§5.4). No confirmation dialog: the scan is read-only, cheap to abandon, and never mutates a file (§8.2); confirm modals are reserved for destructive offers ([page_actions.mdx §3](./page_actions.mdx)). |
+| **Refresh results** | Re-reads `duplicates.csv` and the status into the page without a browser reload — the manual twin of the live-refresh bump (§6), for when a user wants to pull in what a running phase has published *right now*. |
+| **View progress** | Navigates to the **Processing** page (`/processing`), where the batch, its items, and the ETA live (§6). This page keeps **no** private progress machinery, so this link is how the user gets from "I started something" to "here is what it is doing". |
+
+Rules:
+
+* **The row is never hidden and never moves.** It does not appear only when a scan is recommended,
+  and it does not disappear while one runs — a control that relocates itself is a control the user
+  has to re-find.
+* **While a scan is running, "Scan for duplicates" is disabled with a stated reason** in its
+  `title` — *"A duplicate scan is already running — see the Processing page"*. A greyed link with
+  no reason is a dead end ([menus.mdx](./menus.mdx)); the reason plus the neighbouring **View
+  progress** link turns the dead end into the next step.
+* **The row is the answer to a suppressed pop-up.** Because the pop-up can be quiet for days
+  (§5.2), the row is what guarantees the user can *always* rescan on demand — that is precisely why
+  the quiet window is safe.
+* The Subsets page carries the identical row with **Scan for subsets**
+  ([subsets.mdx §5](./subsets.mdx)).
+
+The row is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage` (the `pageActions` memo it feeds to the shared `PageActions` component in `components/menu/PageActions.tsx`; `startScan()` is shared with the pop-up so both paths behave identically).
+
+### 5.2 When the pop-up opens — the 2-day quiet window (LOCKED)
+
+> **THE ANNOYANCE THIS SECTION EXISTS TO PREVENT.** The first rule opened the pop-up whenever the
+> last run was 4+ days old **or had not completed**. A long scan interrupted by an ordinary backend
+> restart leaves `complete: false` **forever** — nothing ever clears it but a full successful run.
+> So a user who had scanned **an hour ago**, and whose fresh results were **already on screen behind
+> the modal**, was asked to scan again on **every single visit** to the page. A recommendation that
+> fires when the answer is already fresh is not a recommendation; it is a dialog the user learns to
+> dismiss without reading — which is exactly how a genuinely stale-data warning later gets ignored.
+
+The evaluation, in order — **the first matching rule wins**:
+
+| # | Condition | Pop-up |
+| --- | --- | --- |
+| 1 | A duplicate scan is **running right now** | **No** — the page shows the running state (§5.5) instead |
+| 2 | The last run was **within the last 2 days** (`VIDEOS_SCAN_PROMPT_QUIET_DAYS = 2`) — **complete or partial, it does not matter** | **No** — the quiet window. Two days is fresh; we do not interrupt over it. |
+| 3 | The scan has **never run** | **Yes** |
+| 4 | The last run is **2+ days old and did not complete** (§8.5) | **Yes** — partial data, and the job is worth finishing |
+| 5 | The last run is **4+ days old** (`VIDEOS_SCAN_STALE_DAYS = 4`) | **Yes** — stale |
+| 6 | otherwise (a complete run between 2 and 4 days old) | **No** |
+
+* **Two clocks, deliberately.** The **quiet window (2 days)** is a *suppression* rule — it can veto
+  a prompt no matter what else is true. The **staleness window (4 days)** is a *recommendation*
+  rule. Between them (2–4 days, run complete) neither fires: the data is neither fresh enough to
+  brag about nor old enough to interrupt over, so we say nothing and leave the row (§5.1).
+* **`complete: false` no longer overrides freshness.** It still *recommends* a rescan (§8.5), and
+  it still opens the pop-up once the run has aged past the quiet window (rule 4) — but it can no
+  longer make a two-hour-old scan nag on every visit.
+* **At most once per page entry.** The pop-up auto-opens **once**; skipping it does not re-arm it
+  for that visit — no re-open on a live-refresh, a status poll, or a scan completion.
+* **The status route carries both verdicts as separate fields**, because they mean different
+  things: **`promptOnEntry`** (may we interrupt?) drives the auto-open, and **`recommend`** (would a
+  scan be useful?) is available for wording and affordances. The page auto-opens on
+  `promptOnEntry` alone.
+
+The two clocks are evaluated in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `dedupeStatus()` (`VIDEOS_SCAN_PROMPT_QUIET_DAYS` suppression + `VIDEOS_SCAN_STALE_DAYS` recommendation, both from `@lfb/shared` `videos.ts`); the auto-open-once latch is `VideosReviewPage.tsx` (the `autoOpened` ref, keyed on `status.promptOnEntry`).
+
+### 5.3 The pop-up anatomy (LOCKED)
+
+It is an **in-app HTML modal** on the one `ModalHost` — never a native browser dialog
+([dialogs.mdx §1](./dialogs.mdx)).
 
 ```
 ┌──────────────────────────────────────────────┐
@@ -241,6 +327,8 @@ running one scan never satisfies the other.)
 │  Never scanned.                              │   ← or: "Last scanned 2026-07-15 09:14 (7 days ago)."
 │  We recommend scanning now to find           │
 │  duplicate videos and images.                │
+│  It runs in the background — you can keep    │   ← the expectation-setting line (§5.4)
+│  using the app while it works.               │
 │                                              │
 │              Skip    ┌─────────────────┐     │
 │                      │  Start scan  ›  │     │
@@ -252,19 +340,63 @@ running one scan never satisfies the other.)
 * **The status line** is the first body line: **"Never scanned."** when no run has ever completed,
   otherwise **"Last scanned {timestamp} ({relative})."** — an absolute time-based stamp plus the
   relative age.
-* **The recommendation line** states why we suggest scanning (4+ days / never).
+* **The recommendation line** states why we suggest scanning (never run / stale / did not finish).
+* **The background line** sets the expectation *before* the click, so the instant dismissal in
+  §5.4 reads as success rather than as the dialog being swallowed: *"It runs in the background —
+  you can keep using the app while it works."*
 * **The button row:** the **dominant primary button "Start scan ›"** (label + right chevron) on
   the right, and a **"Skip" hyperlink** (plain text link, not a button) immediately to its
-  **left**. Skip closes the modal and shows the page with whatever CSV data exists (possibly an
-  empty state: *"No duplicate scan yet — start one from here"*, with an inline Start-scan link
-  that reopens this modal).
-* **Start scan** closes the modal, enqueues the scan (§6), and leaves the user on the page — the
-  table live-refreshes when results land ([sitewide live-refresh](./processing.mdx)).
-* While a duplicate scan is **already running**, the pop-up never opens; the page shows the
-  running state (§6) instead.
+  **left**. Skip — like Esc and a backdrop click — closes the modal and shows the page with
+  whatever CSV data exists (possibly an empty state: *"No duplicate scan yet — start one from
+  here"*, with an inline Start-scan link that reopens this modal).
 
-Staleness evaluation and the modal are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (one component serves both pages, keyed by variant); the auto-open-once logic sits in `VideosReviewPage.tsx`, reading last-run from `GET /api/videos/duplicates/status` (backend: `dedupe.service.ts` — `dedupeStatus()`).
+The modal is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (one component serves both pages, keyed by variant; Esc/backdrop = Skip).
+
+### 5.4 Start is fire-and-forget — instant dismissal, a toast, background work (LOCKED)
+
+> **THE BUG THIS SECTION EXISTS TO PREVENT.** Pressing **Start scan** left the modal sitting on
+> screen over a dimmed page while the browser waited for the POST to resolve — and the POST did not
+> resolve promptly, because the request handler entered the engine's **synchronous prologue**
+> (config reads, unit enumeration) **before the response was flushed**. From the user's chair the
+> app simply **hung**: no progress, no dismissal, no way to tell "starting" from "frozen". A start
+> button must never be able to look like a crash.
+
+The rules — they apply identically to the pop-up's **Start scan ›** and to the row's **Scan for
+duplicates** (§5.1), because both call one shared start path:
+
+1. **The modal closes on the click, not on the response.** Dismissal is optimistic and immediate;
+   the HTTP request is already in flight behind an unblocked page. There is **no** blocking
+   spinner, no dimmed overlay, no disabled page.
+2. **A bottom toast confirms the start** — house toast, bottom of the viewport
+   ([dialogs.mdx](./dialogs.mdx)): **"Duplicate scan started — it runs in the background."** with a
+   **"View progress"** action that navigates to `/processing`. The toast, not the modal, is what
+   tells the user the click landed.
+3. **The page flips to its running state immediately** (§5.5) — optimistically, without waiting for
+   the next status poll. Two confirmations of one action (toast + banner) is correct here: the
+   toast is transient, the banner is the durable state.
+4. **The server flushes the HTTP response before the engine does any work.** The POST handler marks
+   the single-flight state **synchronously** — so an immediate second click coalesces and
+   `GET …/status` already reads `running: true` — and then **defers the run to the next tick**. No
+   enumeration, no config read, no filesystem walk may happen on the request's stack.
+5. **A coalesced start is a normal outcome, not an error.** `started: false` shows the info toast
+   **"A duplicate scan is already running"** with the same **View progress** action.
+6. **A failed start is a toast, never a stuck modal.** The modal is already gone; the error surfaces
+   as an error toast and the row's link stays clickable for a retry.
+
+The fire-and-forget start is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — the `start` mutation (`onMutate` closes the modal + flips the optimistic running status; `onSuccess` raises the toast with its View-progress action); the server side is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `startDedupeScan()` (synchronous single-flight latch + `setImmediate()` deferral so the response flushes first).
+
+### 5.5 The running state on the page (LOCKED)
+
+While a scan runs the page — not a modal — carries the state:
+
+* The **banner** under the title names the **phase** and its counter, and promises results **as they
+  are found**, never "when it completes" (§8.3) — because the table underneath is already filling.
+* **"Scan for duplicates" is disabled with its reason** (§5.1); **View progress** is the live route
+  to detail.
+* **The pop-up never opens** meanwhile (§5.2 rule 1), and an open one closes.
 
 ---
 
@@ -430,7 +562,8 @@ All **video and image files** LFB knows on this computer — every scanned unit 
 computer pin unit, [scan.mdx §4](./scan.mdx)), videos first, images second
 ([videos.mdx §2](./videos.mdx)). The engine reuses hashes and fingerprints already recorded in the
 per-file sidecars ([repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)) and computes only what
-is missing — a warm re-scan is cheap.
+is missing — a warm re-scan is cheap. **"Knows" must mean "as of now", not "as of the last repo
+scan"** — see §8.4, which is a hard requirement, not an optimization.
 
 ### 8.2 Grouping — exact first, then perceptual (LOCKED)
 
@@ -452,7 +585,197 @@ is missing — a warm re-scan is cheap.
 (charter + [perceptual_fingerprint.mdx §4](./perceptual_fingerprint.mdx)).
 
 The engine is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (passes 1–4) with the pure, unit-tested grouping in `computeDuplicateGroups()`; candidate enumeration reuses the existing per-unit rows in `known-media.ts` — `collectKnownMedia()`; warm-re-scan hash/fingerprint caches in `hash-cache.ts` — `VideosCaches`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (the phases of §8.3) with the pure, unit-tested grouping split into `groupByExactHash()` (pass 1) and `groupByFingerprint()` (pass 2), composed by `computeDuplicateGroups()`; candidate enumeration in `known-media.ts` — `collectKnownMedia()`; warm-re-scan hash/fingerprint caches in `hash-cache.ts` — `VideosCaches`.
+
+### 8.3 The run is PROGRESSIVE — hash first, publish, then fingerprint (LOCKED)
+
+The two passes of §8.2 have **wildly different costs**. Pass 1 is a streamed read per file. Pass 2
+shells out to ffmpeg for **every video** to sample frames. On a real machine (~26,500 candidates)
+pass 1 is minutes and pass 2 is hours.
+
+**The engine must therefore publish at every phase boundary, never once at the end.**
+
+> **THE BUG THIS SECTION EXISTS TO PREVENT.** The first implementation hashed *and* fingerprinted
+> every candidate before writing a single row. Three separate scans ran on the author's machine;
+> every one was killed mid-run by an ordinary backend restart; **`duplicates.csv` was never created
+> at all**. A user who copied one image onto another and pressed **Start scan** got nothing back —
+> not because hash matching failed, but because the instant answer was held hostage by a pass that
+> never finished. A fast, correct result that is never published is indistinguishable from a bug.
+
+The phases:
+
+| Phase | Work | Publishes |
+| --- | --- | --- |
+| **0 — candidates** | Enumerate + freshen the candidate set (§8.4). | nothing |
+| **1 — hash** | Full-content SHA-256 for **every** candidate (streamed, cached, checkpointed), bucketed by exact hash. Display attributes probed for **grouped members only**. | **`duplicates.csv` with every byte-identical group**, a **partial** run stamp, live-refresh bump |
+| **2 — fingerprint** | Perceptual fingerprints for everything pass 1 did not group, then the stored-value compare (§7.8). | republished **periodically** during the phase, then finally, with the run stamp **closed as complete** |
+
+Rules:
+
+* **Phase 1 output is never delayed by phase 2.** Byte-identical duplicates — the overwhelmingly
+  common case, and the only one a plain file copy produces — are on screen while phase 2 runs.
+* **Attributes are probed only for files that actually made a group.** Probing all candidates would
+  spawn an ffprobe per video for rows nobody will ever see; the probe is a display concern, not a
+  grouping input (the one exception is video duration, which phase 2 needs for its own gate).
+* **Fingerprints for byte-identical groups cost one computation per group, not one per file.** The
+  fingerprint caches are keyed by **`sha256`**, and byte-identical files share a `sha256` **by
+  definition** — so phase 2 fingerprints **one representative** per pass-1 group and the whole group
+  reads the same stored value. This is what keeps the `fingerprint` column populated for
+  `match_basis: sha256` rows without paying for it N times.
+* **The UI reflects the phase.** `GET /api/videos/duplicates/status` carries `phase`
+  (`candidates` · `hash` · `fingerprint` · `idle`) and a `phaseDone`/`phaseTotal` counter; the page's
+  running banner names the phase and says results appear **as they are found**, never "when it
+  completes".
+* **Batch items settle in phase 1**, because the fast pass is the one pass **every** candidate goes
+  through — so the Processing counter shows real, monotonic progress instead of sitting at `0/26547`
+  for hours. Phase-2 work reports through the progress registry and the `phase` field.
+
+The phased run is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (phase 0/1/2 in sequence), `hashOneFile()` (phase 1 per file), `fingerprintOneFile()` (phase 2 per file), `publish()` (the CSV write + live-refresh bump used at every boundary), `probeAttrsFor()` (grouped members only).
+The phase is surfaced to the page in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `phaseLabel()` (the running banner's phase clause).
+
+### 8.4 Candidate freshness — the scan must see files created since the last repo scan (LOCKED)
+
+The persisted per-unit rows are the **last repo scan's census**. A file created after that scan is
+**absent from them**. Reusing them alone means the Start-scan button promises a fresh answer and
+silently computes over stale inputs.
+
+> **THE BUG THIS SECTION EXISTS TO PREVENT.** The author copied `2078856527541362697_3.jpg` to
+> `mr_dup.jpg` in a tracked repo and pressed **Start scan**. The engine enumerated **26,547**
+> candidates — and `mr_dup.jpg` was **not one of them**, because no repo scan had run in the two
+> minutes since the copy. The engine only ever held **one** of the two files, so no amount of correct
+> hashing could have produced a group. Duplicate detection is a **pairwise** property: a candidate
+> set missing one member of a pair cannot report that pair, and reports nothing rather than an error.
+
+Therefore, **phase 0 unions the persisted census with a live media sweep of the same unit roots**:
+
+* The sweep is **media-extension-only** — no `git check-ignore`, no sidecar reads (the two dominant
+  per-file costs of a real scan), so it is a small fraction of one. Measured on the author's machine:
+  **+8 s across 184 roots** on top of an 11 s enumeration.
+* It is **async and cooperatively yielding** (the shared walk collector), so it never freezes the
+  event loop, and it honours the same skip rules as every other walk — `HARD_SKIP`, dot-directories,
+  macOS bundles-are-opaque, plus our own `.lfbridge` / `.transcribe` artifact homes.
+* Files the persisted rows already know **keep their richer row** (decision, git-ignore, task icon
+  state). Newly discovered files get **default icon state** — they are real candidates that have not
+  been scanned yet, and a blank icon is honest.
+* The duplicate scan **does not trigger a repo scan** and does not wait on one. It is a *reader* that
+  refuses to read a stale list; ownership of the census stays with [scan.mdx](./scan.mdx).
+
+Candidate freshening is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/known-media.ts` — `collectKnownMedia(kinds, { freshen: true })` → `freshenFromDisk()` (the media-only sweep, unioned with the persisted rows).
+
+### 8.5 Restart resilience — checkpointing (LOCKED)
+
+A duplicate scan is a **long** job on a **developer machine**: `tsx watch` restarts, `just run`,
+reboots, and crashes are ordinary events, not exotic ones. **A run that is interrupted must keep the
+work it already paid for.**
+
+> **THE BUG THIS SECTION EXISTS TO PREVENT.** The caches were saved **once, after every candidate had
+> been hashed and fingerprinted**. Every interrupted run therefore discarded **100%** of its hashing.
+> After three full scans on the author's machine, neither `hash_cache.yaml` nor `image_fp.yaml` had
+> ever been written — so no run was ever warm and each one restarted from zero, guaranteeing that a
+> run could never finish on a machine that restarts every few minutes.
+
+Rules:
+
+* **Caches checkpoint on a timer** (30 s) throughout both phases, not only at the end. An interrupted
+  run is then a partial **win**: the next run reuses every hash it already computed.
+* **The run stamp records completeness.** A phase-1 publish writes `complete: false`; only the final
+  publish writes `complete: true`. Staleness (§5) recommends a rescan when the last run is stale
+  **or did not complete** — so partial results render, and the pop-up still asks the user to finish
+  the job. A stamp with no `complete` field reads as complete (it predates progressive publishing,
+  and the old writer only ever stamped at the very end).
+* **The CSV is still rewritten whole** at every publish (§9) — progressive publishing changes *how
+  often* we write, never the atomic whole-file contract.
+
+Checkpointing is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/hash-cache.ts` — `VideosCaches.maybeSave()` (throttled checkpoint, called per file in both phases) beside the end-of-phase `save()`; the completeness flag is `dedupe-store.ts` — `VideosRunStamp.complete` written by `writeDedupeRunStamp()` and read by `dedupeStatus()`.
+
+### 8.6 Hash comparison — the hash alone, deliberately (LOCKED)
+
+Pass 1 is a **single O(N) hash-map build**: bucket by `sha256`, emit buckets of ≥ 2. It is already
+optimal, and the following tempting "optimizations" are **explicitly rejected**:
+
+* **Do NOT pre-bucket or pre-filter by file size.** The intuition ("hashes can't match if sizes
+  differ, so compare sizes first") is a **pairwise-comparison** optimization, and we never compare
+  hashes pairwise — we bucket them. A size index could only ever add a second index to reach the same
+  answer more slowly. Worse, it introduces a **failure mode**: size is reported by the filesystem and
+  can differ from content length across mounts, sparse files, cloud-provider placeholders, and
+  compressed/deduplicating filesystems. **A size mismatch must never be allowed to suppress a hash
+  match.** The hash is the identity; nothing gates it.
+* **Do NOT short-circuit on a partial/head-tail hash.** The tracking scheme's cheap
+  size+mtime+head/tail fingerprint is a *change detector*, not a content identity: two byte-identical
+  copies have different mtimes. Pass 1 needs **full-content** SHA-256, streamed.
+* **Do NOT skip hashing a file because it has no fingerprint.** Hash grouping is independent of, and
+  runs before, fingerprinting.
+* **An empty/absent hash is never an identity.** Files whose hash failed must not collapse into one
+  giant "same hash" group — they are excluded from bucketing entirely.
+
+The legitimate hash optimizations are the ones we do use: **cache by path + size + mtime** so an
+unchanged file is never re-streamed (§7.6), **checkpoint** that cache (§8.5), and **stream** rather
+than read whole files into the heap.
+
+Pass 1 is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `groupByExactHash()` (the O(N) bucket; no size gate anywhere); the streamed hash with its size+mtime cache is `exec.ts` — `sha256File()` and `hash-cache.ts` — `VideosCaches.sha256()`.
+
+### 8.7 Scaling the fingerprint compare — banding, not brute force (LOCKED)
+
+Pass 2 compares **stored fingerprints pairwise**, which is O(N²) if written naively. At ~26,500
+candidates that is **~340 million** synchronous comparisons, each re-parsing two 64-character hex
+strings — **minutes with the Node event loop fully blocked**, i.e. the whole app unresponsive.
+
+The compare must scale, and it must scale **without ever missing a real match**:
+
+* **LSH banding (images) — a pre-filter with NO false negatives.** Split each 256-bit (64-hex)
+  fingerprint into **32 bands of 8 bits**. Two fingerprints within the strict de-dup threshold differ
+  in at most **24** bits, so at most 24 bands can contain a differing bit and **at least 8 bands must
+  be byte-identical**. Comparing only pairs that share ≥ 1 identical band therefore **cannot miss a
+  match** — it only skips pairs that could not possibly have matched. This is exact, not approximate.
+  * The guarantee requires `bandCount > threshold`. A fingerprint too short for that (a 64-bit
+    fallback hash) falls back to **full pairwise within its own length bucket** rather than risk a miss.
+  * A pair is compared in the **lowest band it collides in**, so a pair sharing all 32 bands costs
+    **one** comparison, not 32.
+* **Duration windowing (videos).** Equal-ish length is already a *requirement* of being a duplicate
+  (a much shorter same-content file is a **subset**, not a duplicate). Sorting by duration and
+  sweeping a window prunes exactly the pairs the pairwise loop would have rejected on its first test.
+  Videos with **unknown** duration keep full pairwise treatment — precisely as the per-pair guard did.
+* **Early-abort Hamming on pre-parsed nibbles.** Fingerprints are parsed to a byte array **once**;
+  the pair compare walks it and returns the moment the running distance passes the threshold. Most
+  pairs exit after a handful of nibbles.
+* **Union-find is consulted first.** A pair already in the same component is skipped without any
+  comparison.
+* **The thresholds and the quality gate stay owned by
+  [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx).** Everything above is a *pre-filter*;
+  `sameContent()` still makes every final, authoritative call.
+
+Measured effect on the unit corpus (4,000 unrelated images + one planted matching pair): **115 s →
+under 1 s**, same answer.
+
+The scaled compare is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `unionImagesByFingerprint()` (banding + lowest-band rule + union-find skip), `withinThreshold()` / `toNibbles()` (the early-abort Hamming pre-filter), `videoCandidatePairs()` (duration windowing); the authoritative verdict stays `media/perceptual.service.ts` — `sameContent()` with the exported `IMAGE_THRESHOLD_STRICT` the banding math depends on.
+
+### 8.8 Engine logging (LOCKED)
+
+The engine is a long background job with no synchronous caller, so **the log is the only way to know
+what it did**. It must log, at INFO, on every run:
+
+1. **`duplicate calc engine STARTED`** — before any work.
+2. The **candidate count**, and the **freshen result** (how many files the sweep found that the last
+   repo scan did not know) — the two numbers that tell you whether the scan could possibly have seen
+   your file.
+3. **Each phase start and finish**, with elapsed seconds, the groups/rows **published**, and how many
+   files carry into the next phase.
+4. **Periodic phase-2 progress** at each interim republish.
+5. **`duplicate calc engine FINISHED`** — with the group split (`sha256` vs `fingerprint`), member row
+   count, candidate count, and total elapsed.
+
+A run that ends **without** a FINISHED line was killed — which is itself the diagnosis, and is why the
+partial run stamp (§8.5) exists. Per-file fingerprint failures stay **WARN** and never fail the run
+(§7.6: a fingerprint failure loses a signal, never the item).
+
+Logging goes to the state root's `log.log` / `error.err`
+([storage_local.mdx](./storage_local.mdx)); nothing is written to `/tmp`.
 
 ---
 
@@ -517,13 +840,28 @@ Reading/writing the CSV is handled in code:
    never both (§4).
 5. **Print rules:** resolution as `{w}x{h}` with a parenthesized class **only** for the known
    classes 480p/720p/1080p/2K/4K (§4.4); codec as `codec (h264)` — the value in parentheses (§4.5).
-6. **Pop-up:** entering the page with no run ever, or a run 4+ days old, opens the in-app
-   **"Start Duplicate Scan"** modal — status line ("Never scanned." or "Last scanned {timestamp}
-   ({relative}).") + recommendation, **Skip** hyperlink to the **left** of the dominant
-   **"Start scan ›"** button. Never a native dialog (§5).
-7. **Progress:** Start scan enqueues an async `dedupe_scan` batch tracked by the standard
+6. **Action-links row (§5.1):** every visit shows the house action row under the page title with
+   **Scan for duplicates · Refresh results · View progress**. Scan starts with **no** confirmation
+   dialog; while a scan runs it is **disabled with a stated reason**; the row never hides and never
+   moves.
+7. **Pop-up (§5.2/§5.3):** the in-app **"Start Duplicate Scan"** modal auto-opens **at most once per
+   page entry**, and **only** when never-scanned, or 2+ days old and incomplete, or 4+ days stale —
+   **never** when the last run was **within 2 days** (complete *or* partial), and never while a scan
+   runs. Body = status line ("Never scanned." / "Last scanned {timestamp} ({relative}).") +
+   recommendation + the background-work line; **Skip** hyperlink to the **left** of the dominant
+   **"Start scan ›"** button. Never a native dialog.
+   * *Acceptance test:* scan, then reload the page an hour later — **no pop-up**, even when the run
+     was killed mid-phase-2 and stamped `complete: false`.
+8. **Fire-and-forget start (§5.4):** clicking **Start scan ›** (or the row's **Scan for
+   duplicates**) closes the modal **on the click**, raises the bottom toast *"Duplicate scan
+   started — it runs in the background."* with a **View progress** action into `/processing`, and
+   flips the page to its running state immediately. The page never blocks, dims, or spins. The
+   server marks single-flight **synchronously** and **defers the run past the response flush**, so
+   no enumeration or walk happens on the request's stack. A coalesced start (`started: false`) is an
+   info toast, not an error.
+9. **Progress:** Start scan enqueues an async `dedupe_scan` batch tracked by the standard
    Processing surfaces (page, dock, conditional nav item); detached and single-flight (§6).
-8. **Fingerprint libraries (LOCKED):** every library used satisfies the four requirements —
+10. **Fingerprint libraries (LOCKED):** every library used satisfies the four requirements —
    open-source & embeddable, **text-encodable fingerprint** storable in the CSV column, a compare
    function that takes **stored values** back in, **no phone-home**. For duplicate detection the
    choices are: **images → PDQ 256-bit / 64-hex** (fallback blockhash-core + sharp-phash, both
@@ -531,11 +869,36 @@ Reading/writing the CSV is handled in code:
    and whole-video hashes are rejected for the reasons in §7.2–§7.3. Fingerprints are computed
    only during the dedicated scan for missing/stale files (§7.6), stored per §7.7, and all later
    comparisons are pure functions over stored values (§7.8).
-9. **Engine:** the dedicated scan groups by **SHA-256 first, perceptual fingerprint second**, so
-   copies differing in codec, file size, or pixel depth still group; probes display attributes;
-   never mutates a file; computes **duplicates only** — subsets have their own scan
-   ([subsets.mdx](./subsets.mdx)) (§8).
-10. **CSV:** `~/T/_large_files_bridge/videos/duplicates.csv`, one row per member, groups keyed by
+11. **Engine:** the dedicated scan groups by **SHA-256 first, perceptual fingerprint second**, so
+    copies differing in codec, file size, or pixel depth still group; probes display attributes;
+    never mutates a file; computes **duplicates only** — subsets have their own scan
+    ([subsets.mdx](./subsets.mdx)) (§8).
+12. **Progressive publish (§8.3):** phase 1 writes `duplicates.csv` with every byte-identical group
+    **before** phase 2 begins, and phase 2 republishes periodically. A scan killed during phase 2
+    still leaves a usable CSV and a run stamp marked `complete: false`. The status route reports
+    `phase` + `phaseDone`/`phaseTotal`, and the page's running banner names the phase and promises
+    results **as they are found**.
+    * *Acceptance test:* copy a file onto a new name in a tracked repo, press **Start scan**, and the
+      pair appears as a `match_basis: sha256` group **without waiting for any fingerprinting** —
+      verified end-to-end on 26,548 candidates: phase 1 published 3,013 groups / 9,057 rows in 90 s,
+      including the planted pair.
+13. **Candidate freshness (§8.4):** the candidate set is the persisted census **unioned with a live
+    media sweep**, so a file created since the last repo scan is a candidate. A scan whose candidate
+    set can only see one member of a duplicate pair is a defect, not a "no duplicates" answer.
+14. **Restart resilience (§8.5):** hash/fingerprint caches checkpoint on a timer during both phases,
+    so an interrupted run keeps the work it paid for; the run stamp distinguishes a **partial** run
+    from a **complete** one and `recommend` stays true until one completes — **without** overriding
+    the §5.2 quiet window.
+15. **Hash comparison (§8.6):** pass 1 buckets on the hash **alone** — no size pre-filter, no partial
+    hash, no fingerprint precondition — and an empty hash is never an identity.
+16. **Compare scaling (§8.7):** the fingerprint compare uses **exact** LSH banding (no false
+    negatives, proven by the band-count > threshold argument), lowest-band pair selection, duration
+    windowing for videos, and an early-abort Hamming over pre-parsed nibbles. Thresholds and the
+    quality gate remain owned by `sameContent()`.
+17. **Engine logging (§8.8):** every run logs STARTED, the candidate + freshen counts, each phase's
+    start/finish with what it published, interim phase-2 progress, and FINISHED with the group split.
+    A run with no FINISHED line was killed — and that is the diagnosis.
+18. **CSV:** `~/T/_large_files_bridge/videos/duplicates.csv`, one row per member, groups keyed by
     a shared unique `duplicate_group`, with `full_path`, `sha256`, `fingerprint` (text-encoded per
     §7.7), and the display attributes; rewritten atomically per run; the UI reads only this file
     (§9).
@@ -550,9 +913,22 @@ Reading/writing the CSV is handled in code:
   the DIFFERING attrs comma-separated under each block. An attr is common OR differing, never both.
   PRINT RULES: resolution "{w}x{h} (720p)" — parenthesized class ONLY for known classes
   480p/720p/1080p/2K/4K (±8px snap, resolutionLabel()); codec "codec (h264)".
-  POP-UP: "Start Duplicate Scan" via ModalHost (dialogs.mdx — NEVER native) when never-run or 4+
-  days stale; "Never scanned." / "Last scanned {ts} ({rel})."; Skip HYPERLINK left of dominant
-  "Start scan ›" button.
+  §5 STARTING A SCAN = TWO surfaces. (a) §5.1 PAGE ACTION-LINKS ROW under the title, ALWAYS visible:
+  "Scan for duplicates · Refresh results · View progress" (no confirm dialog; Scan DISABLED w/ reason
+  while running). The row is why the pop-up is allowed to stay quiet. (b) §5.3 POP-UP "Start Duplicate
+  Scan" via ModalHost (dialogs.mdx — NEVER native); "Never scanned." / "Last scanned {ts} ({rel})." +
+  recommendation + background-work line; Skip HYPERLINK left of dominant "Start scan ›" button.
+  §5.2 QUIET WINDOW (added 2026-07-22): first-match rules — running ⇒ no; last run WITHIN 2 DAYS
+  (VIDEOS_SCAN_PROMPT_QUIET_DAYS, complete OR partial) ⇒ NO POP-UP, period; never-run ⇒ yes; 2+ days
+  old AND incomplete ⇒ yes; 4+ days (VIDEOS_SCAN_STALE_DAYS) ⇒ yes. THE ANNOYANCE FIXED: complete:false
+  never clears, so a 1-hour-old killed scan nagged on EVERY visit. Status carries promptOnEntry
+  (auto-open) SEPARATE from recommend (would a scan help). Auto-opens at most ONCE per page entry.
+  §5.4 FIRE-AND-FORGET START (LOCKED): modal closes on the CLICK not the response; bottom toast
+  "Duplicate scan started — it runs in the background." + "View progress" action → /processing; page
+  flips to running optimistically; NEVER a blocking spinner. SERVER: single-flight latch set
+  SYNCHRONOUSLY then setImmediate() so the response flushes BEFORE any enumeration/walk — the old code
+  entered the engine's sync prologue on the request stack and the page looked hung. started:false =
+  info toast, not an error. Row link and modal button share ONE start path.
   PROGRESS: async dedupe_scan batch → processing.mdx surfaces; detached + single-flight (scan.mdx §10).
   LIBRARIES (§7, web-researched, LOCKED): 4 hard requirements — open-source embeddable, TEXT-ENCODABLE
   fingerprint (fits the CSV column), compare function that takes STORED values back in (never re-read
@@ -569,6 +945,27 @@ Reading/writing the CSV is handled in code:
   perceptual compare (catches codec/size/pixel-depth variants; thresholds owned by
   perceptual_fingerprint.mdx), attribute probe (ffprobe/sharp, all local), atomic CSV write +
   dedupe_run.yaml stamp. Signal only — never deletes/alters files.
+  §8.3 PROGRESSIVE (added 2026-07-22 after a real defect): phase 0 candidates → phase 1 HASH publishes
+  duplicates.csv + a PARTIAL stamp → phase 2 FINGERPRINT republishes periodically then closes the stamp.
+  NEVER hold the fast answer hostage to the slow pass. Attrs probed for GROUPED members only; phase 2
+  fingerprints ONE representative per sha group (fp caches are sha-keyed, byte-identical ⇒ same sha).
+  Batch items settle in PHASE 1 (the pass every candidate goes through) so the counter is monotonic.
+  §8.4 CANDIDATE FRESHNESS: persisted census ∪ live media-only sweep. THE ORIGINAL BUG — a file copied
+  2 min before Start scan was not among the 26,547 candidates, so the pair could never group. Sweep is
+  ext-only (no check-ignore/sidecars), async+yielding, HARD_SKIP + bundles + .lfbridge/.transcribe.
+  §8.5 CHECKPOINTING: caches save on a 30 s timer, not once at the end (3 runs were killed and lost
+  100% of their hashing; hash_cache.yaml had NEVER been written). Stamp carries `complete`; absent
+  reads as complete (pre-progressive stamps). Staleness recommends rescan when stale OR incomplete.
+  §8.6 HASH ALONE — LOCKED REJECTIONS: no size pre-bucket/pre-filter (size is a filesystem report, not
+  content length; a size mismatch must NEVER suppress a hash match — and bucketing is already O(N), so
+  a size index is strictly slower), no partial/head-tail hash (that is a CHANGE detector — copies have
+  different mtimes), no fingerprint precondition, empty hash is never an identity.
+  §8.7 COMPARE SCALING: exact LSH banding for images (32 bands × 8 bits; ≤24 differing bits ⇒ ≥8 bands
+  identical ⇒ NO false negatives; falls back to full pairwise when bandCount ≤ threshold), lowest-band
+  pair rule, union-find checked first, early-abort Hamming over pre-parsed nibbles, duration windowing
+  for videos (unknown duration keeps full pairwise). 4k-image unit corpus: 115 s → under 1 s.
+  §8.8 LOGGING: STARTED / candidate+freshen counts / per-phase start+finish+published / interim phase-2
+  progress / FINISHED with the sha-vs-fingerprint group split. No FINISHED line ⇒ the run was killed.
   CSV (§9): ~/T/_large_files_bridge/videos/duplicates.csv — one row per member, shared duplicate_group id,
   cols: duplicate_group, full_path, sha256, fingerprint, match_basis, size_bytes, duration_s,
   width, height, codec, detected_at. Rewritten whole, Category B (state root only).

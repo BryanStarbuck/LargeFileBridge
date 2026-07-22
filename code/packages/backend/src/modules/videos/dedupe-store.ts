@@ -108,10 +108,19 @@ export function readDuplicatesCsv(): DuplicateCsvRow[] {
 // ── the run stamp (§5 staleness + §9) ─────────────────────────────────────────────────────────────────
 
 export interface VideosRunStamp {
-  lastRunAt: string; // ISO of the last COMPLETED run
+  lastRunAt: string; // ISO of the last run that PUBLISHED results (partial or complete)
   ok: boolean;
   counts: Record<string, number>;
   durationMs: number;
+  /**
+   * False for a PARTIAL publish — the engine published what one phase produced and is still working
+   * (or was killed before the next phase finished). The staleness check keeps recommending a rescan
+   * until a run reaches completion (duplicates.mdx §8.3/§8.5). Absent in stamps written before this
+   * field existed, which read as complete — the old writer only ever stamped at the very end.
+   */
+  complete: boolean;
+  /** The phase this stamp was written at: "hash" (partial) or "fingerprint" (the full run). */
+  phase?: string;
 }
 
 export function writeRunStamp(file: string, stamp: VideosRunStamp): void {
@@ -121,6 +130,8 @@ export function writeRunStamp(file: string, stamp: VideosRunStamp): void {
       schema_version: 1,
       last_run_at: stamp.lastRunAt,
       ok: stamp.ok,
+      complete: stamp.complete,
+      ...(stamp.phase ? { phase: stamp.phase } : {}),
       counts: stamp.counts,
       duration_ms: stamp.durationMs,
     }),
@@ -134,6 +145,10 @@ export function readRunStamp(file: string): VideosRunStamp | null {
     return {
       lastRunAt: doc.last_run_at,
       ok: doc.ok !== false,
+      // Absent → complete: stamps written before progressive publishing existed were only ever
+      // written at the very end of a finished run.
+      complete: doc.complete !== false,
+      ...(typeof doc.phase === "string" ? { phase: doc.phase } : {}),
       counts: (doc.counts as Record<string, number>) ?? {},
       durationMs: Number(doc.duration_ms ?? 0),
     };

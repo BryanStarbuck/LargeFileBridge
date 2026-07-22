@@ -4,9 +4,11 @@
 // the two scans stay fully separate (own status, own staleness clock, own batch kind).
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { useNavigate } from "@tanstack/react-router";
+import { Gauge, Loader2, RotateCw, ScanSearch } from "lucide-react";
 import { toast } from "sonner";
 import type { VideosScanStatus } from "@lfb/shared";
+import { PageActions, type Action } from "../../components/menu/PageActions.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
@@ -40,6 +42,19 @@ export interface VideosReviewConfig<M extends VideoMember> {
   matchBasisValues: string[];
 }
 
+/**
+ * The running banner's phase clause (duplicates.mdx §8.3). The engine publishes byte-identical
+ * duplicates the moment hashing finishes and perceptual ones as they are found, so naming the phase
+ * tells the user whether the groups already on screen are the whole story yet.
+ */
+function phaseLabel(status: VideosScanStatus): string {
+  const counter = status.phaseTotal > 0 ? ` ${status.phaseDone.toLocaleString()}/${status.phaseTotal.toLocaleString()}` : "";
+  if (status.phase === "candidates") return " — finding candidate files";
+  if (status.phase === "hash") return ` — hashing files${counter}`;
+  if (status.phase === "fingerprint") return ` — fingerprinting${counter}`;
+  return "";
+}
+
 export function VideosReviewPage<M extends VideoMember>({
   variant,
   title,
@@ -71,13 +86,15 @@ export function VideosReviewPage<M extends VideoMember>({
   // A finished scan bumps the "videos" topic — the open page refetches without a reload.
   useLiveRefresh(["videos"], [listKey, statusKey]);
 
-  // The Start-Scan pop-up (duplicates.mdx §5 / subsets.mdx §5): opens automatically ONCE per page entry
-  // when the scan is recommended (never run, or 4+ days stale) and not running.
+  // The Start-Scan pop-up (duplicates.mdx §5.2 / subsets.mdx §5): opens automatically at most ONCE per
+  // page entry, and only when the SERVER says we may interrupt — `promptOnEntry`, which is `recommend`
+  // minus the 2-day quiet window. A scan inside two days (complete OR partial) never prompts; the
+  // always-visible "Scan for …" action link below is how the user rescans on demand instead.
   const [modalOpen, setModalOpen] = useState(false);
   const autoOpened = useRef(false);
   useEffect(() => {
     if (autoOpened.current || !status) return;
-    if (status.recommend && !status.running) {
+    if (status.promptOnEntry && !status.running) {
       autoOpened.current = true;
       setModalOpen(true);
     }
@@ -87,18 +104,77 @@ export function VideosReviewPage<M extends VideoMember>({
     if (status?.running) setModalOpen(false);
   }, [status?.running]);
 
+  const navigate = useNavigate();
+  const viewProgress = () => void navigate({ to: "/processing" });
+  const scanLabel = variant === "duplicates" ? "Duplicate" : "Subset";
+
+  // Fire-and-forget start (duplicates.mdx §5.4, LOCKED): the pop-up closes on the CLICK — never on the
+  // response — and the page flips to its running state optimistically, so the app can never look hung
+  // while the POST is in flight. The toast (not the modal) is what confirms the click landed.
   const start = useMutation({
     mutationFn: startScan,
-    onSuccess: (r) => {
-      if (!r.started) toast.info("A scan is already running");
+    onMutate: () => {
       setModalOpen(false);
+      qc.setQueryData<VideosScanStatus>(statusKey, (prev) =>
+        prev ? { ...prev, running: true, promptOnEntry: false, phase: "candidates", phaseDone: 0, phaseTotal: 0 } : prev,
+      );
+    },
+    onSuccess: (r) => {
+      if (r.started) {
+        toast.success(`${scanLabel} scan started — it runs in the background.`, {
+          action: { label: "View progress", onClick: viewProgress },
+        });
+      } else {
+        // A coalesced start is a normal outcome, not an error (§5.4 rule 5).
+        toast.info(`A ${scanLabel.toLowerCase()} scan is already running`, {
+          action: { label: "View progress", onClick: viewProgress },
+        });
+      }
       void qc.invalidateQueries({ queryKey: statusKey });
     },
     onError: (e: Error) => {
       clientLog.error("VideosReviewPage.startScan", e);
       toast.error(e.message);
+      void qc.invalidateQueries({ queryKey: statusKey });
     },
   });
+
+  // The page action-links row (duplicates.mdx §5.1) — always visible, never relocated. "Scan for …"
+  // shares ONE start path with the pop-up's primary button, and takes no confirm dialog: the scan is
+  // read-only and never mutates a file (§8.2).
+  // (Rebuilt each render on purpose — PageActions keys its width-fit on the labels, not on identity.)
+  const pageActions: Action[] = [
+    {
+      id: "scan",
+      label: `Scan for ${scanNoun}s`,
+      icon: <ScanSearch className="h-3.5 w-3.5" />,
+      group: "Work",
+      disabled: status?.running || start.isPending,
+      // A greyed link with no reason is a dead end (menus.mdx) — say why, and point at the next step.
+      title: status?.running
+        ? `A ${scanLabel.toLowerCase()} scan is already running — see the Processing page`
+        : undefined,
+      onSelect: () => start.mutate(),
+    },
+    {
+      id: "refresh",
+      label: "Refresh results",
+      icon: <RotateCw className="h-3.5 w-3.5" />,
+      group: "Work",
+      // The manual twin of the live-refresh bump: pull in whatever a running phase has published.
+      onSelect: () => {
+        void qc.invalidateQueries({ queryKey: listKey });
+        void qc.invalidateQueries({ queryKey: statusKey });
+      },
+    },
+    {
+      id: "view-progress",
+      label: "View progress",
+      icon: <Gauge className="h-3.5 w-3.5" />,
+      group: "Work",
+      onSelect: viewProgress,
+    },
+  ];
 
   const groups = useMemo(() => buildGroups(data?.rows ?? []), [buildGroups, data]);
   const rows = useMemo(() => interleaveRows(groups), [groups]);
@@ -155,14 +231,23 @@ export function VideosReviewPage<M extends VideoMember>({
         )}
       </div>
 
+      {/* The page action-links row (duplicates.mdx §5.1) — directly under the title, on EVERY visit:
+          "Scan for duplicates · Refresh results · View progress". It is the durable home of the scan
+          control, which is what lets the entry pop-up stay quiet inside the 2-day window (§5.2). */}
+      <div className="mb-2 shrink-0">
+        <PageActions actions={pageActions} />
+      </div>
+
       {/* Running state (duplicates.mdx §6): the scan is an async batch — the Processing surfaces carry
-          the detailed progress; here we only say it is underway. The pop-up never shows meanwhile. */}
+          the detailed progress; here we name the PHASE, because the engine publishes progressively
+          (§8.3) and the table below already holds real results while the run continues. The pop-up
+          never shows meanwhile. */}
       {status?.running && (
         <div className="mb-2 flex shrink-0 items-center gap-2 text-sm text-black/60">
           <Loader2 className="h-4 w-4 animate-spin" />
           <span>
-            {variant === "duplicates" ? "Duplicate" : "Subset"} scan running — results appear here when it
-            completes (details on the Processing page).
+            {variant === "duplicates" ? "Duplicate" : "Subset"} scan running{phaseLabel(status)} — results
+            appear here as they are found (details on the Processing page).
           </span>
         </div>
       )}
@@ -222,8 +307,8 @@ export function VideosReviewPage<M extends VideoMember>({
         <StartScanModal
           variant={variant}
           status={status}
-          starting={start.isPending}
           onSkip={() => setModalOpen(false)}
+          // Fire-and-forget (§5.4): the mutation's onMutate closes this modal on the click itself.
           onStart={() => start.mutate()}
         />
       )}

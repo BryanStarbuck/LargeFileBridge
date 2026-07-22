@@ -146,16 +146,20 @@ The shared page body both children configure (table, pop-up flow, live refresh, 
 
 ## 4. The scan machinery — one pattern, two separate scans (LOCKED reference)
 
-Each child has its **own dedicated scan**, following one shared pattern: entering a page whose
-scan is stale (4+ days) or has never run opens that page's **Start-Scan pop-up**; starting it
-enqueues an async batch tracked on the **Processing** page; the engine writes that page's CSV
-into Local Storage. **The two scans are separate** — running the duplicate scan never satisfies
+Each child has its **own dedicated scan**, following one shared pattern: an **always-visible
+action-links row** under the page title carries that page's **Scan for …** link, and — only when the
+page's data is old enough to be worth interrupting for (never run, or stale past the 4-day clock,
+and never inside the **2-day quiet window**) — entering the page also opens that page's **Start-Scan
+pop-up**. Starting a scan either way is **fire-and-forget**: the pop-up closes on the click, a toast
+confirms, and the work enqueues as an async batch tracked on the **Processing** page while the
+engine writes that page's CSV into Local Storage. **The two scans are separate** — running the duplicate scan never satisfies
 the subset scan's staleness clock, or vice versa — and each has its own batch kind
 (`dedupe_scan` / `subset_scan`), engine, and fingerprint choice. The pattern is specified in
 [duplicates.mdx](./duplicates.mdx) and mirrored by [subsets.mdx](./subsets.mdx):
 
-* duplicates.mdx §5 / subsets.mdx §5 — the Start-Scan pop-up windows ("Start Duplicate Scan" /
-  "Start Subset Scan").
+* duplicates.mdx §5 / subsets.mdx §5 — starting a scan: the page action-links row (§5.1), the
+  2-day quiet window that suppresses the prompt (§5.2), the Start-Scan pop-up windows ("Start
+  Duplicate Scan" / "Start Subset Scan", §5.3), and the fire-and-forget start (§5.4).
 * duplicates.mdx §6 / subsets.mdx §6 — the progress UI (Processing tab, dock, conditional
   left-bar item).
 * duplicates.mdx §7 / subsets.mdx §7 — the fingerprint libraries (web-researched choices:

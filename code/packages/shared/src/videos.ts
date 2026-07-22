@@ -74,17 +74,52 @@ export interface SubsetsListResponse {
   fileCount: number;
 }
 
+/**
+ * The phase a progressive scan is in (duplicates.mdx §8.3). The engine publishes results at every
+ * phase boundary, so the page has data long before the run ends — `hash` results (byte-identical
+ * duplicates) land within seconds, `fingerprint` results follow.
+ */
+export type VideosScanPhase = "candidates" | "hash" | "fingerprint" | "idle";
+
 /** Staleness status for one of the two dedicated scans (duplicates.mdx §5, subsets.mdx §5). */
 export interface VideosScanStatus {
-  /** ISO datetime of the last COMPLETED run, or null if never run. */
+  /** ISO datetime of the last run that PUBLISHED results (partial or complete), or null if never run. */
   lastRunAt: string | null;
   running: boolean;
-  /** True when never run or lastRunAt is VIDEOS_SCAN_STALE_DAYS+ old — opens the Start-Scan pop-up. */
+  /**
+   * True when never run, when the last run never reached completion, or when lastRunAt is
+   * VIDEOS_SCAN_STALE_DAYS+ old — "a scan would be useful". This is a WORDING/affordance signal
+   * only: it does NOT open the pop-up (duplicates.mdx §5.2 — that is `promptOnEntry`).
+   */
   recommend: boolean;
+  /**
+   * True when we may INTERRUPT the user with the Start-Scan pop-up on page entry: `recommend` AND
+   * outside the VIDEOS_SCAN_PROMPT_QUIET_DAYS quiet window AND not running (duplicates.mdx §5.2).
+   * A scan inside the quiet window never prompts — complete or partial — because a `complete:false`
+   * stamp never clears on its own and would otherwise nag on every visit.
+   */
+  promptOnEntry: boolean;
+  /** Which phase the RUNNING scan is in; "idle" when nothing is running (duplicates.mdx §8.3). */
+  phase: VideosScanPhase;
+  /** Files finished / total in the current phase — drives the running banner's honest counter. */
+  phaseDone: number;
+  phaseTotal: number;
+  /**
+   * False when the last published run stopped before finishing every phase (a restart, a crash, a
+   * kill). Partial results still render; the pop-up keeps recommending a rescan (duplicates.mdx §8.5).
+   */
+  lastRunComplete: boolean;
 }
 
-/** The 4-day staleness recommendation window (duplicates.mdx §5). */
+/** The 4-day staleness RECOMMENDATION window (duplicates.mdx §5.2). */
 export const VIDEOS_SCAN_STALE_DAYS = 4;
+
+/**
+ * The 2-day prompt QUIET window (duplicates.mdx §5.2, LOCKED): a scan that ran within this many days
+ * never opens the entry pop-up — complete or partial. The always-visible "Scan for …" action link
+ * (§5.1) is what keeps an on-demand rescan one click away while we stay quiet.
+ */
+export const VIDEOS_SCAN_PROMPT_QUIET_DAYS = 2;
 
 /**
  * Known common resolution classes (duplicates.mdx §4.4, LOCKED): the parenthesized

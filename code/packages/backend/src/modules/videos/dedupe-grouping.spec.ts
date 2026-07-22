@@ -3,7 +3,7 @@
 // values. Also covers the vPDQ stored-list matchers (symmetric fraction + contiguous run).
 import { describe, expect, it } from "vitest";
 import type { PerceptualFingerprint } from "@lfb/shared";
-import { computeDuplicateGroups, type DedupeFileInfo } from "./dedupe.service.js";
+import { computeDuplicateGroups, groupByExactHash, type DedupeFileInfo } from "./dedupe.service.js";
 import {
   anySampledFrameMatch,
   parseVpdq,
@@ -37,6 +37,86 @@ function file(over: Partial<DedupeFileInfo> & { path: string }): DedupeFileInfo 
 function frames(hexes: string[], startTs = 0): VpdqFrame[] {
   return hexes.map((hex, i) => ({ n: i, hex, quality: 50, ts: startTs + i }));
 }
+
+describe("phase 1 — the HASH pass alone (duplicates.mdx §8.3)", () => {
+  // THE REGRESSION: a plain `cp a.jpg b.jpg` must group on the hash alone, with NO fingerprints
+  // computed at all. The old engine published nothing until every candidate had also been
+  // FINGERPRINTED, so a run killed during that (slow, ffmpeg-bound) pass produced no duplicates.csv
+  // at all — byte-identical copies included.
+  it("groups a straight file copy with no fingerprints present anywhere", () => {
+    const a = file({ path: "/images/2078856527541362697_3.jpg", sha256: "abc", imageFp: null });
+    const b = file({ path: "/images/mr_dup.jpg", sha256: "abc", imageFp: null });
+    const { groups, byteGrouped } = groupByExactHash([a, b]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].basis).toBe("sha256");
+    expect(groups[0].members.map((m) => m.path).sort()).toEqual([
+      "/images/2078856527541362697_3.jpg",
+      "/images/mr_dup.jpg",
+    ]);
+    expect(byteGrouped.size).toBe(2);
+  });
+
+  it("differing file SIZES never suppress a hash match — grouping keys on the hash alone (§8.6)", () => {
+    // Sizes can differ for the same content bytes on some filesystems/reporting paths; the hash is the
+    // only identity pass 1 trusts. A size pre-filter would have silently dropped this pair.
+    const a = file({ path: "/a.jpg", sha256: "same", sizeBytes: 402117 });
+    const b = file({ path: "/b.jpg", sha256: "same", sizeBytes: 402118 });
+    expect(groupByExactHash([a, b]).groups).toHaveLength(1);
+  });
+
+  it("an empty hash is never an identity — unhashed files never collapse into one group", () => {
+    const a = file({ path: "/a.jpg", sha256: "" });
+    const b = file({ path: "/b.jpg", sha256: "" });
+    expect(groupByExactHash([a, b]).groups).toHaveLength(0);
+  });
+});
+
+describe("fingerprint pair banding (duplicates.mdx §8.7)", () => {
+  // The banding pre-filter must have NO false negatives: any pair within the strict threshold must
+  // still be compared. The worst case is a pair AT the threshold with its differing bits spread across
+  // as many bands as possible.
+  it("still groups a pair at the exact strict threshold with differences spread across 24 bands", () => {
+    const chars = "0".repeat(64).split("");
+    for (let b = 0; b < 24; b++) chars[b * 2] = "1"; // one differing bit in each of 24 distinct bands
+    const spread = chars.join("");
+    const a = file({ path: "/a.png", sha256: "x", imageFp: fp(ZEROS) });
+    const b = file({ path: "/b.png", sha256: "y", imageFp: fp(spread) });
+    const groups = computeDuplicateGroups([a, b]);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].basis).toBe("fingerprint");
+  });
+
+  it("a pair beyond the threshold stays apart", () => {
+    const a = file({ path: "/a.png", sha256: "x", imageFp: fp(ZEROS) });
+    const b = file({ path: "/b.png", sha256: "y", imageFp: fp(ONES) });
+    expect(computeDuplicateGroups([a, b])).toHaveLength(0);
+  });
+
+  it("scales: 4000 unrelated images plus one planted pair finds exactly that pair, fast", () => {
+    // Deterministic PRNG so the corpus is well-spread (unrelated images are ~128/256 bits apart) and the
+    // test is reproducible. The old raw double loop ran ~8M sameContent() calls over this — 115 seconds.
+    let seed = 0x2f6e2b1;
+    const randHex = (): string => {
+      let s = "";
+      for (let i = 0; i < 64; i++) {
+        seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+        s += ((seed >> 16) & 0xf).toString(16);
+      }
+      return s;
+    };
+    const files: DedupeFileInfo[] = [];
+    for (let i = 0; i < 4000; i++) {
+      files.push(file({ path: `/n${i}.png`, sha256: `s${i}`, imageFp: fp(randHex()) }));
+    }
+    files.push(file({ path: "/dup-a.png", sha256: "da", imageFp: fp(ZEROS) }));
+    files.push(file({ path: "/dup-b.png", sha256: "db", imageFp: fp(NEAR_ZEROS) }));
+    const t0 = Date.now();
+    const groups = computeDuplicateGroups(files);
+    expect(Date.now() - t0).toBeLessThan(5000);
+    expect(groups).toHaveLength(1);
+    expect(groups[0].members.map((m) => m.path).sort()).toEqual(["/dup-a.png", "/dup-b.png"]);
+  });
+});
 
 describe("computeDuplicateGroups", () => {
   it("pass 1: groups byte-identical files by sha256, basis sha256", () => {

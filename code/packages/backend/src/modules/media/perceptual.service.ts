@@ -48,7 +48,8 @@ const BLOCKHASH_BITS = 16;
 // Matching thresholds over the 256-bit fingerprint (§4). Hamming <= 32/256 == "same content"; the stricter
 // <= 24 is exposed for high-precision de-dup.
 const IMAGE_THRESHOLD = 32;
-const IMAGE_THRESHOLD_STRICT = 24;
+/** Exported so the de-dup engine's LSH banding can prove it has no false negatives (duplicates.mdx §8.7). */
+export const IMAGE_THRESHOLD_STRICT = 24;
 
 // Quality gate (§4): flat/junk frames (a black video frame, a solid fill) produce untrustworthy hashes, so
 // we drop them from AUTOMATIC matching. `quality` is a 0..100 luminance-spread proxy (PDQ ships a real

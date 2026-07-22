@@ -39,11 +39,15 @@ function readYamlMap<T>(file: string, key: string): Record<string, T> {
   }
 }
 
-/** A run-scoped view over both caches: load once at engine start, save once at engine end. */
+/** How often a long run checkpoints its caches to disk (duplicates.mdx §8.5). */
+const CHECKPOINT_MS = 30_000;
+
+/** A run-scoped view over both caches: load once at engine start, CHECKPOINTED throughout, saved at end. */
 export class VideosCaches {
   private hashes = readYamlMap<HashEntry>(HASH_CACHE_FILE(), "entries");
   private imageFps = readYamlMap<PerceptualFingerprint>(IMAGE_FP_FILE(), "entries");
   private dirty = false;
+  private lastSaveAt = Date.now();
 
   /** Full-content sha256, from cache when size+mtime are unchanged, else streamed and remembered. */
   async sha256(abs: string, size: number, mtimeMs: number): Promise<string> {
@@ -65,9 +69,25 @@ export class VideosCaches {
     this.dirty = true;
   }
 
+  /**
+   * Persist if dirty and at least CHECKPOINT_MS has passed since the last write (duplicates.mdx §8.5).
+   *
+   * THE BUG THIS FIXES: save() used to run ONLY after every candidate had been hashed AND fingerprinted.
+   * Every run that was killed first — a `tsx watch` restart, a `just run`, a reboot — threw away 100% of
+   * its hashing. Two full duplicate scans had run on this machine and neither hash_cache.yaml nor
+   * image_fp.yaml had ever been written, so no run was ever warm and each one started from zero.
+   * Checkpointing makes an interrupted run a partial WIN instead of a total loss.
+   */
+  maybeSave(): void {
+    if (!this.dirty) return;
+    if (Date.now() - this.lastSaveAt < CHECKPOINT_MS) return;
+    this.save();
+  }
+
   /** Persist both caches (atomic). Never throws — a cache that cannot be written costs the NEXT run time,
    *  not this run its results. */
   save(): void {
+    this.lastSaveAt = Date.now();
     if (!this.dirty) return;
     try {
       writeFileAtomic(HASH_CACHE_FILE(), YAML.stringify({ schema_version: 1, entries: this.hashes }));
