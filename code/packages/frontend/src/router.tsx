@@ -1,7 +1,7 @@
 // Code-based TanStack Router (sister convention). Auth gating happens in main.tsx (outside the tree).
 // Each page component is code-split via lazyRouteComponent (performance.mdx P-10), so first paint only
 // downloads the AppShell + the landing route's JS — not every table and the media viewer up front.
-import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet } from "@tanstack/react-router";
+import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet, redirect } from "@tanstack/react-router";
 import { AppShell } from "./pages/app/AppShell.js";
 
 // The File System browser and both entity pages take an optional absolute `path` search param
@@ -92,6 +92,27 @@ const ipfsPinsRoute = createRoute({
   validateSearch: (search: Record<string, unknown>): { repo?: string } => ({
     repo: typeof search.repo === "string" ? search.repo : undefined,
   }),
+});
+// Videos (videos.mdx §1): /videos is an alias that lands on the first child — the hub never renders an
+// empty landing page of its own.
+const videosRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/videos",
+  beforeLoad: () => {
+    throw redirect({ to: "/videos/duplicates" });
+  },
+});
+// Duplicates review screen (duplicates.mdx): groups of same-content videos/images, 60/40 review layout.
+const videosDuplicatesRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/videos/duplicates",
+  component: lazyRouteComponent(() => import("./pages/videos/DuplicatesPage.js"), "DuplicatesPage"),
+});
+// Subsets review screen (subsets.mdx): videos contained inside longer videos, same layout + deltas.
+const videosSubsetsRoute = createRoute({
+  getParentRoute: () => appLayout,
+  path: "/videos/subsets",
+  component: lazyRouteComponent(() => import("./pages/videos/SubsetsPage.js"), "SubsetsPage"),
 });
 // The Scans page (left_bar.yaml routes the "Scans" nav item here). The scheduled background jobs are
 // "scheduleTasks" in code; the UI calls what they do "scans" — so the route is /scans (scan.mdx §2 naming).
@@ -206,6 +227,9 @@ const routeTree = rootRoute.addChildren([
     ipfsRoute,
     ipfsOffRoute,
     ipfsPinsRoute,
+    videosRoute,
+    videosDuplicatesRoute,
+    videosSubsetsRoute,
     scansRoute,
     todoRoute,
     companyMappingReviewRoute,

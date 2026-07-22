@@ -11,6 +11,7 @@ import {
   Boxes,
   Check,
   ChevronDown,
+  Clapperboard,
   Columns3,
   ExternalLink,
   FolderGit2,
@@ -30,6 +31,7 @@ const ICONS: Record<string, ComponentType<LucideProps>> = {
   // Not a left_bar.yaml row — the settled state of the runtime-injected "Processing" item (Sidebar.tsx).
   Check,
   ChevronDown,
+  Clapperboard,
   Columns3,
   ExternalLink,
   FolderGit2,

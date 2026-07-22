@@ -26,7 +26,7 @@ Left_Nav:
     # ==========================================================================
     - Location: app
       name: "LargeFileBridge — Main Left Bar"
-      description: "Primary navigation: Repos, Storages, File System, Devices / Peers, Communities, IPFS, Scans, Settings."
+      description: "Primary navigation: Repos, Storages, File System, Devices / Peers, Communities, IPFS, Videos, Scans, To Do, Settings."
       auth_system: "openauth_federated"
       # Sized to the WIDEST item + a small gap, never a round number for its own sake (left_bar.mdx §5).
       # Measured in the rendered system font (SF, macOS) at the real type sizes:
@@ -138,6 +138,26 @@ Left_Nav:
           order: 6
           description: "Your local IPFS node's control panel: is it installed and running, an on/off toggle, live metrics (shared files, storage, peers, bandwidth), the gateway, and the only-our-content security posture. Drills into the pinset table at /ipfs/pins. See pm/ipfs_ui.mdx (dashboard) + pm/ipfs.mdx (pinset)."
 
+        # VIDEOS (pm/videos.mdx) — the hub for the two media-comparison review screens. Below IPFS,
+        # above Scans (videos.mdx §1, LOCKED). Unlike the runtime-injected per-Company children under
+        # Storages, these are FIXED, STATIC children: Duplicates first (selecting Videos lands there —
+        # /videos redirects to /videos/duplicates), then Subsets.
+        - id: videos
+          label: "Videos"
+          icon: "Clapperboard"
+          route: "/videos"
+          order: 7
+          description: "Review duplicate and subset media files side-by-side — confirm they are the same content and decide which copies to keep. Fed by the dedicated duplicate-detection scan. See pm/videos.mdx."
+          children:
+            - id: videos_duplicates
+              label: "Duplicates"
+              route: "/videos/duplicates"
+              description: "Groups of files that are the same content — byte-identical or perceptually identical (pm/duplicates.mdx)."
+            - id: videos_subsets
+              label: "Subsets"
+              route: "/videos/subsets"
+              description: "Files whose content is contained inside another file — clips, crops, downscales (pm/subsets.mdx)."
+
         # NAMING (pm/menus.mdx / scan.mdx): the scheduled background jobs are
         # "scheduleTasks" internally; the UI calls what they do "scans". This
         # page is the transparency+control surface for both scheduleTasks — the
@@ -147,7 +167,7 @@ Left_Nav:
           label: "Scans"
           icon: "RefreshCw"
           route: "/scans"
-          order: 7
+          order: 8
           description: "The scheduled background scan tasks (scheduleTasks): whether each launchd job is installed, on or off, the every-15-min and every-4h schedules, and recent activity."
 
         # TO DO (pm/to_do.mdx). The single aggregated list of everything LargeFileBridge recommends
@@ -160,14 +180,14 @@ Left_Nav:
           label: "To Do"
           icon: "ListTodo"
           route: "/todo"
-          order: 8
+          order: 9
           description: "Everything Large File Bridge recommends you do, bundled per storage: files to pull down from your other computers, big files to git-ignore, videos/images to compress, files to back up, and media to transcribe. Only storages with work show; each is a slug you open to review and apply. Carries a count badge of how many need attention. See pm/to_do.mdx."
 
         - id: settings
           label: "Settings"
           icon: "Settings"
           route: "/settings"
-          order: 9
+          order: 10
           description: "Account, allow-list, and IPFS node configuration."
 
         # ----------------------------------------------------------------------
@@ -175,7 +195,7 @@ Left_Nav:
         # Documented here for discoverability, but NOT a rendered nav_items entry:
         # do NOT add it as a real array element. It is INJECTED AT RUNTIME by
         # Sidebar.tsx (like the dynamic per-Company children under Storages),
-        # appended as the LAST item of this top list — after Settings (order 9),
+        # appended as the LAST item of this top list — after Settings (order 10),
         # before the account slot — ONLY while background work is running (a job
         # running, a pending backlog, or an active "Compress inside" batch), and
         # it disappears when work finishes.
@@ -183,7 +203,7 @@ Left_Nav:
         #     label: "Processing"
         #     icon: "Loader2"
         #     route: "/processing"
-        #     order: 10   # tail of the list; runtime-injected, not statically rendered
+        #     order: 11   # tail of the list; runtime-injected, not statically rendered
 
       # EXTERNAL PRODUCT LINKS (pm/left_bar.mdx §4.2). A small set of OUTBOUND links to our other
       # products, shown in the space BETWEEN the bottom of the top nav list and the account slot, evenly

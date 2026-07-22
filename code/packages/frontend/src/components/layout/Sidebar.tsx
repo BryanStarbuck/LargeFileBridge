@@ -105,6 +105,10 @@ export function Sidebar({ user }: { user: CurrentUser }) {
           const active = isActive(item.route);
           const isIpfs = item.id === "ipfs";
           const isStorages = item.id === "storages";
+          // Generic STATIC yaml children (left_bar.yaml `children:` — e.g. Videos → Duplicates/Subsets,
+          // videos.mdx §1). Storages is excluded: its disclosure list is runtime-composed above (per-Company
+          // children); everything else renders its fixed children straight from the yaml while active.
+          const staticChildren = !isStorages && item.children?.length ? item.children : null;
           // The IPFS parent is "selected" (unfiltered) only when on /ipfs with no ?repo filter.
           // The Storages parent is "selected" only on the /storages index, not a child detail page.
           const parentSelected = isIpfs ? onIpfs && !activeRepo : isStorages ? path === "/storages" : active;
@@ -153,7 +157,33 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                 {isStorages && onStorages && (
                   <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
                 )}
+                {staticChildren && active && (
+                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
+                )}
               </Link>
+
+              {/* Static yaml children (left_bar.yaml `children:`) — the same indented disclosure-group
+                  treatment as Storages' children; the active child additionally highlights (videos.mdx §1). */}
+              {staticChildren && active &&
+                staticChildren.map((child) => {
+                  const childActive =
+                    path === child.route || (child.route !== "/" && path.startsWith(child.route));
+                  return (
+                    <Link
+                      key={child.id}
+                      to={child.route}
+                      title={child.description ?? child.label}
+                      className="mx-2 my-0.5 flex items-center gap-2 rounded-md py-1.5 pl-9 pr-3 text-sm hover:bg-slate-100"
+                      style={
+                        childActive
+                          ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
+                          : { color: "#000" }
+                      }
+                    >
+                      <span className="flex-1 truncate">{child.label}</span>
+                    </Link>
+                  );
+                })}
 
               {/* Storages disclosure children (storages.mdx §2): Personal · companies · Repos · Communities. */}
               {isStorages && onStorages &&

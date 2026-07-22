@@ -94,6 +94,9 @@ interface DataTableProps<T> {
   // the row is an image whose bytes are on this computer, else null. When provided, hovering a row
   // publishes that target so holding Option floats the image preview; the whole row is the hover surface.
   hoverPreview?: (row: T) => string | null;
+  // Optional extra per-row class (e.g. the Videos review tables tint every row of the SELECTED group,
+  // duplicates.mdx §3.2, and mute their slim group-header rows). Appended after the base row classes.
+  rowClassName?: (row: T) => string;
   // Stable id for this table (tables.mdx — remembered view state). When set, the table's sort, column
   // filters, search, hidden columns, and promoted facet state are persisted per logged-in user (in the
   // per-user config.yaml `tables:` record) and restored on the next visit. Keep it unique per surface —
@@ -153,6 +156,7 @@ export function DataTable<T>({
   fileTypeFacet,
   fileFilter,
   hoverPreview,
+  rowClassName,
   tableId,
 }: DataTableProps<T>) {
   // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
@@ -910,7 +914,7 @@ export function DataTable<T>({
                     }
                     onMouseLeave={hoverPreview ? () => setOptionPreviewTarget(null) : undefined}
                     style={{ height: ROW_H }}
-                    className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""}`}
+                    className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""} ${rowClassName ? rowClassName(row.original) : ""}`}
                   >
                     {selection && (
                       <td className="px-2" onClick={(e) => e.stopPropagation()}>

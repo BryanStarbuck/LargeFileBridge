@@ -73,6 +73,9 @@ import type {
   GitIgnoreRequest,
   GitIgnorePlan,
   GitIgnoreResult,
+  DuplicatesListResponse,
+  SubsetsListResponse,
+  VideosScanStatus,
   TranscribeTools,
   TranscribeEngineStatus,
   TranscribeProvisionResult,
@@ -491,4 +494,14 @@ export const api = {
   debugExportTarget: () => unwrap<DebugExportTarget>(http.get("/debug/export/target")),
   debugExport: (body: { scope: "computer" | "repo"; repoId?: string; invokedFrom: "settings" | "one_repo_more_menu" }) =>
     unwrap<DebugExportResult>(http.post("/debug/export", body)),
+
+  // Videos — the Duplicates & Subsets review screens (videos.mdx, duplicates.mdx, subsets.mdx).
+  // Two SEPARATE scans with independent staleness clocks; the status drives each page's Start-Scan
+  // pop-up and the scan POSTs enqueue the dedicated dedupe_scan / subset_scan batches.
+  videosDuplicates: () => unwrap<DuplicatesListResponse>(http.get("/videos/duplicates")),
+  videosDuplicatesStatus: () => unwrap<VideosScanStatus>(http.get("/videos/duplicates/status")),
+  videosDuplicatesScan: () => unwrap<{ started: boolean }>(http.post("/videos/duplicates/scan", {})),
+  videosSubsets: () => unwrap<SubsetsListResponse>(http.get("/videos/subsets")),
+  videosSubsetsStatus: () => unwrap<VideosScanStatus>(http.get("/videos/subsets/status")),
+  videosSubsetsScan: () => unwrap<{ started: boolean }>(http.post("/videos/subsets/scan", {})),
 };
