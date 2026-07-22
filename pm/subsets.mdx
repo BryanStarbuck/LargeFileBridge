@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Subsets (videos only — review screen, scan pop-up, calc engine, subsets.csv)
-description: The full spec for the Subsets review screen — the SECOND level-2 child under the Videos left-bar item (route /videos/subsets — videos.mdx owns nav placement; Duplicates is the first child). VIDEOS ONLY — images are out of scope on this page, unlike Duplicates. A SUBSET is a video whose content is a contiguous segment cut out of a longer video: a 3-minute clip taken from somewhere in the middle of a 10-minute SUPERSET. The page mirrors duplicates.mdx section-for-section — the same 60/40 review layout (Repos-style TanStack table on the left 60% with the small column set: icon control columns, File as name-without-path, Size — no checkbox; a reserved right review column on the remaining 40% that scrolls independently, with the action-links row on top, the "All files are the same:" common-attributes block, and one full-column-width aspect-kept preview block per member with the DIFFERING attributes comma-separated beneath) — with these deltas: each group has exactly one SUPERSET plus its subsets, the superset's preview block renders first and is labeled, and each subset block carries a containment line ("Contained at {start}–{end} of {superset}"). It has its OWN pop-up ("Start Subset Scan", same 4-day staleness rule, Skip hyperlink left of the dominant "Start scan ›" button), its OWN dedicated scan and calc engine (a subset_scan Processing batch — separate from the duplicate scan), and its OWN output file subsets.csv in Local Storage. Contains the WEB-RESEARCHED evaluation of segment-containment fingerprint libraries and the choice (LOCKED): the MPEG-7 Video Signature via the BUNDLED ffmpeg `signature` filter — the ISO standard built precisely to detect whether one video sequence appears inside another and WHERE (frame offsets), zero new dependencies, fully local — cross-checked by Meta vPDQ contiguous-frame-run containment (which reuses the per-frame PDQ fingerprints the duplicate engine already computes); TMK+PDQF and whole-video hashes are disqualified because they only match whole same-length videos. The fingerprint value stored for this page is therefore DIFFERENT from the duplicates one: a per-video MPEG-7 signature file reference plus the matched offset range. Sibling of videos.mdx, duplicates.mdx, perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx, tables.mdx, and storage_local.mdx.
+description: The full spec for the Subsets review screen — the SECOND level-2 child under the Videos left-bar item (route /videos/subsets — videos.mdx owns nav placement; Duplicates is the first child). VIDEOS ONLY — images are out of scope on this page, unlike Duplicates. A SUBSET is a video whose content is a contiguous segment cut out of a longer video: a 3-minute clip taken from somewhere in the middle of a 10-minute SUPERSET. The page mirrors duplicates.mdx section-for-section — the same 60/40 review layout (Repos-style TanStack table on the left 60% showing ONE ROW PER GROUP with the small column set: File as name-without-path, Files as the member count, Size as the reclaimable bytes — no checkbox and no icon columns; a full-width control row above the split; a sticky light-yellow selection and a transient light-green hover that outranks it; and a reserved right review column on the remaining 40% that scrolls independently, with the action-links row on top, the "All files are the same:" common-attributes block, and one file block per member carrying the five icon controls left of the file name, a full-column-width aspect-kept POSTER-FIRST preview with click-to-play, and the DIFFERING attributes comma-separated beneath) — with these deltas: each group has exactly one SUPERSET plus its subsets, the row's File cell and the first preview block are the superset's and it is labeled, and each subset block carries a containment line ("Contained at {start}–{end} of {superset}"). It has its OWN pop-up ("Start Subset Scan", same 4-day staleness rule, Skip hyperlink left of the dominant "Start scan ›" button), its OWN dedicated scan and calc engine (a subset_scan Processing batch — separate from the duplicate scan), and its OWN output file subsets.csv in Local Storage. Contains the WEB-RESEARCHED evaluation of segment-containment fingerprint libraries and the choice (LOCKED): the MPEG-7 Video Signature via the BUNDLED ffmpeg `signature` filter — the ISO standard built precisely to detect whether one video sequence appears inside another and WHERE (frame offsets), zero new dependencies, fully local — cross-checked by Meta vPDQ contiguous-frame-run containment (which reuses the per-frame PDQ fingerprints the duplicate engine already computes); TMK+PDQF and whole-video hashes are disqualified because they only match whole same-length videos. The fingerprint value stored for this page is therefore DIFFERENT from the duplicates one: a per-video MPEG-7 signature file reference plus the matched offset range. Sibling of videos.mdx, duplicates.mdx, perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx, tables.mdx, and storage_local.mdx.
 ---
 
 # LargeFileBridge — Subsets
@@ -76,19 +76,25 @@ subset in another.
 ## 3. User interface — the table (left 60%) (LOCKED)
 
 Identical to [duplicates.mdx §3](./duplicates.mdx) — the shared 60/40 review layout, house
-TanStack table, control row, 500-per-page, full-page-height body scroll, and the **same
-deliberately small column set**: the **icon control columns** (Pin · Ignore · Transcribe ·
-AI description · OCR), **File** (**name without path**, basename only, full path via hover-info
-panel), and **Size**. **No leading checkbox, no bookmark, no path column.** Deltas:
+TanStack table, 500-per-page, full-page-height body scroll, the **full-width control row above the
+split** (so this column starts underneath it, not beside it), **ONE ROW PER GROUP**, and the **same
+deliberately small column set**: **File** (**name without path**, basename only, full path via the
+hover-info panel), **Files** (the member count), and **Size** (reclaimable bytes). **No leading
+checkbox, no bookmark, no path column, and no icon control columns** — the five icons live in the
+right column's file blocks (§4). Deltas:
 
-* **Group header rows** read: superset name, subset count, and basis — e.g.
-  `─ Group a71f · trees_full.mov · 2 subsets · mpeg7 ─`.
-* **Within a group, the superset row renders first**, then its subsets sorted by containment
-  start time. Groups sort by **reclaimable bytes descending** (sum of subset sizes — what
+* **The row's File cell shows the SUPERSET's name** — a subset group is named for the file the whole
+  group hangs off, e.g. `trees_full.mov · 3 files · 1.4 GB`. (There are no group-header rows any
+  more; the old `─ Group a71f · trees_full.mov · 2 subsets · mpeg7 ─` header is what the single row
+  now carries.)
+* **Within the group, the superset comes first** in the right column, then its subsets sorted by
+  containment start time. Groups sort by **reclaimable bytes descending** (sum of subset sizes — what
   deleting the clips would free) by default.
 * The `⛛` filter has **no file-type facet** (videos only); it carries a match-basis facet
   (`mpeg7` · `vpdq` — §8), value-checkbox model, all checked by default.
-* Clicking any member row selects its **whole group** into the right review column (§4).
+* Selection and hover behave exactly as [duplicates.mdx §3.3](./duplicates.mdx): click = sticky
+  light-yellow selection, hover = light green and outranks it, leaving the table falls back to the
+  selection, the first group is seeded once.
 
 The table rows are served by the backend in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/videos.router.ts` — `videosRouter` → `GET /api/videos/subsets` (reads `subsets.csv`, §9; superset row first, subsets by containment start, groups by reclaimable bytes).
@@ -103,8 +109,10 @@ Identical mechanics to [duplicates.mdx §4](./duplicates.mdx): the reserved righ
 independently** of the table and page; the **action-links row** on top (**exactly "Done"** for
 now); the **"All files are the same:"** common-attributes block (comma-space separated — here
 typically resolution, codec, fingerprint-region match; **never duration**, which differs by
-definition); then **one preview block per member** — preview at **full column width, aspect ratio
-kept** — with the member's **differing attributes comma-separated beneath it**, using the same
+definition); then **one file block per member** — the **five icon controls (Pin · Ignore ·
+Transcribe · AI description · OCR) to the LEFT of the file name**, the full path, a **poster-first
+preview at full column width with aspect ratio kept** ([duplicates.mdx §4.3a](./duplicates.mdx)) —
+with the member's **differing attributes comma-separated beneath it**, using the same
 print rules (resolution `{w}x{h} (720p)` only for known classes 480p/720p/1080p/2K/4K; codec as
 `codec (h264)`; [duplicates.mdx §4.4–§4.5](./duplicates.mdx)). Deltas:
 
@@ -116,17 +124,18 @@ print rules (resolution `{w}x{h} (720p)` only for known classes 480p/720p/1080p/
 │  resolution 1920x1080        │
 │  (1080p), codec (h264)       │
 ├──────────────────────────────┤
-│  SUPERSET · trees_full.mov   │ ← superset block FIRST, labeled
+│  ⚲ ⊘ T A O  SUPERSET ·       │ ← superset block FIRST, labeled
+│             trees_full.mov   │
 │  ┌────────────────────────┐  │
-│  │   [video preview]      │  │
+│  │   [poster      ▶ ]     │  │
 │  └────────────────────────┘  │
 │  duration 10:04, 1.9 GB      │
 ├──────────────────────────────┤
-│  trees_clip.mp4              │
+│  ⚲ · T · ·  trees_clip.mp4   │
 │  Contained at 03:10–06:12    │ ← containment line (subset blocks only)
 │  of trees_full.mov           │
 │  ┌────────────────────────┐  │
-│  │   [video preview]      │  │
+│  │   [poster      ▶ ]     │  │
 │  └────────────────────────┘  │
 │  duration 3:02, 412 MB       │
 └──────────────────────────────┘
@@ -138,8 +147,9 @@ print rules (resolution `{w}x{h} (720p)` only for known classes 480p/720p/1080p/
   **"Contained at {start}–{end} of {superset name}"** — the §2 containment range in `mm:ss`
   (or `h:mm:ss` past an hour), from the engine's match offsets (§8). The superset block has no
   containment line.
-* Both video previews are playable; the subset's containment range lets the user seek the
-  superset to the same content and confirm with their eyes.
+* Both video previews are playable **on click** — the ▶ over the poster mounts that one player
+  ([duplicates.mdx §4.3a](./duplicates.mdx)); the subset's containment range then lets the user seek
+  the superset to the same content and confirm with their eyes.
 
 The right review column is the shared component in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (a `variant: "subsets"` adds the SUPERSET label + containment line; offsets print via `videoGroups.tsx` — `formatOffset()`).
@@ -153,8 +163,10 @@ Same two surfaces, same shape, and the same rules as Duplicates
 scans are **separate**, and running one never satisfies the other:
 
 * **The page action-links row** ([duplicates.mdx §5.1](./duplicates.mdx)) sits under the title on
-  **every** visit: **Scan for subsets · Refresh results · View progress**. No confirmation dialog;
-  **Scan for subsets** is disabled with a stated reason while a subset scan runs.
+  **every** visit, holding **exactly one link: Scan for subsets** (Refresh results and View progress
+  were removed page-wide on 2026-07-22 — see duplicates.mdx §5.1 for why). No confirmation dialog;
+  **Scan for subsets** is disabled with a stated reason while a subset scan runs; the row takes the
+  highest z-order.
 * **The pop-up is a nudge, not the control**, and obeys the same **first-match** rules
   ([duplicates.mdx §5.2](./duplicates.mdx)) against the **subset** run stamp (§9): running → never;
   **within 2 days** (`VIDEOS_SCAN_PROMPT_QUIET_DAYS`, complete *or* partial) → **never**;
@@ -386,15 +398,18 @@ Reading/writing is handled in code:
 1. **Left bar:** Subsets is the second level-2 child under Videos (below Duplicates), route
    `/videos/subsets`, yaml-driven (§1).
 2. **Videos only:** images never appear on this page, in its scan, or in its CSV (§ intro, §8).
-3. **Table:** identical to Duplicates — left 60%, icon control columns + File (name without path)
-   + Size, no checkbox — with superset-first group ordering and superset-named group headers (§3).
+3. **Table:** identical to Duplicates — left 60%, **one row per group**, columns **File (name
+   without path) + Files + Size**, no checkbox and **no icon columns**, full-width control row above
+   the split, and the same light-yellow selection / light-green hover model — with the row's File
+   cell showing the **superset's** name and groups ordered by reclaimable bytes (§3).
 4. **Right column:** identical mechanics to Duplicates (independent scroll, "Done" action link,
-   "All files are the same:" block, full-width aspect-kept previews, differing attributes
-   comma-separated beneath each block, same resolution/codec print rules), plus: the **superset
-   block renders first labeled SUPERSET**, and every subset block carries **"Contained at
-   {start}–{end} of {superset}"** (§4).
-5. **Starting a scan:** the always-visible action row (**Scan for subsets · Refresh results · View
-   progress**) plus the "Start Subset Scan" pop-up on its **own** clocks — suppressed entirely
+   "All files are the same:" block, the **five icon controls left of each file name**, full-width
+   aspect-kept **poster-first** previews with click-to-play, differing attributes comma-separated
+   beneath each block, same resolution/codec print rules), plus: the **superset block renders first
+   labeled SUPERSET**, and every subset block carries **"Contained at {start}–{end} of
+   {superset}"** (§4).
+5. **Starting a scan:** the always-visible action row (**exactly one link — Scan for subsets**)
+   plus the "Start Subset Scan" pop-up on its **own** clocks — suppressed entirely
    inside the **2-day quiet window**, opening only when never-scanned / 2+ days old and incomplete /
    4+ days stale, at most once per page entry; never-scanned / last-scanned timestamp line, Skip
    hyperlink left of the dominant "Start scan ›" button; in-app modal only; the start is
@@ -423,10 +438,15 @@ Reading/writing is handled in code:
   deltas + its own library/engine/CSV). VIDEOS ONLY (no images — narrows videos.mdx §2 scope).
   SUBSET = contiguous segment cut from a longer SUPERSET (3-min clip from the middle of a 10-min
   video). SHA-256 plays NO matching role here (a subset is never byte-identical).
-  UI: same 60/40 layout, same small column set (icon cols + File basename + Size, NO checkbox);
-  group header = superset name + subset count; superset row/block FIRST, labeled SUPERSET; every
-  subset preview block carries "Contained at {start}-{end} of {superset}" from the match offsets.
-  OWN action-row link "Scan for subsets" (always visible, under the title) + OWN pop-up "Start Subset
+  UI: same 60/40 layout; ONE ROW PER GROUP as of 2026-07-22 (cols File basename + Files + Size, NO
+  checkbox, NO icon cols — icons moved into the right column's file blocks); the row's File cell shows
+  the SUPERSET's name (that is what the old group-header row carried); FULL-WIDTH control row above
+  the split; light-yellow selection + light-green hover (hover wins) — duplicates.mdx §3.1/§3.3.
+  Superset block FIRST in the right column, labeled SUPERSET; every subset block carries
+  "Contained at {start}-{end} of {superset}" from the match offsets. Previews are POSTER-FIRST with
+  click-to-play (duplicates.mdx §4.3a) — N live <video> elements never loaded at all.
+  OWN action-row link "Scan for subsets" — the ONLY link in the row now (Refresh results / View
+  progress removed page-wide, duplicates.mdx §5.1) — + OWN pop-up "Start Subset
   Scan" (own clocks, subset_run.yaml — the duplicate scan never satisfies it): 2-DAY QUIET WINDOW
   suppresses the prompt entirely, 4-day staleness recommends; start is FIRE-AND-FORGET (modal closes
   on the click, toast + View progress, response flushed before any work) — see duplicates.mdx §5.1–§5.4.

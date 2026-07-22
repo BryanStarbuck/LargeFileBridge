@@ -889,7 +889,14 @@ export function DataTable<T>({
     // region below grows to the bottom of the viewport; the control row + footer stay pinned (shrink-0).
     // wrapRef is measured for responsive column hiding (repos.mdx §3.2.1).
     <div ref={wrapRef} className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
-      {controlsPortal ? createPortal(controls, controlsPortal) : controls}
+      {/* `undefined` = this table paints its own controls (every table but the split-layout pages).
+          `null` = a portal target was declared but has not mounted yet — render NOTHING for that one
+          frame rather than flashing the bar in the wrong place and then moving it. */}
+      {controlsPortal === undefined
+        ? controls
+        : controlsPortal
+          ? createPortal(controls, controlsPortal)
+          : null}
 
       {/* The flat, chromeless data surface — body scrolls inside a bounded, windowed container. */}
       {loading ? (

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Duplicates (review screen, scan pop-up, calc engine, duplicates.csv)
-description: The full spec for the Duplicates review screen under the Videos left-bar item (route /videos/duplicates — videos.mdx owns the nav placement). Defines — in dedicated sections, one per concern — (1) the LEFT-BAR entry (level-2 child of Videos); (2) the USER INTERFACE — the 60/40 review layout — a Repos-style TanStack table on the left 60% of the content width with a deliberately SMALL column set (the icon control columns, a File column showing the file NAME WITHOUT PATH, and Size — no leading checkbox, no bookmark), and the reserved RIGHT REVIEW COLUMN on the remaining 40% that scrolls independently: an action-links row on top (just "Done" for now), then an "All files are the same:" block listing the attributes ALL group members share (file size, SHA-256 hash, fingerprint, duration for videos, resolution, codec — comma-space separated), then one full-column-width aspect-ratio-preserving preview block per duplicate with the attributes that DIFFER printed comma-separated under each preview so the user can compare and contrast; the resolution print rule (width x height, plus a parenthesized class like (480p) ONLY when it snaps to a known common class — 480p/720p/1080p/2K/4K) and the codec print rule (the codec name in parentheses after the word codec); (3) STARTING A SCAN — the always-visible PAGE ACTION-LINKS ROW under the page title (whose first link is "Scan for duplicates") plus the "Start Duplicate Scan" entry pop-up, which is a NUDGE and not the control: it is suppressed entirely by a 2-DAY QUIET WINDOW (a scan inside two days never prompts, complete or partial), opens only when never-scanned / 2+ days old and incomplete / 4+ days stale, carries a Skip hyperlink to the LEFT of the dominant "Start scan ›" button and a never-scanned / last-scanned-at timestamp line, and starts FIRE-AND-FORGET — the modal closes on the CLICK (never on the response), a bottom toast confirms with a "View progress" action into the Processing page, and the server flushes the HTTP response before the engine touches any work so the page can never hang; (4) the PROGRESS UI — the scan goes asynchronous as a batch on the Processing page; (5) the CALC ENGINE — the dedicated duplicate-detection scan that groups files first by exact SHA-256 and then by perceptual fingerprint (PDQ/vPDQ per perceptual_fingerprint.mdx — PhotoDNA-STYLE, explicitly not PhotoDNA), so duplicates are found even when the copies differ in codec, file size, or pixel depth — and, per the §8.3–§8.8 rules added after a real field defect, runs PROGRESSIVELY (phase 1 hash publishes duplicates.csv before phase 2 fingerprinting even starts, so the fast answer is never held hostage to the slow pass), over a FRESHENED candidate set (§8.4 — the persisted census unioned with a live media sweep, because a file copied minutes before pressing Start scan was absent from the census and the pair could therefore never group), with CHECKPOINTED caches so an interrupted run keeps its work (§8.5), grouping on the HASH ALONE with size pre-filtering explicitly rejected (§8.6), an EXACT no-false-negative LSH banding compare that took the fingerprint pass from O(N²) brute force to near-linear (§8.7), and mandatory START/PHASE/FINISH logging (§8.8); and (6) the FILE FORMAT of duplicates.csv in Local Storage — one row per member file, rows sharing a duplicate_group id, with full_path, sha256, fingerprint, and the display attributes. Also contains the WEB-RESEARCHED FINGERPRINT-LIBRARY section (§7) with the four hard requirements (open-source and embeddable in our Node/TypeScript app; a TEXT-ENCODABLE fingerprint value storable in the CSV fingerprint column; an OFFLINE COMPARE FUNCTION that stored values can be fed back into later without re-reading media bytes; and absolutely NO PHONE-HOME — no network to do the work or report anything), the candidate lists for IMAGES and for VIDEOS, and the LOCKED per-media choices FOR DUPLICATE DETECTION — images: PDQ 256-bit (64-hex) via a local binding, with blockhash-core + sharp-phash as the pure-JS MIT fallback; videos: vPDQ per-frame PDQ (text lines frame_number,hex,quality,timestamp) — plus how to use each algorithm, when to run it, where the values are stored, and how later comparisons feed the stored values back into the library's compare functions. Sibling of videos.mdx (hub + layout shell), subsets.mdx (the twin screen with its OWN subset scan, calc engine, fingerprint choice, and subsets.csv), perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx (no native dialogs — ModalHost), tables.mdx, and storage_local.mdx (the state root the CSV lives in).
+description: The full spec for the Duplicates review screen under the Videos left-bar item (route /videos/duplicates — videos.mdx owns the nav placement). Defines — in dedicated sections, one per concern — (1) the LEFT-BAR entry (level-2 child of Videos); (2) the USER INTERFACE — the 60/40 review layout — a Repos-style TanStack table on the left 60% of the content width showing ONE ROW PER GROUP (revised 2026-07-22 — no group-header rows and no per-member rows) with a deliberately SMALL column set (File = the basename of any ONE member, Files = the member count, Size = the reclaimable bytes; no leading checkbox, no bookmark, and no icon columns), whose CONTROL ROW spans the FULL page width above the split so the right column starts underneath it, whose rows carry a sticky light-YELLOW selection and a transient light-GREEN hover that outranks it (hover drives the right column, leaving the table falls back to the selection), and the reserved RIGHT REVIEW COLUMN on the remaining 40% that scrolls independently: an action-links row on top (just "Done" for now), then an "All files are the same:" block listing the attributes ALL group members share (file size, SHA-256 hash, fingerprint, duration for videos, resolution, codec — comma-space separated), then one FILE BLOCK per member carrying the five icon controls (Pin, Ignore, Transcribe, AI description, OCR) to the LEFT of the file name, the full path, a full-column-width aspect-ratio-preserving preview, and the attributes that DIFFER printed comma-separated beneath so the user can compare and contrast; the POSTER-FIRST preview rule (§4.3a — each block loads ONE small cached JPEG from GET /api/media/poster instead of a live media stream, because N simultaneous <video> elements exhaust the browser's ~6-connections-per-origin budget and the previews then never load at all; videos show the poster with a play control and only mount a player on click, undecodable codecs fall back to the transcode stream, and HEIC/TIFF/ProRes/HEVC render because the backend decodes them); the resolution print rule (width x height, plus a parenthesized class like (480p) ONLY when it snaps to a known common class — 480p/720p/1080p/2K/4K) and the codec print rule (the codec name in parentheses after the word codec); (3) STARTING A SCAN — the always-visible PAGE ACTION-LINKS ROW under the page title (holding EXACTLY ONE link, "Scan for duplicates" — Refresh results and View progress were removed because the page self-refreshes and three honest routes to progress already exist — and taking the highest z-order so nothing below it clips the links) plus the "Start Duplicate Scan" entry pop-up, which is a NUDGE and not the control: it is suppressed entirely by a 2-DAY QUIET WINDOW (a scan inside two days never prompts, complete or partial), opens only when never-scanned / 2+ days old and incomplete / 4+ days stale, carries a Skip hyperlink to the LEFT of the dominant "Start scan ›" button and a never-scanned / last-scanned-at timestamp line, and starts FIRE-AND-FORGET — the modal closes on the CLICK (never on the response), a bottom toast confirms with a "View progress" action into the Processing page, and the server flushes the HTTP response before the engine touches any work so the page can never hang; (4) the PROGRESS UI — the scan goes asynchronous as a batch on the Processing page; (5) the CALC ENGINE — the dedicated duplicate-detection scan that groups files first by exact SHA-256 and then by perceptual fingerprint (PDQ/vPDQ per perceptual_fingerprint.mdx — PhotoDNA-STYLE, explicitly not PhotoDNA), so duplicates are found even when the copies differ in codec, file size, or pixel depth — and, per the §8.3–§8.8 rules added after a real field defect, runs PROGRESSIVELY (phase 1 hash publishes duplicates.csv before phase 2 fingerprinting even starts, so the fast answer is never held hostage to the slow pass), over a FRESHENED candidate set (§8.4 — the persisted census unioned with a live media sweep, because a file copied minutes before pressing Start scan was absent from the census and the pair could therefore never group), with CHECKPOINTED caches so an interrupted run keeps its work (§8.5), grouping on the HASH ALONE with size pre-filtering explicitly rejected (§8.6), an EXACT no-false-negative LSH banding compare that took the fingerprint pass from O(N²) brute force to near-linear (§8.7), and mandatory START/PHASE/FINISH logging (§8.8); and (6) the FILE FORMAT of duplicates.csv in Local Storage — one row per member file, rows sharing a duplicate_group id, with full_path, sha256, fingerprint, and the display attributes. Also contains the WEB-RESEARCHED FINGERPRINT-LIBRARY section (§7) with the four hard requirements (open-source and embeddable in our Node/TypeScript app; a TEXT-ENCODABLE fingerprint value storable in the CSV fingerprint column; an OFFLINE COMPARE FUNCTION that stored values can be fed back into later without re-reading media bytes; and absolutely NO PHONE-HOME — no network to do the work or report anything), the candidate lists for IMAGES and for VIDEOS, and the LOCKED per-media choices FOR DUPLICATE DETECTION — images: PDQ 256-bit (64-hex) via a local binding, with blockhash-core + sharp-phash as the pure-JS MIT fallback; videos: vPDQ per-frame PDQ (text lines frame_number,hex,quality,timestamp) — plus how to use each algorithm, when to run it, where the values are stored, and how later comparisons feed the stored values back into the library's compare functions. Sibling of videos.mdx (hub + layout shell), subsets.mdx (the twin screen with its OWN subset scan, calc engine, fingerprint choice, and subsets.csv), perceptual_fingerprint.mdx, scan.mdx, processing.mdx, dialogs.mdx (no native dialogs — ModalHost), tables.mdx, and storage_local.mdx (the state root the CSV lives in).
 ---
 
 # LargeFileBridge — Duplicates
@@ -27,6 +27,14 @@ delete is an explicit user action per file (charter: detect, surface, offer — 
 > `GET /api/videos/duplicates/status` (not `/dedupe/status`), `resolutionLabel()` lives in
 > `@lfb/shared` `videos.ts` (not a `media/resolutionClass.ts`), and table search runs client-side
 > over the served rows (the whole CSV ships to the page — house table pattern), not server-filtered.
+>
+> **REVISED 2026-07-22 (afternoon), after using it on real data.** Four changes, all specified above:
+> the table collapsed to **one row per group** (§3, §3.1); the control row was hoisted to **full page
+> width** above the split (§3, [tables.mdx §2.13](./tables.mdx)); **selection + hover** became the
+> two-input model that drives the right column (§3.3, [tables.mdx §2.14](./tables.mdx)); previews
+> became **poster-first with click-to-play** (§4.3a) — which is what actually made them appear — and
+> the five icon controls moved to the right column's file blocks (§4.3). The page action row lost
+> **Refresh results** and **View progress** and gained the highest z-order (§5.1).
 
 This spec builds on the siblings and does not repeat them:
 
@@ -66,29 +74,44 @@ as active while this route is current, in addition to the parent Videos highligh
 
 ---
 
-## 3. User interface — the table (left 60%) (LOCKED)
+## 3. User interface — the group table (left 60%) (LOCKED — revised 2026-07-22)
 
 The page uses the shared **60/40 review layout** ([videos.mdx §3](./videos.mdx)): the table owns
 the left **60%** of the content width; the right **40%** is the review column (§4). The table is a
-house TanStack `DataTable` with the standard control row (search + `⛛` filter + `⇅` sort) and
-**500-per-page** pagination. Nothing renders beneath it, so it is a **full-page-height** table —
-the body scrolls inside, header and count/pagination footer stay pinned (charter table rule).
+house TanStack `DataTable` with **500-per-page** pagination. Nothing renders beneath it, so it is a
+**full-page-height** table — the body scrolls inside, header and count/pagination footer stay pinned
+(charter table rule).
+
+**The control row spans the FULL page width, above the split** ([tables.mdx
+§2.13](./tables.mdx)). Search, `⇅`, `⛛` and `⚏` govern the whole page, so they get the whole page;
+**the right review column starts underneath that bar, never beside it.**
+
+**ONE ROW PER GROUP.** A group — not a file — is the unit the user reviews: they pick a group, then
+compare its files in the right column. The table therefore lists **groups, one line each**, labelled
+with **one of the group's file names**.
+
+> **WHAT THIS REPLACED, AND WHY.** The table used to interleave a slim group-header row with one row
+> per member. A nine-file group ate ten rows, a tall screen showed three groups, and the page's whole
+> job — *scan the list of duplicate sets, biggest win first* — needed constant scrolling. Worse, the
+> per-file rows implied per-file review in a surface that has no room for it: the files sit side by
+> side in the right column, which is the only place they can actually be compared. Collapsing to one
+> row per group is not a density tweak; it makes the left side a list of DECISIONS and the right side
+> the evidence for the one in focus.
 
 ```
-┌───────────────────────────────────────────────────────┐
-│  search…                                    ⇅   ⛛     │ ← control row
-├───────────────────────────────────────────────────────┤
-│  ⚲ ⊘ T A O   File               Size                  │ ← icon cols + File + Size. That's it.
-│  ─ Group 4f2a · 3 files · same content (fingerprint) ─│ ← group header row
-│  ⚲ · T · ·   trees.mov          734 MB            ›   │
-│  ⚲ · T · ·   trees_h264.mp4     118 MB            ›   │
-│  · ⊘ · · ·   trees_old.mov      734 MB            ›   │
-│  ─ Group 9c81 · 2 files · same content (sha256) ──────│
-│  · · · · ·   beach.mp4          1.2 GB            ›   │
-│  · · · · ·   beach copy.mp4     1.2 GB            ›   │
-├───────────────────────────────────────────────────────┤
-│  212 groups · 471 files            page 1 / 1  [500 ▾]│
-└───────────────────────────────────────────────────────┘
+┌────────────────────────────────────────────────────────────────────────────────┐
+│  search…                                            ⇅   ⛛   ⚏                  │ ← FULL-WIDTH control row
+├──────────────────────────────────────────────┬─────────────────────────────────┤
+│  File                    Files      Size     │  Done                           │
+│  trees.mov                   3   734 MB   ›  │  All files are the same: …      │
+│  beach.mp4                   2   1.2 GB   ›  │  ⚲ ⊘ T A O  trees.mov           │
+│  hollywood_cut.mp4           9  36.2 GB   ›  │  /Users/…/trees.mov             │
+│  loop.mp4                    2   289 KB   ›  │  ┌───────────────────────────┐  │
+│              …                               │  │  [poster ▶]               │  │
+├──────────────────────────────────────────────┤  └───────────────────────────┘  │
+│  212 groups            page 1 / 1  [500 ▾]   │  codec (prores), 734 MB         │
+└──────────────────────────────────────────────┴─────────────────────────────────┘
+        ← 60% of the content width →              ← 40%, scrolls on its own →
 ```
 
 ### 3.1 The column set — deliberately small (LOCKED)
@@ -97,39 +120,77 @@ This table has **fewer columns** than the file tables elsewhere. Exactly:
 
 | Column | Content | Rules |
 | --- | --- | --- |
-| **Icon control columns** | The house leading icon columns ([tables.mdx §4c](./tables.mdx)) — Pin · Ignore · Transcribe · AI description · OCR — showing at a glance whether each member is pinned, transcribed, described, etc. | Same `StatusActionIcon` grammar as everywhere; **never** set `width` on an icon column; headers stay strings. |
-| **File** | The **file name without its path** (`basename` only). | The full path is NOT a column — it lives in the right column's preview blocks and the hover-info panel. Truncate with ellipsis; hover publishes the full path to the left-bar hover-info panel ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). |
-| **Size** | Human-readable file size. | Right-aligned, house size formatting. |
+| **File** | **One of the group's file names**, basename only — no path. Any member's name is truthful (they are the same content), so it is simply the **first member in display order**; on Subsets that is deliberately the **superset**. | The full path is NOT a column — it lives in the right column's file blocks and in the left-bar hover-info panel ([non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)). Truncate with ellipsis. |
+| **Files** | How many files are in the group. | Right-aligned. The one group-level fact the old header row carried that the single row must not lose. First column to drop on a narrow split ([tables.mdx §4a](./tables.mdx)). |
+| **Size** | The group's **reclaimable bytes** — what deleting the extra copies would free (sum of member sizes minus the largest; Subsets: sum of the subsets' sizes). | Right-aligned, house size formatting. This is the number that ranks the list. |
 
 **Explicitly absent (LOCKED):** there is **no leading checkbox column** (no multi-select on this
-table), **no bookmark column**, no Path, no counts, no status rollup. The icon columns + File +
-Size — that is the whole table.
+table), **no bookmark column**, no Path, no per-member rows — and **no icon control columns**. The
+five icons (Pin · Ignore · Transcribe · AI description · OCR) describe a **file**, and the table's
+rows are **groups**, so they moved to the right review column and sit beside the files themselves
+(§4.3). File · Files · Size — that is the whole table.
 
-### 3.2 Rows, grouping, and selection (LOCKED)
+### 3.2 Ordering, search, and filtering (LOCKED)
 
-* Rows are **grouped by `duplicate_group`**: a slim group-header row (group id short-hash, member
-  count, match basis) precedes its member rows. Groups sort by **reclaimable bytes descending**
-  (sum of member sizes minus the largest member) by default — the most disk-winning groups first;
+* Groups sort by **reclaimable bytes descending** by default — the most disk-winning groups first;
   the `⇅` dropdown and header-clicks re-sort per house rules.
-* **Clicking any member row selects its whole group** and loads that group into the right review
-  column (§4). The selected group's rows carry the house selected-row tint. Keyboard ↑/↓ moves
-  between groups.
-* Search matches on file name and path (server-filtered); the `⛛` filter carries the File-type
-  facet (Videos · Images — [tables.mdx §2.10](./tables.mdx) subset) and a match-basis facet
-  (sha256 · fingerprint), value-checkbox model, all checked by default.
+* **Search matches on EVERY member's name and path**, even though the row shows only one name.
+  Anything else would be a trap: typing the name of the duplicate you are hunting for would silently
+  find nothing because that file was not the one the row happened to display. Search is client-side
+  over the served rows (the whole CSV ships to the page — house table pattern).
+* The `⛛` filter carries the File-type facet (Videos · Images — [tables.mdx
+  §2.10](./tables.mdx) subset) and a **match-basis** facet (`sha256` · `fingerprint`),
+  value-checkbox model, all checked by default. Both are **group-level** values, so filtering keeps
+  whole groups.
+
+### 3.3 Selection and hover — what the right column is showing (LOCKED — added 2026-07-22)
+
+The right column always shows **one** group. Two inputs decide which, and they are deliberately
+different in character:
+
+| Input | Character | Row tint |
+| --- | --- | --- |
+| **Selected** — the group the user **clicked** | **Sticky.** Survives the pointer leaving the table, a scroll, a re-render | **light yellow** |
+| **Hovered** — the group the pointer is **over** | **Transient.** Lives only while the pointer is on that row | **light green** |
+
+Rules:
+
+* **Hover wins while it lasts; selection is the fallback.** Move the pointer down the list and the
+  right column follows it — that is how a user surveys twenty groups in a few seconds without
+  clicking anything. Move the pointer **off the table** and the column falls back to the **selected**
+  group, so the thing they deliberately chose is still there when they reach for it.
+* **Clicking a row selects it.** That is what makes a group stick while the user works in the right
+  column (scrolling it, playing a preview, reading paths).
+* **The first group is selected on arrival**, so the column is never empty while real results sit on
+  screen. It is seeded **once**; after that only a rescan that removes the group clears it — never a
+  re-render, or **Done** (§4.1) would be undone the instant it was pressed.
+* Keyboard **↑/↓** moves the **selection** between groups; it is inert while typing in the search box
+  or interacting with a media element.
+* The hover CLEAR is wired to the table **body**, never to each row — see [tables.mdx
+  §2.14](./tables.mdx) for why a per-row clear flickers.
+* **The hover is debounced (~120 ms).** A hover is a *sweep*: dragging the pointer down two hundred
+  rows would otherwise build two hundred review columns and request a grant and a poster for every
+  file in every group brushed past. A short pause is also what the user means by "show me this one".
 
 The table rows are served by the backend in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/videos.router.ts` — `videosRouter` → `GET /api/videos/duplicates` (reads `duplicates.csv`, §9; groups sorted by reclaimable bytes descending).
-Rendering the grouped table and selection is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/DuplicatesPage.tsx` — `DuplicatesPage` (a thin config over the shared `VideosReviewPage.tsx` body; group/row model in `videoGroups.tsx` — `buildDuplicateGroups()`).
+The group row model (one row per group, the representative file name, reclaimable bytes, the search text spanning every member) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/videoGroups.tsx` — `buildDuplicateGroups()` / `buildVideoColumns()`.
+Selection + hover precedence and the full-width control-row slot are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage` (`selectedGroupId` / `hoveredGroupId` → `shownGroup`; the `controlsEl` portal target it hands the `DataTable`), configured by `DuplicatesPage.tsx` — `DuplicatesPage`.
 
 ---
 
 ## 4. User interface — the right review column (right 40%) (LOCKED)
 
-The right column shows the **selected group's members for side-by-side review**. It is its own
-scroll region — **the user scrolls it down independently of the table and the page**, because a
-group can hold many duplicates and each gets a full preview block.
+The right column shows the **shown group's files for side-by-side review** — the **hovered** group,
+falling back to the **selected** one (§3.3). It is its own scroll region — **the user scrolls it down
+independently of the table and the page**, because a group can hold many duplicates and each gets a
+full preview block.
+
+**This column is where the FILES live.** The per-file icon controls, the paths, and the previews are
+all here, because the table on the left is a list of **groups** and has no per-file line to hang them
+on.
 
 Top-to-bottom structure:
 
@@ -142,15 +203,17 @@ Top-to-bottom structure:
 │  fingerprint, duration,      │
 │  resolution 1280x720 (720p)  │
 ├──────────────────────────────┤
-│  trees.mov                   │ ← 4.3 one preview block per member
+│  ⚲ ⊘ T A O  trees.mov        │ ← 4.3 file block: the five ICONS, then the NAME
+│  /Users/bryan/Movies/tre…    │      the full path, muted
 │  ┌────────────────────────┐  │
-│  │   [video preview]      │  │   full column width, aspect kept
-│  └────────────────────────┘  │
+│  │   [poster      ▶ ]     │  │   full column width, aspect kept
+│  └────────────────────────┘  │      click ▶ to play (§4.3a)
 │  codec (prores), 734 MB      │ ← the DIFFERING attributes, comma-separated
 ├──────────────────────────────┤
-│  trees_h264.mp4              │
+│  ⚲ · T A ·  trees_h264.mp4   │
+│  /Users/bryan/exports/tre…   │
 │  ┌────────────────────────┐  │
-│  │   [video preview]      │  │
+│  │   [poster      ▶ ]     │  │
 │  └────────────────────────┘  │
 │  codec (h264), 118 MB        │
 │           …                  │   (scrolls independently)
@@ -160,9 +223,11 @@ Top-to-bottom structure:
 ### 4.1 The action-links row (top) (LOCKED)
 
 A row of text action links pinned at the top of the column. **For now it contains exactly one
-link: "Done"** — it deselects the group and clears the column. More actions will join this row in
-the future (e.g. per-group delete flows); the row is the reserved home for them. House action-link
-styling ([page_actions.mdx](./page_actions.mdx)).
+link: "Done"** — it clears both the hover and the selection, so the column empties and stays empty
+(§3.3's one-time seed does not re-fire). More actions will join this row in the future (e.g.
+per-group delete flows); the row is the reserved home for them. House action-link styling
+([page_actions.mdx](./page_actions.mdx)), and — like the page's own action row (§5.1) — it takes the
+**highest z-order in its column** so nothing painted after it can clip its links.
 
 ### 4.2 The "All files are the same:" block — common attributes (LOCKED)
 
@@ -184,15 +249,20 @@ An attribute appears **either** here (same everywhere) **or** under the preview 
 somewhere) — **never both**. Example render:
 `All files are the same: Fingerprint, duration, resolution 1920x1080 (1080p)`.
 
-### 4.3 The preview blocks — one per member, differences underneath (LOCKED)
+### 4.3 The file blocks — one per member, icons and differences included (LOCKED — revised 2026-07-22)
 
-Below the common block, **one preview block per member**, in table order:
+Below the common block, **one file block per member**, in group order:
 
-* **Header line:** the file name (basename, bold); the full path in small muted type beneath it.
-* **The preview:** the image, or a playable video preview (poster + play — the house media
-  preview, [media_viewer.mdx](./media_viewer.mdx) conventions). It takes the **full width the
-  right column gives it** and **always keeps the file's aspect ratio** — width is fixed to the
-  column, height follows the aspect. Never cropped, never stretched, never a fixed-height thumb.
+* **Header line:** the **five icon controls** — Pin · Ignore · Transcribe · AI description · OCR,
+  in the locked site-wide order ([tables.mdx §4c](./tables.mdx)) — **to the LEFT of the file name**,
+  then the file name (basename, bold). The icons live here, and **only** here, on this page: they
+  describe a **file**, and the left table's rows are **groups** (§3.1). Same `StatusActionIcon`
+  grammar, colors, tooltips, and hover-info wiring as every other surface — a user who learned them
+  on the One-repo page reads them here without being taught twice.
+* **Second line:** the **full path**, small and muted.
+* **The preview:** the image, or the video's poster with a play control (§4.3a). It takes the **full
+  width the right column gives it** and **always keeps the file's aspect ratio** — width is fixed to
+  the column, height follows the aspect. Never cropped, never stretched, never a fixed-height thumb.
 * **The differing-attributes line (bottom of the block):** the attributes that **differ** across
   the group, printed for **this** member, **comma-space delimited on one wrapping text line** —
   text, not a grid: fewer columns, more compactness (e.g. `codec (h264), 118 MB, 1280x720 (720p)`).
@@ -200,6 +270,48 @@ Below the common block, **one preview block per member**, in table order:
 
 Because the common attributes are hoisted to the top and each block shows **only** what differs,
 the user compares and contrasts by scanning one short line under each preview.
+
+### 4.3a Previews are POSTER-FIRST, and the player only mounts on a click (LOCKED — added 2026-07-22)
+
+> **THE BUG THIS SECTION EXISTS TO PREVENT.** Every block mounted a live
+> `<video src="/api/media/raw">`, and **the previews simply never appeared** — no error, no broken-image
+> glyph, nothing. Nothing had failed: the requests were never sent. A browser allows about **six
+> connections per origin** over HTTP/1.1, and a media element **holds its connection open** while it
+> buffers. A nine-member group therefore starved itself — the first few players took every socket, the
+> rest never started, and **the page's own `/api` calls queued behind them**, including the media grants
+> for those very members. The group with the biggest win was, inevitably, the group with the most
+> files and the largest ones (nine 4 GB 4K masters), so the worst case was the first thing the user saw.
+> A preview surface that shows N files at once cannot open N streams; that is not a heavy version of
+> the right design, it is the wrong design.
+
+The rules:
+
+1. **Each block loads ONE small cached JPEG poster**, not the media file. It finishes in milliseconds
+   and releases its connection, so a group of any size loads.
+2. **The backend renders the poster** — `GET /api/media/poster`, gated by the **same signed grant**
+   as `/raw` and `/stream` (a plain `<img>` cannot send a Bearer header). Images go through `sharp`,
+   video frames through the bundled **ffmpeg** (fast input seek, one frame). This is 100% local —
+   no network, ever (charter).
+3. **It fixes the second failure class for free:** formats the browser cannot decode *at all* —
+   **HEIC/HEIF, TIFF, ProRes, HEVC** — still show a picture, because **we** decode them. Previously
+   these were silently blank even when the bytes streamed perfectly.
+4. **Posters are cached, keyed on the file's content** (path + size + mtime + width), so re-hovering a
+   group is instant and a replaced file can never show a stale frame. Generation is
+   **concurrency-capped** so a twelve-member group cannot spawn twelve simultaneous 4K decodes.
+5. **Videos do not autoplay. The user clicks the ▶ to play** — mounting a dozen autoplaying streams is
+   exactly the problem the poster solves. The click swaps in the real `<video autoPlay controls>` for
+   **that one file**; the poster stays as its `poster` attribute so the frame never blinks away.
+6. **A codec the browser refuses falls back to the transcode pipe** (`/api/media/stream`,
+   [codecs.mdx §6](./codecs.mdx)) exactly as the media viewer does — and only if **that** also fails
+   does the block say **"Preview unavailable"**, with a **try again** link. A blank rectangle is never
+   an acceptable answer.
+7. **Grants are refreshed inside their 10-minute TTL**, so a review column left open on screen never
+   starts serving 403s from expired URLs.
+
+The poster endpoint is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/poster.service.ts` — `ensurePoster()` (content-keyed cache, concurrency semaphore, in-flight de-dup), `posterKindFor()` / `normalizePosterWidth()`; the route is `media.router.ts` — `GET /api/media/poster` (same `verifyGrant()` gate as `/raw`).
+The poster-first block, the click-to-play swap, and the transcode fallback are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `MemberPreview`.
 
 ### 4.4 The resolution print rule (LOCKED)
 
@@ -219,7 +331,7 @@ heic, webp for images) — prints as the word **`codec`** followed by the value 
 **`codec (h264)`**. Same form in the common block and in the differing lines.
 
 The right review column is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, preview blocks; its own `overflow-y-auto` region; the common/differing split is `computeAttributeSplit()`).
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, per-file blocks with the five icon controls; its own `overflow-y-auto` region; the common/differing split is `computeAttributeSplit()`, the per-file icon state is `videoGroups.tsx` — `memberTaskState()`).
 
 ---
 
@@ -244,26 +356,41 @@ A duplicate scan can start **two** ways, and the two are deliberately different 
 ### 5.1 The page action-links row (LOCKED)
 
 Directly under the page title sits the house **page action-links row**
-([page_actions.mdx §0/§3](./page_actions.mdx)) — a single horizontal row of blue text hyperlinks,
-each with a leading ~14 px icon, `·` separated, underline on hover. It renders on **every** visit,
-running or not, empty CSV or not.
+([page_actions.mdx §0/§3](./page_actions.mdx)) — a horizontal row of blue text hyperlinks, each with
+a leading ~14 px icon, `·` separated, underline on hover. It renders on **every** visit, running or
+not, empty CSV or not.
 
 ```
 Duplicates                                                    212 groups · 471 files
-⌕ Scan for duplicates  ·  ⟳ Refresh results  ·  ◷ View progress
+⌕ Scan for duplicates
 ```
 
 | Link | Behaviour |
 | --- | --- |
 | **Scan for duplicates** | Starts the duplicate scan — the **same fire-and-forget start** the pop-up's primary button performs (§5.4). No confirmation dialog: the scan is read-only, cheap to abandon, and never mutates a file (§8.2); confirm modals are reserved for destructive offers ([page_actions.mdx §3](./page_actions.mdx)). |
-| **Refresh results** | Re-reads `duplicates.csv` and the status into the page without a browser reload — the manual twin of the live-refresh bump (§6), for when a user wants to pull in what a running phase has published *right now*. |
-| **View progress** | Navigates to the **Processing** page (`/processing`), where the batch, its items, and the ETA live (§6). This page keeps **no** private progress machinery, so this link is how the user gets from "I started something" to "here is what it is doing". |
+
+**The row holds exactly ONE link (revised 2026-07-22).** Two others were removed, and the reasons are
+worth keeping, because both looked useful:
+
+* **"Refresh results" is gone.** The page already refetches on the `videos` live-refresh topic (which
+  every publish bumps, §8.3) and on the running-status poll. A manual Refresh could therefore only
+  ever repeat what had already happened — and its presence implied the opposite, that the numbers on
+  screen might be stale unless you press something. A page that refreshes itself must not ship a
+  button suggesting it does not.
+* **"View progress" is gone.** It competed for attention with the one control that matters on this
+  page, and it was never the only route: the start toast carries its own **View progress** action
+  (§5.4), the running banner points at the Processing page (§5.5), and the conditional **Processing**
+  left-bar item appears on its own while a batch runs (§6). Three honest routes already existed.
 
 Rules:
 
 * **The row is never hidden and never moves.** It does not appear only when a scan is recommended,
   and it does not disappear while one runs — a control that relocates itself is a control the user
   has to re-find.
+* **The row takes the highest z-order of the page content.** It is one line of links directly under
+  the title with nothing above it, so anything painted after it — the control row that follows, a
+  sticky table head — was winning the stacking order and **clipping the links' bottom edge**. The fix
+  is z-order only: the row **never pushes anything down**, it just stops being covered.
 * **While a scan is running, "Scan for duplicates" is disabled with a stated reason** in its
   `title` — *"A duplicate scan is already running — see the Processing page"*. A greyed link with
   no reason is a dead end ([menus.mdx](./menus.mdx)); the reason plus the neighbouring **View
@@ -826,25 +953,45 @@ Reading/writing the CSV is handled in code:
 
 1. **Left bar:** Duplicates is the first level-2 child under Videos, route `/videos/duplicates`,
    yaml-driven ([videos.mdx §1](./videos.mdx)); it is where selecting Videos lands (§1).
-2. **Table:** left 60% of the content width; TanStack, control row, 500-page, full-page-height.
-   Columns are exactly the icon control columns + **File (name without path)** + **Size** — **no
-   leading checkbox**, no bookmark, no path column (§3).
-3. **Grouping & selection:** rows group under `duplicate_group` headers; clicking a member selects
-   its group into the right column (§3.2).
-4. **Right column:** the reserved right 40%, scrolling **independently**; top action-links row
+2. **Table — ONE ROW PER GROUP:** left 60% of the content width; TanStack, 500-page,
+   full-page-height. Every group is **exactly one row**, labelled with **one of its file names**;
+   there are **no group-header rows and no per-member rows**. Columns are exactly **File (name
+   without path)** + **Files (count)** + **Size (reclaimable bytes)** — **no leading checkbox**, no
+   bookmark, no path column, and **no icon control columns** (they moved to the right column, §4.3).
+   The **control row spans the full page width above the split**, and the right review column starts
+   **underneath** it (§3, [tables.mdx §2.13](./tables.mdx)).
+   * *Acceptance test:* a nine-file group occupies **one** table line, not ten.
+3. **Search reaches every member (§3.2):** typing the name of ANY file in a group finds that group,
+   including the members whose name the row does not display.
+4. **Selection & hover (§3.3):** clicking a row **selects** its group — light-yellow row, sticky.
+   Hovering a row shows **that** group in the right column — light-green row — and hover **outranks**
+   the selection while the pointer is on the table. Moving the pointer **off the table** falls back to
+   the selected group. The **first** group is selected on arrival and the seed fires **once**, so
+   **Done** actually empties the column instead of being instantly undone. ↑/↓ moves the selection.
+5. **Right column:** the reserved right 40%, scrolling **independently**; top action-links row
    holding exactly **"Done"** for now; then the **"All files are the same:"** block listing the
    attributes common to every member (file size, SHA-256 hash, fingerprint, duration for videos,
-   resolution, codec) comma-space separated; then one preview block per member — preview at
-   **full column width with aspect ratio kept** — with that member's **differing** attributes
-   comma-separated beneath it. An attribute appears in the common block or the differing lines,
-   never both (§4).
-5. **Print rules:** resolution as `{w}x{h}` with a parenthesized class **only** for the known
+   resolution, codec) comma-space separated; then **one file block per member** — the **five icon
+   controls (Pin · Ignore · Transcribe · AI description · OCR) to the LEFT of the file name**, the
+   full path beneath, the preview at **full column width with aspect ratio kept**, and that member's
+   **differing** attributes comma-separated beneath it. An attribute appears in the common block or
+   the differing lines, never both (§4).
+6. **Previews actually load, at any group size (§4.3a):** each block loads ONE cached JPEG from
+   `GET /api/media/poster` (same signed grant as `/raw`) — **never** N live media streams. Videos show
+   the poster with a ▶ and **only mount a player on the click**; an undecodable codec retries through
+   `/api/media/stream`; only after that does the block say **"Preview unavailable"** with a **try
+   again** link. HEIC/TIFF/ProRes/HEVC render, because the backend decodes them.
+   * *Acceptance test:* select the largest group (nine 4 GB 4K masters) — **all nine** previews
+     appear, and the page's other requests are not blocked.
+7. **Print rules:** resolution as `{w}x{h}` with a parenthesized class **only** for the known
    classes 480p/720p/1080p/2K/4K (§4.4); codec as `codec (h264)` — the value in parentheses (§4.5).
-6. **Action-links row (§5.1):** every visit shows the house action row under the page title with
-   **Scan for duplicates · Refresh results · View progress**. Scan starts with **no** confirmation
-   dialog; while a scan runs it is **disabled with a stated reason**; the row never hides and never
-   moves.
-7. **Pop-up (§5.2/§5.3):** the in-app **"Start Duplicate Scan"** modal auto-opens **at most once per
+8. **Action-links row (§5.1):** every visit shows the house action row under the page title with
+   **exactly one link — Scan for duplicates**. Refresh results and View progress are **removed**
+   (the page self-refreshes; the toast, the banner, and the conditional nav item are the routes to
+   progress). Scan starts with **no** confirmation dialog; while a scan runs it is **disabled with a
+   stated reason**; the row never hides, never moves, and takes the **highest z-order** so nothing
+   below it can clip the links.
+9. **Pop-up (§5.2/§5.3):** the in-app **"Start Duplicate Scan"** modal auto-opens **at most once per
    page entry**, and **only** when never-scanned, or 2+ days old and incomplete, or 4+ days stale —
    **never** when the last run was **within 2 days** (complete *or* partial), and never while a scan
    runs. Body = status line ("Never scanned." / "Last scanned {timestamp} ({relative}).") +
@@ -852,16 +999,16 @@ Reading/writing the CSV is handled in code:
    **"Start scan ›"** button. Never a native dialog.
    * *Acceptance test:* scan, then reload the page an hour later — **no pop-up**, even when the run
      was killed mid-phase-2 and stamped `complete: false`.
-8. **Fire-and-forget start (§5.4):** clicking **Start scan ›** (or the row's **Scan for
-   duplicates**) closes the modal **on the click**, raises the bottom toast *"Duplicate scan
-   started — it runs in the background."* with a **View progress** action into `/processing`, and
-   flips the page to its running state immediately. The page never blocks, dims, or spins. The
-   server marks single-flight **synchronously** and **defers the run past the response flush**, so
-   no enumeration or walk happens on the request's stack. A coalesced start (`started: false`) is an
-   info toast, not an error.
-9. **Progress:** Start scan enqueues an async `dedupe_scan` batch tracked by the standard
-   Processing surfaces (page, dock, conditional nav item); detached and single-flight (§6).
-10. **Fingerprint libraries (LOCKED):** every library used satisfies the four requirements —
+10. **Fire-and-forget start (§5.4):** clicking **Start scan ›** (or the row's **Scan for
+    duplicates**) closes the modal **on the click**, raises the bottom toast *"Duplicate scan
+    started — it runs in the background."* with a **View progress** action into `/processing`, and
+    flips the page to its running state immediately. The page never blocks, dims, or spins. The
+    server marks single-flight **synchronously** and **defers the run past the response flush**, so
+    no enumeration or walk happens on the request's stack. A coalesced start (`started: false`) is an
+    info toast, not an error.
+11. **Progress:** Start scan enqueues an async `dedupe_scan` batch tracked by the standard
+    Processing surfaces (page, dock, conditional nav item); detached and single-flight (§6).
+12. **Fingerprint libraries (LOCKED):** every library used satisfies the four requirements —
    open-source & embeddable, **text-encodable fingerprint** storable in the CSV column, a compare
    function that takes **stored values** back in, **no phone-home**. For duplicate detection the
    choices are: **images → PDQ 256-bit / 64-hex** (fallback blockhash-core + sharp-phash, both
@@ -869,11 +1016,11 @@ Reading/writing the CSV is handled in code:
    and whole-video hashes are rejected for the reasons in §7.2–§7.3. Fingerprints are computed
    only during the dedicated scan for missing/stale files (§7.6), stored per §7.7, and all later
    comparisons are pure functions over stored values (§7.8).
-11. **Engine:** the dedicated scan groups by **SHA-256 first, perceptual fingerprint second**, so
+13. **Engine:** the dedicated scan groups by **SHA-256 first, perceptual fingerprint second**, so
     copies differing in codec, file size, or pixel depth still group; probes display attributes;
     never mutates a file; computes **duplicates only** — subsets have their own scan
     ([subsets.mdx](./subsets.mdx)) (§8).
-12. **Progressive publish (§8.3):** phase 1 writes `duplicates.csv` with every byte-identical group
+14. **Progressive publish (§8.3):** phase 1 writes `duplicates.csv` with every byte-identical group
     **before** phase 2 begins, and phase 2 republishes periodically. A scan killed during phase 2
     still leaves a usable CSV and a run stamp marked `complete: false`. The status route reports
     `phase` + `phaseDone`/`phaseTotal`, and the page's running banner names the phase and promises
@@ -882,39 +1029,63 @@ Reading/writing the CSV is handled in code:
       pair appears as a `match_basis: sha256` group **without waiting for any fingerprinting** —
       verified end-to-end on 26,548 candidates: phase 1 published 3,013 groups / 9,057 rows in 90 s,
       including the planted pair.
-13. **Candidate freshness (§8.4):** the candidate set is the persisted census **unioned with a live
+15. **Candidate freshness (§8.4):** the candidate set is the persisted census **unioned with a live
     media sweep**, so a file created since the last repo scan is a candidate. A scan whose candidate
     set can only see one member of a duplicate pair is a defect, not a "no duplicates" answer.
-14. **Restart resilience (§8.5):** hash/fingerprint caches checkpoint on a timer during both phases,
+16. **Restart resilience (§8.5):** hash/fingerprint caches checkpoint on a timer during both phases,
     so an interrupted run keeps the work it paid for; the run stamp distinguishes a **partial** run
     from a **complete** one and `recommend` stays true until one completes — **without** overriding
     the §5.2 quiet window.
-15. **Hash comparison (§8.6):** pass 1 buckets on the hash **alone** — no size pre-filter, no partial
+17. **Hash comparison (§8.6):** pass 1 buckets on the hash **alone** — no size pre-filter, no partial
     hash, no fingerprint precondition — and an empty hash is never an identity.
-16. **Compare scaling (§8.7):** the fingerprint compare uses **exact** LSH banding (no false
+18. **Compare scaling (§8.7):** the fingerprint compare uses **exact** LSH banding (no false
     negatives, proven by the band-count > threshold argument), lowest-band pair selection, duration
     windowing for videos, and an early-abort Hamming over pre-parsed nibbles. Thresholds and the
     quality gate remain owned by `sameContent()`.
-17. **Engine logging (§8.8):** every run logs STARTED, the candidate + freshen counts, each phase's
+19. **Engine logging (§8.8):** every run logs STARTED, the candidate + freshen counts, each phase's
     start/finish with what it published, interim phase-2 progress, and FINISHED with the group split.
     A run with no FINISHED line was killed — and that is the diagnosis.
-18. **CSV:** `~/T/_large_files_bridge/videos/duplicates.csv`, one row per member, groups keyed by
+20. **CSV:** `~/T/_large_files_bridge/videos/duplicates.csv`, one row per member, groups keyed by
     a shared unique `duplicate_group`, with `full_path`, `sha256`, `fingerprint` (text-encoded per
     §7.7), and the display attributes; rewritten atomically per run; the UI reads only this file
     (§9).
 
 <!--
   Duplicates review screen under the Videos hub (videos.mdx owns nav + 60/40 shell).
-  LOCKED: table = icon control cols + File (BASENAME ONLY) + Size, NO checkbox/bookmark/path;
-  rows grouped by duplicate_group, click selects whole group into the right column.
+  §3 REVISED 2026-07-22 — ONE ROW PER GROUP. LOCKED: table cols = File (BASENAME of ANY one member) +
+  Files (count) + Size (RECLAIMABLE bytes). NO checkbox/bookmark/path, and NO ICON COLUMNS — the five
+  icons describe a FILE and the rows are GROUPS, so they moved into the right column's file blocks
+  (§4.3). No group-header rows, no per-member rows (a 9-file group was 10 lines; now it is 1).
+  Search still matches EVERY member's name+path or hunting a duplicate by name silently finds nothing.
+  CONTROL ROW IS FULL PAGE WIDTH above the split (tables.mdx §2.13); right column starts BENEATH it.
+  §3.3 SELECT + HOVER: click = SELECTED (sticky, LIGHT YELLOW row); hover = shown in right column
+  (LIGHT GREEN row) and hover OUTRANKS selection; leaving the table body falls back to the selection.
+  First group seeded ONCE (else "Done" is undone on the next render). Hover CLEAR is on the table
+  BODY, never per row (leave-then-enter would blink the consumer through null — tables.mdx §2.14).
   RIGHT COLUMN (40%, INDEPENDENT scroll): action links top (just "Done" for now) → "All files are
   the same:" block (common attrs, comma-space: file size, SHA-256 hash, fingerprint, duration
-  [video], resolution, codec) → one preview block per member (FULL column width, ASPECT KEPT) with
-  the DIFFERING attrs comma-separated under each block. An attr is common OR differing, never both.
+  [video], resolution, codec) → one FILE BLOCK per member: FIVE ICONS (Pin·Ignore·Transcribe·
+  AI description·OCR) LEFT OF THE NAME, full path, preview (FULL column width, ASPECT KEPT), then the
+  DIFFERING attrs comma-separated. An attr is common OR differing, never both.
+  §4.3a POSTER-FIRST PREVIEWS (added 2026-07-22) — THE "previews never load" BUG: every block mounted
+  a live <video src=/api/media/raw>. ~6 connections per origin over HTTP/1.1 and a media element HOLDS
+  its socket while buffering, so a 9-member group starved itself — and the page's OWN /api calls
+  (the grants for those members) queued behind it. Nothing errored; the requests were never sent.
+  FIX: GET /api/media/poster (same verifyGrant token as /raw & /stream) → ONE small cached JPEG per
+  block; sharp for images, bundled ffmpeg (fast -ss seek, 1 frame) for video; cache keyed on
+  path+size+mtime+width; concurrency-capped + in-flight de-duped. Side win: HEIC/TIFF/ProRes/HEVC now
+  render because WE decode them. Videos DO NOT autoplay — click ▶ to mount the real player for that
+  one file; undecodable codec retries /api/media/stream; only then "Preview unavailable · try again".
+  Grants refetched inside the 10-min TTL so a column left open never serves 403s.
   PRINT RULES: resolution "{w}x{h} (720p)" — parenthesized class ONLY for known classes
   480p/720p/1080p/2K/4K (±8px snap, resolutionLabel()); codec "codec (h264)".
   §5 STARTING A SCAN = TWO surfaces. (a) §5.1 PAGE ACTION-LINKS ROW under the title, ALWAYS visible:
-  "Scan for duplicates · Refresh results · View progress" (no confirm dialog; Scan DISABLED w/ reason
+  "Scan for duplicates" — EXACTLY ONE LINK as of 2026-07-22. "Refresh results" REMOVED (the page
+  already refetches on the videos live-refresh topic + the running status poll, so it could only
+  repeat what happened — and implied the numbers might be stale); "View progress" REMOVED (the start
+  toast, the running banner, and the conditional Processing nav item are three honest routes already).
+  Row takes the HIGHEST z-order — content below was clipping the links' bottom edge; z-order ONLY,
+  it never pushes anything down. (no confirm dialog; Scan DISABLED w/ reason
   while running). The row is why the pop-up is allowed to stay quiet. (b) §5.3 POP-UP "Start Duplicate
   Scan" via ModalHost (dialogs.mdx — NEVER native); "Never scanned." / "Last scanned {ts} ({rel})." +
   recommendation + background-work line; Skip HYPERLINK left of dominant "Start scan ›" button.

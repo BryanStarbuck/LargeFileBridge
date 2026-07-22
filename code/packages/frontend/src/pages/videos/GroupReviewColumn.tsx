@@ -1,18 +1,22 @@
-// The right review column (duplicates.mdx §4, LOCKED; subsets.mdx §4 deltas): the selected group's
-// members for side-by-side review. Its own overflow-y scroll region, independent of the table and page.
+// The right review column (duplicates.mdx §4, LOCKED; subsets.mdx §4 deltas): the group's members for
+// side-by-side review. Its own overflow-y scroll region, independent of the table and page.
 // Top-to-bottom: the action-links row (exactly "Done" for now) → the literal "All files are the same:"
-// block listing the COMMON attributes comma-space separated → one preview block per member (full column
-// width, aspect ratio kept) with that member's DIFFERING attributes comma-separated beneath it. An
-// attribute appears in the common block OR under the previews — never both (§4.2/§4.3).
+// block listing the COMMON attributes comma-space separated → one FILE BLOCK per member — the five icon
+// controls, then the file name, then a full-column-width aspect-preserving preview, then that member's
+// DIFFERING attributes. An attribute appears in the common block OR under the previews — never both
+// (§4.2/§4.3).
 //
 // Print rules (LOCKED): resolution and codec strings come ONLY from the shared helpers
 // resolutionLabel() / codecLabel() (duplicates.mdx §4.4–§4.5); sizes via the house formatBytes.
+import { useEffect, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Check } from "lucide-react";
+import { Check, Play } from "lucide-react";
 import { codecLabel, formatBytes, mediaKindForName, resolutionLabel } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageActions } from "../../components/menu/PageActions.js";
-import { formatClock, formatOffset, type VideoMember } from "./videoGroups.js";
+import { TaskIconCell } from "../../components/table/taskIcons.js";
+import { clientLog } from "../../lib/clientLog.js";
+import { ICON_KINDS, formatClock, formatOffset, memberTaskState, type VideoMember } from "./videoGroups.js";
 
 export type ReviewVariant = "duplicates" | "subsets";
 
@@ -90,7 +94,7 @@ export function GroupReviewColumn({
   onDone,
 }: {
   variant: ReviewVariant;
-  /** The selected group's members in display order (subsets: superset first — subsets.mdx §4). */
+  /** The group's members in display order (subsets: superset first — subsets.mdx §4). */
   members: VideoMember[];
   /** "Done" — deselects the group and clears the column (duplicates.mdx §4.1). */
   onDone: () => void;
@@ -102,7 +106,7 @@ export function GroupReviewColumn({
     <div className="flex h-full min-h-0 flex-col">
       {/* §4.1 — the action-links row pinned at the top; exactly "Done" for now (the reserved home for
           future per-group actions). House action-link styling via PageActions. */}
-      <div className="shrink-0 border-b border-[var(--lfb-border)] pb-2">
+      <div className="relative z-30 shrink-0 border-b border-[var(--lfb-border)] pb-2">
         <PageActions
           actions={[
             {
@@ -130,14 +134,23 @@ export function GroupReviewColumn({
           const differing = differingOf(m);
           return (
             <div key={m.fullPath} className="border-b border-[var(--lfb-border)] py-3">
-              {/* §4.3 header line: bold basename (subsets label the superset block — subsets.mdx §4). */}
-              <div className="break-words text-sm font-semibold text-black">
-                {isSuperset && (
-                  <span className="mr-1.5 rounded bg-[var(--lfb-primary-tint)] px-1.5 py-0.5 align-middle text-[10px] font-bold tracking-wide text-[var(--lfb-primary)]">
-                    SUPERSET
-                  </span>
-                )}
-                {m.name}
+              {/* §4.3 header line: the five icon controls, then the bold basename (subsets label the
+                  superset block — subsets.mdx §4). The icons live HERE, with the file they describe,
+                  because the table's rows are GROUPS now and have no per-file line to carry them. */}
+              <div className="flex items-start gap-2">
+                <span className="flex shrink-0 items-center gap-0.5 pt-0.5">
+                  {ICON_KINDS.map((kind) => (
+                    <TaskIconCell key={kind} kind={kind} state={memberTaskState(m, kind)} />
+                  ))}
+                </span>
+                <span className="min-w-0 break-words text-sm font-semibold text-black">
+                  {isSuperset && (
+                    <span className="mr-1.5 rounded bg-[var(--lfb-primary-tint)] px-1.5 py-0.5 align-middle text-[10px] font-bold tracking-wide text-[var(--lfb-primary)]">
+                      SUPERSET
+                    </span>
+                  )}
+                  {m.name}
+                </span>
               </div>
               <div className="break-all text-xs text-black/45">{m.fullPath}</div>
               {isSubset && m.startOffsetS != null && m.endOffsetS != null && (
@@ -157,43 +170,134 @@ export function GroupReviewColumn({
   );
 }
 
-/** The media preview (§4.3, LOCKED): full column width, aspect ratio ALWAYS kept — never cropped,
- *  stretched, or fixed-height. Loads via the same signed media grant the media viewer uses. */
+/**
+ * The media preview (§4.3, LOCKED): full column width, aspect ratio ALWAYS kept — never cropped,
+ * stretched, or fixed-height.
+ *
+ * POSTER FIRST, PLAYER ON CLICK (§4.3a — the fix for "the previews never load"). A group holds up to a
+ * dozen members and this column renders them ALL. Mounting a dozen live <video src="/api/media/raw">
+ * elements is self-defeating: a browser allows ~6 connections per origin over HTTP/1.1 and a media
+ * element HOLDS its connection while it buffers, so the first few players consume every socket, the rest
+ * never start, and the page's own /api calls (the grants for those very members) queue behind them. So
+ * each block loads ONE small cached JPEG from /api/media/poster — which also renders formats the browser
+ * cannot decode at all (HEIC, ProRes, HEVC), because the backend does the decoding. Clicking a video's
+ * poster swaps in the real <video autoPlay controls>, and only then does a stream get opened.
+ */
 function MemberPreview({ member }: { member: VideoMember }) {
   const kind = mediaKindForName(member.name);
   const previewable = kind === "image" || kind === "video";
-  const { data: grant, isError } = useQuery({
+  const [playing, setPlaying] = useState(false);
+  // Native decode failed → retry through the backend transcode pipe, exactly as the media viewer does
+  // (codecs.mdx §6). Only if THAT fails do we say the preview is unavailable.
+  const [videoFallback, setVideoFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  const {
+    data: grant,
+    isError,
+    refetch,
+  } = useQuery({
     queryKey: ["media-grant", member.fullPath], // shares the MediaViewer's grant cache
     queryFn: () => api.mediaGrant(member.fullPath),
     enabled: previewable,
-    staleTime: 60_000,
+    // A grant is a 10-minute capability (media.service.ts GRANT_TTL_MS). Refetch inside that window so a
+    // review column left open on screen never starts serving 403s from expired URLs.
+    staleTime: 5 * 60 * 1000,
+    refetchInterval: 5 * 60 * 1000,
     retry: false,
   });
+
+  // A new file in the block resets the transient player state (React reuses the component by position).
+  useEffect(() => {
+    setPlaying(false);
+    setVideoFallback(false);
+    setFailed(false);
+  }, [member.fullPath]);
+
   if (!previewable) return null;
   const ratio = member.width && member.height ? `${member.width} / ${member.height}` : "16 / 9";
-  if (isError) {
+
+  if (isError || failed) {
     return (
       <div
-        className="mt-2 grid w-full place-items-center rounded bg-slate-50 text-xs text-black/40"
+        className="mt-2 grid w-full place-items-center rounded bg-slate-50 px-3 text-center text-xs text-black/45"
         style={{ aspectRatio: ratio }}
       >
-        Preview unavailable
+        <span>
+          Preview unavailable —{" "}
+          <button
+            className="text-[var(--lfb-primary)] underline underline-offset-2"
+            onClick={() => {
+              setFailed(false);
+              setVideoFallback(false);
+              void refetch();
+            }}
+          >
+            try again
+          </button>
+        </span>
       </div>
     );
   }
   if (!grant) {
     return <div className="mt-2 w-full animate-pulse rounded bg-slate-100" style={{ aspectRatio: ratio }} />;
   }
-  return kind === "image" ? (
-    <img src={grant.url} alt={member.name} className="mt-2 h-auto w-full rounded" />
-  ) : (
-    <video
-      src={grant.url}
-      controls
-      playsInline
-      preload="metadata"
-      aria-label={member.name}
-      className="mt-2 h-auto w-full rounded"
-    />
+
+  // Both derived from the ONE signed grant — same token, different endpoint (media.router.ts).
+  const posterUrl = `${grant.url.replace("/api/media/raw", "/api/media/poster")}&w=640`;
+  const streamUrl = grant.url.replace("/api/media/raw", "/api/media/stream");
+
+  if (kind === "video" && playing) {
+    return (
+      <video
+        // Remount when we swap native → transcode stream so the element reloads the new source.
+        key={videoFallback ? "stream" : "native"}
+        src={videoFallback ? streamUrl : grant.url}
+        poster={posterUrl}
+        controls
+        autoPlay
+        playsInline
+        preload="metadata"
+        aria-label={member.name}
+        onError={() => {
+          if (!videoFallback) {
+            clientLog.warn("GroupReviewColumn.video", `native decode failed, trying transcode: ${member.name}`);
+            setVideoFallback(true);
+          } else {
+            clientLog.warn("GroupReviewColumn.video", `transcode stream failed: ${member.name}`);
+            setFailed(true);
+          }
+        }}
+        className="mt-2 h-auto w-full rounded bg-black"
+      />
+    );
+  }
+
+  return (
+    <div className="relative mt-2">
+      <img
+        src={posterUrl}
+        alt={member.name}
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className="h-auto w-full rounded bg-slate-50"
+        style={{ aspectRatio: ratio, objectFit: "contain" }}
+      />
+      {kind === "video" && (
+        // Videos do not autoplay on arrival — a dozen simultaneous streams is exactly the problem the
+        // poster solves. Click to play (duplicates.mdx §4.3a).
+        <button
+          onClick={() => setPlaying(true)}
+          aria-label={`Play ${member.name}`}
+          title="Play this video"
+          className="absolute inset-0 grid place-items-center rounded bg-black/0 transition hover:bg-black/20"
+        >
+          <span className="grid h-12 w-12 place-items-center rounded-full bg-black/55 text-white">
+            <Play className="ml-0.5 h-6 w-6" fill="currentColor" />
+          </span>
+        </button>
+      )}
+    </div>
   );
 }

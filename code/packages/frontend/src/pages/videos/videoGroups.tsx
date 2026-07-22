@@ -1,22 +1,15 @@
 // Shared row/group model for the two Videos review tables (duplicates.mdx §3, subsets.mdx §3).
 //
-// Both pages show a house DataTable whose rows are GROUPED under slim group-header rows. DataTable is
-// flat, so the grouping is modeled here: each table row is either a group HEADER or a MEMBER, and every
-// sortable column's accessor returns a GROUP-LEVEL value — so any sort the user applies reorders whole
-// groups while the members (and the header, inserted first) keep their in-group order via the stable
-// sort. Default order: groups by reclaimable bytes descending (duplicates.mdx §3.2).
-import type { ReactNode } from "react";
+// ONE ROW PER GROUP (revised 2026-07-22). The table used to interleave a slim group-header row with one
+// row per member, so a 9-file group ate 10 rows and a screen of results showed three groups. A group is
+// the unit the user actually reviews — they pick a GROUP and then compare its files in the right column —
+// so the table lists groups, one line each, labelled with a REPRESENTATIVE member's file name. The
+// per-file detail (and the per-file icon control columns) moved to the right review column, where the
+// files themselves are.
 import type { DuplicateMemberRow, SubsetMemberRow, TaskStatus } from "@lfb/shared";
 import { fileTypeForName, formatBytes } from "@lfb/shared";
 import type { LfbColumn } from "../../components/table/types.js";
-import {
-  TASK_ICON,
-  TaskIconCell,
-  TaskIconHeader,
-  analysisTaskStatuses,
-  boolStatus,
-  type TaskIconKind,
-} from "../../components/table/taskIcons.js";
+import { analysisTaskStatuses, boolStatus, type TaskIconKind } from "../../components/table/taskIcons.js";
 import { setHoverInfo } from "../repos/HoverInfoRegion.js";
 
 /** The member fields both review screens share — DuplicateMemberRow and SubsetMemberRow satisfy it. */
@@ -49,21 +42,21 @@ export interface VideoGroup<M extends VideoMember> {
   members: M[];
   /** Drives the default sort — duplicates: sum − largest member; subsets: sum of subset sizes. */
   reclaimableBytes: number;
-  headerText: string;
-  /** Group-level File-sort key so sorting by File keeps groups contiguous. */
+  /**
+   * The ONE file name the group's single table row shows (§3.1). Any member's name is a truthful label —
+   * every member is the same content — so this is simply the first member in display order (for subsets
+   * that is deliberately the SUPERSET, the file the group is named after).
+   */
+  representativeName: string;
+  /** Group-level File-sort key so sorting by File orders groups by that same shown name. */
   sortName: string;
-  /** Group-level search text: any member's name/path keeps the header row visible. */
+  /** Group-level search text: any member's name/path keeps the group's row visible. */
   searchText: string;
   /** File-type facet value (first member's class — a group is homogeneous). */
   fileType: string;
-  /** Match-basis facet value (duplicates.mdx §3.2 / subsets.mdx §3) — the group-level basis, so
-   *  filtering keeps whole groups (header + members) together. */
+  /** Match-basis facet value (duplicates.mdx §3.2 / subsets.mdx §3). */
   matchBasis: string;
 }
-
-export type VideoTableRow<M extends VideoMember> =
-  | { kind: "header"; group: VideoGroup<M> }
-  | { kind: "member"; member: M; group: VideoGroup<M> };
 
 export function buildDuplicateGroups(rows: DuplicateMemberRow[]): VideoGroup<DuplicateMemberRow>[] {
   const byId = new Map<string, DuplicateMemberRow[]>();
@@ -76,12 +69,13 @@ export function buildDuplicateGroups(rows: DuplicateMemberRow[]): VideoGroup<Dup
   for (const [id, members] of byId) {
     const total = members.reduce((s, m) => s + m.sizeBytes, 0);
     const largest = members.reduce((s, m) => Math.max(s, m.sizeBytes), 0);
+    const rep = members[0]?.name ?? "";
     groups.push({
       id,
       members,
       reclaimableBytes: total - largest,
-      headerText: `Group ${id} · ${members.length} files · same content (${members[0]?.matchBasis ?? ""})`,
-      sortName: (members[0]?.name ?? "").toLowerCase(),
+      representativeName: rep,
+      sortName: rep.toLowerCase(),
       searchText: members.map((m) => `${m.name} ${m.fullPath}`).join(" "),
       fileType: fileTypeForName(members[0]?.name ?? ""),
       matchBasis: members[0]?.matchBasis ?? "",
@@ -107,13 +101,15 @@ export function buildSubsetGroups(rows: SubsetMemberRow[]): VideoGroup<SubsetMem
     });
     const superset = members.find((m) => m.role === "superset");
     const subsets = members.filter((m) => m.role === "subset");
+    // A subset group is NAMED for its superset — that is the file the whole group hangs off.
+    const rep = superset?.name ?? members[0]?.name ?? "";
     groups.push({
       id,
       members,
       // What deleting the clips would free (subsets.mdx §3).
       reclaimableBytes: subsets.reduce((s, m) => s + m.sizeBytes, 0),
-      headerText: `Group ${id} · ${superset?.name ?? "?"} · ${subsets.length} subset${subsets.length === 1 ? "" : "s"} · ${members[0]?.matchBasis ?? ""}`,
-      sortName: (superset?.name ?? members[0]?.name ?? "").toLowerCase(),
+      representativeName: rep,
+      sortName: rep.toLowerCase(),
       searchText: members.map((m) => `${m.name} ${m.fullPath}`).join(" "),
       fileType: fileTypeForName(members[0]?.name ?? ""),
       // The superset row leads after the sort above, and its basis is the group-level basis.
@@ -124,18 +120,10 @@ export function buildSubsetGroups(rows: SubsetMemberRow[]): VideoGroup<SubsetMem
   return groups;
 }
 
-/** Interleave the slim group-header rows with their member rows, in group order. */
-export function interleaveRows<M extends VideoMember>(groups: VideoGroup<M>[]): VideoTableRow<M>[] {
-  const out: VideoTableRow<M>[] = [];
-  for (const group of groups) {
-    out.push({ kind: "header", group });
-    for (const member of group.members) out.push({ kind: "member", member, group });
-  }
-  return out;
-}
-
-// ── Icon control-column state, best-effort from the row's tracking fields (tables.mdx §4c) ─────────
-function memberTaskState(m: VideoMember, kind: TaskIconKind): TaskStatus {
+// ── Per-file icon state, best-effort from the row's tracking fields (tables.mdx §4c) ───────────────
+// These render in the RIGHT REVIEW COLUMN now (duplicates.mdx §4.3), left of each file's name — the table
+// has no per-file rows to hang them on any more.
+export function memberTaskState(m: VideoMember, kind: TaskIconKind): TaskStatus {
   if (kind === "pin") return boolStatus(m.decision === "sync"); // intent, not reality (decisions.mdx)
   if (kind === "ignore") return boolStatus(m.gitIgnored);
   const analysis = [
@@ -146,60 +134,53 @@ function memberTaskState(m: VideoMember, kind: TaskIconKind): TaskStatus {
   return analysisTaskStatuses(m.name, analysis)[kind];
 }
 
-const ICON_KINDS: TaskIconKind[] = ["pin", "ignore", "transcribe", "describe", "ocr"];
+/** The locked icon order, shared by every surface that shows the five (tables.mdx §4c / ocr.mdx §8.2). */
+export const ICON_KINDS: TaskIconKind[] = ["pin", "ignore", "transcribe", "describe", "ocr"];
 
 /**
- * The deliberately small column set (duplicates.mdx §3.1, LOCKED): the five icon control columns +
- * File (basename only) + Size. No leading checkbox, no bookmark, no path column. Icon columns NEVER
- * set `width` and their `header` stays a readable string (tables.mdx §4c).
+ * The group table's deliberately small column set (duplicates.mdx §3.1, LOCKED): **File** (the
+ * representative member's basename — no path), **Files** (how many are in the group), **Size** (the
+ * reclaimable bytes). No icon columns (they moved to the right column with the files), no leading
+ * checkbox, no bookmark, no path column.
  */
-export function buildVideoColumns<M extends VideoMember>(): LfbColumn<VideoTableRow<M>>[] {
-  const iconCols: LfbColumn<VideoTableRow<M>>[] = ICON_KINDS.map((kind) => ({
-    id: kind,
-    header: TASK_ICON[kind].label,
-    headerCell: <TaskIconHeader kind={kind} />,
-    tight: true,
-    kind: "enum",
-    sortable: false,
-    filterable: false,
-    accessor: (r) => (r.kind === "member" ? memberTaskState(r.member, kind) : ""),
-    cell: (r) =>
-      r.kind === "member" ? <TaskIconCell kind={kind} state={memberTaskState(r.member, kind)} /> : null,
-  }));
+export function buildVideoColumns<M extends VideoMember>(): LfbColumn<VideoGroup<M>>[] {
   return [
-    ...iconCols,
     {
       id: "file",
       header: "File",
       kind: "text",
-      // Group-level sort key: sorting by File reorders GROUPS (stable sort keeps each group's
-      // header-then-members order intact).
-      accessor: (r) => r.group.sortName,
-      cell: (r) =>
-        r.kind === "header" ? (
-          <span className="block truncate text-xs font-medium text-black/50">{r.group.headerText}</span>
-        ) : (
-          <span
-            className="block max-w-full truncate"
-            title={r.member.fullPath}
-            // The full path is NOT a column — it publishes to the left-bar hover-info panel
-            // (duplicates.mdx §3.1 / non_intrusive_tooltip.mdx).
-            onMouseEnter={() => setHoverInfo(r.member.fullPath)}
-            onMouseLeave={() => setHoverInfo(null)}
-          >
-            {r.member.name}
-          </span>
-        ),
+      accessor: (g) => g.sortName,
+      cell: (g) => (
+        <span
+          className="block max-w-full truncate"
+          title={g.members[0]?.fullPath}
+          // The full path is NOT a column — it publishes to the left-bar hover-info panel
+          // (duplicates.mdx §3.1 / non_intrusive_tooltip.mdx).
+          onMouseEnter={() => setHoverInfo(g.members[0]?.fullPath ?? null)}
+          onMouseLeave={() => setHoverInfo(null)}
+        >
+          {g.representativeName}
+        </span>
+      ),
+    },
+    {
+      id: "count",
+      header: "Files",
+      kind: "int",
+      align: "right",
+      minWidth: 64,
+      priority: 20, // the first column to drop on a narrow split (tables.mdx §4a)
+      accessor: (g) => g.members.length,
     },
     {
       id: "size",
       header: "Size",
       kind: "bytes",
       align: "right",
-      // Group-level value = reclaimable bytes, so the default sort (and any Size sort) ranks the most
-      // disk-winning groups first while keeping groups contiguous (duplicates.mdx §3.2).
-      accessor: (r) => r.group.reclaimableBytes,
-      cell: (r): ReactNode => (r.kind === "member" ? formatBytes(r.member.sizeBytes) : null),
+      // Reclaimable bytes, so the default sort (and any Size sort) ranks the most disk-winning groups
+      // first (duplicates.mdx §3.2).
+      accessor: (g) => g.reclaimableBytes,
+      cell: (g) => formatBytes(g.reclaimableBytes),
     },
   ];
 }

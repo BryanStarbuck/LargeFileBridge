@@ -63,18 +63,48 @@ user's own browser, unrelated to IPFS gateway behavior (charter: IPFS no-relay p
 
 ## 2. The backend contract (`/api/media`)
 
-Three endpoints in one module. Two are allow-list-gated like every data route; the third is gated by the
+Endpoints in one module. Two are allow-list-gated like every data route; the rest are gated by the
 signed token so a plain media element (which cannot send a `Bearer` header) can still load.
 
 ```
-GET /api/media/grant?path=<abs>     (allow-listed)  → { url: "/api/media/raw?path=<abs>&e=<expMs>&t=<hmac>" }
-GET /api/media/probe?path=<abs>     (allow-listed)  → MediaProbe
-GET /api/media/raw?path=&e=&t=       (token-gated)   → the bytes, with Range support
+GET /api/media/grant?path=<abs>       (allow-listed)  → { url: "/api/media/raw?path=<abs>&e=<expMs>&t=<hmac>" }
+GET /api/media/probe?path=<abs>       (allow-listed)  → MediaProbe
+GET /api/media/raw?path=&e=&s=&t=      (token-gated)   → the bytes, with Range support
+GET /api/media/stream?path=&e=&s=&t=   (token-gated)   → a live browser-safe fragmented MP4 (codecs.mdx §6)
+GET /api/media/poster?path=&e=&s=&t=&w= (token-gated)  → ONE small cached JPEG frame (§2.1)
 ```
 
-**Grant.** `t = HMAC-SHA256( `path`\n`expMs`, MEDIA_SECRET )`, hex. `MEDIA_SECRET` is a random 32-byte
-key minted once per backend process (tokens naturally invalidate on restart — acceptable for a viewer).
-Default expiry ≈ 6h so a long viewing session with re-buffers keeps working.
+### 2.1 Poster — one small JPEG per file, for surfaces that show MANY files at once (LOCKED — added 2026-07-22)
+
+`/raw` is right for **one** file on screen. It is exactly wrong for a surface showing **N** files at
+once, and the failure is silent: a browser allows about **six connections per origin** over HTTP/1.1
+and a media element **holds its connection** while it buffers, so nine `<video src=…/raw>` elements
+starve each other *and* the page's own `/api` calls. The previews do not error — they never load.
+
+`/api/media/poster` answers that surface: **one small cached JPEG**, generated locally (sharp for
+images, the bundled ffmpeg's fast input seek for a video frame), keyed on **path + size + mtime +
+width** so it is always the current bytes, **concurrency-capped** and **in-flight de-duped** so a
+twelve-file group cannot spawn twelve simultaneous 4K decodes. `w` snaps to one of a small fixed set
+of widths so no caller can spray the cache. A kind with no picture (audio, PDF, anything unknown)
+gets a **415**, not a guess.
+
+It also renders what the browser cannot: **HEIC/HEIF, TIFF, ProRes, HEVC** show a picture because
+**we** do the decoding.
+
+The Duplicates / Subsets review column is the first consumer ([duplicates.mdx
+§4.3a](./duplicates.mdx)): poster first, and the real player mounts only when the user clicks ▶.
+
+Poster generation and its cache are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/poster.service.ts` — `ensurePoster()` / `posterKindFor()` / `normalizePosterWidth()`; the route (same `verifyGrant()` gate as `/raw`) is `media.router.ts` — `GET /poster`.
+
+**Grant.** `t = HMAC-SHA256( `path`\n`expMs`\n`sessionId`, MEDIA_SECRET )`, hex — the **minting
+session** is signed in too (security audit finding 10), so a tampered `s` changes the signature and a
+grant can never be silently re-attributed. `MEDIA_SECRET` is a random 32-byte key minted once per
+backend process (tokens naturally invalidate on restart — acceptable for a viewer). Expiry is
+**10 minutes**: the URL is a bearer capability, so the window stays short — long enough to (re)buffer a
+viewing session, rather than the old ≈6 h that turned a leaked URL into a long-lived read capability.
+A surface that stays open longer than that **refetches the grant inside the window** rather than
+letting its media start 403-ing.
 
 Minting and verifying the short-lived HMAC-signed grant is handled in code:
 

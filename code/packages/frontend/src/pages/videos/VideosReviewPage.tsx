@@ -5,23 +5,18 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient, type QueryKey } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
-import { Gauge, Loader2, RotateCw, ScanSearch } from "lucide-react";
+import { Loader2, ScanSearch } from "lucide-react";
 import { toast } from "sonner";
 import type { VideosScanStatus } from "@lfb/shared";
 import { PageActions, type Action } from "../../components/menu/PageActions.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
+import { useDebounced } from "../../lib/useDebounced.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { ReviewSplitLayout } from "./ReviewSplitLayout.js";
 import { GroupReviewColumn, type ReviewVariant } from "./GroupReviewColumn.js";
 import { StartScanModal } from "./StartScanModal.js";
-import {
-  buildVideoColumns,
-  interleaveRows,
-  type VideoGroup,
-  type VideoMember,
-  type VideoTableRow,
-} from "./videoGroups.js";
+import { buildVideoColumns, type VideoGroup, type VideoMember } from "./videoGroups.js";
 
 export interface VideosReviewConfig<M extends VideoMember> {
   variant: ReviewVariant;
@@ -142,6 +137,12 @@ export function VideosReviewPage<M extends VideoMember>({
   // The page action-links row (duplicates.mdx §5.1) — always visible, never relocated. "Scan for …"
   // shares ONE start path with the pop-up's primary button, and takes no confirm dialog: the scan is
   // read-only and never mutates a file (§8.2).
+  //
+  // EXACTLY ONE LINK (revised 2026-07-22). "Refresh results" and "View progress" were removed: the page
+  // already refetches itself on the "videos" live-refresh topic and on the running status poll, so a
+  // manual Refresh only ever duplicated what had already happened; and the running banner (plus the
+  // start toast's own "View progress" action) is the honest route to the Processing page, so a permanent
+  // link to it was a third click competing with the one control that matters here.
   // (Rebuilt each render on purpose — PageActions keys its width-fit on the labels, not on identity.)
   const pageActions: Action[] = [
     {
@@ -156,35 +157,43 @@ export function VideosReviewPage<M extends VideoMember>({
         : undefined,
       onSelect: () => start.mutate(),
     },
-    {
-      id: "refresh",
-      label: "Refresh results",
-      icon: <RotateCw className="h-3.5 w-3.5" />,
-      group: "Work",
-      // The manual twin of the live-refresh bump: pull in whatever a running phase has published.
-      onSelect: () => {
-        void qc.invalidateQueries({ queryKey: listKey });
-        void qc.invalidateQueries({ queryKey: statusKey });
-      },
-    },
-    {
-      id: "view-progress",
-      label: "View progress",
-      icon: <Gauge className="h-3.5 w-3.5" />,
-      group: "Work",
-      onSelect: viewProgress,
-    },
   ];
 
   const groups = useMemo(() => buildGroups(data?.rows ?? []), [buildGroups, data]);
-  const rows = useMemo(() => interleaveRows(groups), [groups]);
   const columns = useMemo(() => buildVideoColumns<M>(), []);
 
-  // Clicking any member row selects its WHOLE group into the right review column (duplicates.mdx §3.2).
+  // ── Which group the right column shows (duplicates.mdx §3.3) ────────────────────────────────────
+  // Two inputs, one answer: a CLICKED selection (sticky, tinted light yellow) and a HOVERED row
+  // (transient, tinted light green). Hover WINS while the pointer is over the table; leaving the body
+  // falls back to the selection. The first group is selected on arrival so the column is never empty
+  // while real results sit on screen.
   const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const selectedGroup = groups.find((g) => g.id === selectedGroupId) ?? null;
+  const [hoveredGroupId, setHoveredGroupId] = useState<string | null>(null);
+  // Seed the selection ONCE, when rows first arrive — never again, or "Done" (which clears it) would be
+  // undone on the very next render. After that the only correction is dropping a selection whose group
+  // no longer exists (a rescan republished the CSV).
+  const seeded = useRef(false);
+  useEffect(() => {
+    if (groups.length === 0) return;
+    if (!seeded.current) {
+      seeded.current = true;
+      setSelectedGroupId(groups[0].id);
+      return;
+    }
+    setSelectedGroupId((cur) => (cur && !groups.some((g) => g.id === cur) ? null : cur));
+  }, [groups]);
+  // Debounced, because a hover is a SWEEP: dragging the pointer down 200 rows would otherwise mount
+  // 200 review columns and request a media grant + poster for every file in every group brushed past.
+  // A short pause is also what the user means by "show me this one".
+  const settledHoverId = useDebounced(hoveredGroupId, 120);
+  const shownGroupId = settledHoverId ?? selectedGroupId;
+  const shownGroup = groups.find((g) => g.id === shownGroupId) ?? null;
 
-  // Keyboard ↑/↓ moves the selection between groups (§3.2) — inert while typing or playing a preview.
+  // The full-width slot the DataTable portals its control row into (§3): a bar that governs the whole
+  // page spans the whole page, and the right review column starts BENEATH it.
+  const [controlsEl, setControlsEl] = useState<HTMLDivElement | null>(null);
+
+  // Keyboard ↑/↓ moves the selection between groups (§3.3) — inert while typing or playing a preview.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
@@ -232,9 +241,13 @@ export function VideosReviewPage<M extends VideoMember>({
       </div>
 
       {/* The page action-links row (duplicates.mdx §5.1) — directly under the title, on EVERY visit:
-          "Scan for duplicates · Refresh results · View progress". It is the durable home of the scan
-          control, which is what lets the entry pop-up stay quiet inside the 2-day window (§5.2). */}
-      <div className="mb-2 shrink-0">
+          "Scan for duplicates". It is the durable home of the scan control, which is what lets the entry
+          pop-up stay quiet inside the 2-day window (§5.2).
+          `relative z-30` (§5.1): the row is a single line of links with nothing above it, so anything
+          that paints later — the control row that follows it, a sticky table head — was winning the
+          stacking order and clipping the links' bottom edge. The row takes the HIGHEST z of the page
+          content; it never pushes anything down, it just stops being covered. */}
+      <div className="relative z-30 mb-2 shrink-0">
         <PageActions actions={pageActions} />
       </div>
 
@@ -253,51 +266,58 @@ export function VideosReviewPage<M extends VideoMember>({
       )}
 
       <ReviewSplitLayout
+        // The full-width control-row slot (§3): the DataTable paints its search + ⇅ + ⛛ + ⚏ in here.
+        controls={<div ref={setControlsEl} />}
         table={
-          <DataTable<VideoTableRow<M>>
+          <DataTable<VideoGroup<M>>
             tableId={tableId}
-            data={rows}
+            data={groups}
             columns={columns}
-            searchKeys={(r) =>
-              r.kind === "header" ? r.group.searchText : `${r.member.name} ${r.member.fullPath}`
-            }
-            getRowId={(r) => (r.kind === "header" ? `h:${r.group.id}` : `m:${r.group.id}:${r.member.fullPath}`)}
-            onRowClick={(r) => setSelectedGroupId(r.group.id)}
-            rowClassName={(r) =>
-              r.group.id === selectedGroupId
-                ? "bg-[var(--lfb-primary-tint)]"
-                : r.kind === "header"
-                  ? "bg-slate-50"
-                  : ""
-            }
-            itemNoun="rows"
+            controlsPortal={controlsEl}
+            // ONE ROW PER GROUP (§3.1) — search still matches on EVERY member's name and path, so
+            // typing a file name finds the group that file is in.
+            searchKeys={(g) => g.searchText}
+            getRowId={(g) => g.id}
+            onRowClick={(g) => setSelectedGroupId(g.id)}
+            onRowHover={(g) => setHoveredGroupId(g?.id ?? null)}
+            // Hover = light green ("this is what the right column is showing right now"); the CSS hover
+            // variant outranks the selected tint below, which is exactly the precedence §3.3 wants.
+            rowHoverClass="hover:bg-green-100"
+            // Selection = light yellow, and it persists when the pointer leaves the table (§3.3).
+            rowClassName={(g) => (g.id === selectedGroupId ? "bg-yellow-100" : "")}
+            itemNoun="groups"
             // Groups by reclaimable bytes descending — the most disk-winning groups first (§3.2).
             defaultSort={[{ id: "size", desc: true }]}
             loading={isLoading}
-            fileTypeFacet={withFileTypeFacet ? { valueOf: (r) => r.group.fileType } : undefined}
-            // The match-basis facet (duplicates.mdx §3.2 / subsets.mdx §3) — group-level, so filtering
-            // keeps each group's header + members together.
+            fileTypeFacet={withFileTypeFacet ? { valueOf: (g) => g.fileType } : undefined}
+            // The match-basis facet (duplicates.mdx §3.2 / subsets.mdx §3) — group-level, like the rows.
             extraFacets={[
               {
                 id: "match_basis",
                 label: "Match basis",
                 values: matchBasisValues,
-                valueOf: (r) => r.group.matchBasis,
+                valueOf: (g) => g.matchBasis,
               },
             ]}
             empty={empty}
           />
         }
         review={
-          selectedGroup ? (
+          shownGroup ? (
             <GroupReviewColumn
+              // Remount per group so every block's transient player state (poster ↔ playing) resets
+              // instead of leaking across a hover from one group to the next.
+              key={shownGroup.id}
               variant={variant}
-              members={selectedGroup.members}
-              onDone={() => setSelectedGroupId(null)}
+              members={shownGroup.members}
+              onDone={() => {
+                setHoveredGroupId(null);
+                setSelectedGroupId(null);
+              }}
             />
           ) : (
             <div className="grid h-full place-items-center px-4 text-center text-sm text-black/40">
-              Select a file to review its whole group side-by-side.
+              Hover or click a group to review its files side-by-side.
             </div>
           )
         }

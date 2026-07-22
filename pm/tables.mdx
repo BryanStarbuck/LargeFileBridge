@@ -520,6 +520,43 @@ The **Filter ⛛**, **Sort**, and **Columns** pop-up windows share one window be
 The shared pop-up window (edge line, click-outside collapse, Apply footer) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/Popover.tsx` — `Popover` (used by `DataTable` and the Full-paths page).
 
+### 2.13 The control row spans the full page width, even in a split layout (LOCKED — product-owner revision 2026-07-22)
+
+The control row — **search + `⇅` sort + `⛛` filter + `⚏` columns** — governs the **page**, not a
+column of it. So on a **split-layout page** (a table beside a companion panel — today the Videos
+review screens, [duplicates.mdx §3](./duplicates.mdx)) the bar **runs the full width of the content
+area**, and the companion panel **starts underneath it**, never beside it.
+
+* The row keeps every bit of its behaviour and state — it is the same table's control row; it is only
+  **painted** somewhere else. The three dropdowns travel with it, anchored under the icons that open
+  them.
+* Getting there is a **slot**, not a copy: the page renders an empty full-width slot above the split
+  and the table **portals** its control block into it. There is never a second control row to keep in
+  sync, and a page that declares no slot renders the bar in the normal place (above its own body).
+* **Never** render the bar for a frame in the wrong place: until the slot exists the table paints no
+  controls at all, rather than showing them inline and then jumping.
+
+The full-width control-row slot is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `controlsPortal` prop and the `controls` node it portals); the slot itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (the `controls` prop).
+
+### 2.14 Row hover is page state, not just a CSS tint (LOCKED — added 2026-07-22)
+
+A table whose row **drives another panel** (a preview, a review column) publishes its hover as real
+state: `onRowHover(row)` on enter, `onRowHover(null)` on leave.
+
+* **The clear is wired to the table BODY, never to each row.** Pointer events fire the old row's
+  *leave* immediately before the new row's *enter*, so a per-row clear blinks the consumer through
+  `null` between **every** adjacent pair of rows — which reads as a flicker, and remounts whatever the
+  consumer was showing. Leaving the body is the only event that means "nothing is hovered".
+* **Hover outranks selection** where both exist; the hover tint is a CSS `hover:` variant, which
+  already wins over a plain background class, so the two never need to be reconciled in JS.
+* The hover background is **overridable per table** (`rowHoverClass`) — a table whose hover carries
+  meaning may say so in colour (the Videos review tables use light green for "this is what the panel
+  is showing", against light yellow for the sticky selection — [duplicates.mdx §3.3](./duplicates.mdx)).
+
+Row hover state is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `onRowHover` / `rowHoverClass` props; the clear lives on the body scroll container's `onMouseLeave`).
+
 ---
 
 ## 3. Multi-level sort — primary / secondary / tertiary (LOCKED)
