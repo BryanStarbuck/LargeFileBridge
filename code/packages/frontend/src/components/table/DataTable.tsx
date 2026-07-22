@@ -8,6 +8,7 @@
 //    column model, so `tanColumns` no longer depends on the unstable `selection` object.
 //  * P-05 the search box is debounced — filtering the dataset runs once per pause, not per keypress.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import {
   useReactTable,
   getCoreRowModel,
@@ -99,15 +100,29 @@ interface DataTableProps<T> {
   // the row is an image whose bytes are on this computer, else null. When provided, hovering a row
   // publishes that target so holding Option floats the image preview; the whole row is the hover surface.
   hoverPreview?: (row: T) => string | null;
-  // Optional extra per-row class (e.g. the Videos review tables tint every row of the SELECTED group,
-  // duplicates.mdx §3.2, and mute their slim group-header rows). Appended after the base row classes.
+  // Optional extra per-row class (e.g. the Videos review tables tint the SELECTED group's row yellow,
+  // duplicates.mdx §3.3). Appended after the base row classes.
   rowClassName?: (row: T) => string;
+  // Row hover as PAGE STATE, not just a CSS effect (duplicates.mdx §3.3): called with a row when the
+  // pointer enters it and with `null` when the pointer leaves the table body. The clear is wired to the
+  // BODY, never to each row — a row-level leave fires just before the next row's enter, which would
+  // flash the consumer through `null` between every pair of adjacent rows.
+  onRowHover?: (row: T | null) => void;
+  // Override the body-row hover background (default: the house slate tint). The Videos review tables
+  // pass a light-green tint so hover reads as "this is what the right column is showing".
+  rowHoverClass?: string;
   // Stable id for this table (tables.mdx — remembered view state). When set, the table's sort, column
   // filters, search, hidden columns, and promoted facet state are persisted per logged-in user (in the
   // per-user config.yaml `tables:` record) and restored on the next visit. Keep it unique per surface —
   // e.g. "repos", "storages", "repo-files:<tab>". Omit it and the table works exactly as before but
   // remembers nothing across visits.
   tableId?: string;
+  // Render the control row (search + ⇅ + ⛛ + ⚏, the facet rail, and their dropdowns) into THIS element
+  // instead of above the table body (tables.mdx §2.12). A split-layout page (Duplicates/Subsets) mounts
+  // the target full-width above the split so the bar spans the whole page and the right review column
+  // starts BENEATH it — see duplicates.mdx §3. Everything else about the table is unchanged; the
+  // controls stay this table's own state, they are only PAINTED somewhere else.
+  controlsPortal?: HTMLElement | null;
 }
 
 // The File-type facet vocabulary (tables.mdx §2.10) — labels + the one class that starts UNCHECKED (Other).
@@ -163,7 +178,10 @@ export function DataTable<T>({
   fileFilter,
   hoverPreview,
   rowClassName,
+  onRowHover,
+  rowHoverClass = "hover:bg-slate-100",
   tableId,
+  controlsPortal,
 }: DataTableProps<T>) {
   // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
   // tertiary list — index 0 = primary. The dropdown priority slots and header clicks both drive it.
@@ -522,11 +540,12 @@ export function DataTable<T>({
   // squeezed. Columns with no width share what's left. The leading select + trailing kebab get their own.
   const hasWidths = visibleColumns.some((c) => c.width);
 
-  return (
-    // Full-page-height (repos.mdx §3.3.1): fill mode makes this a flex column so the body scroll
-    // region below grows to the bottom of the viewport; the control row + footer stay pinned (shrink-0).
-    // wrapRef is measured for responsive column hiding (repos.mdx §3.2.1).
-    <div ref={wrapRef} className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
+  // The control block — search + ⇅ + ⛛ + ⚏, the facet rail, and the three dropdowns. Kept as ONE node so
+  // it can be painted either above the body (the default) or, on a split-layout page, portaled into a
+  // full-width slot above the split (`controlsPortal`, tables.mdx §2.12). The dropdowns MUST travel with
+  // the icons that open them — they anchor to the flow position right beneath the row.
+  const controls = (
+    <>
       {/* Control row (repos.mdx §3.1) */}
       <div className="flex shrink-0 items-center gap-2 py-2">
         <div className="relative flex-1 max-w-sm">
@@ -862,6 +881,15 @@ export function DataTable<T>({
           </button>
         </Popover>
       )}
+    </>
+  );
+
+  return (
+    // Full-page-height (repos.mdx §3.3.1): fill mode makes this a flex column so the body scroll
+    // region below grows to the bottom of the viewport; the control row + footer stay pinned (shrink-0).
+    // wrapRef is measured for responsive column hiding (repos.mdx §3.2.1).
+    <div ref={wrapRef} className={fillHeight ? "flex min-h-0 flex-1 flex-col" : ""}>
+      {controlsPortal ? createPortal(controls, controlsPortal) : controls}
 
       {/* The flat, chromeless data surface — body scrolls inside a bounded, windowed container. */}
       {loading ? (
@@ -871,6 +899,10 @@ export function DataTable<T>({
       ) : (
         <div
           ref={scrollRef}
+          // The hover CLEAR lives here, not on the rows: moving from one row to the next fires the old
+          // row's leave before the new row's enter, so a per-row clear would blink the consumer through
+          // `null` between every adjacent pair (duplicates.mdx §3.3).
+          onMouseLeave={onRowHover ? () => onRowHover(null) : undefined}
           className={`overflow-auto ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
         >
           <table className={`w-full text-sm border-collapse ${hasWidths ? "table-fixed" : ""}`}>
@@ -971,13 +1003,17 @@ export function DataTable<T>({
                     // Option-key image preview target (option_image_preview.mdx §1): hovering an image
                     // row publishes it; holding Option floats the preview. Null targets clear.
                     onMouseEnter={
-                      hoverPreview
-                        ? (e) => setOptionPreviewTarget(hoverPreview(row.original), e.clientX, e.clientY)
+                      hoverPreview || onRowHover
+                        ? (e) => {
+                            if (hoverPreview)
+                              setOptionPreviewTarget(hoverPreview(row.original), e.clientX, e.clientY);
+                            onRowHover?.(row.original);
+                          }
                         : undefined
                     }
                     onMouseLeave={hoverPreview ? () => setOptionPreviewTarget(null) : undefined}
                     style={{ height: ROW_H }}
-                    className={`border-b border-[var(--lfb-border)] ${onRowClick ? "cursor-pointer hover:bg-slate-100" : ""} ${rowClassName ? rowClassName(row.original) : ""}`}
+                    className={`border-b border-[var(--lfb-border)] ${onRowClick ? `cursor-pointer ${rowHoverClass}` : ""} ${rowClassName ? rowClassName(row.original) : ""}`}
                   >
                     {selection && (
                       <td className="px-2" onClick={(e) => e.stopPropagation()}>

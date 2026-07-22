@@ -8,6 +8,7 @@ import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
 import { mintGrant, probeMedia, verifyGrant, mimeFor, parseRange } from "./media.service.js";
 import { streamPlayable } from "./transcode.service.js";
+import { ensurePoster, normalizePosterWidth, posterKindFor } from "./poster.service.js";
 
 export const mediaRouter = Router();
 
@@ -56,6 +57,44 @@ mediaRouter.get("/stream", async (req, res) => {
   // streamPlayable is async now (its ffprobe plan step must not block the event loop — to_fix.mdx §3.3.4).
   // It resolves once ffmpeg is piping, not when the stream ends, and reports its own faults onto `res`.
   await streamPlayable(file.abs, res, (cb) => req.on("close", cb));
+});
+
+// GET /api/media/poster?path=&e=&s=&t=&w= — ONE small cached JPEG frame for an image or a video
+// (duplicates.mdx §4.3a). Same signed-token gate as /raw and /stream, because a plain <img> can't send a
+// Bearer header. This is what a multi-preview surface (the Duplicates/Subsets review column) loads instead
+// of N live media elements: it finishes fast and frees its socket, and it renders formats the browser
+// cannot decode at all (HEIC, ProRes, HEVC) because the decode happens here.
+mediaRouter.get("/poster", async (req, res) => {
+  const p = typeof req.query.path === "string" ? req.query.path : undefined;
+  const e = typeof req.query.e === "string" ? req.query.e : undefined;
+  const s = typeof req.query.s === "string" ? req.query.s : undefined;
+  const t = typeof req.query.t === "string" ? req.query.t : undefined;
+
+  let file: { abs: string; size: number };
+  try {
+    file = verifyGrant(p, e, s, t);
+  } catch (err) {
+    const msg = (err as Error).message;
+    const code = msg === "grant expired" || msg === "bad grant" ? 403 : /ENOENT|not a file/.test(msg) ? 404 : 400;
+    log.warn("media", `poster grant rejected (${code}) for ${p ?? "<none>"}: ${msg}`);
+    return res.status(code).json({ ok: false, error: msg });
+  }
+  if (!posterKindFor(file.abs)) {
+    return res.status(415).json({ ok: false, error: "not a previewable media file" });
+  }
+
+  try {
+    const jpg = await ensurePoster(file.abs, normalizePosterWidth(req.query.w));
+    res.setHeader("Content-Type", "image/jpeg");
+    res.setHeader("Content-Disposition", "inline");
+    // The cache key already encodes size+mtime, so a hit is always the CURRENT bytes — an hour of
+    // browser caching costs nothing in correctness and keeps a re-selected group instant.
+    res.setHeader("Cache-Control", "private, max-age=3600");
+    res.sendFile(jpg);
+  } catch (err) {
+    log.warn("media", `poster failed for ${file.abs}: ${(err as Error).message}`);
+    res.status(500).json({ ok: false, error: (err as Error).message });
+  }
 });
 
 // GET /api/media/raw?path=&e=&t= — stream the bytes with Range (token-gated, NOT allow-list-gated).
