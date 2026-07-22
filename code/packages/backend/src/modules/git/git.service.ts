@@ -1228,13 +1228,25 @@ function runCheckIgnoreBatch(
     // still carries whichever inputs WERE ignored (empty on a clean exit-1), so read it off the error.
     const err = e as { status?: number; stdout?: string | Buffer; stderr?: string | Buffer };
     if (err.status === 1 && err.stdout != null) return { out: err.stdout.toString(), unknown: [] };
+    // NOT A REPOSITORY — the cwd itself is unanswerable (classically a stale/copied `.claude/worktrees/*`
+    // checkout whose gitlink passes the stat probe but whose worktree registry points at the old path, so
+    // git fatals "not a git repository: (null)"). No amount of bisection changes that answer, and this
+    // recurs on EVERY scan cycle for as long as the dead checkout exists — so mark the batch UNKNOWN
+    // quietly (DEBUG, not WARN: a dead worktree is not an actionable fault) instead of warning + bisecting.
+    if (/not a git repository/i.test(err.stderr?.toString() ?? "")) {
+      log.debug("git", `check-ignore skipped: ${repoRoot} is not a usable git repository (stale worktree?) — ${absPaths.length} path(s) UNKNOWN`);
+      return { out: "", unknown: absPaths.slice() };
+    }
     // Submodule-contained path aborted the batch — split at the boundary and retry both halves.
     const split =
       splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, err.stderr?.toString()) : null;
     if (split) {
       const inside = isGitWorkingTree(split.subRoot)
         ? runCheckIgnoreBatch(split.subRoot, split.inside, verbose, splits + 1, budget)
-        : { out: "", unknown: [] }; // no usable submodule tree → conservatively "not ignored"
+        : // No usable nested tree (stale worktree, pruned submodule) — these paths are UNANSWERABLE, and the
+          // three-valued contract above says unanswerable must surface as UNKNOWN, never fold into "not
+          // ignored" (this branch used to return unknown: [] and silently misclassified every inside path).
+          { out: "", unknown: split.inside };
       const rest = runCheckIgnoreBatch(repoRoot, split.rest, verbose, splits + 1, budget);
       return { out: rest.out + inside.out, unknown: [...rest.unknown, ...inside.unknown] };
     }
@@ -1306,12 +1318,19 @@ async function runCheckIgnoreAsyncBatch(
   // "none ignored" (stdout carries whichever WERE ignored, empty on a clean 1) — not a failure.
   if (!res.err) return { out: res.stdout, unknown: [] };
   if ((res.err as { code?: number }).code === 1) return { out: res.stdout, unknown: [] };
+  // NOT A REPOSITORY — same quiet-unknown handling as the sync twin (stale/copied worktree cwd; bisection
+  // cannot change the answer and warning every cycle is noise, not signal).
+  if (/not a git repository/i.test(res.stderr)) {
+    log.debug("git", `check-ignore (async) skipped: ${repoRoot} is not a usable git repository (stale worktree?) — ${absPaths.length} path(s) UNKNOWN`);
+    return { out: "", unknown: absPaths.slice() };
+  }
   // Submodule-contained path aborted the batch — same split-and-retry as the sync twin.
   const split = splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, res.stderr) : null;
   if (split) {
     const inside = isGitWorkingTree(split.subRoot)
       ? await runCheckIgnoreAsyncBatch(split.subRoot, split.inside, verbose, splits + 1, budget)
-      : { out: "", unknown: [] }; // no usable submodule tree → conservatively "not ignored"
+      : // Unanswerable nested tree → UNKNOWN, never "not ignored" (see the sync twin).
+        { out: "", unknown: split.inside };
     const rest = await runCheckIgnoreAsyncBatch(repoRoot, split.rest, verbose, splits + 1, budget);
     return { out: rest.out + inside.out, unknown: [...rest.unknown, ...inside.unknown] };
   }
