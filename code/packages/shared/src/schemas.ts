@@ -979,6 +979,10 @@ export const TableViewSchema = z.object({
   // controls and the clause bar are two views of THIS one string, so persisting it persists the whole
   // filter. "" is a deliberate cleared state; an ABSENT key falls back to the surface's seed.
   file_filter: z.string().optional(),
+  // Extra value-checkbox facets (duplicates.mdx §3.2 "Match basis", subsets.mdx §3), keyed by facet id.
+  // Stored as the UNCHECKED values, per the §4.1 hidden-not-shown rule: a value added to a facet's
+  // vocabulary later is absent from this list, therefore shown — never invisible to existing users.
+  facet_hidden: z.record(z.string(), z.array(z.string())).optional(),
   updated_at: iso.optional(),
 });
 export type TableView = z.infer<typeof TableViewSchema>;

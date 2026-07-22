@@ -689,8 +689,10 @@ The §2.4 rule is not filter-only. **Pin and git-ignore are two sortable columns
   **not** in any pin unit — it is *this user's* view of *this page*.
 * **Keyed by table id.** `tables.views.<tableId>` (`repos`, `files`, `communities`, `repo-files:<tab>`,
   …). Each entry stores the **ordered sort keys**, the **active filters** (including the promoted
-  **Large files only** toggle and the **File-type facet**), the **search text**, and the **hidden
-  columns** the user turned off in the Columns dropdown (§4b).
+  **Large files only** toggle, the **File-type facet**, the **§2.11 file-filter expression**, and any
+  **extra value-checkbox facets** such as Match basis), the **search text**, and the **hidden
+  columns** the user turned off in the Columns dropdown (§4b). The list is exhaustive by construction —
+  see §4.0a.
 * **Status: IMPLEMENTED.** The `tables.views` map — unused scaffolding until now — is live. Backend:
   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.service.ts`
   (`loadTableViews` / `saveTableView`, read-modify-write merge-by-key so one table's write never
@@ -704,6 +706,47 @@ The §2.4 rule is not filter-only. **Pin and git-ignore are two sortable columns
   §4.1 principle: every persisted field records the **deviation from default** (hidden columns, hidden
   file-types, Large-only on), never the shown set, so newly-added columns/kinds stay visible to
   existing users.
+
+#### 4.0a The wire schema is DERIVED from TableViewSchema — never hand-listed (LOCKED — added 2026-07-22)
+
+**Every field of a `TableView` must survive the save/load round trip.** The `PUT /api/table-views/:tableId`
+body schema is therefore **derived** from `TableViewSchema` (`.omit({ updated_at }).partial()`), never
+written out field by field.
+
+**Why this is LOCKED.** zod objects **strip** unknown keys. A field the body schema does not declare is
+not rejected and not logged — the browser sends it, the server answers `200 { ok: true }`, and the value
+is thrown away. There is no failure anywhere to notice. This actually happened: the hand-written body
+schema never listed **`file_filter`**, so the entire §2.11 Filter dropdown state — on One-repo files,
+Storage detail, IPFS pins, and Full paths — was discarded on **every** save for as long as the feature
+existed, while the sort, search, and hidden columns written in the same request survived. The user's
+report was "my filter is gone after I restart, but my sort is still there." Deriving the schema makes a
+one-sided addition impossible.
+
+**The PUT is a PATCH, and the merge happens under the file lock.** Only the keys actually sent are
+changed; absent keys keep their stored value. Not every writer sends the whole view — Full paths persists
+`file_filter` alone, and a `DataTable` omits the keys for facets its surface doesn't carry — so re-parsing
+a partial on its own would **default every absent key** and wipe that table's saved sort, search, and
+columns. Merge onto the stored view first, parse second, both inside `updateUserConfig`'s mutate callback.
+
+Wire contract and merge:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.router.ts`
+(`viewBody`) and `.../table-views.service.ts`, `saveTableView()`.
+Guarded by `.../table-views.spec.ts` — a round-trip test over a fixture holding a non-default value in
+every field, plus a test asserting the fixture still covers every field `TableViewSchema` declares.
+
+**On the browser side the same completeness rule applies**, and the save must be keyed on the payload's
+**content**, not on the identity of the props that built it. Surfaces pass `fileFilter={{…}}` /
+`extraFacets={[…]}` as inline literals, so those props are a new object every render; an effect that
+depends on them re-runs on every render and **restarts the 600 ms debounce**, which under a stream of
+re-renders (a row-hover sweep, a liveness poll) can starve the write indefinitely. Implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`viewJson` payload + its save effect).
+
+**A pending write is flushed when the PAGE goes away, not only on unmount.** Closing the tab, reloading,
+or quitting the browser tears the page down without unmounting anything, so a change made inside the last
+600 ms was lost — the "I changed it, then restarted, and it was gone" case. `useTableView` flushes on
+`visibilitychange → hidden` and `pagehide` as well as on unmount:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/useTableView.ts`.
 
 #### 4.1 Facets persist as the HIDDEN values, never the shown ones (LOCKED)
 

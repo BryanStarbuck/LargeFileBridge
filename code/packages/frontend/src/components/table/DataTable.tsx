@@ -25,6 +25,7 @@ import { useDebounced } from "../../lib/useDebounced.js";
 import { setOptionPreviewTarget } from "../preview/OptionImagePreview.js";
 import { useWindowedRows } from "./useWindowedRows.js";
 import { useTableView } from "../../api/useTableView.js";
+import type { TableViewPatch } from "../../api/client.js";
 import type { LfbColumn } from "./types.js";
 import {
   evalFileFilter,
@@ -380,6 +381,15 @@ export function DataTable<T>({
       if (hc.length) setHiddenCols(new Set(hc));
       if (typeof v.large_only === "boolean") setLargeOnlyOn(v.large_only);
       if (Array.isArray(v.hidden_types)) setHiddenTypes(new Set(v.hidden_types));
+      // Extra facets (§4.1 hidden-not-shown). Only facets this surface still declares are restored, so a
+      // retired facet id in an old saved view can never keep filtering rows the user can no longer see.
+      if (v.facet_hidden && extraFacets) {
+        const known = new Set(extraFacets.map((f) => f.id));
+        const restored = Object.entries(v.facet_hidden)
+          .filter(([id, vals]) => known.has(id) && Array.isArray(vals) && vals.length > 0)
+          .map(([id, vals]) => [id, new Set(vals)] as const);
+        if (restored.length) setFacetHidden(Object.fromEntries(restored));
+      }
       // §2.11.5: a stored "" is a deliberate cleared state and is restored as such; an ABSENT key
       // leaves the surface's seed (defaultExpr) in place — except the one migration below.
       if (typeof v.file_filter === "string") setFileFilterText(v.file_filter);
@@ -390,34 +400,39 @@ export function DataTable<T>({
         setFileFilterText(v.large_only ? "size = only_large" : "");
     }
     setHydrated(true);
-  }, [tableId, viewLoaded, hydrated, storedView, columns, ffHasSize]);
+  }, [tableId, viewLoaded, hydrated, storedView, columns, ffHasSize, extraFacets]);
+
+  // EVERY piece of persisted view state must appear in the payload below — a field left out is never
+  // stored, and the round trip stays silent about it (that is how the §2.11 `file_filter` and the extra
+  // facets went unpersisted while the sort and search beside them worked).
+  //
+  // The save is keyed on the payload's CONTENT, not on the identity of the props that built it. Callers
+  // pass `fileFilter={{…}}` / `extraFacets={[…]}` as inline literals, so those props are a NEW object on
+  // every render; an effect depending on them re-runs on every render and calls saveView() again, which
+  // RESTARTS the 600 ms debounce each time. Under anything that re-renders in a stream — a row-hover
+  // sweep, a liveness poll — that timer can be starved indefinitely and the write never goes out. A
+  // stringified payload changes only when a value the user actually changed changes.
+  const viewJson = JSON.stringify({
+    sort: sorting.map((s) => ({ col: s.id, dir: s.desc ? "desc" : "asc" })),
+    filters: Object.fromEntries(columnFilters.map((f) => [f.id, String(f.value)])),
+    search,
+    hidden_columns: [...hiddenCols],
+    ...(largeOnly ? { large_only: largeOnlyOn } : {}),
+    ...(fileTypeFacet ? { hidden_types: [...hiddenTypes] } : {}),
+    ...(fileFilter ? { file_filter: fileFilterText } : {}),
+    ...(extraFacets
+      ? {
+          facet_hidden: Object.fromEntries(
+            extraFacets.map((f) => [f.id, [...(facetHidden[f.id] ?? [])]]),
+          ),
+        }
+      : {}),
+  } satisfies TableViewPatch);
 
   useEffect(() => {
     if (!tableId || !hydrated) return;
-    saveView({
-      sort: sorting.map((s) => ({ col: s.id, dir: s.desc ? "desc" : "asc" })),
-      filters: Object.fromEntries(columnFilters.map((f) => [f.id, String(f.value)])),
-      search,
-      hidden_columns: [...hiddenCols],
-      ...(largeOnly ? { large_only: largeOnlyOn } : {}),
-      ...(fileTypeFacet ? { hidden_types: [...hiddenTypes] } : {}),
-      ...(fileFilter ? { file_filter: fileFilterText } : {}),
-    });
-  }, [
-    tableId,
-    hydrated,
-    sorting,
-    columnFilters,
-    search,
-    hiddenCols,
-    largeOnlyOn,
-    hiddenTypes,
-    largeOnly,
-    fileTypeFacet,
-    fileFilter,
-    fileFilterText,
-    saveView,
-  ]);
+    saveView(JSON.parse(viewJson) as TableViewPatch);
+  }, [tableId, hydrated, viewJson, saveView]);
 
   // Responsive column priority (repos.mdx §3.2.1 / tables.mdx §4a): measure the container and hide the
   // lowest-priority columns until the min-width budget fits — so a cell never wraps to a second line.

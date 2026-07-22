@@ -15,17 +15,27 @@ export function loadTableViews(email: string): Record<string, TableView> {
   return getUserConfig(email).tables.views;
 }
 
-/** Persist one table's view (debounced by the frontend). The input is loose (partial); it is re-parsed
- *  through the schema so every field lands defaulted and a malformed body can never corrupt the config.
- *  Merges by key — writing one table's view never clobbers another table's. Stamps `updated_at`. */
+/** Persist one table's view (debounced by the frontend). The input is a PATCH: it is merged onto the
+ *  table's STORED view, then re-parsed through the schema so every field lands defaulted and a malformed
+ *  body can never corrupt the config. Merges on both axes — writing one table's view never clobbers
+ *  another table's, and sending one field never clobbers that table's other fields. Stamps `updated_at`.
+ *
+ *  The merge is deliberate, not cosmetic. Not every writer sends the whole view: FullPathsPage persists
+ *  only `file_filter`, and a DataTable omits the keys for facets its surface doesn't carry. Re-parsing a
+ *  partial on its own would default every absent key — silently wiping that table's saved sort, search,
+ *  and hidden columns on the next write. Merge first, parse second.
+ *
+ *  Read-modify-write happens INSIDE updateUserConfig's mutate callback so the merge sees the state under
+ *  the per-file lock, not a copy read before it. */
 export async function saveTableView(
   email: string,
   tableId: string,
   patch: Partial<TableView>,
   nowIso: string,
 ): Promise<TableView> {
-  const next = TableViewSchema.parse({ ...patch, updated_at: nowIso });
   const updated = await updateUserConfig(email, (c) => {
+    const existing = c.tables.views[tableId];
+    const next = TableViewSchema.parse({ ...existing, ...patch, updated_at: nowIso });
     c.tables.views = { ...c.tables.views, [tableId]: next };
     return c;
   });

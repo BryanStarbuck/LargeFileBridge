@@ -94,5 +94,22 @@ export function useTableView(tableId?: string): UseTableView {
   // Flush any pending write when the table unmounts so a quick change right before navigation persists.
   useEffect(() => flush, [flush]);
 
+  // …and when the PAGE goes away. Unmount alone only covers in-app navigation: closing the tab, hitting
+  // reload, or quitting the browser tears the page down without ever unmounting a component, so a change
+  // made inside the last 600 ms was dropped on the floor — the exact "I changed it, then restarted, and
+  // it was gone" case. `visibilitychange → hidden` is the reliable signal (it fires before teardown on
+  // every platform, unlike `beforeunload` on mobile Safari); `pagehide` covers the bfcache path.
+  useEffect(() => {
+    const onHide = () => {
+      if (document.visibilityState === "hidden") flush();
+    };
+    document.addEventListener("visibilitychange", onHide);
+    window.addEventListener("pagehide", flush);
+    return () => {
+      document.removeEventListener("visibilitychange", onHide);
+      window.removeEventListener("pagehide", flush);
+    };
+  }, [flush]);
+
   return { view, loaded, save };
 }
