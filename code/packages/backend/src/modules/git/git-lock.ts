@@ -14,7 +14,7 @@ interface GitLockState {
 }
 const storageGitLocks = new Map<string, GitLockState>();
 
-export function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T> {
+export function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T | undefined> {
   const state = storageGitLocks.get(id);
 
   // Nothing running — take the lock immediately.
@@ -30,8 +30,16 @@ export function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise
   }
 
   // Something is queued already — collapse into it. The queued pass has not started, so it will observe
-  // everything this caller wanted synced. Returning its promise means N callers await ONE pass.
-  if (state.queued) return state.queued as Promise<T>;
+  // everything this caller wanted synced. N callers await ONE pass — but the queued pass may belong to a
+  // DIFFERENT caller with a different return type (a queued pinStorageUnitInner resolves void, and handing
+  // that to a syncStorageText caller made it read `.problem` off undefined). Resolve undefined — "your work
+  // is covered, the covering pass reports its own problems" — never another caller's value.
+  if (state.queued) {
+    return (state.queued as Promise<unknown>).then(
+      () => undefined,
+      () => undefined, // the covering pass logs/records its own failure; the collapsed caller has no result
+    );
+  }
 
   // One is running, none queued — queue exactly one successor.
   const queued = state.running.then(

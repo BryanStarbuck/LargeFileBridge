@@ -910,7 +910,9 @@ export type ProgressKind =
   | "import"
   | "install"
   | "download" // large model-weights download (transcribe_engine.mdx §3.3 — the qwen provisioning download)
-  | "configure"; // engine start / config-repair fixes (e.g. Start IPFS from a warning popup)
+  | "configure" // engine start / config-repair fixes (e.g. Start IPFS from a warning popup)
+  | "dedupe_scan" // the dedicated duplicate-detection scan (duplicates.mdx §6)
+  | "subset_scan"; // the dedicated subset-detection scan (subsets.mdx §6) — separate from dedupe_scan
 
 // One in-flight job as reported by GET /api/progress (server-side) or held optimistically in the
 // browser. `done`/`total` are present only for DETERMINATE jobs (a bar is drawn); `unit` labels the

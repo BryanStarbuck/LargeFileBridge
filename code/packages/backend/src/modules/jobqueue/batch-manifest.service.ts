@@ -34,6 +34,7 @@ export type BatchOutcome =
   | "transcribed"
   | "compressed"
   | "ocred"
+  | "processed" // a Videos-scan item (hash/fingerprint/signature/pair compare) that completed (videos.mdx §4)
   | "rejected" // the provider REFUSED this file — a verdict, not a fault (processing_batches.mdx §4.2)
   | "failed"
   | "halted"

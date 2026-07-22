@@ -606,7 +606,9 @@ export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
     // The cycle's pull may have landed other computers' device files — the Devices page learns live.
     // Throttled: the device pass runs one cycle per storage in a burst.
     bumpTopicThrottled(DEVICES_TOPIC);
-    return r;
+    // `undefined` = this call collapsed into an already-queued pass (git-lock.ts), which does a superset
+    // of this work and reports its own problems — so the honest result here is "ran, nothing to report".
+    return r ?? { ran: true };
   });
 }
 
@@ -623,7 +625,10 @@ export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
  * device worker tomorrow leaves artifact delivery intact.
  */
 export function syncStorageText(id: string): Promise<GitCycleResult> {
-  return withStorageGitLock(id, () => syncStorageTextInner(id, "sync"));
+  // `undefined` = collapsed into an already-queued pass on this storage's lock (git-lock.ts) — that pass
+  // runs the same pull→reconcile→commit→push cycle and reports its own problems. Callers read `.problem`
+  // off this result (backbone-freshness, sync-trigger), so never let the collapse hand them undefined.
+  return withStorageGitLock(id, () => syncStorageTextInner(id, "sync")).then((r) => r ?? { ran: true });
 }
 
 async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleResult> {

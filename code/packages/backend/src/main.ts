@@ -36,6 +36,7 @@ import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import { tableViewsRouter } from "./modules/store-model/table-views.router.js";
 import { debugRouter } from "./modules/debug/debug.router.js";
 import { filesQueryRouter } from "./modules/files-query/files-query.router.js";
+import { videosRouter } from "./modules/videos/videos.router.js";
 import { ensureApiSecret } from "./config/credentials-file.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
 import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules/schedule/schedule.service.js";
@@ -336,6 +337,7 @@ async function main(): Promise<void> {
   app.use("/api/table-views", tableViewsRouter); // per-user remembered table sort/filters/columns (tables.mdx)
   app.use("/api/debug", debugRouter); // Export Debug Information: the per-computer debug.yaml state dump (debug.mdx)
   app.use("/api/files", filesQueryRouter); // CLI "get file list": category-grouped file query (cli.mdx §4)
+  app.use("/api/videos", videosRouter); // Videos review screens: duplicates + subsets lists, status, scans (videos.mdx)
 
   // Global error handler -> error.err.
   app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {

@@ -109,6 +109,9 @@ const VERBS: Record<ProgressKind, string> = {
   install: "Installing",
   download: "Downloading",
   configure: "Configuring",
+  // The two dedicated Videos scans (videos.mdx §4) — separate kinds on purpose.
+  dedupe_scan: "Finding duplicates in",
+  subset_scan: "Finding subsets in",
 };
 export function verb(kind: ProgressKind): string {
   return VERBS[kind] ?? "Working";

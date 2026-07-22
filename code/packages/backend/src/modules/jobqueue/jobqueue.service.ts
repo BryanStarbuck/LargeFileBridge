@@ -418,6 +418,32 @@ function recordBatchResult(
 }
 
 /**
+ * Fold one item's terminal outcome into a batch OWNED BY AN EXTERNAL (non-queue) engine — the seam the
+ * detached Videos scans use (duplicates.mdx §6, subsets.mdx §6). Those engines are single-flight
+ * background runs (scan.mdx §10) whose per-item work never passes through `runTask`, so its `finally`
+ * choke point cannot fold their outcomes; this is the SAME fold (`recordBatchResult`) exposed at the
+ * module boundary. The batch row still lives here, still settles `finishedAt` when
+ * ok+rejected+failed+halted reaches total, and still bumps the JOBS topic — one Processing surface,
+ * two kinds of producer.
+ */
+export function settleExternalItem(
+  batchId: string,
+  r: { state: "ok" | "rejected" | "failed" | "halted"; path: string; reason?: string },
+): void {
+  recordBatchResult(batchId, r);
+  bumpTopicThrottled(JOBS_TOPIC);
+}
+
+/**
+ * Surface an external engine's per-item failure as a row on the Processing items table — the same
+ * `recentFailures` feed the queue's own runners use, exposed for the detached Videos scans.
+ */
+export function recordExternalFailure(f: { op: ProgressKind; path: string; reason: string; batchId?: string }): void {
+  recordFailure({ op: f.op, path: f.path, reason: f.reason, batchId: f.batchId });
+  bumpTopicThrottled(JOBS_TOPIC);
+}
+
+/**
  * Stop a batch (processing_batches.mdx §6.2): drain its PENDING tasks to `halted` and let the in-flight
  * ones finish. A halted file was never attempted, so it costs nothing to re-run.
  */

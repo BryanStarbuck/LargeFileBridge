@@ -42,6 +42,7 @@ export const TODO_TOPIC: StateTopic = "todo"; // TO DO batch store
 export const DEVICES_TOPIC: StateTopic = "devices"; // device registry / peers
 export const SETTINGS_TOPIC: StateTopic = "settings"; // app config, AI config, flags
 export const IPFS_TOPIC: StateTopic = "ipfs"; // node status, install/upgrade, pinset
+export const VIDEOS_TOPIC: StateTopic = "videos"; // Videos review screens — duplicates.csv / subsets.csv rewritten (videos.mdx §4)
 
 export interface StateBump {
   topic: StateTopic;
