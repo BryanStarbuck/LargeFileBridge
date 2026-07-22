@@ -24,8 +24,13 @@ pattern — and states only its deltas, plus the parts that are genuinely its ow
 `subsets.csv`** (§8–§9). Exact SHA-256 matching plays no role here — a subset is by definition
 **not** byte-identical to its superset; everything rides on fingerprints.
 
-> **HONEST STATUS — spec ahead of code.** Nothing on this page exists yet; code pointers name the
-> **planned** homes.
+> **HONEST STATUS — BUILT (2026-07-22).** The page, pop-up, engine, and CSV exist; code pointers
+> name the **actual** homes. Implementation deltas from the planned pointers: the router is the one
+> shared `videos.router.ts`, the pop-up is the shared `StartScanModal.tsx`, and the engine lives in
+> `subset-scan.service.ts` (with the MPEG-7 boundary in `mpeg7-signature.service.ts`). One
+> **deliberate deviation from §7.5 is recorded in §7.5a**: ffmpeg's CLI `signature` filter cannot
+> load two *stored* `.mpeg7sig` files for comparison — its detect mode recomputes signatures from
+> the two video inputs — so only the vPDQ cross-check truly compares stored values.
 
 Siblings this spec builds on and does not repeat:
 
@@ -85,10 +90,10 @@ panel), and **Size**. **No leading checkbox, no bookmark, no path column.** Delt
   (`mpeg7` · `vpdq` — §8), value-checkbox model, all checked by default.
 * Clicking any member row selects its **whole group** into the right review column (§4).
 
-The table rows are served by the backend in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subsets.router.ts` — `subsetsRouter` → `GET /api/videos/subsets` (reads `subsets.csv`, §9).
-Rendering is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/SubsetsPage.tsx` — `SubsetsPage` (mounts the same `ReviewSplitLayout` + `GroupReviewColumn` as Duplicates).
+The table rows are served by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/videos.router.ts` — `videosRouter` → `GET /api/videos/subsets` (reads `subsets.csv`, §9; superset row first, subsets by containment start, groups by reclaimable bytes).
+Rendering is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/SubsetsPage.tsx` — `SubsetsPage` (a thin config over the shared `VideosReviewPage.tsx`, mounting the same `ReviewSplitLayout` + `GroupReviewColumn` as Duplicates; group model in `videoGroups.tsx` — `buildSubsetGroups()`).
 
 ---
 
@@ -136,8 +141,8 @@ print rules (resolution `{w}x{h} (720p)` only for known classes 480p/720p/1080p/
 * Both video previews are playable; the subset's containment range lets the user seek the
   superset to the same content and confirm with their eyes.
 
-The right review column is the shared component in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (a `variant: "subsets"` adds the SUPERSET label + containment line).
+The right review column is the shared component in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (a `variant: "subsets"` adds the SUPERSET label + containment line; offsets print via `videoGroups.tsx` — `formatOffset()`).
 
 ---
 
@@ -158,8 +163,8 @@ satisfies the other:
   live-refreshes when results land.
 * Never opens while a subset scan is already running — the page shows the running state instead.
 
-Handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartSubsetScanModal.tsx` — `StartSubsetScanModal` (reads `GET /api/videos/subsets/status`).
+Handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (the shared component, `variant: "subsets"`); the auto-open logic in `VideosReviewPage.tsx` reads `GET /api/videos/subsets/status` (backend: `subset-scan.service.ts` — `subsetStatus()`).
 
 ---
 
@@ -178,8 +183,8 @@ batch on the standard Processing surfaces — no private progress machinery.
   the request and single-flight ([scan.mdx §10](./scan.mdx)).
 * On completion: write `subsets.csv` (§9), stamp the run, bump the live-refresh topic.
 
-Handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-scan.service.ts` — `enqueueSubsetScan()`.
+Handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-scan.service.ts` — `startSubsetScan()` (detached + single-flight; the run registers the `subset_scan` batch and folds items at the queue's shared settle seams).
 
 ---
 
@@ -264,14 +269,25 @@ Re-grouping and future re-scans compare **stored artifacts only** — two cached
 into `findContainment()`, two stored `.vpdq` frame lists into the run matcher. The media bytes
 are re-read only when a fingerprint is missing or its `sha256` invalidated — never to compare.
 
+### 7.5a CLI reality — a recorded deviation from §7.5 (2026-07-22)
+
+ffmpeg's `signature` filter **cannot load two stored `.mpeg7sig` files for comparison** — its
+two-input detect mode recomputes signatures from the two **video inputs**, so the MPEG-7 pair
+lookup re-decodes media. Only the **vPDQ cross-check** truly compares stored values (and it runs
+**first**, as a cheap pruner, so the expensive detect only runs on plausible pairs — the confirmed
+set is the same intersection §8 requires either way). The cached `.mpeg7sig` files still satisfy
+the §7.4 storage contract (a durable, referenceable fingerprint artifact per video) and would plug
+straight into a future signature-file comparator.
+Recorded in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/mpeg7-signature.service.ts` — the "CLI REALITY NOTE" header comment.
+
 ### 7.6 When to run it
 
 Only inside the dedicated subset scan (§8): signature generation in phase 2 (missing/stale files
 only), containment lookups in phase 4. Never on page load, never on a request path, never in the
 15-minute/4-hour scheduleTasks.
 
-The library boundary is one module so the algorithm can be swapped without touching the engine, in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/mpeg7-signature.service.ts` — `computeSignature(path)` (ffmpeg `signature` export, cached) / `findContainment(subsetSig, supersetSig)` (returns matched ranges + confidence).
+The library boundary is one module so the algorithm can be swapped without touching the engine, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/mpeg7-signature.service.ts` — `computeSignature(path, sha256)` (ffmpeg `signature` export, sha256-keyed cache) / `findContainment(subsetPath, supersetPath, subsetDurationS)` (two-input detect, §7.5a; log parsed by the unit-tested `parseSignatureDetectLog()`) / `mpeg7Available()` (filter probe — absent filter degrades to vPDQ-only confirmations, `match_basis: vpdq`).
 
 ---
 
@@ -304,8 +320,8 @@ stamp — run on demand from the pop-up (§5). Pipeline:
 computation is local — ffmpeg and the PDQ matcher, no sockets (charter;
 [perceptual_fingerprint.mdx §6](./perceptual_fingerprint.mdx)).
 
-The engine is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-scan.service.ts` — `runSubsetScan()` (phases 1–6), on `mpeg7-signature.service.ts` (§7) and `perceptual.service.ts` (cross-check).
+The engine is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-scan.service.ts` — `runSubsetScan()` (phases 1–6) and `matchPair()` (vPDQ run first as the cheap pruner, MPEG-7 detect confirms + provides offsets, corroboration overlap check — §7.5a), on `mpeg7-signature.service.ts` (§7) and `vpdq.service.ts` — `longestSharedRun()` (cross-check).
 
 ---
 
@@ -351,8 +367,8 @@ a71f30d2,/Users/bryan/Movies/clips/trees_clip.mp4,subset,77bd02…,signatures/77
 * Category-B computed state ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
   state root only, never committed anywhere.
 
-Reading/writing is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-store.ts` — `writeSubsetsCsv()` / `readSubsetsCsv()`.
+Reading/writing is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/subset-store.ts` — `writeSubsetsCsv()` / `readSubsetsCsv()` (shared CSV encode/parse in `csv.ts`; run stamps via `dedupe-store.ts` — `writeRunStamp()`/`readRunStamp()`).
 
 ---
 
@@ -412,5 +428,8 @@ Reading/writing is handled in code (planned):
   CSV cols: subset_group, full_path, role (ONE superset per group), sha256, fingerprint,
   match_basis (mpeg7|vpdq), start/end_offset_s (subset rows, in SUPERSET time), confidence,
   size_bytes, duration_s, width, height, codec, detected_at.
-  SPEC-AHEAD-OF-CODE: nothing built; code pointers = planned homes.
+  BUILT 2026-07-22. Actual homes: shared videos.router.ts, shared StartScanModal/VideosReviewPage,
+  engine subset-scan.service.ts + mpeg7-signature.service.ts + vpdq.service.ts. §7.5a DEVIATION:
+  ffmpeg CLI signature detect recomputes from the two VIDEO inputs (cannot load two stored
+  .mpeg7sig); vPDQ run test = the true stored-value compare and runs FIRST as the pruner.
 -->

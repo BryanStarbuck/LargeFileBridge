@@ -37,10 +37,12 @@ export function computeAttributeSplit(members: VideoMember[], variant: ReviewVar
   const sizeCommon = allEqual(members.map((m) => m.sizeBytes));
   const shaCommon = allEqual(members.map((m) => m.sha256));
   // Duplicates: a fingerprint-basis group matched within threshold by definition; byte-identical groups
-  // count when the stored strings agree. Subsets: the signature references always differ — never listed.
+  // count when the stored strings agree AND exist — an all-empty column (fingerprinting failed or was
+  // skipped) must not read as "same fingerprint". Subsets: the signature references always differ — never listed.
   const fpCommon =
     variant === "duplicates" &&
-    (members[0]?.matchBasis === "fingerprint" || allEqual(members.map((m) => m.fingerprint)));
+    (members[0]?.matchBasis === "fingerprint" ||
+      (members.every((m) => m.fingerprint !== "") && allEqual(members.map((m) => m.fingerprint))));
 
   const durations = members.map((m) => m.durationS);
   const durationsKnown = durations.every((d): d is number => d != null);

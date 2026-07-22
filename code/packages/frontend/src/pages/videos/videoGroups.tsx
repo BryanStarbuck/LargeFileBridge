@@ -56,6 +56,9 @@ export interface VideoGroup<M extends VideoMember> {
   searchText: string;
   /** File-type facet value (first member's class — a group is homogeneous). */
   fileType: string;
+  /** Match-basis facet value (duplicates.mdx §3.2 / subsets.mdx §3) — the group-level basis, so
+   *  filtering keeps whole groups (header + members) together. */
+  matchBasis: string;
 }
 
 export type VideoTableRow<M extends VideoMember> =
@@ -81,6 +84,7 @@ export function buildDuplicateGroups(rows: DuplicateMemberRow[]): VideoGroup<Dup
       sortName: (members[0]?.name ?? "").toLowerCase(),
       searchText: members.map((m) => `${m.name} ${m.fullPath}`).join(" "),
       fileType: fileTypeForName(members[0]?.name ?? ""),
+      matchBasis: members[0]?.matchBasis ?? "",
     });
   }
   groups.sort((a, b) => b.reclaimableBytes - a.reclaimableBytes);
@@ -112,6 +116,8 @@ export function buildSubsetGroups(rows: SubsetMemberRow[]): VideoGroup<SubsetMem
       sortName: (superset?.name ?? members[0]?.name ?? "").toLowerCase(),
       searchText: members.map((m) => `${m.name} ${m.fullPath}`).join(" "),
       fileType: fileTypeForName(members[0]?.name ?? ""),
+      // The superset row leads after the sort above, and its basis is the group-level basis.
+      matchBasis: members[0]?.matchBasis ?? "",
     });
   }
   groups.sort((a, b) => b.reclaimableBytes - a.reclaimableBytes);

@@ -71,6 +71,7 @@ videosRouter.get("/duplicates/status", (_req, res) => {
   try {
     res.json({ ok: true, data: dedupeStatus() });
   } catch (e) {
+    log.error("videos", `duplicates status failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -141,6 +142,7 @@ videosRouter.get("/subsets/status", (_req, res) => {
   try {
     res.json({ ok: true, data: subsetStatus() });
   } catch (e) {
+    log.error("videos", `subsets status failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });

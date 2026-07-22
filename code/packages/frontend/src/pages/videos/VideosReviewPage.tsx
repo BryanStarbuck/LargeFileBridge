@@ -35,6 +35,9 @@ export interface VideosReviewConfig<M extends VideoMember> {
   buildGroups: (rows: M[]) => VideoGroup<M>[];
   /** Duplicates carries the File-type facet (Videos · Images); Subsets is videos-only (subsets.mdx §3). */
   withFileTypeFacet: boolean;
+  /** The ⛛ filter's match-basis facet vocabulary — duplicates: sha256 · fingerprint (duplicates.mdx
+   *  §3.2); subsets: mpeg7 · vpdq (subsets.mdx §3). Value-checkbox model, all checked by default. */
+  matchBasisValues: string[];
 }
 
 export function VideosReviewPage<M extends VideoMember>({
@@ -49,6 +52,7 @@ export function VideosReviewPage<M extends VideoMember>({
   startScan,
   buildGroups,
   withFileTypeFacet,
+  matchBasisValues,
 }: VideosReviewConfig<M>) {
   const qc = useQueryClient();
 
@@ -186,6 +190,16 @@ export function VideosReviewPage<M extends VideoMember>({
             defaultSort={[{ id: "size", desc: true }]}
             loading={isLoading}
             fileTypeFacet={withFileTypeFacet ? { valueOf: (r) => r.group.fileType } : undefined}
+            // The match-basis facet (duplicates.mdx §3.2 / subsets.mdx §3) — group-level, so filtering
+            // keeps each group's header + members together.
+            extraFacets={[
+              {
+                id: "match_basis",
+                label: "Match basis",
+                values: matchBasisValues,
+                valueOf: (r) => r.group.matchBasis,
+              },
+            ]}
             empty={empty}
           />
         }

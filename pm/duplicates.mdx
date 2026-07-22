@@ -20,8 +20,13 @@ and its heavily-compressed JPEG. That is why grouping runs on **two identities**
 **LFB never deletes on its own.** The page surfaces groups and gives the user the evidence; any
 delete is an explicit user action per file (charter: detect, surface, offer — never act).
 
-> **HONEST STATUS — spec ahead of code.** Nothing on this page exists yet; code pointers name the
-> **planned** homes.
+> **HONEST STATUS — BUILT (2026-07-22).** The page, pop-up, engine, and CSV exist; code pointers
+> name the **actual** homes. Implementation deltas from the planned pointers: the router is the one
+> shared `videos.router.ts` (not a separate `duplicates.router.ts`), the pop-up is the shared
+> `StartScanModal.tsx` (one component, both variants), the status route is
+> `GET /api/videos/duplicates/status` (not `/dedupe/status`), `resolutionLabel()` lives in
+> `@lfb/shared` `videos.ts` (not a `media/resolutionClass.ts`), and table search runs client-side
+> over the served rows (the whole CSV ships to the page — house table pattern), not server-filtered.
 
 This spec builds on the siblings and does not repeat them:
 
@@ -113,10 +118,10 @@ Size — that is the whole table.
   facet (Videos · Images — [tables.mdx §2.10](./tables.mdx) subset) and a match-basis facet
   (sha256 · fingerprint), value-checkbox model, all checked by default.
 
-The table rows are served by the backend in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/duplicates.router.ts` — `duplicatesRouter` → `GET /api/videos/duplicates` (reads `duplicates.csv`, §9).
-Rendering the grouped table and selection is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/DuplicatesPage.tsx` — `DuplicatesPage`.
+The table rows are served by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/videos.router.ts` — `videosRouter` → `GET /api/videos/duplicates` (reads `duplicates.csv`, §9; groups sorted by reclaimable bytes descending).
+Rendering the grouped table and selection is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/DuplicatesPage.tsx` — `DuplicatesPage` (a thin config over the shared `VideosReviewPage.tsx` body; group/row model in `videoGroups.tsx` — `buildDuplicateGroups()`).
 
 ---
 
@@ -204,8 +209,8 @@ class** is the class appended in parentheses: **`1280x720 (720p)`**. The known c
 Dimensions that match no class print bare: `1442x1080`. Snapping tolerates the usual encode
 variance (±8 px per axis; portrait matches by the transposed dimensions).
 
-The class-snapping helper is one shared function in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media/resolutionClass.ts` — `resolutionLabel(width, height)`.
+The class-snapping helper is one shared function in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/videos.ts` — `resolutionLabel(width, height)` (the `RESOLUTION_CLASSES` named constant; `codecLabel()` sits beside it for §4.5).
 
 ### 4.5 The codec print rule (LOCKED)
 
@@ -213,8 +218,8 @@ The codec — the compression-algorithm format of the file (h264, hevc, prores, 
 heic, webp for images) — prints as the word **`codec`** followed by the value **in parentheses**:
 **`codec (h264)`**. Same form in the common block and in the differing lines.
 
-The right review column is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, preview blocks; its own `overflow-y-auto` region).
+The right review column is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, preview blocks; its own `overflow-y-auto` region; the common/differing split is `computeAttributeSplit()`).
 
 ---
 
@@ -258,8 +263,8 @@ running one scan never satisfies the other.)
 * While a duplicate scan is **already running**, the pop-up never opens; the page shows the
   running state (§6) instead.
 
-Staleness evaluation and the modal are handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartDuplicateScanModal.tsx` — `StartDuplicateScanModal` (reads last-run from `GET /api/videos/dedupe/status`).
+Staleness evaluation and the modal are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (one component serves both pages, keyed by variant); the auto-open-once logic sits in `VideosReviewPage.tsx`, reading last-run from `GET /api/videos/duplicates/status` (backend: `dedupe.service.ts` — `dedupeStatus()`).
 
 ---
 
@@ -281,8 +286,8 @@ background-processing model, and the **Processing** surfaces track all of it
 * On completion the engine writes `duplicates.csv` (§9), bumps the live-refresh topic, and the
   page re-renders with fresh groups.
 
-Enqueueing the batch is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `enqueueDedupeScan()` (registers the `dedupe_scan` batch with the job queue).
+Enqueueing the batch is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `startDedupeScan()` (detached + single-flight; the run registers the `dedupe_scan` batch and folds every item at the queue's shared settle seams `settleExternalItem`/`settleOne`).
 
 ---
 
@@ -407,8 +412,9 @@ back into the library's compare functions — media bytes are never re-read to c
   duplicate from a mere subset).
 * The compare boundary is one module so the fallback→PDQ swap never touches the engine.
 
-The hash + compare boundary is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage()` / `fingerprintVideo()` / `hammingDistance()` / `sameContent()` ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)).
+The hash + compare boundary is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage()` / `hammingDistance()` / `sameContent()` ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)); the video side is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/vpdq.service.ts` — `ensureVpdqFrames()` (sha256-keyed `.vpdq` cache) / `symmetricSharedFraction()` (the stored-value duplicate matcher) / `anySampledFrameMatch()` (the cheap prefilter before the full compare).
 
 ---
 
@@ -445,8 +451,8 @@ is missing — a warm re-scan is cheap.
 **Signal only.** The engine groups and records; it never deletes, replaces, or alters a file
 (charter + [perceptual_fingerprint.mdx §4](./perceptual_fingerprint.mdx)).
 
-The engine is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (passes 1–4), using `perceptual.service.ts` — `sameContent()` for pass 2.
+The engine is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (passes 1–4) with the pure, unit-tested grouping in `computeDuplicateGroups()`; candidate enumeration reuses the existing per-unit rows in `known-media.ts` — `collectKnownMedia()`; warm-re-scan hash/fingerprint caches in `hash-cache.ts` — `VideosCaches`.
 
 ---
 
@@ -488,8 +494,8 @@ duplicate_group,full_path,sha256,fingerprint,match_basis,size_bytes,duration_s,w
 * Category-B computed state ([artifact_placement_policy.mdx](./artifact_placement_policy.mdx)):
   state root only, never committed anywhere.
 
-Reading/writing the CSV is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe-store.ts` — `writeDuplicatesCsv()` / `readDuplicatesCsv()`.
+Reading/writing the CSV is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe-store.ts` — `writeDuplicatesCsv()` / `readDuplicatesCsv()` (RFC-4180 encode/parse in `csv.ts`; atomic write + state-root paths in `paths.ts`).
 
 ---
 
@@ -566,5 +572,8 @@ Reading/writing the CSV is handled in code (planned):
   CSV (§9): ~/T/_large_files_bridge/videos/duplicates.csv — one row per member, shared duplicate_group id,
   cols: duplicate_group, full_path, sha256, fingerprint, match_basis, size_bytes, duration_s,
   width, height, codec, detected_at. Rewritten whole, Category B (state root only).
-  SPEC-AHEAD-OF-CODE: nothing built; code pointers = planned homes.
+  BUILT 2026-07-22. Actual homes differ from the planned ones: shared videos.router.ts (not
+  duplicates.router.ts), shared StartScanModal.tsx + VideosReviewPage.tsx, status route
+  /api/videos/duplicates/status, resolutionLabel() in @lfb/shared videos.ts; search is client-side
+  over the served rows. Match-basis facet = the DataTable extraFacets checkbox facet.
 -->

@@ -150,6 +150,26 @@ function matchesAny(frame: VpdqFrame, others: VpdqFrame[]): boolean {
   return false;
 }
 
+// Quick-reject sampling: both real matchers demand a HIGH matched fraction of the smaller list (0.8
+// symmetric for duplicates, a run covering 0.7 of the subset for containment), so evenly spaced samples
+// cannot ALL miss when a real match exists — the non-matching frames span well under half the timeline.
+const QUICK_REJECT_SAMPLES = 10;
+
+/**
+ * Cheap prefilter before the O(|a|·|b|) matchers: do ANY of ~10 evenly spaced quality-gated frames of
+ * `a` Hamming-match anywhere in `b`? False means the expensive compare cannot reach the high-fraction
+ * bars above and is safely skipped (~60× cheaper for the common no-match pair). Callers that accept
+ * LOW matched fractions must not use this.
+ */
+export function anySampledFrameMatch(a: VpdqFrame[], b: VpdqFrame[]): boolean {
+  const ua = usable(a);
+  const ub = usable(b);
+  if (ua.length === 0 || ub.length === 0) return false;
+  const step = Math.max(1, Math.floor(ua.length / QUICK_REJECT_SAMPLES));
+  for (let i = 0; i < ua.length; i += step) if (matchesAny(ua[i], ub)) return true;
+  return false;
+}
+
 /**
  * The SYMMETRIC shared-frame fraction between two stored frame lists (duplicates.mdx §7.8): the
  * fraction of quality-gated frames of A matched anywhere in B, and vice versa — the pair's score is

@@ -21,9 +21,8 @@ duplicate scan writes `duplicates.csv`; the separate subset scan writes `subsets
 pattern is specified **once**, in [duplicates.mdx](./duplicates.mdx) §5–§9;
 [subsets.mdx](./subsets.mdx) mirrors it and specifies its deltas.
 
-> **HONEST STATUS — spec ahead of code.** This hub and both children are specification-first
-> ([spec-ahead-of-code is the house pattern](./to_fix.mdx)); no nav entry, route, engine, or CSV
-> exists yet. Code pointers below name the **planned** homes.
+> **HONEST STATUS — BUILT (2026-07-22).** The nav entry, routes, 60/40 layout, both scans, both
+> engines, and both CSVs exist. Code pointers below name the **actual** homes.
 
 This spec builds on the siblings and does not repeat them:
 
@@ -87,8 +86,8 @@ IPFS, above Scans** in the rendered list. The app bar order becomes:
 * All color, width, hover, and truncation rules are [left_bar.mdx §2/§5](./left_bar.mdx) —
   nothing new here.
 
-Rendering the Videos item and its static children from the yaml is handled in code (planned):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (the same `children:` disclosure path Storages uses; no new mechanism).
+Rendering the Videos item and its static children from the yaml is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (the generic `staticChildren` disclosure path — any yaml item with fixed `children:`; Storages keeps its runtime-composed list). The `/videos` → `/videos/duplicates` redirect lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `videosRoute`.
 
 ---
 
@@ -138,8 +137,10 @@ Both children render the same screen shape — **"the Repos page with a reserved
 * Column set, right-column content model, and every behavioral detail are owned by
   [duplicates.mdx §3–§4](./duplicates.mdx); [subsets.mdx](./subsets.mdx) states its deltas.
 
-The 60/40 split view both pages mount is handled in code (planned):
+The 60/40 split view both pages mount is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (table slot + independently-scrolling right column slot).
+The shared page body both children configure (table, pop-up flow, live refresh, group selection) is
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage`.
 
 ---
 
@@ -192,7 +193,7 @@ the subset scan's staleness clock, or vice versa — and each has its own batch 
   independent 4-day staleness clocks). Pattern specified once in duplicates.mdx §5-§9; subsets.mdx =
   mirror + deltas (incl. its own library choice: MPEG-7 Video Signature + vPDQ cross-check).
   Scope: Duplicates = videos primary + images secondary; Subsets = VIDEOS ONLY; audio OUT of v1.
-  SPEC-AHEAD-OF-CODE: nothing built yet;
-  code pointers are planned homes. Siblings: left_bar, duplicates, subsets, perceptual_fingerprint,
+  BUILT 2026-07-22: nav + routes + shared VideosReviewPage/ReviewSplitLayout + both engines + CSVs.
+  Siblings: left_bar, duplicates, subsets, perceptual_fingerprint,
   scan, processing, tables.
 -->

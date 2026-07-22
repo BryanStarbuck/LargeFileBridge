@@ -20,8 +20,9 @@ export function DuplicatesPage() {
       startScan={api.videosDuplicatesScan}
       buildGroups={buildDuplicateGroups}
       // Duplicates covers videos first, images second (videos.mdx §2) — the ⛛ filter carries the
-      // File-type facet (duplicates.mdx §3.2).
+      // File-type facet and the sha256 · fingerprint match-basis facet (duplicates.mdx §3.2).
       withFileTypeFacet
+      matchBasisValues={["sha256", "fingerprint"]}
     />
   );
 }

@@ -30,7 +30,7 @@ import { log, withLogContext } from "../../shared/logging.js";
 import { collectKnownMedia, type KnownMediaFile } from "./known-media.js";
 import { VideosCaches } from "./hash-cache.js";
 import { probeImageAttrs, probeVideoAttrs, toolOnPath, type MediaAttrs } from "./exec.js";
-import { ensureVpdqFrames, symmetricSharedFraction, vpdqRelRef, type VpdqFrame } from "./vpdq.service.js";
+import { anySampledFrameMatch, ensureVpdqFrames, symmetricSharedFraction, vpdqRelRef, type VpdqFrame } from "./vpdq.service.js";
 import { writeDuplicatesCsv, writeDedupeRunStamp, readDedupeRunStamp, type DuplicateCsvRow } from "./dedupe-store.js";
 import { DEDUPE_SCAN_KIND, asProgressKind } from "./videos.kinds.js";
 
@@ -125,7 +125,14 @@ export function computeDuplicateGroups(files: DedupeFileInfo[]): DuplicateGroup[
         if (da !== null && db !== null && da > 0 && db > 0 && Math.min(da, db) < DUP_DURATION_RATIO * Math.max(da, db)) {
           continue;
         }
-        if (a.frames?.length && b.frames?.length && symmetricSharedFraction(a.frames, b.frames) >= VIDEO_DUP_FRACTION) {
+        if (
+          a.frames?.length &&
+          b.frames?.length &&
+          // Sampled prefilter first — the full O(F²) symmetric compare only runs on plausible pairs,
+          // keeping the N² pass from pinning the event loop on all-miss comparisons.
+          anySampledFrameMatch(a.frames, b.frames) &&
+          symmetricSharedFraction(a.frames, b.frames) >= VIDEO_DUP_FRACTION
+        ) {
           uf.union(i, j);
         }
       }

@@ -80,6 +80,11 @@ interface DataTableProps<T> {
   // listed so the user can filter to them without expanding; a "More types…" disclosure reveals the rest
   // (Other). An "All kinds" checkbox clears the filter. Images/Videos/Audio/PDFs start checked; Other unchecked.
   fileTypeFacet?: { valueOf: (row: T) => string };
+  // Extra value-checkbox facets rendered INSIDE the Filter ⛛ dropdown, below the File-type facet — a
+  // FIXED value vocabulary, one checkbox per value, all checked by default; unchecking hides the rows
+  // carrying that value (e.g. the Videos review tables' match-basis facet — duplicates.mdx §3.2 /
+  // subsets.mdx §3). Session-only state (deliberately not part of the persisted table view).
+  extraFacets?: { id: string; label: string; values: string[]; valueOf: (row: T) => string }[];
   // The §2.11 file filter (tables.mdx §2.11) — segmented All/Not-yet/Done controls in a two-column-wide
   // Filter ⛛ dropdown plus the editable boolean clause bar, persisted per user as the ONE expression
   // string. `fields` is this surface's honest subset in display order, each with the row's answer for
@@ -154,6 +159,7 @@ export function DataTable<T>({
   defaultSort,
   largeOnly,
   fileTypeFacet,
+  extraFacets,
   fileFilter,
   hoverPreview,
   rowClassName,
@@ -182,6 +188,8 @@ export function DataTable<T>({
   // The "More types…" disclosure inside the Filter dropdown — collapsed by default so only the four common
   // kinds show without expanding (tables.mdx §2.10).
   const [showMoreTypes, setShowMoreTypes] = useState(false);
+  // Extra facets' UNCHECKED values, keyed by facet id — everything checked (empty sets) by default.
+  const [facetHidden, setFacetHidden] = useState<Record<string, ReadonlySet<string>>>({});
 
   // ── The §2.11 file filter (tables.mdx §2.11) ──────────────────────────────────
   // ONE expression string is the whole state: the segmented controls and the clause bar are two views
@@ -242,12 +250,18 @@ export function DataTable<T>({
     if (largeOnly && largeOnlyOn) d = d.filter(largeOnly.rowIsLarge);
     if (fileTypeFacet && hiddenTypes.size > 0)
       d = d.filter((r) => !hiddenTypes.has(fileTypeFacet.valueOf(r)));
+    if (extraFacets) {
+      for (const f of extraFacets) {
+        const hidden = facetHidden[f.id];
+        if (hidden && hidden.size > 0) d = d.filter((r) => !hidden.has(f.valueOf(r)));
+      }
+    }
     // The §2.11 file-filter expression (tables.mdx §2.11.4) — the last VALID expression, so a
     // half-typed clause in the bar never blanks the table.
     if (fileFilter && ffApplied)
       d = d.filter((r) => evalFileFilter(ffApplied, (fid) => ffValueOf.get(fid)?.(r) ?? "na"));
     return d;
-  }, [data, largeOnly, largeOnlyOn, fileTypeFacet, hiddenTypes, fileFilter, ffApplied, ffValueOf]);
+  }, [data, largeOnly, largeOnlyOn, fileTypeFacet, hiddenTypes, extraFacets, facetHidden, fileFilter, ffApplied, ffValueOf]);
 
   // Toggle a file-type class, honoring the last-value rule (tables.mdx §2.1): the final CHECKED present
   // class can't be unchecked (that would only ever blank the table).
@@ -277,6 +291,23 @@ export function DataTable<T>({
       return presentTypes.filter((x) => !hiddenTypes.has(x)).length === 1;
     },
     [presentTypes, hiddenTypes],
+  );
+
+  // Toggle one extra-facet value, honoring the same last-value rule as the file-type facet: the final
+  // checked value can't be unchecked (that would only ever blank the table).
+  const toggleFacetValue = useCallback(
+    (facet: { id: string; values: string[] }, v: string) =>
+      setFacetHidden((prev) => {
+        const cur = new Set(prev[facet.id] ?? []);
+        if (cur.has(v)) {
+          cur.delete(v);
+        } else {
+          if (facet.values.filter((x) => x !== v && !cur.has(x)).length === 0) return prev; // last checked — refuse
+          cur.add(v);
+        }
+        return { ...prev, [facet.id]: cur };
+      }),
+    [],
   );
 
   const searchText = useCallback(
@@ -434,6 +465,7 @@ export function DataTable<T>({
   const facetActive =
     (!!largeOnly && largeOnlyOn) ||
     (!!fileTypeFacet && presentTypes.some((t) => hiddenTypes.has(t))) ||
+    (!!extraFacets && extraFacets.some((f) => (facetHidden[f.id]?.size ?? 0) > 0)) ||
     (!!fileFilter && ffApplied !== null); // any §2.11 clause lights the icon (tables.mdx §2.11.4)
   const filtersActive = columnFilters.length > 0 || facetActive;
   const sortActive = sorting.length > 0;
@@ -708,6 +740,36 @@ export function DataTable<T>({
               <div className="my-1 border-t border-[var(--lfb-border)]" />
             </>
           )}
+          {/* Extra value-checkbox facets (duplicates.mdx §3.2 / subsets.mdx §3 — e.g. Match basis on the
+              Videos review tables): fixed vocabulary, all checked by default, last-checked guarded. */}
+          {extraFacets?.map((f) => {
+            const hidden = facetHidden[f.id];
+            const checkedCount = f.values.filter((v) => !hidden?.has(v)).length;
+            return (
+              <div key={f.id}>
+                <div className="px-3 pb-1 pt-0.5 text-[11px] uppercase tracking-wide text-black/40">
+                  {f.label}
+                </div>
+                <div className="grid grid-cols-4 gap-x-3 px-3">
+                  {f.values.map((v) => {
+                    const checked = !hidden?.has(v);
+                    return (
+                      <label key={v} className="flex cursor-pointer items-center gap-2 py-1 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          disabled={checked && checkedCount === 1}
+                          onChange={() => toggleFacetValue(f, v)}
+                        />
+                        <span className={checked ? "text-black/70" : "text-black/50"}>{v}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="my-1 border-t border-[var(--lfb-border)]" />
+              </div>
+            );
+          })}
           {columns
             .filter((c) => (c.filterable ?? true) && c.id !== bookmarkColId && !ffCoveredCols.has(c.id))
             .map((c) => {
@@ -755,6 +817,7 @@ export function DataTable<T>({
             className="w-full px-3 py-1.5 text-sm text-[var(--lfb-primary)]"
             onClick={() => {
               setColumnFilters([]);
+              setFacetHidden({});
               if (fileFilter) setFileFilterText(""); // "" = the deliberate cleared state (§2.11.5)
             }}
           >

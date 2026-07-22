@@ -135,13 +135,32 @@ export async function collectKnownMedia(kinds: ReadonlySet<MediaKind>): Promise<
  * Best-effort icon-state lookup for the LIST endpoints: abs path → IconState. Built from the same
  * enumeration; on any failure returns an empty map so the list renders with cheap defaults rather
  * than blocking (the endpoints must stay light — duplicates.mdx §3.2 reads only the CSV).
+ *
+ * TTL-cached and single-flight: the enumeration composes every repo's row model (sidecar reads +
+ * git check-ignore — the dominant walk cost), which must not run per request. Icon state is a
+ * nicety, so a 30 s stale view is fine; concurrent requests share one in-flight build.
  */
-export async function buildIconStateIndex(): Promise<Map<string, IconState>> {
-  try {
-    const files = await collectKnownMedia(new Set<MediaKind>(["video", "image"]));
-    return new Map(files.map((f) => [f.abs, f.icon]));
-  } catch (e) {
-    log.warn("videos", `icon-state index unavailable (rows get defaults): ${(e as Error).message}`);
-    return new Map();
+const ICON_INDEX_TTL_MS = 30_000;
+let iconIndexCache: { at: number; index: Map<string, IconState> } | null = null;
+let iconIndexInFlight: Promise<Map<string, IconState>> | null = null;
+
+export function buildIconStateIndex(): Promise<Map<string, IconState>> {
+  if (iconIndexCache && Date.now() - iconIndexCache.at < ICON_INDEX_TTL_MS) {
+    return Promise.resolve(iconIndexCache.index);
   }
+  if (iconIndexInFlight) return iconIndexInFlight;
+  iconIndexInFlight = (async () => {
+    try {
+      const files = await collectKnownMedia(new Set<MediaKind>(["video", "image"]));
+      const index = new Map(files.map((f) => [f.abs, f.icon]));
+      iconIndexCache = { at: Date.now(), index };
+      return index;
+    } catch (e) {
+      log.warn("videos", `icon-state index unavailable (rows get defaults): ${(e as Error).message}`);
+      return new Map<string, IconState>();
+    } finally {
+      iconIndexInFlight = null;
+    }
+  })();
+  return iconIndexInFlight;
 }

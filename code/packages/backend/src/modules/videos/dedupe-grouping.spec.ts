@@ -4,7 +4,14 @@
 import { describe, expect, it } from "vitest";
 import type { PerceptualFingerprint } from "@lfb/shared";
 import { computeDuplicateGroups, type DedupeFileInfo } from "./dedupe.service.js";
-import { parseVpdq, serializeVpdq, symmetricSharedFraction, longestSharedRun, type VpdqFrame } from "./vpdq.service.js";
+import {
+  anySampledFrameMatch,
+  parseVpdq,
+  serializeVpdq,
+  symmetricSharedFraction,
+  longestSharedRun,
+  type VpdqFrame,
+} from "./vpdq.service.js";
 
 const ZEROS = "0".repeat(64);
 const ONES = "f".repeat(64);
@@ -158,5 +165,19 @@ describe("vpdq stored-list matchers", () => {
     expect(run!.coverage).toBe(1);
     // No run of ≥3 → null (1–2 matched frames are noise, not containment).
     expect(longestSharedRun(frames([ZEROS]), sup)).toBeNull();
+  });
+
+  it("anySampledFrameMatch passes real matches (incl. long lists) and rejects all-miss pairs", () => {
+    const shared = frames([ZEROS, ONES, "a".repeat(64)]);
+    expect(anySampledFrameMatch(shared, shared)).toBe(true);
+    expect(anySampledFrameMatch(shared, frames(["9".repeat(64), "3".repeat(64)]))).toBe(false);
+    expect(anySampledFrameMatch(shared, [])).toBe(false);
+    // A long subset whose containment run covers ≥70% of its timeline must never be prefiltered out:
+    // 100 frames, the first 25 unique junk, the remaining 75 present in the superset — evenly spaced
+    // samples cannot all land in the 25% miss region.
+    const hex = (i: number) => i.toString(16).padStart(2, "0").repeat(32);
+    const longSub = frames(Array.from({ length: 100 }, (_, i) => (i < 25 ? hex(i) : hex(100 + i))));
+    const sup = frames(Array.from({ length: 100 }, (_, i) => hex(125 + i)));
+    expect(anySampledFrameMatch(longSub, sup)).toBe(true);
   });
 });

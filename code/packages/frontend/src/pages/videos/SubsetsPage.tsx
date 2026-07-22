@@ -21,8 +21,10 @@ export function SubsetsPage() {
       fetchStatus={api.videosSubsetsStatus}
       startScan={api.videosSubsetsScan}
       buildGroups={buildSubsetGroups}
-      // Videos only — no File-type facet on this page (subsets.mdx §3).
+      // Videos only — no File-type facet on this page; the ⛛ filter carries the mpeg7 · vpdq
+      // match-basis facet (subsets.mdx §3).
       withFileTypeFacet={false}
+      matchBasisValues={["mpeg7", "vpdq"]}
     />
   );
 }

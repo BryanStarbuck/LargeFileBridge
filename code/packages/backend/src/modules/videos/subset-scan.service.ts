@@ -33,7 +33,15 @@ import { log, withLogContext } from "../../shared/logging.js";
 import { collectKnownMedia } from "./known-media.js";
 import { VideosCaches } from "./hash-cache.js";
 import { probeVideoAttrs, toolOnPath, type MediaAttrs } from "./exec.js";
-import { ensureVpdqFrames, readVpdq, longestSharedRun, vpdqRelRef, type SharedRun } from "./vpdq.service.js";
+import {
+  anySampledFrameMatch,
+  ensureVpdqFrames,
+  readVpdq,
+  longestSharedRun,
+  vpdqRelRef,
+  type SharedRun,
+  type VpdqFrame,
+} from "./vpdq.service.js";
 import {
   computeSignature,
   findContainment,
@@ -208,12 +216,15 @@ async function runSubsetScan(): Promise<void> {
     }
 
     // Phase 2 — signatures + frame lists, missing/stale only (sha256-keyed caches). Item per file.
+    // The frame lists are kept IN MEMORY for the match phase: the O(pairs) phase 4 must never re-read
+    // and re-parse the same `.vpdq` file per pair (and readFileSync on the engine path is banned).
     const okFiles = new Set<string>();
+    const framesBySha = new Map<string, VpdqFrame[]>();
     await mapLimit(infos, width, async (f) => {
       const jobId = begin(asProgressKind(SUBSET_SCAN_KIND), path.basename(f.abs));
       try {
         if (mpeg7) await computeSignature(f.abs, f.sha256);
-        await ensureVpdqFrames(f.abs, f.sha256, f.durationS);
+        framesBySha.set(f.sha256, await ensureVpdqFrames(f.abs, f.sha256, f.durationS));
         okFiles.add(f.abs);
         settleOne(manifest.batchId, f.abs, "processed");
         settleExternalItem(manifest.batchId, { state: "ok", path: f.abs });
@@ -242,7 +253,7 @@ async function runSubsetScan(): Promise<void> {
           settleExternalItem(manifest.batchId, { state: "ok", path: pairLabel });
           return;
         }
-        const hit = await matchPair(p.sub, p.sup, mpeg7);
+        const hit = await matchPair(p.sub, p.sup, mpeg7, framesBySha);
         if (hit) hits.push(hit);
         settleOne(manifest.batchId, pairLabel, "processed", hit ? "containment confirmed" : undefined);
         settleExternalItem(manifest.batchId, { state: "ok", path: pairLabel });
@@ -339,10 +350,18 @@ async function runSubsetScan(): Promise<void> {
  * drops the hit. When the signature filter is unavailable (or errors on this pair), a strong vPDQ run
  * stands alone with `match_basis: vpdq` (subsets.mdx §9 — cross-check-only confirmations).
  */
-async function matchPair(sub: SubsetFileInfo, sup: SubsetFileInfo, mpeg7: boolean): Promise<ConfirmedHit | null> {
-  const subFrames = readVpdq(sub.sha256);
-  const supFrames = readVpdq(sup.sha256);
+async function matchPair(
+  sub: SubsetFileInfo,
+  sup: SubsetFileInfo,
+  mpeg7: boolean,
+  framesBySha: Map<string, VpdqFrame[]>,
+): Promise<ConfirmedHit | null> {
+  // Phase 2 already holds both parsed lists in memory; the disk read is only a resume fallback.
+  const subFrames = framesBySha.get(sub.sha256) ?? readVpdq(sub.sha256);
+  const supFrames = framesBySha.get(sup.sha256) ?? readVpdq(sup.sha256);
   if (!subFrames?.length || !supFrames?.length) return null;
+  // Sampled prefilter first — the O(|sub|·|sup|) run DP only spends CPU on plausible pairs.
+  if (!anySampledFrameMatch(subFrames, supFrames)) return null;
   const run: SharedRun | null = longestSharedRun(subFrames, supFrames);
   if (!run || run.coverage < VPDQ_MIN_COVERAGE) return null;
 
