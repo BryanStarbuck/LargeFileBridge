@@ -128,25 +128,87 @@ function neverIpfsPaths(repoRoot: string, relPaths: string[]): string[] {
 export const reposRouter = Router();
 reposRouter.use(requireAllowListed);
 
+/**
+ * How many repos to compose before handing the event loop back (see {@link buildRepoRows}).
+ * Small enough that the pause between two chunks is a few milliseconds, large enough that the yields
+ * themselves cost nothing measurable on a machine with a handful of repos.
+ */
+const REPO_ROWS_YIELD_EVERY = 10;
+
+/**
+ * Build every Repos-table row, YIELDING to the event loop as it goes.
+ *
+ * `computeRepoRow` is synchronous and reads the disk, so composing N of them back-to-back occupies the
+ * single Node thread for the whole walk — nothing else runs, not even a request that is already parsed
+ * and waiting. On a machine tracking ~180 repos that was long enough that clicking a repo row looked
+ * broken: the One-repo detail (`GET /api/repos/:repoId`) simply sat in the queue until the list finished,
+ * and if a second list refetch had already stacked up behind the first, it waited for that one too.
+ * Pausing every {@link REPO_ROWS_YIELD_EVERY} repos costs this request a few milliseconds and lets every
+ * other request be served WHILE the list is being built.
+ */
+async function buildRepoRows(): Promise<RepoRow[]> {
+  const folders = listRepoFolders();
+  const rows: RepoRow[] = [];
+  for (let i = 0; i < folders.length; i++) {
+    rows.push(computeRepoRow(folders[i]));
+    if ((i + 1) % REPO_ROWS_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
+  }
+  return rows;
+}
+
+/**
+ * The in-flight list build, so concurrent callers SHARE one walk instead of each starting their own.
+ *
+ * The Repos page invalidates `["repos"]` on every live-refresh bump, and a burst of bumps (a scan pass, a
+ * pin pass) used to turn into a burst of overlapping `GET /api/repos` walks that serialised on the event
+ * loop — each one finishing later than the last (10s, then 21s, then 31s…) while every unrelated request
+ * queued behind the growing backlog. Coalescing is what keeps a bump storm costing one walk.
+ */
+let repoRowsInFlight: Promise<RepoRow[]> | null = null;
+
+function repoRows(): Promise<RepoRow[]> {
+  if (repoRowsInFlight) return repoRowsInFlight;
+  const p = buildRepoRows();
+  repoRowsInFlight = p;
+  const clear = (): void => {
+    if (repoRowsInFlight === p) repoRowsInFlight = null;
+  };
+  p.then(clear, clear);
+  return p;
+}
+
+/**
+ * Fire the per-repo working-tree convergence trigger for every tracked repo, yielding as it goes.
+ * Each call is individually cheap and throttled, but `repoRootFor` re-reads a config per repo, so the
+ * sweep is chunked for the same reason the row build is: it must never hold the thread against the
+ * requests the page issues immediately after this one.
+ */
+async function convergeAllWorkingRepos(): Promise<void> {
+  const folders = listRepoFolders();
+  for (let i = 0; i < folders.length; i++) {
+    try {
+      maybeConvergeWorkingRepo(repoRootFor(folders[i]), "Repos list loaded");
+    } catch {
+      /* a freshness trigger must never break the page */
+    }
+    if ((i + 1) % REPO_ROWS_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
+  }
+}
+
 // GET /api/repos — the Repos table.
-reposRouter.get("/", (_req, res) => {
+reposRouter.get("/", async (_req, res) => {
   try {
     // Freshness self-heal: if we haven't scanned the filesystem in >4h, kick a background scan now so the
     // next poll reflects current disk state. Non-blocking + single-flight (scan-job.ts) — never delays this
     // response and no-ops when a scan is already running or recent.
     maybeTriggerStaleScan("Repos list loaded");
-    const rows: RepoRow[] = listRepoFolders().map(computeRepoRow);
-    // Working-repo convergence (backbone_resilience.mdx §6.4): pull down other computers' finished
-    // `.lfbridge/` artifacts. Cheap per repo (throttled 30 min, gated to artifact-bearing repos),
-    // non-blocking — fired after the rows are computed so it never delays this response.
-    for (const folder of listRepoFolders()) {
-      try {
-        maybeConvergeWorkingRepo(repoRootFor(folder), "Repos list loaded");
-      } catch {
-        /* a freshness trigger must never break the page */
-      }
-    }
+    const rows: RepoRow[] = await repoRows();
     res.json({ ok: true, data: rows });
+    // Working-repo convergence (backbone_resilience.mdx §6.4): pull down other computers' finished
+    // `.lfbridge/` artifacts. Cheap per repo (throttled 30 min, gated to artifact-bearing repos) and
+    // fire-and-forget — but it still re-reads every repo's config, so it runs AFTER the response is on the
+    // wire and yields between chunks, exactly like the row build above.
+    void convergeAllWorkingRepos();
   } catch (e) {
     log.error("repos", `list failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });

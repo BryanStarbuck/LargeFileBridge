@@ -575,6 +575,48 @@ The durable backlog and its boot restore are in code:
 
 ---
 
+## Fourth pass (P-35) — the landing page · T3/T4
+
+### 🔴 P-35 — `GET /api/repos` composed every file of every repo, synchronously · T3/T4
+- **Where:** `code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()`
+  (called `composeFileRows()` for the whole repo, then `countDecisions()` / `peerCountForFiles()`
+  over the result); `code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos`
+  (a synchronous handler: `listRepoFolders().map(computeRepoRow)` plus a second full pass calling
+  `repoRootFor()` per repo).
+- **Symptom:** This is T3 on the **landing page**. The Repos table needs five fields per file
+  (decision, transfer, peers, `analysisOnly`, `pinnedForeign`) but the row was built by composing
+  the complete `FileRow`, which is expensive on purpose — one `git check-ignore` spawn per repo
+  plus a per-file artifact probe for the four task axes. Measured on a 179-repo machine:
+  **~11 seconds, fully synchronous**, so nothing else ran for its whole duration. The
+  user-visible failure was *not* a slow table: clicking a repo row **looked like it did nothing**,
+  because the One-repo detail (`GET /api/repos/:repoId`, itself ~1s) sat in the queue behind the
+  list. And because the Repos page invalidates `["repos"]` on every live-refresh bump (T4), a
+  bump burst stacked overlapping walks that each finished later than the last — measured at
+  10s → 21s → 31s → 41s → 51s → 61s, with an unrelated `/api/ipfs/liveness` taking 43s behind them.
+- **Fix (done), three parts:**
+  1. **Count without composing.** A dedicated `repoRowStats()` derives the three aggregates from
+     the config + scan status + manifest, reading each field exactly the way `composeFileRows`
+     reads it and reusing the SAME `remoteOnlyRows()` composer so the two paths cannot drift.
+     Verified byte-identical to the old rows across all 179 repos. **11.5s → 1.5s.**
+  2. **Yield while building.** The handler is async and hands the event loop back every
+     `REPO_ROWS_YIELD_EVERY` (10) repos — the same "make the walk yield" rule as P-04/P-16 — so a
+     row click is served *while* the list is still being built, not after.
+  3. **Coalesce concurrent walks.** One in-flight promise is shared, so a bump storm costs one
+     walk instead of N. Measured: 6 simultaneous list requests now all return in ~1.7s.
+  The per-repo convergence sweep also moved to **after** `res.json()` and yields the same way, so
+  it can never delay the response it used to run inside.
+
+The cheap row aggregates are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (consumed by `computeRepoRow()`)
+
+The yielding, coalesced list endpoint is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `buildRepoRows()` / `repoRows()` / `convergeAllWorkingRepos()`
+
+The drift guard that keeps the two counting paths honest is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts`
+
+---
+
 ## Part III — The architecture transformation (streaming background filesystem index)
 
 Everything above (P-01…P-21) is **client-side triage plus "make the walk yield."** It cut the

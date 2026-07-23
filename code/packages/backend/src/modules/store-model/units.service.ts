@@ -275,9 +275,7 @@ export function computeRepoRow(folder: string): RepoRow {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
   const manifest = getRepoManifest(folder);
-  const files = composeFileRows(folder, cfg, status, manifest);
-  const counts = countDecisions(files);
-  const peerCount = peerCountForFiles(files);
+  const { counts, peerCount, transferring } = repoRowStats(cfg, status, manifest);
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
     bookmarked: cfg.bookmarked,
@@ -286,7 +284,7 @@ export function computeRepoRow(folder: string): RepoRow {
     counts,
     peerCount,
     lastPinAt: status.last_pin_at,
-    status: rollupStatus(cfg.pinned, counts, status, files),
+    status: rollupStatus(cfg.pinned, counts, status, transferring),
     pinned: cfg.pinned,
     // Company/personal owner: honor the local owner_override (manual) else derive from the git remote (auto)
     // (repo_company_mapping.mdx §5.2). ownerForRepoConfig threads the user's personal-accounts list so an
@@ -348,7 +346,12 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set
     path: cfg.repo.path || "",
     remote: cfg.repo.remote,
     pinned: cfg.pinned,
-    status: rollupStatus(cfg.pinned, counts, status, files),
+    status: rollupStatus(
+      cfg.pinned,
+      counts,
+      status,
+      files.some((f) => f.transfer === "fetching" || f.transfer === "pushing"),
+    ),
     peerCount: peerCountForFiles(files),
     lastPinAt: status.last_pin_at,
     lastScanAt: status.last_scan_at,
@@ -494,7 +497,10 @@ function composeFileRows(
 export function remoteOnlyRows(
   cfg: RepoUnitConfig,
   manifest: Manifest,
-  local: FileRow[],
+  // Only the PATHS of the already-scanned rows matter here, so the parameter asks for exactly that much.
+  // It keeps every existing caller (which passes real `FileRow[]`) working while letting the cheap
+  // Repos-table path (`repoRowStats`) hand over raw scan candidates without composing rows first.
+  local: ReadonlyArray<Pick<FileRow, "path">>,
   repoRootAbs: string | null,
   selfLabel: string,
 ): FileRow[] {
@@ -802,15 +808,89 @@ function peerCountForFiles(files: FileRow[]): number {
   return set.size;
 }
 
+/**
+ * The three aggregates one Repos-table row needs — decision counts, distinct peer count, and whether a
+ * transfer is in flight — computed WITHOUT composing full FileRows (repos.mdx §4.1/§4.2).
+ *
+ * WHY THIS EXISTS. `computeRepoRow` used to build the complete `FileRow[]` for a repo purely to count it,
+ * and a FileRow is expensive ON PURPOSE: it carries the git-ignore axis (one `git check-ignore` spawn per
+ * repo) and the four task axes (a sidecar/artifact probe per file). None of that reaches the Repos table —
+ * the row needs five fields per file, all of which are already in the config, the scan status and the
+ * manifest. Paying the full price once per repo made `GET /api/repos` an ~11-second SYNCHRONOUS handler on
+ * a 179-repo machine, which pinned the event loop for its whole duration: every other request — notably
+ * the One-repo detail a row click issues — queued behind it, so clicking a repo looked like it did nothing.
+ *
+ * The five fields are read the SAME way `composeFileRows` reads them (decision from the config, transfer
+ * from {@link transferFor}, peers from the manifest, `analysisOnly` from the candidate, `pinnedForeign`
+ * from the cached foreign-pin index), and the remote-only rows come from the SAME {@link remoteOnlyRows}
+ * composer, so the counts here and the counts on the One-repo page cannot drift apart.
+ */
+function repoRowStats(
+  cfg: RepoUnitConfig,
+  status: UnitStatus,
+  manifest: Manifest,
+): { counts: RepoCounts; peerCount: number; transferring: boolean } {
+  const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
+  const repoRootAbs = cfg.repo.path
+    ? path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~"))
+    : null;
+  const selfLabel = computerLabel();
+
+  const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0, pinnedForeign: 0 };
+  const peerSet = new Set<string>();
+  let transferring = false;
+
+  // One file's contribution — the exact arithmetic countDecisions()/peerCountForFiles()/rollupStatus()
+  // perform over a composed FileRow, applied to the raw fields instead.
+  const tally = (
+    decision: Decision,
+    transfer: TransferStatus,
+    peers: string[],
+    analysisOnly: boolean,
+    pinnedForeign: boolean,
+  ): void => {
+    for (const p of peers) peerSet.add(p);
+    if (transfer === "fetching" || transfer === "pushing") transferring = true;
+    if (analysisOnly) return; // small analysis-only media is not a decision the user owes (scan.mdx §4.1 rule 5)
+    if (decision === "ignore") counts.ignored++;
+    else if (decision === "undecided") {
+      if (pinnedForeign) counts.pinnedForeign++;
+      else counts.undecided++;
+    } else if (decision === "sync") {
+      if (transfer === "pinned") counts.pinned++;
+      else counts.pending++;
+    }
+  };
+
+  for (const cand of status.candidates) {
+    const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
+    const m = manifestByPath.get(cand.path);
+    const peers = m?.pinned_by ?? [];
+    tally(
+      decision,
+      transferFor(decision, m?.cid ?? null, peers, selfLabel),
+      peers,
+      cand.analysisOnly === true,
+      !!(repoRootAbs && decision !== "sync" && foreignPinByAbsPath(path.join(repoRootAbs, cand.path))),
+    );
+  }
+  // Files only another of the user's computers holds (storage_company.mdx §8.5). Composed, not
+  // re-derived: the four conditions that admit one of these rows live in exactly one place.
+  for (const r of remoteOnlyRows(cfg, manifest, status.candidates, repoRootAbs, selfLabel)) {
+    tally(r.decision, r.transfer, r.peers, !!r.analysisOnly, !!r.pinnedForeign);
+  }
+
+  return { counts, peerCount: peerSet.size, transferring };
+}
+
 // Rolled-up status with the LOCKED precedence (repos.mdx §4.2).
 function rollupStatus(
   pinned: boolean,
   counts: RepoCounts,
   status: UnitStatus,
-  files: FileRow[],
+  transferring: boolean,
 ): RepoStatus {
   if (status.last_error || status.repo_state === "missing") return "error";
-  const transferring = files.some((f) => f.transfer === "fetching" || f.transfer === "pushing");
   if (transferring) return "pinning";
   if (counts.pending > 0) return "behind";
   if (counts.undecided > 0) return "needs_review";
