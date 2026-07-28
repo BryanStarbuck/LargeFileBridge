@@ -1,6 +1,6 @@
 // Two append-only rolling logs at the state root (storage.mdx §12). Never throws.
 //
-// Converged on the family's gold-standard logger (Philosophers_Stone / Marketing AI), keeping this
+// Converged on the family's gold-standard logger (uplift / Marketing AI), keeping this
 // app's dir/filename conventions (log.log / error.err) and its stable log.{debug,info,warn,error,
 // fatal}(ctx, msg) API. Refinements over the original per-write statSync appender:
 //   1. CACHED SIZE — an in-memory byte counter (seeded from the file size on open) replaces the
