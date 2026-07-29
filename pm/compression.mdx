@@ -96,23 +96,78 @@ Detecting installed tools (which of ffmpeg/ffprobe/magick/oxipng/cwebp/cjpeg/jpe
 
 ---
 
-## 2.1 Quality control — the MIDDLE setting (HARD REQUIREMENT, LOCKED)
+## 2.1 Quality control — the SIX RULES (HARD REQUIREMENT, LOCKED)
 
-This is the **single most important compression rule** and it applies **equally to IMAGE and VIDEO**:
+> **Revised 2026-07-29.** This section previously read *"we deliberately pick the MIDDLE of the range"* and
+> the code implemented it faithfully — image quality **85**, video **CRF 21**. On **2026-07-09** a single
+> 21-minute run rewrote **2,670 images under `~/_Mirror/`** and **1,063 under `~/BGit/`** with those
+> settings, and a forensic pass over the result found that the middle was not the problem: **four separate
+> rules were missing entirely.** The rules below replace the old item 3 and extend item 1. They are stated
+> as **R1-R6** so each one is individually citable, testable and auditable.
 
-1. **Same pixel resolution.** Every compressed output keeps the **same aspect ratio and the same pixel
-   resolution** as the input — for **both images and video**. We **never downscale** (verified after
-   encoding, §5). Compression buys smaller files by spending bits more efficiently, **not** by throwing
-   away pixels.
-2. **A modern algorithm with a controllable quality↔size range.** For each media type we use a **modern,
-   high-efficiency** codec/encoder that exposes a **continuous quality knob** — one end = **highest
-   quality / larger file**, the other end = **maximum compression / visibly degraded**. We do **not** use
-   any tool that only has a single "make it as small as possible" mode.
-3. **We deliberately pick the MIDDLE of that range.** The default quality is **`medium`** (config default,
-   never the extreme). At medium we keep **nearly all** the perceptible quality and still get a **much
-   smaller** file — we give up only a **minuscule** amount of quality in exchange for a large size win.
-   `high` and `low` (and `lossless`) exist for the user who wants to slide toward either end, but the
-   product default sits in the middle.
+**R1. RESOLUTION IS ABSOLUTE — INCLUDING COLOUR (LOCKED).**
+A compressed output keeps the same width, the same height, **and the same or finer chroma sampling** as its
+input. JPEG output is **always 4:4:4**; video keeps a 4:2:2/4:4:4 source's chroma rather than dropping it to
+`yuv420p`. Verified **after** encoding, on **both** planes, for **every** file — an output that fails is
+discarded and the original kept.
+
+> *Why this is R1 and not a footnote.* The old guard compared `%w %h` before and after, and it worked
+> perfectly — 200 sampled files, zero mismatches, the luma resolution was never reduced. But `%w %h` are the
+> **luma** dimensions. Colour is stored in two separate planes with their own resolution, and **100%** of
+> that run's output came out at `2x2,1x1,1x1` — 4:2:0, both colour planes at **half width and half height**,
+> a quarter of the colour detail — because ImageMagick silently picks 4:2:0 for any quality below 90 and was
+> never told otherwise. On photographs it is nearly invisible. On the **1,776 screenshots** in that set —
+> coloured text, thin red annotation arrows drawn on evidence — it is the single most visible artifact. A
+> resolution rule that only checks brightness is not a resolution rule.
+
+**R2. QUALITY SITS 75% TOWARD BEST, NOT AT THE MIDDLE (LOCKED).**
+On the usable band the default is **75% of the way from "smallest" to "highest quality"**. See §2.1.2 for
+the arithmetic and the resulting numbers.
+
+**R3. THE SIZE-GAIN FLOOR (LOCKED).**
+A compress is committed **only** when the candidate is meaningfully smaller. How much is "meaningful"
+depends on what is being traded:
+
+| Transform | Floor | Why |
+| --- | --- | --- |
+| lossless → lossless (PNG re-deflate, `jpegtran` repack) | **2%** | nothing is given up, so any real win is free |
+| lossy → lossy (a normal re-encode) | **20%** | quality is being spent — it must buy something |
+| lossless → lossy (needs the R4 opt-in as well) | **50%** | the one destructive transform |
+| compatibility conversion (HEIC → JPEG, forced H.264) | **exempt** | exists for playability, may legitimately grow |
+
+Below the floor the candidate is deleted, the original kept, and the file reported as
+**"kept the original — the best candidate was only N% smaller"**. That refusal is **recorded** (§8.4), so
+the same file is never re-examined on the next sweep.
+
+> *Why.* The old gate was `afterBytes >= beforeBytes` — **one byte** of gain was enough. The 2026-07-20 log
+> shows `Mirandized_Sept_11_.png` 172,518 → 154,959 (**10.2%**) and `inputs/Document.png` 56,243 → 55,440
+> (**1.4%**): in both cases a **lossless** PNG was destroyed and replaced by a **lossy** file to save 17 KB
+> and 803 bytes respectively.
+
+**R4. A LOSSLESS SOURCE NEVER SILENTLY BECOMES LOSSY (LOCKED).**
+PNG / BMP / TIFF / GIF default to a **lossless target**. A lossless → lossy conversion requires an explicit
+opt-in (`compression.images.allow_lossless_to_lossy`, **default off**), and even then must clear the 50%
+floor of R3 and always keeps the original in trash.
+
+> *Why this is the biggest one.* Nobody had written this rule, so nothing enforced it. With
+> `prefer: ["jpeg", …]` and `convert_types: true`, the **first** question the engine asked of a lossless PNG
+> screenshot was "may I make it a JPEG?", and the answer was yes. The alpha guard did not stop it: an opaque
+> screenshot's alpha channel is **unused**, so `alphaUsed === false` and the guard waved it through. macOS
+> writes screenshots as PNG; under `~/_Mirror/Politics/Charlie_Kirk_Mi/` there are now **459** files named
+> `Screenshot ….jpg` and **2** named `Screenshot ….png`. Roughly **3,248** lossless originals were converted
+> and then **hard-deleted**.
+
+**R5. THE ORIGINAL IS RECOVERABLE BY DEFAULT (LOCKED).**
+The default disposition is **trash**, never hard delete (§8.2, §12.5).
+
+**R6. NO SILENT RENAMES (LOCKED).**
+Compression is **format-preserving** wherever the format can hold its own re-encode: a `.png` stays a
+`.png`, a `.jpg` stays a `.jpg`. A conversion that changes the extension happens only for HEIC/HEIF/AVIF
+(compatibility), for BMP/TIFF/GIF (which have no in-place lossless recompression), and for the R4 opt-in.
+When an extension **does** change, the engine searches the owning git repo for text files that still
+reference the old name and **reports** them — in the log, the history line, and the compress result. It does
+**not** rewrite them: compressing an image is consent to change **that image**, not consent to edit every
+markdown file and stylesheet in the repo (the same rule the charter applies to `.gitignore` entries).
 
 ### 2.1.1 The RISK this requirement guards against (why the tool choice matters)
 
@@ -123,34 +178,35 @@ because it takes an explicit numeric quality parameter** that spans the full ran
 it to the middle. The tools are **always** invoked **with that parameter set** — the quality is **never
 left to the tool's default and never maxed out silently**.
 
-### 2.1.2 The exact knob, range, and MIDDLE value per media type
+### 2.1.2 The exact knob, range, and DEFAULT value per media type (R2)
 
-| Media | Tool / encoder | The range knob | Scale (best-quality ↔ smallest) | MIDDLE (`medium`, the default) |
+| Media | Encoder | The range knob | Usable band (smallest ↔ best) | DEFAULT (`medium`) |
 | --- | --- | --- | --- | --- |
-| **Video** | `ffmpeg` — `libx264` (H.264), `libx265` (HEVC), `libaom-av1` (AV1) | **`-crf <n>`** (Constant Rate Factor) | `0` = lossless … `51` = worst; **lower = higher quality/bigger** | **CRF 21** for H.264/AV1, **CRF 24** for HEVC |
-| **Image (lossy)** | ImageMagick `-quality <n>` / `cwebp -q <n>` (JPEG / WebP / JPEG 2000) | **`-quality` / `-q`** | `0` = smallest/worst … `100` = best/biggest | **quality 85** |
-| **Image (lossless)** | `oxipng` (PNG kept as PNG) | optimization **level** only | n/a — pixels never change | lossless (no quality given up) |
+| **Video** | `ffmpeg` — `libx264` / `libx265` / `libaom-av1`, `-preset slow` | **`-crf <n>`** | H.264 `28 … 18`, HEVC `31 … 21`, AV1 `40 … 26` (**lower = better**) | **CRF 20** (H.264), **CRF 23** (HEVC) |
+| **Image (lossy)** | **mozjpeg** / **libwebp**, via `sharp` — always **4:4:4** (R1) | **quality** | `70 … 100` | **quality 93** |
+| **Image (lossless)** | strict PNG re-deflate + verified re-filter / exact palette | none — pixels never change | n/a | lossless |
 
-Mapping of the four quality steps to concrete tool values (so `medium` is always the middle, not an
-extreme):
+**The arithmetic, so the number is auditable.** A rung is `worst + t × (best − worst)`, with
+`t = 0.75` for `medium` (`0.27` for `low`, `0.87` for `high`), and **ties round toward better quality** on
+both bands:
 
-* **Video CRF** — `lossless → 0`, `high → base−3`, **`medium → base`**, `low → base+5`, where `base = 24`
-  for HEVC and `base = 21` for H.264 / AV1.
-* **Image quality** — `lossless → 100`, `high → 92`, **`medium → 85`**, `low → 70`.
+* **Image quality** — `70 + 0.75 × 30 = 92.5` → **93**. `low → 79`, `high → 97`, `lossless → 100`.
+* **Video CRF** — `28 − 0.75 × 10 = 20.5` → **20** (floored, because lower CRF is better quality).
+  HEVC: `31 − 0.75 × 10 = 23.5` → **23**.
 
-**The mechanism that guarantees the middle** is two things together: (a) the config default
-`quality: "medium"` for both `images` and `video`, and (b) the two pure mapping functions that translate
-`medium` into the concrete mid-range number. If either the default or a mapping ever drifted to an
-extreme, the middle guarantee would break — so both are LOCKED here.
+**Where the extra quality is paid for.** Raising the target would normally make files bigger. It does not,
+because the encoder changed at the same time: **mozjpeg** produces roughly **15-25% smaller** JPEGs than
+libjpeg-turbo at the same visual quality, and video gains `-preset slow`. The spec previously *claimed*
+mozjpeg was used for JPEG; the code detected `cjpeg` and `jpegoptim` and then **never called either**,
+falling through to plain ImageMagick. It is now genuinely used — in-process, via `sharp`, which bundles it.
 
-Choosing the concrete quality value for the chosen tool is handled in code:
+Implemented in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
-`videoCrf()` (CRF for H.264/HEVC/AV1) and `jpegQuality()` (0–100 for JPEG/WebP/JPEG 2000). The knob is
-then passed to the actual command in `imageCommand()` (`-quality` / `cwebp -q`) and in `compressFile()`'s
-ffmpeg build (`-crf`), both of which **omit any `-vf scale` / `-s` / resize** so resolution is preserved.
-The `medium` default itself lives in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `compression.images.quality`
-and `compression.video.quality` defaults.
+`jpegQuality()` and `videoCrf()` (the two ladders), `pickImageTarget()` (R4/R6 target selection), and the
+gate chain inside `compressFile()` (R1 resolution + chroma, R3 floors). The encoders themselves live in
+`.../modules/compress/image-encode.ts` — `encodeImage()`, `encodeJpeg()`, `encodePng()` — and the strict
+lossless PNG path in `.../modules/compress/png-redeflate.ts` — `redeflatePng()`. Defaults in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts`.
 
 ---
 
@@ -160,17 +216,52 @@ The engine builds a **plan** for a file from its kind + the user's codec prefere
 
 ### 3.1 Images
 
-* **PNG / BMP / TIFF / GIF (lossless source):**
-  * If the user's quality is **lossless**, or the file stays PNG → **`oxipng`** lossless recompression
-    (same pixels, smaller file).
-  * Otherwise **convert to a compressible format** — normally **PNG → JPEG** at medium quality. If the
-    user prefers/allows it and it is genuinely better, **JPEG 2000** (`.jp2`) may be used instead; a user
-    can **deny JPEG 2000** in settings and it is then never chosen.
-  * **Alpha guard:** JPEG has **no alpha**. If a PNG's alpha is actually used (§6), we do **not** convert
-    to JPEG — we either keep PNG (lossless recompress) or, when the user allows it, target **lossless
-    WebP** (which preserves alpha).
-* **JPEG / WebP (already lossy):** re-encode at medium quality with `mozjpeg`/`cwebp` only when it yields a
-  real gain; otherwise report **"already compressed — no gain"** and change nothing.
+* **PNG / BMP / TIFF / GIF (lossless source) → a LOSSLESS target (R4).** This is asked **first**, before the
+  user's `prefer` list is even read. Three candidates are produced and the **smallest** one wins:
+  1. a **strict re-deflate** — the IDAT stream is inflated and re-compressed without ever decoding the
+     image, so it is lossless *by construction*;
+  2. a **re-filtered** re-encode (adaptive per-scanline filters), then re-deflated;
+  3. an exact **8-bit palette**, attempted only when the image genuinely holds ≤256 colours — common for UI
+     screenshots.
+  Candidates 2 and 3 involve a decode, so each is **verified** before it can be taken: both images are
+  decoded and compared, and the candidate is discarded unless it **renders identically** (see §3.1.1).
+  A `.png` stays a `.png` (R6). BMP/TIFF/GIF have no in-place lossless recompression, so PNG is their
+  lossless home — that renames the file and therefore requires `convert_types`.
+  * **Expect 0-23%,** not 80%. Lossless recompression of an already-reasonable PNG is a modest win. When it
+    cannot clear the 2% floor the original is kept, and that is the correct outcome — the alternative that
+    "achieved" 84-92% did so by throwing the image away.
+  * **Alpha guard:** unchanged (§6), and now largely moot for this branch — a lossless target keeps alpha.
+* **JPEG / WebP (already lossy): format-preserving, and lossless if we can manage it.** Re-encoding a lossy
+  file cannot recover what it already threw away; it only adds a **second generation** of loss. So:
+  * if the source is **already at or below** our quality target, we do a **`jpegtran` lossless repack**
+    (identical DCT coefficients, 3-10% fewer bytes) and never re-encode;
+  * otherwise we re-encode at the R2 target with **4:4:4** chroma, and the R3 20% floor decides whether it
+    was worth it;
+  * a JPEG is **never** converted to WebP (or vice-versa) by a compress sweep — that is a rename (R6) and a
+    second lossy generation for a marginal win. The explicit convert action (§8.1) exists for that.
+* **Animated GIF / animated WebP: never handed to a still encoder.** The frame count is probed first. A
+  multi-frame source targets **animated lossless WebP**; if conversion is off, it is skipped with a reason.
+  > *Why.* `magick in.gif -quality 85 out.jpg` writes `out-0.jpg`, `out-1.jpg`, … and **not** the path we
+  > asked for, so the file was reported as a failure while N stray frame files piled up in the temp
+  > directory — a contributor to the 146 orphaned temp files (11 GB) found on this machine.
+
+#### 3.1.1 What "lossless" is allowed to mean here (LOCKED)
+
+Two encodings may differ in ways nothing can ever display, and refusing those would throw away most of the
+available saving. Exactly two differences are treated as *no* difference, and they are the two every PNG
+optimiser makes:
+
+1. a **fully-opaque alpha channel may be dropped** (RGBA → RGB renders identically);
+2. the **RGB underneath a fully-transparent pixel may change** (those samples are never drawn).
+
+Anything else — one changed visible sample, a different dimension — fails, and the candidate is discarded.
+
+> **A trap worth recording, because it nearly shipped.** `sharp`'s `png({ effort: 10 })` is **not** a
+> lossless option — `effort` drives its palette **quantiser**. On the real corpus it "won" **60-78%** and
+> changed up to **4.2 million pixels per image** with deltas as large as **72**. It looks exactly like a
+> spectacular lossless result. Only the decode-and-compare verification caught it. Never pass `effort` to a
+> PNG encode that claims to be lossless.
+
 * **HEIC / HEIF / AVIF (Apple photos & efficient formats): a COMPATIBILITY conversion — normally → JPEG.**
   These are byte-efficient (HEVC/AV1-coded) but **poorly supported** by the sites people post to, so the
   default is to **convert to JPEG** for universal compatibility (governed by the `convert_types` setting
@@ -560,6 +651,85 @@ Accepting and threading the per-job cap into each tool is handled in code:
 `imageCommand()` (oxipng `--threads`, `cwebp` `-mt`, `magick -limit thread`); omitted → the tool's all-core
 default. The queue that supplies the cap per media bucket is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`.
 
+### 8.4.0 A file is compressed AT MOST ONCE — the three sources (LOCKED)
+
+Before a single byte is transcoded the engine asks **three independent sources** whether this file is
+already finished. **Any** of them saying "done" stops the work. This is the rule the user stated plainly:
+*"If we compress the file once, we never want to compress it again."*
+
+| # | Source | Where | Answers the case |
+| --- | --- | --- | --- |
+| 1 | **The in-file marker** | inside the file's own container metadata | anything, anywhere — it rides with the bytes over IPFS, through a git checkout, onto a USB stick |
+| 2 | **This computer's record** | `~/T/_large_files_bridge/repos/<repoKey>/analysis/<rel>/compression.yaml` | a format that cannot hold a marker; a refusal we want remembered |
+| 3 | **The travelling record** | `<syncRepo>/repos/<repoUid>/analysis/<rel>/compression.yaml` in the owning **company / Personal** repo | **the file was compressed on ANOTHER of your computers** and arrived here already compressed |
+
+Source 3 is the one the charter's two-computer story needs: a file compressed on the laptop, pinned over
+IPFS to the tower, whose format has nowhere to put a marker. The record travelled in the company/Personal
+sync repo, so the tower still knows, and still refuses to redo it. Only **one** write is needed to populate
+both 2 and 3 — the record is written to Local Storage and `tracking-sync.service.ts mirrorToSyncRepo`
+mirrors it into the sync repo.
+
+**Backfill both ways.** When one source knows and another does not, the gap is closed on sight: a file that
+arrives carrying a marker but no record gets a record written; a file with a record whose bytes lost their
+marker gets **re-stamped**. Otherwise the Compress status would keep counting it "compressible" forever on
+whichever machine holds the gap.
+
+**Refusals are recorded too.** Every terminal outcome is written, with an `outcome` field:
+
+* `compressed` — the bytes were replaced.
+* `declined` — we looked, and keeping the original was right (below the R3 floor, or already at/below the
+  quality target). **Not re-offered** while the bytes are unchanged.
+* `blocked` — a safety guard refused. **Not** a settled state: the file stays eligible, because a fixed
+  engine should retry it.
+
+> *Why `declined` matters.* The old engine recorded only successes, so a file we deliberately kept carried
+> no memory of that decision, and **every** later sweep paid the full transcode again to reach the identical
+> conclusion. That is most of why compression felt like it ran over and over.
+
+**Freshness.** A record describes **specific bytes**: it is honoured only while the file still has the size
+the record captured. Edit or replace the file and the record stops applying and the file is offered again.
+
+**Marker versions.** The marker is `LFBcompressed;v<N>;<codec>`. **v1** was the original engine (ImageMagick,
+quality 85, 4:2:0); **v2** is the current one. A v1 file is still honoured as "already compressed" and is
+**never re-swept** — its original is gone, so putting it through a second generation could only lose more.
+
+**Which formats can hold a marker, and what happens when they cannot.**
+
+| Format | How the marker is written | Lossless? |
+| --- | --- | --- |
+| JPEG | a `COM` segment spliced in after the APPn block | yes — a metadata splice, pixel data copied through byte-for-byte |
+| PNG | a `tEXt` chunk (keyword `Comment`) before the first `IDAT` | yes — same |
+| WebP | an `XMP ` chunk via `webpmux` | yes — the VP8/VP8L bitstream is untouched |
+| MP4 / MOV / audio | ffmpeg `-metadata comment=` **inline during the transcode** | free — no second pass |
+| BMP / TIFF / GIF | ImageMagick `-set comment` (fallback; these are lossless targets) | yes for these targets |
+| anything else | **no in-file marker** — sources 2 and 3 carry the state | n/a |
+
+> *The defect this replaced.* The marker used to be written by handing `-set comment` to the **encoder** —
+> so it could only ever be applied by an encoder that took such a flag. The **oxipng** (PNG→PNG) and
+> **cwebp** (→WebP) branches took no such flag and wrote **no marker at all**, so every one of those files
+> was re-encoded on **every single run**, forever, each pass paying a full transcode to rediscover "no
+> gain". Stamping is now a separate post-encode step that does not care which encoder ran.
+
+Implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compress-marker.ts` —
+`readImageMarker()` / `stampImageMarker()` (pure buffer walks, no child process) — and
+`.../modules/compress/compress-ledger.ts` — `ledgerSaysDone()`, `writeLedger()`, `buildRecord()`. The gate
+itself is `alreadyHandled()` in `.../modules/compress/compression.service.ts`.
+
+### 8.5 Abandoned temp files are swept (LOCKED)
+
+`tmpOut()` writes candidates to `<state>/tmp/compress-<uuid><ext>`. A run that is killed, crashes, or is
+OOM-reaped mid-transcode leaves its candidate behind, and nothing used to collect them — this machine had
+accumulated **146 orphans totalling 11 GB**, which is also a record of how often those runs died part-way.
+
+* `compressFile()` wraps its whole body in `try/finally` and unlinks the temp on **every** exit, including a
+  thrown exception (the old code only cleaned up on the paths it explicitly returned from).
+* `sweepCompressTemp()` runs **at boot** and removes `compress-*` entries older than 24 hours — old enough
+  that an in-flight job's candidate can never be touched — logging the count and bytes reclaimed.
+
+Implemented in `.../modules/compress/compression.service.ts` — `sweepCompressTemp()`, called from
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` `bootstrapState()`.
+
 ### 8.4 The "already-compressed" marker — durable, in-file, mesh-wide skip (LOCKED)
 
 **The problem this solves.** A user points **Compress inside** at a huge, deep tree (e.g. **18,000 files**)
@@ -661,13 +831,30 @@ Surfacing the codec + compressed-state and the Compress action per file is handl
 
 1. Compression runs **only** on explicit user action — one file, several checked files, or **every file in
    the current table filter** — never automatically.
-2. It uses **quality-controllable brew tools** (`ffmpeg`, ImageMagick, `oxipng`, `cwebp`, `mozjpeg`) at a
-   **medium** quality, **preferring lossless** where it applies; a missing tool degrades with an
-   "install X" message, not a silent fail.
-2a. **The MIDDLE-quality requirement (§2.1) holds for both images and video:** the tool exposes a full
-    quality↔size range (video `-crf 0…51`; image `-quality 0…100`), and the engine pins it to the middle
-    by default — **CRF 21** (H.264/AV1) / **CRF 24** (HEVC) for video, **quality 85** for lossy images —
-    at the **same pixel resolution** as the input. A tool with no controllable middle is disqualified.
+2. It uses **quality-controllable encoders** — `ffmpeg` for video, and **mozjpeg / libwebp / libpng via
+   `sharp`, in-process** for images — **preferring lossless** where it applies. Only `ffmpeg`/`ffprobe`
+   (video) and ImageMagick (a few probes) remain external; a missing one degrades with an "install X"
+   message, not a silent fail. `oxipng` / `cwebp` / `cjpeg` / `jpegoptim` are **no longer required** —
+   which matters, because `oxipng` was **never installed on this machine**, so the "lossless PNG
+   recompress" path the spec promised had silently never been reachable and every PNG fell through to the
+   lossy branch instead.
+2a. **The R2 quality requirement (§2.1) holds for both images and video:** the encoder exposes a full
+    quality↔size range and the engine pins it **75% toward best quality** by default — **CRF 20** (H.264) /
+    **CRF 23** (HEVC) with `-preset slow` for video, **quality 93 at 4:4:4 chroma** for lossy images — at
+    the **same pixel resolution** as the input. An encoder with no controllable range is disqualified.
+2b. **R1 (chroma).** Every lossy image output is verified to be `1x1,1x1,1x1` (4:4:4); an output whose
+    chroma sampling is **coarser** than its input's is refused and the original kept. Video keeps a
+    4:2:2/4:4:4 source's pixel format unless it is a compatibility convert.
+2c. **R3 (floors).** A candidate below its floor — 2% lossless / 20% lossy / 50% lossless→lossy — is
+    deleted, the original kept, and the refusal **recorded** so the file is not re-examined next sweep.
+2d. **R4 (lossless).** With shipped defaults, a PNG/BMP/TIFF/GIF **cannot** become a JPEG. Enabling
+    `allow_lossless_to_lossy` is the only way, and the transform still needs the 50% floor.
+2e. **R6 (renames).** A `.png` stays a `.png` and a `.jpg` stays a `.jpg`. When an extension does change,
+    referencing text files in the owning git repo are found and **reported**, never silently rewritten.
+2f. **Compressed at most once.** The three sources of §8.4.0 are consulted before any transcode, and a
+    second run over a compressed tree does **zero** transcodes.
+2g. **No orphaned temporaries.** `compressFile()` sweeps its temp in a `finally`, and boot sweeps any
+    `compress-*` older than 24h (§8.5).
 3. The output **always keeps the same aspect ratio and pixel resolution** (verified after encoding; a size
    change aborts). We **never downscale**.
 4. Before compressing, the **alpha-channel safety check** runs: a **used** PNG alpha blocks JPEG/JPEG-2000

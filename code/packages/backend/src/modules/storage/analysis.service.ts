@@ -59,6 +59,12 @@ export function analyzeFile(root: string, rel: string): string[] {
 }
 
 /**
+ * @deprecated Superseded by `modules/compress/compress-ledger.ts` — `writeLedger()` / `buildRecord()`,
+ * which write the SAME file at the SAME path but carry the fields the 2026-07 engine added (`outcome`,
+ * `reason`, `chroma`, `lossless`, `engine`), and which are paired with `readLedger()` / `ledgerSaysDone()`
+ * so a record can actually PREVENT a re-compress rather than only describe one after the fact. Kept for
+ * any caller outside the compress module; do not add new callers. `analysisOutputs()` reads both shapes.
+ *
  * Write the travelling compression record for a file (compression.mdx §8 step 6) —
  * `<Local Storage repos/<repoKey>>/analysis/<relpath>/compression.yaml`. It is CATEGORY-B tracking state
  * (artifact_placement_policy.mdx): Local Storage ALWAYS, never the working repo — matching its two sibling

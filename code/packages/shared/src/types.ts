@@ -1410,6 +1410,11 @@ export interface CompressTools {
   cjpeg: boolean; // mozjpeg
   jpegoptim: boolean;
   heif: boolean; // ImageMagick libheif delegate / heif-dec — required to read HEIC/HEIF/AVIF (images.mdx §4.1)
+  // Added with the 2026-07 engine rebuild. The image encoders moved IN-PROCESS to sharp (which bundles
+  // mozjpeg / libwebp / libpng), so oxipng / cwebp / cjpeg above are now reported-but-not-required.
+  jpegtran?: boolean; // the LOSSLESS JPEG entropy repacker (§3.1)
+  webpmux?: boolean;  // writes the in-file marker into a WebP RIFF container
+  sharp?: boolean;    // always true — a library dependency, not a PATH tool
 }
 
 // The dry-run plan + safety verdict for a file (compression.mdx §3/§6) — drives the pre-compress warning.
@@ -1433,6 +1438,11 @@ export interface CompressResult {
   beforeBytes: number | null;
   afterBytes: number | null;
   codec: string | null;       // the codec the output was written with
+  // A format conversion RENAMES the file (foo.heic → foo.jpg), which breaks every markdown / HTML / CSS /
+  // manifest reference to the old name. We never silently rewrite those files, so we report instead:
+  // `renamedFrom` is the old basename and `staleReferences` is how many text files still point at it.
+  renamedFrom?: string;
+  staleReferences?: number;
 }
 export interface CompressBatchResult {
   results: CompressResult[];

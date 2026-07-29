@@ -68,6 +68,21 @@ async function bootstrapState(): Promise<void> {
   } catch (e) {
     log.warn("main", `CLI API secret provisioning failed: ${(e as Error).message}`);
   }
+  // Sweep abandoned transcode temporaries (compression.mdx §8, BUG-9). A compress run that is killed,
+  // crashes, or is OOM-reaped mid-transcode leaves its candidate in `<state>/tmp/` forever, and nothing
+  // ever collected them — this machine had accumulated 146 orphans totalling 11 GB. Only entries older
+  // than a day are removed, so an in-flight job's candidate is never touched. Synchronous and fast (one
+  // readdir + stats); best-effort, never blocks boot.
+  // LAZY import, deliberately. A top-level `import { sweepCompressTemp }` here reached the compress module
+  // through an import cycle and read the binding before that module had finished evaluating — the sweep
+  // then failed at boot with "sweepCompressTemp is not defined". Importing at call time breaks the cycle;
+  // this is the same lazy-import-vs-cycle pattern the artifact-write seams use.
+  try {
+    const { sweepCompressTemp } = await import("./modules/compress/compression.service.js");
+    sweepCompressTemp();
+  } catch (e) {
+    log.warn("main", `compress temp sweep failed: ${(e as Error).message}`);
+  }
   // Mint a stable computer id on first boot (storage.mdx §3).
   await updateAppConfig((c) => {
     if (!c.computer.id) c.computer.id = crypto.randomUUID();

@@ -6,7 +6,7 @@ import { useEffect, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Link } from "@tanstack/react-router";
 import { toast } from "sonner";
-import type { GlobalSettings, SizeUnit, PersonalAccount, CompressMediaPrefs, CompressQuality, DescribeAiProviderConfig } from "@lfb/shared";
+import type { GlobalSettings, SizeUnit, PersonalAccount, CompressMediaPrefs, CompressionSettings, CompressQuality, DescribeAiProviderConfig } from "@lfb/shared";
 import { SIZE_UNITS, toBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { CredentialsSetupCard } from "../../components/CredentialsSetupCard.js";
@@ -390,20 +390,74 @@ function CompressionSettingsSection() {
     onError: (e: Error) => { clientLog.error("Settings.compress", e); toast.error(e.message); },
   });
   if (!s) return null;
-  const missing = tools ? Object.entries(tools).filter(([, v]) => !v).map(([k]) => k) : [];
+  // Only the tools we genuinely cannot work without are worth nagging about. The image encoders now run
+  // in-process, so oxipng / cwebp / cjpeg / jpegoptim being absent changes nothing — listing them as
+  // "not installed" sent people to install things that were never used.
+  const REQUIRED: Record<string, string> = {
+    ffmpeg: "video compression",
+    ffprobe: "reading video details",
+    magick: "a few image probes",
+  };
+  const missing = tools ? Object.keys(REQUIRED).filter((k) => !(tools as unknown as Record<string, boolean>)[k]) : [];
 
   return (
-    <Section title="Compression" subtitle="Per-media codec preferences. Medium quality, resolution always preserved. Deny codecs some social sites don't support.">
+    <Section title="Compression" subtitle="Per-media codec preferences. Resolution — including colour resolution — is always preserved, and a lossless original is never turned into a lossy copy unless you ask.">
       {(["images", "video"] as const).map((m) => (
         <MediaPrefRow key={m} media={m} prefs={s[m]} onSave={(patch) => save.mutate({ [m]: { ...s[m], ...patch } })} />
       ))}
+      <SizeFloorRow settings={s} onSave={(patch) => save.mutate(patch)} />
       <p className="mt-2 text-xs text-black/50">Audio compression is disabled for now (planned later).</p>
       {tools && missing.length > 0 && (
         <p className="mt-1 text-xs text-amber-700">
-          Tools not installed: {missing.join(", ")} — <code>brew install ffmpeg imagemagick libheif oxipng webp mozjpeg</code>
+          Not installed: {missing.map((k) => `${k} (${REQUIRED[k]})`).join(", ")} — <code>brew install ffmpeg imagemagick</code>
         </p>
       )}
     </Section>
+  );
+}
+
+/**
+ * The size-gain floors (compression.mdx §2.1 R3). Large File Bridge only replaces a file when the new one
+ * is meaningfully smaller — below the floor it keeps the original and says so. Three floors, because how
+ * big a win is "worth it" depends on what is being given up.
+ */
+function SizeFloorRow({ settings, onSave }: { settings: CompressionSettings; onSave: (patch: Partial<CompressionSettings>) => void }) {
+  const pct = (n: number) => Math.round(n * 100);
+  const Field = ({ label, value, onChange, hint }: { label: string; value: number; onChange: (n: number) => void; hint: string }) => (
+    <label className="flex items-center gap-1.5" title={hint}>
+      {label}
+      <input
+        type="number" min={0} max={95} step={1} value={pct(value)}
+        className="w-16 rounded border border-[var(--lfb-border)] px-1 py-0.5"
+        onChange={(e) => onChange(Math.max(0, Math.min(95, Number(e.target.value))) / 100)}
+      />
+      %
+    </label>
+  );
+  return (
+    <div className="mb-3 rounded-md border border-[var(--lfb-border)] p-3">
+      <div className="mb-1 text-sm font-medium">Only replace a file when it actually gets smaller</div>
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <Field
+          label="Normal compress" value={settings.minSizeGain}
+          onChange={(n) => onSave({ minSizeGain: n })}
+          hint="A re-encode that spends quality must save at least this much, or the original is kept."
+        />
+        <Field
+          label="Lossless" value={settings.minSizeGainLossless}
+          onChange={(n) => onSave({ minSizeGainLossless: n })}
+          hint="A lossless re-pack gives up no quality at all, so a smaller win is still worth taking."
+        />
+        <Field
+          label="Lossless → lossy" value={settings.minSizeGainLosslessToLossy}
+          onChange={(n) => onSave({ minSizeGainLosslessToLossy: n })}
+          hint="Trading a lossless original for a lossy copy is the one destructive transform — it needs a large win to be worth it."
+        />
+      </div>
+      <p className="mt-1 text-xs text-black/50">
+        Below the floor, Large File Bridge keeps your original and records why, so the same file is not re-examined on every run.
+      </p>
+    </div>
   );
 }
 
@@ -413,8 +467,12 @@ function CompressionSettingsSection() {
 const IMAGE_SCOPE_EXTS = [".heic", ".heif", ".avif", ".png", ".bmp", ".tiff", ".gif", ".jpg", ".jpeg", ".webp"];
 const VIDEO_SCOPE_EXTS = [".mov", ".mp4", ".avi", ".mkv", ".webm", ".m4v", ".mpg", ".wmv", ".flv"];
 function convertLabel(media: "images" | "video", ext: string): string {
-  if (media === "images") return ext === ".jpg" || ext === ".jpeg" || ext === ".webp" ? "re-encode" : "→ JPEG";
-  return ext === ".mp4" ? "re-encode" : "→ H.264";
+  if (media === "video") return ext === ".mp4" ? "re-encode" : "→ H.264";
+  // Images: what actually happens now. A lossless source keeps a LOSSLESS target (PNG), an already-lossy
+  // one is re-encoded in place, and only HEIC/HEIF/AVIF become JPEG — as a compatibility conversion.
+  if (ext === ".heic" || ext === ".heif" || ext === ".avif") return "→ JPEG";
+  if (ext === ".png" || ext === ".jpg" || ext === ".jpeg" || ext === ".webp") return "re-encode";
+  return "→ PNG (lossless)";
 }
 
 function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; prefs: CompressMediaPrefs; onSave: (patch: Partial<CompressMediaPrefs>) => void }) {
@@ -443,10 +501,49 @@ function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; pre
             {QUALITIES.map((q) => <option key={q} value={q}>{q}</option>)}
           </select>
         </label>
-        <label className="flex items-center gap-1.5" title="When on, a compress may change the format to a better/compatible target (HEIC → JPEG, PNG → JPEG). Off = format-preserving.">
+        <label className="flex items-center gap-1.5" title="When on, a compress may change the format to a better or more compatible target (HEIC → JPEG, BMP/TIFF → PNG). Off = format-preserving, so no file is ever renamed.">
           <input type="checkbox" checked={prefs.convertTypes} onChange={(e) => onSave({ convertTypes: e.target.checked })} /> Convert file types
         </label>
       </div>
+      {media === "images" && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <label
+            className="flex items-center gap-1.5"
+            title="OFF by default, and it is the most important setting here. PNG, BMP, TIFF and GIF are LOSSLESS — every pixel is exactly as it was saved. Turning this on lets a compress replace one with a JPEG, which throws detail away permanently. It is worst on screenshots: coloured text and thin annotation lines smear. When on, the conversion still has to save at least the 'Lossless → lossy' percentage below, and your original still goes to the trash rather than being deleted."
+          >
+            <input
+              type="checkbox"
+              checked={prefs.allowLosslessToLossy === true}
+              onChange={(e) => onSave({ allowLosslessToLossy: e.target.checked })}
+            />
+            Allow lossless images to become lossy
+            {prefs.allowLosslessToLossy === true && <span className="ml-1 text-xs text-amber-700">— your PNGs can be replaced by JPEGs</span>}
+          </label>
+          <label className="flex items-center gap-1.5" title="Try an exact 256-colour palette for images that only use that many colours — common for screenshots. It is checked pixel-by-pixel before it is used, so it can never change the image.">
+            <input type="checkbox" checked={prefs.pngPalette !== false} onChange={(e) => onSave({ pngPalette: e.target.checked })} /> Palette PNGs when exact
+          </label>
+          <label className="flex items-center gap-1.5" title="Refuse any output whose COLOUR resolution is lower than the original's. Colour is stored separately from brightness, and halving it is a resolution reduction that a width/height check cannot see.">
+            <input type="checkbox" checked={prefs.guardChroma !== false} onChange={(e) => onSave({ guardChroma: e.target.checked })} /> Guard colour resolution
+          </label>
+        </div>
+      )}
+      {media === "video" && (
+        <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+          <label className="flex items-center gap-1.5" title="Keep a video's colour detail when it is finer than the usual 4:2:0, instead of silently reducing it. Turned off only for a compatibility convert, where a widely-playable file is the point.">
+            <input type="checkbox" checked={prefs.preserveChroma !== false} onChange={(e) => onSave({ preserveChroma: e.target.checked })} /> Preserve colour detail
+          </label>
+          <label className="flex items-center gap-1.5" title="How hard the encoder searches. Slower presets produce smaller files at the same quality.">
+            Encoder effort
+            <select
+              className="rounded border border-[var(--lfb-border)] px-1 py-0.5"
+              value={prefs.preset ?? "slow"}
+              onChange={(e) => onSave({ preset: e.target.value })}
+            >
+              {["veryfast", "faster", "fast", "medium", "slow", "slower"].map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </label>
+        </div>
+      )}
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm">
         <label className="flex items-center gap-1.5">
           Prefer

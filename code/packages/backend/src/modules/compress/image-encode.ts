@@ -16,10 +16,9 @@
 //   * mozjpeg      — 15-25% smaller JPEGs than libjpeg-turbo at the SAME visual quality. That saving is
 //                    what pays for raising the quality target instead of lowering it.
 //   * libwebp 1.6  — lossless and near-lossless WebP.
-//   * libpng/zlib-ng at effort 10 — a lossless PNG re-deflate. Measured on the 16 real originals this app
-//                    destroyed on 2026-07-20, this alone returns 60-78% of the bytes with ZERO pixel
-//                    change, where the lossy JPEG conversion took 84-92% AND threw the image away.
-//                    That measurement is why lossless is now the DEFAULT for lossless sources.
+//   * libpng + adaptive filtering — one of the LOSSLESS PNG candidates (see encodePng, and read the
+//                    warning there about `effort`, which is a LOSSY option that nearly shipped as a
+//                    lossless one).
 // It also runs IN PROCESS: no fork per file, no argv quoting, and errors arrive as exceptions instead of a
 // scraped stderr tail.
 //
@@ -29,6 +28,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
+import { redeflatePng } from "./png-redeflate.js";
 
 // LOCKED (compression.mdx §2.1 R1). Every lossy image this app writes stores its colour planes at FULL
 // resolution. There is no setting for this and no code path that may choose otherwise: 4:2:0 is a
@@ -129,54 +129,168 @@ async function encodeWebp(src: string, out: string, o: EncodeOpts): Promise<Enco
     )
     .keepMetadata()
     .toFile(out);
-  return { ok: true, lossless: o.lossless, how: o.lossless ? "webp lossless" : `webp q${o.quality} smart-subsample` };
+  if (!o.lossless) return { ok: true, lossless: false, how: `webp q${o.quality} smart-subsample` };
+  // "Lossless" is CHECKED, not asserted. libwebp's lossless mode is bit-exact on the pixels it is given,
+  // but it is given them by the same decode pipeline that normalises alpha, so the claim still has to be
+  // verified before it is made. An animated source is exempt: `rendersIdentically` compares the first page
+  // only, so a pass would not be evidence about the rest, and claiming less is the safe direction.
+  const verified = !o.animated && (await rendersIdentically(src, out));
+  return {
+    ok: true,
+    lossless: verified,
+    how: verified ? "webp lossless (verified renders identically)" : "webp lossless",
+  };
 }
 
 /**
- * Re-encode `src` → `out` as a PNG, LOSSLESSLY. Two candidates, and we keep the smaller:
+ * Does `b` RENDER IDENTICALLY to `a`? The precise definition of "lossless" this module is willing to claim.
  *
- *   1. A maximum-effort deflate (`compressionLevel 9, effort 10`). Same pixels, smaller file — this is the
- *      oxipng role, done in-process (and oxipng is frequently not even installed).
- *   2. An 8-bit PALETTE encode, attempted only when the image genuinely holds ≤256 distinct colours, which
- *      is the common case for the UI screenshots this app is most often pointed at. A palette PNG of a
- *      ≤256-colour image is exactly representable — but we never take that on trust: the candidate is
- *      decoded back and compared to the source buffer byte-for-byte, and it is discarded unless identical.
- *      That verification is what makes "lossless" a fact here rather than a claim.
+ * Byte-equality of the two raw buffers is NOT the test, because two encodings can differ in ways that no
+ * viewer can ever show — and refusing those would throw away most of the available saving. Two differences
+ * are treated as no difference, and they are exactly the two that every PNG optimiser makes:
+ *
+ *   1. A FULLY-OPAQUE alpha channel may be dropped. An alpha channel that is 255 everywhere carries no
+ *      information; RGB and RGBA render the same. (A channel with ANY non-opaque pixel is never dropped —
+ *      the comparison below fails immediately if it were.)
+ *   2. The RGB under a FULLY-TRANSPARENT pixel may change. Those samples are not drawn, by definition.
+ *
+ * Anything else — one changed visible sample, a different dimension, a different frame count — fails.
+ *
+ * This is a real decode of both images, so it is bounded by the caller's pixel budget.
+ */
+async function rendersIdentically(a: string, b: string): Promise<boolean> {
+  try {
+    const [ra, rb] = await Promise.all([
+      sharp(a, { failOn: "none" }).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+      sharp(b, { failOn: "none" }).ensureAlpha().raw().toBuffer({ resolveWithObject: true }),
+    ]);
+    if (ra.info.width !== rb.info.width || ra.info.height !== rb.info.height) return false;
+    if (ra.data.length !== rb.data.length) return false;
+    const A = ra.data;
+    const B = rb.data;
+    for (let i = 0; i + 3 < A.length; i += 4) {
+      if (A[i + 3] !== B[i + 3]) return false; // alpha itself must match exactly
+      if (A[i + 3] === 0) continue; // invisible sample — its RGB is not rendered
+      if (A[i] !== B[i] || A[i + 1] !== B[i + 1] || A[i + 2] !== B[i + 2]) return false;
+    }
+    return true;
+  } catch {
+    return false; // could not verify → must not claim lossless
+  }
+}
+
+/**
+ * Re-encode `src` → `out` as a PNG, LOSSLESSLY — and PROVE it rather than assume it.
+ *
+ * A WARNING WORTH KEEPING, because it nearly shipped: sharp's `png({ effort: 10 })` is NOT a lossless
+ * option. `effort` drives sharp's PALETTE QUANTISER, and passing it silently turns a truecolour PNG into a
+ * quantised 8-bit one. Measured on this app's own damaged corpus it "won" 60-78% — and changed up to 4.2
+ * MILLION pixels per image with deltas as large as 72. It looks exactly like a spectacular lossless result
+ * and it is real, visible degradation. The verification below is what caught it. Do not add `effort` here.
+ *
+ * Candidates, smallest verified one wins:
+ *   1. STRICT RE-DEFLATE of the source (png-redeflate.ts) — lossless by construction, no decode at all.
+ *   2. sharp's ADAPTIVE-FILTERING re-encode (which re-chooses per-scanline filters and IS lossless), then
+ *      re-deflated by (1). Sometimes beats (1) alone, sometimes loses to it — so both are measured.
+ *   3. An 8-bit PALETTE encode, attempted only when the image genuinely holds ≤256 distinct colours (the
+ *      common case for flat-colour UI screenshots), where a palette is an exact representation.
+ * Every candidate that involves a decode is checked with `rendersIdentically` before it can be taken.
+ *
+ * Honest expectations: on real files this returns roughly 0-23%. That is far less than the 84-92% the old
+ * engine "achieved" by converting to lossy JPEG — but it does it without throwing the image away, and when
+ * it cannot clear the size floor the caller keeps the original, which is the correct outcome.
  */
 async function encodePng(src: string, out: string, o: EncodeOpts): Promise<EncodeResult> {
-  const base = sharp(src, { failOn: "none", animated: o.animated });
-  await base.png({ compressionLevel: 9, effort: 10 }).keepMetadata().toFile(out);
-  let how = "png deflate(effort 10)";
-
-  if (!o.tryPalette || o.animated) return { ok: true, lossless: true, how };
-
   const meta = await probeImage(src);
-  if (!meta || meta.width * meta.height > PALETTE_PIXEL_BUDGET) return { ok: true, lossless: true, how };
+  const pixels = meta ? meta.width * meta.height : Number.MAX_SAFE_INTEGER;
+  const srcSize = fs.statSync(src).size;
 
-  try {
-    // ONE raw decode, reused for both the colour count and the verification compare.
-    const srcRaw = await sharp(src, { failOn: "none" }).ensureAlpha().raw().toBuffer();
-    if (countColours(srcRaw, PALETTE_MAX_COLOURS) > PALETTE_MAX_COLOURS) {
-      return { ok: true, lossless: true, how }; // a photo/gradient — palette would be lossy, don't try
-    }
-    const cand = `${out}.palette.tmp`;
-    await sharp(src, { failOn: "none" })
-      .png({ compressionLevel: 9, effort: 10, palette: true, quality: 100, colours: PALETTE_MAX_COLOURS, dither: 0 })
-      .keepMetadata()
-      .toFile(cand);
-    const candRaw = await sharp(cand, { failOn: "none" }).ensureAlpha().raw().toBuffer();
-    const identical = srcRaw.equals(candRaw);
-    if (identical && fs.statSync(cand).size < fs.statSync(out).size) {
+  let have = false;
+  let how = "";
+
+  // Candidate 1 — lossless by construction. No decode, so no verification is possible OR needed.
+  if (redeflatePng(src, out)) {
+    have = true;
+    how = "png re-deflate (bit-exact)";
+  }
+
+  /** Take `cand` if it is smaller than what we have AND it verifies. Always consumes the candidate file. */
+  const consider = async (cand: string, label: string, needsVerify: boolean): Promise<void> => {
+    try {
+      const size = fs.statSync(cand).size;
+      const target = have ? fs.statSync(out).size : srcSize;
+      if (size >= target) {
+        fs.rmSync(cand, { force: true });
+        return;
+      }
+      if (needsVerify && !(await rendersIdentically(src, cand))) {
+        fs.rmSync(cand, { force: true });
+        return;
+      }
       fs.renameSync(cand, out);
-      how = "png palette (verified pixel-exact)";
-    } else {
+      have = true;
+      how = label;
+    } catch {
       fs.rmSync(cand, { force: true });
     }
-  } catch {
-    /* the palette attempt is an optimisation — its failure leaves the verified deflate output in place */
+  };
+
+  // Animated PNGs and images past the verification budget stop at candidate 1: we will not claim a
+  // losslessness we cannot check, and decoding a very large image twice is not worth the extra few percent.
+  if (!o.animated && pixels <= VERIFY_PIXEL_BUDGET) {
+    // Candidate 2 — re-filter, then re-deflate the re-filtered stream.
+    const filtered = `${out}.filtered.tmp`;
+    try {
+      await sharp(src, { failOn: "none" })
+        .png({ compressionLevel: 9, adaptiveFiltering: true }) // NO `effort` — see the warning above
+        .keepMetadata()
+        .toFile(filtered);
+      const packed = `${out}.filtered.rd.tmp`;
+      if (redeflatePng(filtered, packed)) {
+        // The re-deflate is bit-exact w.r.t. `filtered`, so verifying `filtered` covers both.
+        if (await rendersIdentically(src, filtered)) {
+          await consider(packed, "png re-filter + re-deflate (verified)", false);
+        } else {
+          fs.rmSync(packed, { force: true });
+        }
+      }
+      await consider(filtered, "png re-filter (verified)", true);
+    } catch {
+      fs.rmSync(filtered, { force: true });
+      fs.rmSync(`${out}.filtered.rd.tmp`, { force: true });
+    }
+
+    // Candidate 3 — the exact palette, for images that can hold one.
+    if (o.tryPalette && pixels <= PALETTE_PIXEL_BUDGET) {
+      const pal = `${out}.palette.tmp`;
+      try {
+        const srcRaw = await sharp(src, { failOn: "none" }).ensureAlpha().raw().toBuffer();
+        if (countColours(srcRaw, PALETTE_MAX_COLOURS) <= PALETTE_MAX_COLOURS) {
+          await sharp(src, { failOn: "none" })
+            .png({ compressionLevel: 9, palette: true, quality: 100, colours: PALETTE_MAX_COLOURS, dither: 0 })
+            .keepMetadata()
+            .toFile(pal);
+          await consider(pal, "png palette (verified renders identically)", true);
+        }
+      } catch {
+        fs.rmSync(pal, { force: true });
+      }
+    }
   }
-  return { ok: true, lossless: true, how };
+
+  if (have) return { ok: true, lossless: true, how };
+
+  // NOTHING beat the source losslessly. We must NOT fall back to writing a lossy candidate here — that is
+  // precisely the substitution this whole rewrite exists to prevent. Copy the source through instead, so
+  // the caller's size-gain floor sees a truthful zero and keeps (and records) the original.
+  fs.copyFileSync(src, out);
+  return { ok: true, lossless: true, how: "no lossless candidate was smaller — original kept" };
 }
+
+/** Above this many pixels we do not run the decode-and-compare verification (2 raw RGBA decodes ≈ 8
+ *  bytes/pixel of transient memory, and the compress queue runs many jobs at once). Past it, only the
+ *  lossless-by-construction re-deflate is used — a smaller win, but never an unverified claim. */
+const VERIFY_PIXEL_BUDGET = 30_000_000;
 
 /** Count distinct RGBA pixels, stopping as soon as the cap is exceeded (so a photo costs almost nothing). */
 function countColours(raw: Buffer, cap: number): number {

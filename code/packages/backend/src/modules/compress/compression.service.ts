@@ -22,7 +22,6 @@ import type {
 import { mediaKindForName } from "@lfb/shared";
 import type { CompressionOutcome } from "@lfb/shared";
 import {
-  MARKER_PREFIX,
   markerPayload,
   isAnyMarker,
   markerCodec,
@@ -37,14 +36,12 @@ import {
   probeImage,
   jpegChromaSampling,
   chromaGotCoarser,
-  CHROMA_444,
 } from "./image-encode.js";
 import { ledgerSaysDone, writeLedger, buildRecord } from "./compress-ledger.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { expandHome, compressInfo } from "../fs/badges.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { findStorageRootForPath } from "../storage/storage.service.js";
-import { writeCompressionRecord } from "../storage/analysis.service.js";
 import { fingerprintImage, fingerprintVideo } from "../media/perceptual.service.js";
 import { appendFileEvent, type SidecarSeed, type FileEventInput } from "../storage/file-sidecar.service.js";
 import { appendHistory } from "../storage/history-log.service.js";
@@ -204,12 +201,64 @@ export async function detectTools(): Promise<CompressTools> {
     ffmpeg: onPath("ffmpeg"),
     ffprobe: onPath("ffprobe"),
     magick: onPath("magick") || onPath("convert"),
+    // oxipng / cwebp / cjpeg are no longer REQUIRED: the image encoders they used to provide now run
+    // in-process through sharp, which bundles mozjpeg, libwebp and libpng. That is not a cosmetic change —
+    // oxipng was not even installed on this machine, so the "lossless PNG recompress" path the spec
+    // promised had silently never been available, and every PNG fell through to the lossy branch instead.
+    // The flags are still reported because the settings page shows which tools are present.
     oxipng: onPath("oxipng"),
     cwebp: onPath("cwebp"),
     cjpeg: onPath("cjpeg"),
     jpegoptim: onPath("jpegoptim"),
+    // The LOSSLESS JPEG repacker (§3.1) — re-packs an already-lossy JPEG's entropy coding for 3-10% fewer
+    // bytes with byte-identical DCT coefficients. mozjpeg's build is preferred; libjpeg-turbo's works too.
+    jpegtran: onPath(MOZJPEG_JPEGTRAN) || onPath("jpegtran"),
+    // Writes the in-file marker into a WebP's RIFF container (compress-marker.ts). Absent → WebP outputs
+    // carry no in-file marker and rely on the compression record instead.
+    webpmux: onPath("webpmux"),
+    // sharp is a library dependency, not a PATH tool — always available, reported for the settings page.
+    sharp: true,
     heif: await magickSupportsHeif(),
   };
+}
+
+/**
+ * Sweep abandoned transcode temporaries (BUG-9).
+ *
+ * `tmpOut()` writes candidates to `<state>/tmp/compress-<uuid><ext>`. The happy path renames them away and
+ * the guarded failure paths delete them, but a process that is KILLED, crashes, or is OOM-reaped mid
+ * transcode leaves its candidate behind forever. Nothing ever collected them: this machine had 146 orphans
+ * totalling 11 GB, which is also a record of how often those runs were killed part-way.
+ *
+ * Called at boot and after each bulk run. Only removes `compress-*` entries older than `maxAgeHours`, so it
+ * can never delete a candidate a job currently in flight is still writing.
+ */
+export function sweepCompressTemp(maxAgeHours = 24): { files: number; bytes: number } {
+  const dir = path.join(resolveStateDir(), "tmp");
+  let files = 0;
+  let bytes = 0;
+  try {
+    const cutoff = Date.now() - maxAgeHours * 3600_000;
+    for (const name of fs.readdirSync(dir)) {
+      if (!name.startsWith("compress-")) continue;
+      const p = path.join(dir, name);
+      try {
+        const st = fs.statSync(p);
+        if (st.mtimeMs >= cutoff) continue;
+        fs.rmSync(p, { force: true, recursive: st.isDirectory() });
+        files++;
+        bytes += st.size;
+      } catch {
+        /* a file that vanished under us needs no sweeping */
+      }
+    }
+  } catch {
+    return { files, bytes }; // no tmp dir yet → nothing to sweep
+  }
+  if (files > 0) {
+    log.info("compress", `swept ${files} abandoned transcode temp file(s), reclaimed ${(bytes / 1024 / 1024).toFixed(0)} MB`);
+  }
+  return { files, bytes };
 }
 function magickBin(): string {
   return onPath("magick") ? "magick" : "convert";
@@ -449,9 +498,6 @@ const VIDEO_TARGETS: Record<string, { encoder: string; ext: string; alpha: boole
   av1: { encoder: "libaom-av1", ext: ".mp4", alpha: false, label: "AV1" },
 };
 const LOSSLESS_IMAGE_EXT = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
-// Source extensions `cwebp` can actually decode. It CANNOT read GIF or BMP, so those must route through
-// ImageMagick when targeting WebP (a GIF handed to cwebp fails with "Cannot read input picture file").
-const CWEBP_READABLE = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"]);
 
 // ── the quality ladder (compression.mdx §2.1 R2, LOCKED) ───────────────────────
 // The default sits 75% of the way toward BEST quality, not at the midpoint.
@@ -461,11 +507,14 @@ const CWEBP_READABLE = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp
 // 70..100, 75% toward best is 70 + 0.75 × 30 = 92.5 → q92. Paired with 4:4:4 chroma (image-encode.ts) and
 // mozjpeg, which is 15-25% more byte-efficient at the same visual quality — that efficiency is what pays
 // for the higher target instead of the files simply getting bigger.
+// Where a rung lands is `worst + t × (best − worst)`, and ties ROUND TOWARD BETTER QUALITY — the same rule
+// on both bands, so neither can drift toward the smaller file by accident. medium = 70 + 0.75 × 30 = 92.5
+// → q93.
 const JPEG_BAND = { worst: 70, best: 100 } as const;
-function jpegQuality(q: CompressMediaPrefs["quality"]): number {
+export function jpegQuality(q: CompressMediaPrefs["quality"]): number {
   if (q === "lossless") return 100;
   const t = q === "high" ? 0.87 : q === "low" ? 0.27 : 0.75; // medium = the documented 75/25 policy
-  return Math.round(JPEG_BAND.worst + t * (JPEG_BAND.best - JPEG_BAND.worst));
+  return Math.ceil(JPEG_BAND.worst + t * (JPEG_BAND.best - JPEG_BAND.worst));
 }
 
 // Same 75/25 policy on the video band, where LOWER CRF is better quality. The usable H.264 band is 28
@@ -477,11 +526,13 @@ const CRF_BAND: Record<string, { worst: number; best: number }> = {
   hevc: { worst: 31, best: 21 },
   av1: { worst: 40, best: 26 },
 };
-function videoCrf(codec: string, q: CompressMediaPrefs["quality"]): number {
+export function videoCrf(codec: string, q: CompressMediaPrefs["quality"]): number {
   if (q === "lossless") return 0;
   const band = CRF_BAND[codec] ?? CRF_BAND.h264;
   const t = q === "high" ? 0.87 : q === "low" ? 0.27 : 0.75;
-  return Math.round(band.worst - t * (band.worst - band.best));
+  // Floor, not round — on the CRF band LOWER is better, so flooring is the same "toward better quality"
+  // tie-break that `Math.ceil` is on the JPEG band. medium H.264 = 28 − 0.75 × 10 = 20.5 → CRF 20.
+  return Math.floor(band.worst - t * (band.worst - band.best));
 }
 
 function mediaOf(name: string): CompressMedia | null {
@@ -534,7 +585,7 @@ type PlanResult = Plan | { toolMissing: string } | { skip: string };
  * originals this app destroyed, the lossless path returns 60-78% of the bytes with zero pixel change, where
  * the lossy path took 84-92% and threw the image away.
  */
-function pickImageTarget(
+export function pickImageTarget(
   prefs: CompressMediaPrefs,
   tools: CompressTools,
   srcExt: string,
@@ -620,24 +671,18 @@ function pickImageTarget(
     return losslessPlan();
   }
 
-  // ── An ALREADY-LOSSY source (JPEG / WebP). Its information is already gone; re-encoding cannot restore
-  // it and only adds a fresh generation of loss, so the default is a format-PRESERVING re-encode and the
-  // caller additionally runs the "is the source already at or below our target?" test (BUG-6) before
-  // spending anything. Conversion between the two lossy formats is only reached via `prefer`.
-  if (prefs.convertTypes) {
-    for (const key of prefs.prefer) {
-      const t = IMAGE_TARGETS[key];
-      if (!t || denied.has(key)) continue;
-      if (!t.alpha && alphaUsed !== false) continue;
-      if (key === "webp" && srcExt !== ".webp") {
-        return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (${prefs.quality})`, lossless: false };
-      }
-      if (key === "jpeg" && srcExt !== ".jpg" && srcExt !== ".jpeg") {
-        return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality})`, lossless: false };
-      }
-      break; // the first allowed preference that is not already the source format decides
-    }
-  }
+  // ── An ALREADY-LOSSY source (JPEG / WebP) is ALWAYS re-encoded FORMAT-PRESERVING. Two reasons, and both
+  // are rules elsewhere in this file:
+  //
+  //   * R6 — a JPEG→WebP conversion RENAMES the file, and every markdown / HTML / CSS / manifest reference
+  //     to it breaks. A shipped default must not do that silently. (This is not hypothetical: with
+  //     `prefer: ["webp", …]` the engine converted every .jpg on the machine to .webp.)
+  //   * The information a lossy source threw away is gone. Passing it through a DIFFERENT lossy codec
+  //     cannot recover any of it and adds a second generation of loss for a marginal byte win.
+  //
+  // A user who genuinely wants a different container has the explicit convert action for it (§8.1), which
+  // is a deliberate, per-file choice rather than a side effect of a compress sweep. The caller additionally
+  // runs the "is the source already at or below our target?" test (BUG-6) before spending anything here.
   return {
     media: "images",
     targetKey: srcExt === ".webp" ? "webp" : "jpeg",
@@ -661,7 +706,38 @@ function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt
   // (images.mdx §1.4 — the same format-preserving policy as images). ffmpeg muxes into that container.
   const keepContainer = !prefs.convertTypes && !force && srcExt;
   const ext = keepContainer ? srcExt : t.ext;
-  return { media: "video", targetKey: key, targetCodec: t.label, ext, action: `→ ${t.label} (${prefs.quality}, CRF ${videoCrf(key, prefs.quality)})`, lossless: prefs.quality === "lossless" };
+  return {
+    media: "video", targetKey: key, targetCodec: t.label, ext,
+    action: `→ ${t.label} (${prefs.quality}, CRF ${videoCrf(key, prefs.quality)}, preset ${prefs.preset ?? "slow"})`,
+    lossless: prefs.quality === "lossless",
+    // A FORCED codec is the compatibility convert (codecs.mdx §5): its job is universal playability, so it
+    // is exempt from the size-gain floors and is the one case allowed to normalise chroma to yuv420p.
+    formatConvert: Boolean(force),
+  };
+}
+
+/**
+ * The output pixel format for a video encode — R1 applied to video.
+ *
+ * The old engine hard-coded `-pix_fmt yuv420p` on every transcode. For a 4:2:0 source that is a no-op, but
+ * for a 4:2:2 or 4:4:4 source it SILENTLY HALVES the colour planes: exactly the image 4:2:0 defect, in the
+ * other media type, and equally invisible to a guard that only compares width and height.
+ *
+ * So: keep the source's chroma when it is finer than 4:2:0 and the encoder can carry it. The one exemption
+ * is a COMPATIBILITY convert, where normalising to yuv420p is the entire point — a High 4:4:4 Predictive
+ * H.264 stream is not playable in most places, and that conversion exists to make a file playable.
+ */
+export function videoPixFmt(srcPixFmt: string, prefs: CompressMediaPrefs, isCompatConvert: boolean): string {
+  const f = (srcPixFmt || "").toLowerCase();
+  if (isCompatConvert || prefs.preserveChroma === false) return "yuv420p";
+  // Already 4:2:0 (or unknown) → yuv420p is not a reduction, and it is the safest, most playable choice.
+  if (!f || f.includes("420")) return "yuv420p";
+  // Finer than 4:2:0. Preserve it rather than throw colour resolution away. x264/x265 pick the profile that
+  // carries it automatically once the pixel format asks for it.
+  if (f.includes("444")) return f.includes("10") ? "yuv444p10le" : "yuv444p";
+  if (f.includes("422")) return f.includes("10") ? "yuv422p10le" : "yuv422p";
+  if (f.includes("10")) return "yuv420p10le";
+  return "yuv420p";
 }
 
 /** Dry-run: what would happen + is it alpha-safe. Never touches the file. */
@@ -838,92 +914,122 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   const o: CompressFileOpts = typeof opts === "string" ? { forceVideoCodec: opts } : opts ?? {};
   const forceVideoCodec = o.forceVideoCodec;
   const abs = path.resolve(expandHome(input.trim()));
-  let beforeBytes: number | null = null;
+  // BUG-9 — the temp path is hoisted out of the body so the `finally` at the very bottom can sweep it on
+  // EVERY exit, including an exception thrown between the encode and the replace. The old code only
+  // unlinked on the paths it explicitly returned from, which is how 146 orphaned temp files totalling 11 GB
+  // accumulated from runs that were killed part-way.
+  let tmpPath: string | null = null;
   try {
-    beforeBytes = fs.statSync(abs).size;
-  } catch {
-    return fail(abs, "file not found");
-  }
-  const check = await checkFile(abs);
-  if (!check.media || check.media === "audio") return fail(abs, check.action, "skipped", beforeBytes);
-  if (check.toolMissing) return fail(abs, `needs ${check.toolMissing}`, "failed", beforeBytes);
-  if (!check.alphaSafe) return fail(abs, check.warning ?? "alpha safety check failed", "blocked", beforeBytes);
-  if (!check.eligible) return fail(abs, check.action, "skipped", beforeBytes);
+    let beforeBytes: number | null = null;
+    try {
+      beforeBytes = fs.statSync(abs).size;
+    } catch {
+      return fail(abs, "file not found");
+    }
+    const check = await checkFile(abs);
+    if (!check.media || check.media === "audio") return fail(abs, check.action, "skipped", beforeBytes);
+    if (check.toolMissing) return fail(abs, `needs ${check.toolMissing}`, "failed", beforeBytes);
+    if (!check.alphaSafe) return fail(abs, check.warning ?? "alpha safety check failed", "blocked", beforeBytes);
+    if (!check.eligible) return fail(abs, check.action, "skipped", beforeBytes);
 
-  const settings = getCompressionSettings();
-  const tools = await detectTools();
-  const media = check.media;
+    const settings = getCompressionSettings();
+    const tools = await detectTools();
+    const media = check.media;
 
-  // §8.4 — the already-compressed marker. If this file already carries our in-file marker (from a prior
-  // pass here, or because a peer compressed it and it pinned over IPFS), skip it BEFORE any transcode — the
-  // whole point is to never re-encode a file we (or another of the user's computers) already compressed.
-  const marker = await readMarker(abs, media, tools);
-  if (marker.startsWith(MARKER_PREFIX)) {
-    // BACKFILL the travelling compression record on a marker skip (best-effort, §8.4): the marker rode in
-    // WITH the bytes (a peer compressed this file and it pinned over IPFS, or a pre-record engine did), so
-    // THIS machine may hold no record — and without one the Compress status keeps counting the file
-    // "compressible" forever (units.service.ts compressStatusFor reads the record via analysisOutputs).
-    // Sizes are the CURRENT bytes (the original is unknown here; ratio 1 = "no measured gain, marker-skip").
-    if (beforeBytes != null) {
-      try {
-        const storageRoot = findStorageRootForPath(abs);
-        if (storageRoot) {
-          const rel = path.relative(storageRoot, abs);
-          writeCompressionRecord(storageRoot, rel, {
-            source: rel,
-            original: { name: path.basename(abs), extension: path.extname(abs).replace(/^\./, ""), size: beforeBytes },
-            compressed: { codec: marker.split(";")[2] ?? null, size: beforeBytes, ratio: 1, at: new Date().toISOString() },
-          });
-        }
-      } catch (e) {
-        log.warn("compress", `marker-skip record backfill skipped: ${(e as Error).message}`);
+    // ── §8.4 — HAVE WE ALREADY DEALT WITH THIS FILE? Asked of THREE independent sources before a single
+    // byte is transcoded, because compressing a file twice is not merely wasted work: for a lossy target it
+    // stacks a fresh generation of loss on the last one. Any source saying "done" stops us.
+    const done = await alreadyHandled(abs, media, tools, beforeBytes);
+    if (done) {
+      return { path: abs, status: "skipped", reason: done.reason, beforeBytes, afterBytes: beforeBytes, codec: check.targetCodec };
+    }
+
+    const prefs = media === "images" ? settings.images : settings.video;
+    const srcExt = path.extname(abs).toLowerCase();
+    const shape = media === "images" ? await imageShape(abs, tools) : { alphaUsed: check.alphaUsed, pages: 1 };
+    const plan = media === "images"
+      ? pickImageTarget(prefs, tools, srcExt, shape.alphaUsed, shape.pages)
+      : pickVideoTarget(prefs, tools, srcExt, forceVideoCodec);
+    if ("toolMissing" in plan) return fail(abs, `needs ${plan.toolMissing}`, "failed", beforeBytes);
+    if ("skip" in plan) return fail(abs, plan.skip, "skipped", beforeBytes);
+
+    // ── BUG-6 — DO NOT RE-ENCODE A FILE THAT IS ALREADY AT OR BELOW OUR TARGET. A JPEG that arrived from a
+    // phone or a social network is already lossy; re-encoding it cannot recover information that is gone,
+    // it can only add a second generation of DCT error on top of the first. When the source is already at
+    // or under the target quality the ONLY transform worth doing is a lossless entropy repack, which
+    // encodeImageCandidate picks automatically — so all this test does is refuse the genuinely destructive
+    // case where a repack is not available either.
+    const srcQ = media === "images" && (srcExt === ".jpg" || srcExt === ".jpeg")
+      ? await jpegSourceQuality(abs, tools)
+      : null;
+
+    // §8.0 — capture the BEFORE state FIRST, before we touch a byte: the original's exact content hash +
+    // size and (video/image) its perceptual fingerprint, plus its source codec. Once the replace runs, the
+    // original only exists in trash, so "what it was" must be recorded now. All best-effort (guarded).
+    const beforeCap = exactHashAndSize(abs);
+    const srcCodec = await sourceCodecLabel(abs, media, tools);
+    const fingerprintBefore = await perceptualFingerprint(abs, media);
+
+    const out = tmpOut(plan.ext);
+    tmpPath = out;
+    // The INPUT half of the §5.1 integrity gate + the §5 resolution guard below. The type is written out on
+    // purpose: it is what makes tsc reject a probe left un-awaited here (a Promise is ALWAYS truthy, so a
+    // missing await would turn the `!outDims` gate below into a permanent false and let corrupt output
+    // replace the user's original — silent data loss). One probe per file, not three.
+    const inInfo = media === "images" ? null : await videoInfo(abs, tools);
+    const inDims: { w: number; h: number } | null =
+      media === "images" ? await imageDims(abs, tools) : (inInfo ? { w: inInfo.w, h: inInfo.h } : null);
+    // The CHROMA half of the resolution rule — captured before, compared after. `%w %h` reports the LUMA
+    // plane only, which is exactly why the old guard could report "resolution unchanged" while the two
+    // colour planes had been halved in both axes.
+    const inChroma = media === "images" ? jpegChromaSampling(abs) : (inInfo?.pixFmt ?? "");
+
+    let how = "";
+    // The encoder's VERIFIED verdict, which is not the same thing as the plan's intent. `plan.lossless` is
+    // what we asked for; `wasLossless` is what we got and checked. Everything downstream — which size floor
+    // applies, what the record says, what the log claims — reads the verified fact, never the intent.
+    let wasLossless = plan.lossless === true;
+    if (media === "images") {
+      const enc = await encodeImageCandidate(plan, abs, out, prefs, tools, srcQ);
+      if (!enc.ok) {
+        return fail(abs, enc.reason ?? "image encode failed", enc.declined ? "skipped" : "failed", beforeBytes);
+      }
+      how = enc.how;
+      wasLossless = enc.lossless;
+      // A plan that PROMISED lossless and did not deliver it must never replace the user's file. This
+      // cannot happen today (encodePng copies the source through rather than emit a lossy fallback), and
+      // this is the belt that keeps it that way if a future encoder is added.
+      if (plan.lossless === true && !enc.lossless) {
+        return fail(abs, "refused: the lossless encode could not be verified as lossless; original kept", "blocked", beforeBytes);
+      }
+    } else {
+      const t = VIDEO_TARGETS[plan.targetKey];
+      // -threads caps a BATCHED job to its slice (parallelization.mdx §2); a one-off compress omits it so
+      // ffmpeg uses its all-core default. 0 would mean "auto/all cores" to ffmpeg — so only pass when > 0.
+      const threadArgs = o.threads && o.threads > 0 ? ["-threads", String(o.threads)] : [];
+      const pixFmt = videoPixFmt(inInfo?.pixFmt ?? "", prefs, Boolean(plan.formatConvert));
+      const crf = videoCrf(plan.targetKey, prefs.quality);
+      const preset = prefs.preset ?? "slow";
+      how = `${t.label} CRF ${crf} preset ${preset} ${pixFmt}`;
+      // §8.4 — the in-file marker is stamped INLINE here (free — no extra pass): `-metadata comment=…`
+      // writes it into the output's moov/udta, so a re-run, or another of the user's computers that
+      // receives this file, reads it back and skips the work.
+      const args = [
+        "-y", "-i", abs,
+        "-c:v", t.encoder, ...threadArgs,
+        "-crf", String(crf),
+        "-preset", preset,
+        "-pix_fmt", pixFmt,
+        "-c:a", "copy",
+        "-movflags", "+use_metadata_tags",
+        "-metadata", `comment=${markerPayload(plan.targetKey)}`,
+        out,
+      ];
+      const r = await runAsync("ffmpeg", args);
+      if (r.code !== 0 || !safeSize(out)) {
+        return fail(abs, `ffmpeg failed: ${(r.err || "").split("\n").slice(-3).join(" ").slice(0, 200)}`, "failed", beforeBytes);
       }
     }
-    return { path: abs, status: "skipped", reason: "already compressed (marker)", beforeBytes, afterBytes: beforeBytes, codec: check.targetCodec };
-  }
-
-  const prefs = media === "images" ? settings.images : settings.video;
-  const srcExt = path.extname(abs).toLowerCase();
-  const plan = media === "images"
-    ? pickImageTarget(prefs, tools, srcExt, check.alphaUsed)
-    : pickVideoTarget(prefs, tools, srcExt, forceVideoCodec);
-  if ("toolMissing" in plan) return fail(abs, `needs ${plan.toolMissing}`, "failed", beforeBytes);
-  if ("skip" in plan) return fail(abs, plan.skip, "skipped", beforeBytes);
-
-  // §8.0 — capture the BEFORE state FIRST, before we touch a byte: the original's exact content hash + size
-  // and (video/image) its perceptual fingerprint, plus its source codec. Once the replace (step 5) runs the
-  // original only exists in trash, so "what it was" must be recorded now. All best-effort (guarded).
-  const beforeCap = exactHashAndSize(abs);
-  const srcCodec = await sourceCodecLabel(abs, media, tools);
-  const fingerprintBefore = await perceptualFingerprint(abs, media);
-
-  const out = tmpOut(plan.ext);
-  // The INPUT half of the §5.1 integrity gate + the §5 resolution guard below. The type is written out on
-  // purpose: it is what makes tsc reject a probe left un-awaited here (a Promise is ALWAYS truthy, so a
-  // missing await would turn the `!outDims` gate below into a permanent false and let corrupt output
-  // replace the user's original — silent data loss). One probe per file, not three.
-  const inInfo = media === "images" ? null : await videoInfo(abs, tools);
-  const inDims: { w: number; h: number } | null =
-    media === "images" ? await imageDims(abs, tools) : (inInfo ? { w: inInfo.w, h: inInfo.h } : null);
-
-  // Build + run the tool.
-  let cmd: { bin: string; args: string[] };
-  if (media === "images") {
-    cmd = imageCommand(plan, abs, out, prefs, tools, o.threads);
-  } else {
-    const t = VIDEO_TARGETS[plan.targetKey];
-    // -threads caps a BATCHED job to its slice (parallelization.mdx §2); a one-off compress omits it so
-    // ffmpeg uses its all-core default. 0 would mean "auto/all cores" to ffmpeg — so only pass when > 0.
-    const threadArgs = o.threads && o.threads > 0 ? ["-threads", String(o.threads)] : [];
-    // §8.4 — stamp the in-file marker inline (free — no extra pass). `-metadata comment=…` writes it into
-    // the output's moov/udta so a re-run / a peer reads it back and skips this file.
-    cmd = { bin: "ffmpeg", args: ["-y", "-i", abs, "-c:v", t.encoder, ...threadArgs, "-crf", String(videoCrf(plan.targetKey, prefs.quality)), "-pix_fmt", "yuv420p", "-c:a", "copy", "-metadata", `comment=${markerPayload(plan.targetKey)}`, out] };
-  }
-  const r = await runAsync(cmd.bin, cmd.args);
-  if (r.code !== 0 || !safeSize(out)) {
-    tryUnlink(out);
-    return fail(abs, `${cmd.bin} failed: ${(r.err || "").split("\n").slice(-3).join(" ").slice(0, 200)}`, "failed", beforeBytes);
-  }
 
   // §5 — verify resolution unchanged (never downscale) and that we actually gained.
   // Re-probed with the SAME probe that read the input, and RESOLVED (awaited) before the gate reads it.
@@ -938,173 +1044,439 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
   // output's are NOT, the encoder produced an unreadable file — refuse and keep the original untouched.
   // This is independent of preserveResolution (a user turning that off must NOT disable corruption
   // detection). This is the last line of defense against silent compression data-loss.
-  if (inDims && !outDims) {
-    tryUnlink(out);
-    return fail(abs, "refused: compressed output is unreadable/corrupt — could not verify its dimensions; original kept", "blocked", beforeBytes);
-  }
-  if (settings.preserveResolution && inDims && outDims && (inDims.w !== outDims.w || inDims.h !== outDims.h)) {
-    tryUnlink(out);
-    return fail(abs, `refused: resolution changed ${inDims.w}×${inDims.h} → ${outDims.w}×${outDims.h}`, "blocked", beforeBytes);
-  }
-  const afterBytes = fs.statSync(out).size;
-  // A COMPATIBILITY conversion (HEIC/HEIF/AVIF → JPEG, or a forced H.264 — compression.mdx §5) exists for
-  // universal playback, not shrinkage, so it is EXEMPT from the "must be smaller" guard and may grow the
-  // file. Every OTHER compress must actually gain, or we keep the original untouched.
-  if (!plan.formatConvert && beforeBytes != null && afterBytes >= beforeBytes) {
-    tryUnlink(out);
-    return { path: abs, status: "skipped", reason: "no gain (already well compressed)", beforeBytes, afterBytes, codec: check.targetCodec };
-  }
-
-  // §8 — replace: dispose the original, then move temp → final path (new ext if the format changed).
-  // Disposition: a per-call `deleteOriginal` (the "Compress inside" dialog's per-run radio,
-  // compress_inside.mdx §4) wins; otherwise the global recoverable-by-default (settings). This runs
-  // ONLY here — after the temp verified resolution and confirmed a size gain — so a file that failed
-  // to compress NEVER reaches this point and its original is never touched (the transactional rule).
-  const disposition: DeleteOriginalMode =
-    o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard");
-  const finalPath = path.join(path.dirname(abs), path.basename(abs, path.extname(abs)) + plan.ext);
-  try {
-    if (disposition === "trash") trashOriginal(abs);
-    else fs.unlinkSync(abs);
-    fs.renameSync(out, finalPath);
-  } catch (e) {
-    tryUnlink(out);
-    return fail(abs, `replace failed: ${(e as Error).message}`, "failed", beforeBytes);
-  }
-  log.info("compress", `${abs} → ${finalPath} (${check.targetCodec}) ${beforeBytes}→${afterBytes} bytes`);
-
-  // Best-effort travelling compression record in the owning storage's SDL (syncable_data_location.mdx §4.3).
-  // Wrapped so it can NEVER fail a compression — the bytes are already replaced by this point.
-  try {
-    const storageRoot = findStorageRootForPath(finalPath);
-    if (storageRoot && beforeBytes != null) {
-      const rel = path.relative(storageRoot, finalPath);
-      writeCompressionRecord(storageRoot, rel, {
-        source: rel,
-        original: {
-          name: path.basename(abs),
-          extension: path.extname(abs).replace(/^\./, ""),
-          size: beforeBytes,
-        },
-        compressed: {
-          codec: plan.targetKey,
-          size: afterBytes,
-          ratio: beforeBytes > 0 ? Number((afterBytes / beforeBytes).toFixed(3)) : 0,
-          at: new Date().toISOString(),
-        },
-      });
+    if (inDims && !outDims) {
+      return fail(abs, "refused: compressed output is unreadable/corrupt — could not verify its dimensions; original kept", "blocked", beforeBytes);
     }
+    if (settings.preserveResolution && inDims && outDims && (inDims.w !== outDims.w || inDims.h !== outDims.h)) {
+      return fail(abs, `refused: resolution changed ${inDims.w}×${inDims.h} → ${outDims.w}×${outDims.h}`, "blocked", beforeBytes);
+    }
+
+    // ── R1's SECOND HALF — CHROMA (BUG-1). The check above compares `%w %h`, which are the LUMA plane's
+    // dimensions. The two COLOUR planes have their own resolution, and a 4:2:0 encode stores them at half
+    // width AND half height — a quarter of the colour detail — while `%w %h` reports no change at all. That
+    // is how 3,248 images were subsampled past a guard that was, on its own terms, working correctly.
+    // The encoder is now told 4:4:4 explicitly (image-encode.ts CHROMA_444) and this is the verification.
+    const outChroma = media === "images" ? jpegChromaSampling(out) : ((await videoInfo(out, tools))?.pixFmt ?? "");
+    if (prefs.guardChroma !== false && media === "images" && chromaGotCoarser(inChroma, outChroma)) {
+      return fail(abs, `refused: colour resolution dropped (chroma ${inChroma || "?"} → ${outChroma || "?"}) — this is a resolution reduction; original kept`, "blocked", beforeBytes);
+    }
+    if (media === "video" && prefs.preserveChroma !== false && !plan.formatConvert && chromaCoarserPixFmt(inChroma, outChroma)) {
+      return fail(abs, `refused: colour resolution dropped (pixel format ${inChroma} → ${outChroma}); original kept`, "blocked", beforeBytes);
+    }
+
+    const afterBytes = fs.statSync(out).size;
+
+    // ── R3 — THE SIZE-GAIN FLOOR (BUG-3). The old gate was `afterBytes >= beforeBytes`: ANY reduction, even
+    // one byte, was accepted. That is how a lossless PNG was destroyed for a 1.4% saving (Document.png,
+    // 56,243 → 55,440 bytes) and another for 10.2%. A compress is only worth committing when it actually
+    // wins, and how big a win it must be depends on WHAT IS BEING TRADED:
+    //
+    //   lossless → lossless   nothing is traded, so any real gain is free money  (min_size_gain_lossless)
+    //   lossy    → lossy      quality is being spent                             (min_size_gain, 20%)
+    //   lossless → lossy      the destructive one — needs the opt-in AND a big win (…_lossless_to_lossy, 50%)
+    //   compatibility convert exists for playability, not shrinkage               (exempt, may grow)
+    const gain = beforeBytes != null && beforeBytes > 0 ? 1 - afterBytes / beforeBytes : 1;
+    const floor = plan.losslessSource && !wasLossless
+      ? settings.minSizeGainLosslessToLossy
+      : wasLossless
+        ? settings.minSizeGainLossless
+        : settings.minSizeGain;
+    if (!plan.formatConvert && gain < floor) {
+      const reason =
+        `kept the original — the best candidate was only ${(gain * 100).toFixed(1)}% smaller` +
+        ` (needs ${(floor * 100).toFixed(0)}%${plan.losslessSource && !wasLossless ? ", because this would trade a lossless original for a lossy copy" : ""})`;
+      // RECORD THE REFUSAL (§8.4). Without this the file carries no memory of the decision and every later
+      // sweep pays the full transcode again to reach the identical conclusion — which is most of why files
+      // felt like they were being compressed over and over.
+      recordOutcome(abs, abs, {
+        outcome: "declined", codec: plan.targetKey, size: beforeBytes ?? afterBytes,
+        originalSize: beforeBytes ?? afterBytes, reason, chroma: inChroma, lossless: true, engine: how,
+      });
+      return { path: abs, status: "skipped", reason, beforeBytes, afterBytes, codec: check.targetCodec };
+    }
+
+    // ── §8.4 — STAMP THE DURABLE MARKER, before the replace, so the bytes that land in the user's tree are
+    // already marked. Video/audio were marked inline by ffmpeg; images are stamped here by a lossless
+    // metadata splice. This is the fix for the paths that previously wrote NO marker at all (the PNG and
+    // WebP encoders took no comment flag), which is why those files were re-encoded on every single run.
+    let marked = media !== "images";
+    if (media === "images") {
+      marked = await stampMarker(out, plan.targetKey, tools);
+      if (!marked) {
+        log.debug("compress", `${path.basename(out)}: format carries no in-file marker — relying on the compression record`);
+      }
+      // The splice rewrote the file; re-read its size so the record and the log line are truthful.
+    }
+    const finalBytes = fs.statSync(out).size;
+
+    // §8 — replace: dispose the original, then move temp → final path (new ext if the format changed).
+    // Disposition: a per-call `deleteOriginal` (the "Compress inside" dialog's per-run radio,
+    // compress_inside.mdx §4) wins; otherwise the global recoverable-by-default (settings). This runs
+    // ONLY here — after the temp verified resolution, chroma, integrity and the size floor — so a file that
+    // failed to compress NEVER reaches this point and its original is never touched (the transactional rule).
+    const disposition: DeleteOriginalMode =
+      o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard");
+    const finalPath = path.join(path.dirname(abs), path.basename(abs, path.extname(abs)) + plan.ext);
+    try {
+      if (disposition === "trash") trashOriginal(abs);
+      else fs.unlinkSync(abs);
+      fs.renameSync(out, finalPath);
+      tmpPath = null; // the temp is now the user's file — the finally must not delete it
+    } catch (e) {
+      return fail(abs, `replace failed: ${(e as Error).message}`, "failed", beforeBytes);
+    }
+    log.info(
+      "compress",
+      `${abs} → ${finalPath} (${how}) ${beforeBytes}→${finalBytes} bytes, ${(gain * 100).toFixed(1)}% smaller` +
+        `, chroma ${outChroma || "n/a"}${wasLossless ? ", LOSSLESS" : ""}${marked ? "" : ", no in-file marker"}`,
+    );
+
+    // The travelling compression record — the SECOND and THIRD answers to "was this already compressed?".
+    // It is written to Local Storage and mirrored from there into the owning company / Personal sync repo,
+    // so the user's OTHER computers know this file is finished even when its format could not carry an
+    // in-file marker. Best-effort: the bytes are already replaced, so this can never fail a compression.
+    recordOutcome(abs, finalPath, {
+      outcome: "compressed", codec: plan.targetKey, size: finalBytes,
+      originalSize: beforeBytes ?? finalBytes, reason: null, chroma: outChroma,
+      lossless: wasLossless, engine: how,
+    });
+
+    // ── BUG-7 — a format change RENAMES the file, and every markdown / HTML / CSS / manifest reference to
+    // the old name is now a dead link. We do not silently edit the user's source files (charter: we surface
+    // and offer, we do not act on files nobody selected) — so we find the references and report them.
+    const renamedFrom = path.basename(finalPath) !== path.basename(abs) ? path.basename(abs) : null;
+    const referencedBy = renamedFrom ? await findReferences(abs, renamedFrom) : [];
+    if (referencedBy.length > 0) {
+      log.warn(
+        "compress",
+        `${renamedFrom} → ${path.basename(finalPath)}: ${referencedBy.length} file(s) still reference the old name — ${referencedBy.slice(0, 5).join(", ")}${referencedBy.length > 5 ? ", …" : ""}`,
+      );
+    }
+
+    // §8.0 — capture the AFTER state on the RESULT file (exact hash + size, post perceptual fingerprint),
+    // then append ONE per-file sidecar event + a history line to the owning repo, and re-stamp any team
+    // decision across a format change. ALL best-effort (guarded): the bytes are already safely replaced by
+    // this point, so a tracking-write failure must NEVER surface as a compression failure or lose the file.
+    try {
+      const repoRoot = findStorageRootForPath(finalPath);
+      if (repoRoot) {
+        const relFinal = path.relative(repoRoot, finalPath);
+        // A format change (extension differs) is a CONVERT (HEIC→JPEG / GIF→PNG) and moves the file to a
+        // new path; a same-extension re-encode is a COMPRESS in place. This split drives the event kind,
+        // the format:{from,to} field, and whether a decision re-stamp is needed (only on a path change).
+        const oldExt = path.extname(abs).toLowerCase();
+        const isConvert = oldExt !== plan.ext.toLowerCase();
+
+        const afterCap = exactHashAndSize(finalPath);
+        const fingerprintAfter = await perceptualFingerprint(finalPath, media);
+
+        const seed: SidecarSeed = {
+          name: path.basename(finalPath),
+          categories: [media === "images" ? "image" : "video"],
+          size: afterCap.size ?? finalBytes,
+          hash: afterCap.hash,
+          fingerprint: fingerprintAfter,
+        };
+        const event: FileEventInput = {
+          kind: isConvert ? "convert" : "compress",
+          before: { hash: beforeCap.hash, size: beforeCap.size ?? beforeBytes },
+          after: { hash: afterCap.hash, size: afterCap.size ?? finalBytes },
+          fingerprint_before: fingerprintBefore,
+          fingerprint_after: fingerprintAfter,
+          codec: { from: srcCodec, to: plan.targetKey },
+          by: o.by ?? null,
+        };
+        if (isConvert) {
+          event.format = { from: oldExt.replace(/^\./, ""), to: plan.ext.replace(/^\./, "") };
+        }
+        appendFileEvent(repoRoot, relFinal, event, seed);
+
+        appendHistory(repoRoot, {
+          verb: isConvert ? "CONVERT" : "COMPRESS",
+          by: o.by ?? undefined,
+          summary:
+            `${isConvert ? "Converted" : "Compressed"} ${relFinal} (${how}) ${srcCodec}→${plan.targetKey} ` +
+            `${beforeBytes}→${finalBytes} bytes${wasLossless ? ", lossless (renders identically)" : ""}` +
+            `${referencedBy.length ? `; ${referencedBy.length} file(s) still reference "${renamedFrom}"` : ""}`,
+        });
+
+        // §12 (decisions.mdx) — a format change moves the file to a new path, which the decision fold keys
+        // on; re-stamp the team's existing pin/ignore choice onto the new path so a decided file stays
+        // decided. Skipped for an in-place compress (same path → decision key unchanged).
+        if (isConvert) {
+          const folder = folderForRepoId(repoIdFromPath(repoRoot));
+          if (folder) {
+            const oldRel = path.relative(repoRoot, abs);
+            await restampOnTransform(folder, oldRel, relFinal, o.by ?? null);
+          }
+        }
+      }
+    } catch (e) {
+      log.warn("compress", `sidecar/history capture skipped: ${(e as Error).message}`);
+    }
+
+    return {
+      path: finalPath,
+      status: "compressed",
+      reason: wasLossless ? "lossless — renders identically, smaller file" : null,
+      beforeBytes,
+      afterBytes: finalBytes,
+      codec: check.targetCodec,
+      renamedFrom: renamedFrom ?? undefined,
+      staleReferences: referencedBy.length || undefined,
+    };
+  } finally {
+    // BUG-9 — the ONE place a temp is swept, reached on every exit including a thrown exception. On the
+    // happy path `tmpPath` was cleared at the rename, so this is a no-op there.
+    if (tmpPath) tryUnlink(tmpPath);
+  }
+}
+
+// ── the "already handled?" gate (§8.4) ─────────────────────────────────────────
+/**
+ * Ask all three sources whether this file is finished, and report which one answered.
+ *
+ * Cheapest first: the in-file marker is a bounded buffer read (or one ffprobe for video/audio), and the
+ * ledger lookup is a couple of `stat`s. Both are far cheaper than the transcode they prevent.
+ *
+ * When one source knows and another does not, we BACKFILL the one that does not — so a file that arrived
+ * from another computer already compressed gets a record here on first sight, and a file whose record
+ * exists but whose bytes lost their marker gets re-marked. Otherwise the Compress status would keep
+ * counting the file "compressible" forever on whichever machine holds the gap.
+ */
+async function alreadyHandled(
+  abs: string,
+  media: CompressMedia,
+  tools: CompressTools,
+  currentBytes: number | null,
+): Promise<{ reason: string } | null> {
+  const marker = await readMarker(abs, media, tools);
+  const hasMarker = isAnyMarker(marker);
+
+  const root = safeStorageRoot(abs);
+  const rel = root ? path.relative(root, abs) : null;
+  const hit = root && rel ? ledgerSaysDone(root, rel) : null;
+
+  if (!hasMarker && !hit) return null;
+
+  if (hasMarker && !hit && currentBytes != null) {
+    // The marker rode in WITH the bytes — a peer compressed this file and it pinned over IPFS, or an older
+    // engine did it here before records existed. This machine holds no record, so write one.
+    recordOutcome(abs, abs, {
+      outcome: "compressed", codec: markerCodec(marker), size: currentBytes, originalSize: currentBytes,
+      reason: "recorded from the file's own marker (compressed elsewhere)", chroma: null,
+      lossless: false, engine: marker,
+    });
+  }
+  if (!hasMarker && hit && media === "images" && canStampInFile(abs)) {
+    // The record says done but the bytes carry no marker — typically because the file was compressed by an
+    // engine version that could not stamp this format. Stamp it now, so the file itself carries the answer
+    // from here on and no computer that receives it has to consult a record at all.
+    const codec = hit.record.compressed?.codec ?? path.extname(abs).replace(/^\./, "");
+    if (stampImageMarker(abs, markerPayload(codec))) {
+      log.debug("compress", `${abs}: back-stamped the in-file marker from the compression record`);
+    }
+  }
+
+  if (hasMarker) return { reason: "already compressed (the file carries our marker)" };
+  const outcome = hit?.record.outcome ?? "compressed";
+  return {
+    reason: outcome === "declined"
+      ? `already reviewed — ${hit?.record.reason ?? "compressing it was not worth the quality cost"}`
+      : "already compressed on this or another of your computers (compression record)",
+  };
+}
+
+/** findStorageRootForPath, but it can never throw into the compress path. */
+function safeStorageRoot(abs: string): string | null {
+  try {
+    return findStorageRootForPath(abs);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Write the terminal outcome to the ledger — Local Storage, mirrored from there into the owning company /
+ * Personal sync repo so the user's other computers inherit the answer. Called for EVERY terminal outcome,
+ * `declined` included. Best-effort by contract; never throws into the compress path.
+ */
+function recordOutcome(
+  originalAbs: string,
+  finalAbs: string,
+  args: {
+    outcome: CompressionOutcome;
+    codec: string | null;
+    size: number;
+    originalSize: number;
+    reason: string | null;
+    chroma: string | null;
+    lossless: boolean;
+    engine: string | null;
+  },
+): void {
+  try {
+    const root = safeStorageRoot(finalAbs);
+    if (!root) return; // a file outside every tracked storage has only its in-file marker — by design
+    const rel = path.relative(root, finalAbs);
+    writeLedger(
+      root,
+      rel,
+      buildRecord({
+        rel,
+        originalName: path.basename(originalAbs),
+        originalExt: path.extname(originalAbs).replace(/^\./, ""),
+        originalSize: args.originalSize,
+        outcome: args.outcome,
+        codec: args.codec,
+        size: args.size,
+        reason: args.reason,
+        chroma: args.chroma,
+        lossless: args.lossless,
+        engine: args.engine,
+      }),
+    );
   } catch (e) {
     log.warn("compress", `compression record skipped: ${(e as Error).message}`);
   }
-
-  // §8.0 — capture the AFTER state on the RESULT file (exact hash + size, post perceptual fingerprint), then
-  // append ONE per-file sidecar event + a history line to the owning repo, and re-stamp any team decision
-  // across a format change. ALL best-effort (guarded): the bytes are already safely replaced by this point,
-  // so a tracking-write failure must NEVER surface as a compression failure or lose the file.
-  try {
-    const repoRoot = findStorageRootForPath(finalPath);
-    if (repoRoot) {
-      const relFinal = path.relative(repoRoot, finalPath);
-      // A format change (extension differs) is a CONVERT (PNG→JPEG / HEIC→JPEG) and moves the file to a new
-      // path; a same-extension re-encode is a COMPRESS in place. This split drives the event kind, the
-      // format:{from,to} field, and whether a decision re-stamp is needed (only when the path changes).
-      const oldExt = path.extname(abs).toLowerCase();
-      const isConvert = oldExt !== plan.ext.toLowerCase();
-
-      const afterCap = exactHashAndSize(finalPath);
-      const fingerprintAfter = await perceptualFingerprint(finalPath, media);
-
-      const seed: SidecarSeed = {
-        name: path.basename(finalPath),
-        categories: [media === "images" ? "image" : "video"],
-        size: afterCap.size ?? afterBytes,
-        hash: afterCap.hash,
-        fingerprint: fingerprintAfter,
-      };
-      const event: FileEventInput = {
-        kind: isConvert ? "convert" : "compress",
-        before: { hash: beforeCap.hash, size: beforeCap.size ?? beforeBytes },
-        after: { hash: afterCap.hash, size: afterCap.size ?? afterBytes },
-        fingerprint_before: fingerprintBefore,
-        fingerprint_after: fingerprintAfter,
-        codec: { from: srcCodec, to: plan.targetKey },
-        by: o.by ?? null,
-      };
-      if (isConvert) {
-        event.format = { from: oldExt.replace(/^\./, ""), to: plan.ext.replace(/^\./, "") };
-      }
-      appendFileEvent(repoRoot, relFinal, event, seed);
-
-      appendHistory(repoRoot, {
-        verb: isConvert ? "CONVERT" : "COMPRESS",
-        by: o.by ?? undefined,
-        summary: `${isConvert ? "Converted" : "Compressed"} ${relFinal} (${check.targetCodec}) ${srcCodec}→${plan.targetKey} ${beforeBytes}→${afterBytes} bytes`,
-      });
-
-      // §12 (decisions.mdx) — a format change moves the file to a new path, which the decision fold keys on;
-      // re-stamp the team's existing pin/ignore choice onto the new path so a decided file stays decided.
-      // Skipped for an in-place compress (same path → decision key unchanged).
-      if (isConvert) {
-        const folder = folderForRepoId(repoIdFromPath(repoRoot));
-        if (folder) {
-          const oldRel = path.relative(repoRoot, abs);
-          await restampOnTransform(folder, oldRel, relFinal, o.by ?? null);
-        }
-      }
-    }
-  } catch (e) {
-    log.warn("compress", `sidecar/history capture skipped: ${(e as Error).message}`);
-  }
-
-  return { path: finalPath, status: "compressed", reason: null, beforeBytes, afterBytes, codec: check.targetCodec };
 }
 
-function imageCommand(plan: Plan, abs: string, out: string, prefs: CompressMediaPrefs, tools: CompressTools, threads?: number): { bin: string; args: string[] } {
-  const q = String(jpegQuality(prefs.quality));
-  // Thread-cap a BATCHED image job so the queue can fan MANY of them out to ~90% of cores without each
-  // tool also grabbing every core (parallelization.mdx §2). oxipng defaults to ALL cores (rayon) — the
-  // most important one to pin to 1 under a wide fan-out. A one-off compress passes no `threads` and each
-  // tool uses its own default. `capped` = an explicit small cap was requested.
-  const capped = threads != null && threads > 0;
+/** Is `after` a coarser video chroma than `before`? (yuv444 → yuv422 → yuv420.) Unknown → false. */
+export function chromaCoarserPixFmt(before: string, after: string): boolean {
+  const rank = (f: string): number => {
+    const s = (f || "").toLowerCase();
+    if (s.includes("444")) return 3;
+    if (s.includes("422")) return 2;
+    if (s.includes("420")) return 1;
+    return 0;
+  };
+  const a = rank(before);
+  const b = rank(after);
+  return a > 0 && b > 0 && b < a;
+}
 
-  // ── HEIC / HEIF / AVIF → the PRIMARY still (images.mdx §4.1, LOCKED). A HEIC is a CONTAINER that may
-  // hold a primary image, thumbnails, depth/auxiliary images, and (Live Photos) a motion clip. We read
-  // ONLY the primary still by pinning scene `[0]` — ImageMagick's HEIF reader decodes the pitm primary
-  // image as scene 0 — and we pass NO `--with-aux` / coalesce, so no thumbnail, aux/depth image, or
-  // motion-video frame can be selected. `-auto-orient` bakes in the EXIF rotation the container carried.
-  // These always route through ImageMagick (cwebp/oxipng can't read HEIC). Never downscaled (no resize).
+/**
+ * Which text files still point at a renamed image (BUG-7).
+ *
+ * We do NOT rewrite them. Compressing an image is consent to change THAT image, not consent to edit every
+ * markdown and stylesheet in the repo — the same "surface and offer, never act on files nobody selected"
+ * rule the charter applies to `.gitignore` entries. So this reports, and the report reaches the log, the
+ * history line and the compress result.
+ *
+ * `git grep` is used when the file is inside a git work tree because it is indexed and bounded; outside
+ * one we skip the search rather than walk an unbounded tree on an interactive path.
+ */
+async function findReferences(abs: string, oldBasename: string): Promise<string[]> {
+  try {
+    const dir = path.dirname(abs);
+    const top = await runAsync("git", ["-C", dir, "rev-parse", "--show-toplevel"], 10_000, { captureStdout: true });
+    const repo = top.out.trim();
+    if (top.code !== 0 || !repo) return [];
+    const r = await runAsync(
+      "git",
+      ["-C", repo, "grep", "-l", "--fixed-strings", "-I", "--", oldBasename],
+      30_000,
+      { captureStdout: true },
+    );
+    // git grep exits 1 when there are no matches — that is the normal, good case, not an error.
+    if (r.code !== 0) return [];
+    return r.out.split("\n").map((l) => l.trim()).filter(Boolean).slice(0, 200);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Produce the candidate output for an image, choosing between the LOSSLESS and the LOSSY route.
+ *
+ * This replaces the old `imageCommand()`, which built an ImageMagick argv and let ImageMagick decide
+ * everything it was not told — including chroma subsampling, which it sets to 4:2:0 for any quality below
+ * 90. Nothing is left to an encoder's default here.
+ *
+ * The extra intelligence over "just run the encoder" is the LOSSLESS REPACK for an already-lossy source. A
+ * JPEG that arrived from a phone or a social network has already spent its quality; re-encoding it can only
+ * add a second generation of loss. But its entropy coding can almost always be re-packed — same DCT
+ * coefficients, same pixels, 3-10% fewer bytes — by `jpegtran`. So when the source is already at or below
+ * our quality target, we take the free win and refuse the destructive one.
+ */
+async function encodeImageCandidate(
+  plan: Plan,
+  abs: string,
+  out: string,
+  prefs: CompressMediaPrefs,
+  tools: CompressTools,
+  srcQuality: number | null,
+): Promise<{ ok: boolean; reason?: string; declined?: boolean; how: string; lossless: boolean }> {
+  const quality = jpegQuality(prefs.quality);
   const srcExt = path.extname(abs).toLowerCase();
+  const opts = {
+    quality,
+    lossless: plan.lossless === true,
+    animated: plan.animated === true,
+    tryPalette: prefs.pngPalette !== false,
+  };
+
+  // HEIC / HEIF / AVIF → the PRIMARY still only (images.mdx §4.1, LOCKED). A HEIC is a container that may
+  // also hold thumbnails, depth/auxiliary images and (Live Photos) a motion clip; `page: 0` pins the pitm
+  // primary image so none of those can be selected instead.
   if (HEIC_FAMILY_EXT.has(srcExt)) {
-    const limit = capped ? ["-limit", "thread", String(threads)] : [];
-    const primary = `${abs}[0]`; // scene 0 = the pitm primary image — never a preview/aux/motion frame
-    const enc = plan.targetKey === "webp" && plan.lossless
-      ? ["-define", "webp:lossless=true"]
-      : ["-quality", q];
-    return { bin: magickBin(), args: [...limit, primary, "-auto-orient", ...enc, "-set", "comment", markerPayload(plan.targetKey), out] };
+    const r = await encodeHeicPrimary(plan.targetKey, abs, out, opts);
+    return { ok: r.ok, reason: r.reason, how: r.how, lossless: r.lossless };
   }
 
-  if (plan.targetKey === "png" && tools.oxipng) {
-    const t = capped ? ["--threads", String(threads)] : [];
-    return { bin: "oxipng", args: ["-o", "4", ...t, "--strip", "safe", abs, "--out", out] };
+  // An already-lossy JPEG staying a JPEG. Prefer the free, lossless repack (BUG-6).
+  const jpegInPlace = (srcExt === ".jpg" || srcExt === ".jpeg") && plan.targetKey === "jpeg" && plan.ext === srcExt;
+  if (jpegInPlace && srcQuality != null && srcQuality <= quality + 2) {
+    if (tools.jpegtran) {
+      const r = await runAsync(
+        jpegtranBin(),
+        ["-copy", "all", "-optimize", "-progressive", "-outfile", out, abs],
+        10 * 60_000,
+      );
+      if (r.code === 0 && safeSize(out)) {
+        return { ok: true, how: `jpegtran lossless repack (source already q${srcQuality} ≤ target q${quality})`, lossless: true };
+      }
+      tryUnlink(out);
+    }
+    // No repacker available, and re-encoding would be pure generation loss. Declining is the right answer,
+    // and `declined: true` makes the caller report it as a deliberate skip rather than a failure.
+    return {
+      ok: false,
+      declined: true,
+      how: "",
+      lossless: false,
+      reason: `kept the original — it is already at quality ${srcQuality}, at or below our target of ${quality}; re-encoding it would only lose detail`,
+    };
   }
-  if (plan.targetKey === "webp" && tools.cwebp && CWEBP_READABLE.has(srcExt)) {
-    // cwebp reads only PNG/JPEG/TIFF/WebP — it CANNOT read GIF or BMP ("Cannot read input picture file").
-    // A GIF/BMP → WebP conversion therefore falls through to the ImageMagick branch below (which decodes
-    // both, and coalesces a multi-frame GIF into an animated WebP). Gating on CWEBP_READABLE is what keeps
-    // those sources off cwebp instead of failing every one of them.
-    // cwebp is single-threaded by default; `-mt` opts INTO multi-threading. A batched (capped) job stays
-    // single-threaded; a one-off job turns -mt ON to use the whole machine on that lone file.
-    const mt = capped ? [] : ["-mt"];
-    return plan.lossless
-      ? { bin: "cwebp", args: [...mt, "-lossless", abs, "-o", out] }
-      : { bin: "cwebp", args: [...mt, "-q", q, abs, "-o", out] };
+
+  const r = await encodeImage(plan.targetKey, abs, out, opts);
+  return { ok: r.ok, reason: r.reason, how: r.how, lossless: r.lossless };
+}
+
+/** mozjpeg's `jpegtran` when it is installed (it re-packs measurably better), else the one on PATH. */
+function jpegtranBin(): string {
+  return onPath(MOZJPEG_JPEGTRAN) ? MOZJPEG_JPEGTRAN : "jpegtran";
+}
+const MOZJPEG_JPEGTRAN = "/opt/homebrew/opt/mozjpeg/bin/jpegtran";
+
+/**
+ * The source JPEG's quality, as ImageMagick estimates it from its quantisation tables.
+ *
+ * CAVEAT, and it matters: this is an ESTIMATE derived from the tables, and mozjpeg uses different tables
+ * from libjpeg — a file we ourselves wrote at q92 reads back as roughly 80. So this number must never be
+ * the only thing standing between a file and a re-encode. It is not: our own outputs carry the in-file
+ * marker and never reach this function, and anything that does get re-encoded still has to clear the 20%
+ * size floor afterwards. This is a heuristic that avoids obviously-pointless work, not a safety guard.
+ */
+async function jpegSourceQuality(abs: string, tools: CompressTools): Promise<number | null> {
+  if (!tools.magick) return null;
+  try {
+    const r = await run(magickBin(), ["identify", "-format", "%Q", abs]);
+    const q = Number(r.out.trim());
+    return Number.isFinite(q) && q > 0 && q <= 100 ? q : null;
+  } catch {
+    return null;
   }
-  // Everything else via ImageMagick, quality-controlled, NO resize (keeps resolution). `-limit thread N`
-  // caps a batched job; a one-off uses ImageMagick's default thread policy. `-set comment …` stamps the
-  // §8.4 in-file marker inline (into the JPEG COM / PNG tEXt) so a re-run / a peer skips this file.
-  const limit = capped ? ["-limit", "thread", String(threads)] : [];
-  return { bin: magickBin(), args: [...limit, abs, "-quality", q, "-set", "comment", markerPayload(plan.targetKey), out] };
 }
 
 /** Byte size for the batch manifest, or 0 if unreadable. Distinct from `safeSize()` above, which answers
