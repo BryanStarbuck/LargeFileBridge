@@ -6,6 +6,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import {
+  APP_BUILD,
   DeviceFileSchema,
   disambiguateDevices,
   type DeviceFile,
@@ -100,6 +101,8 @@ function toRecord(doc: DeviceFile): DeviceRecord {
       owner: doc.device.owner,
       ipfsPeerId: doc.device.ipfs_peer_id,
       hardware: hwDocToCamel(doc.device.hardware),
+      appBuild: doc.device.app_build,
+      appBuildLabel: doc.device.app_build_label,
     },
     schedule: {
       enabled: doc.schedule.enabled,
@@ -140,6 +143,12 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
     // different network — or a user who fixed their `git config user.email` — would otherwise keep
     // publishing the stale value to every other computer forever (devices.mdx §7.1).
     hardware: { ...cfg.computer.hardware, ...freshVolatileHardware() },
+    // Publish which build this computer runs (devices.mdx §7.2). This is SUBSTANTIVE — it moves only when
+    // the user upgrades, so the one commit it costs is real news ("this computer now has the fix"), not
+    // churn. It is deliberately not the git sha, which would move every few minutes on this auto-committed
+    // repo and re-create the flood §6.6 removed.
+    app_build: APP_BUILD.number,
+    app_build_label: APP_BUILD.label,
   };
   if (!existed) {
     // A fresh device file: the default schedule matches the 15-min background pass (devices.mdx §3).

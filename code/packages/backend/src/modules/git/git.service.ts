@@ -183,6 +183,14 @@ export function resolutionFor(p: string): ConflictResolution {
   if (base === "files.yaml") return "regenerate";
   // Self-owned: a device file is written only by the device it names.
   if (/(^|\/)devices\/[^/]+\.yaml$/.test(p)) return "ours";
+  // A DEBUG EXPORT is self-owned too — `debug/<device>/…` is written only by the computer it names
+  // (debug.mdx §4.2). It had NO rule, which broke the §4.3.1 guarantee in the worst way: an add/add
+  // conflict on `debug/bryan-mac-pro/debug.yaml` aborted the ENTIRE merge on the company tracking repo,
+  // every cycle, so that storage stopped syncing altogether while the log repeated "1 conflicted path(s)
+  // have no automatic resolution". Observed live on 2026-07-29. "ours" keeps this computer's copy and
+  // loses nothing — the other side stays in git history, and a debug export is a disposable snapshot the
+  // user can take again at any time.
+  if (/(^|\/)debug\/[^/]+\/.+$/.test(p)) return "ours";
   // Append-only lists (the .gitattributes union should have handled these; do it by hand if it didn't).
   if (base === "manifest.yaml" || base === "decisions.yaml" || base === "owner_map.yaml") return "union";
   if (base === "LargeFilesBridge_SyncList.yaml") return "union";
@@ -750,6 +758,21 @@ export class GitBackbone {
   }
 
   /**
+   * Is a merge waiting to be concluded? Asked via `--git-path`, never by joining `.git/`: in a linked
+   * worktree `.git` is a FILE pointing at the real git dir, so a naive join silently never finds
+   * `MERGE_HEAD` — and would fail to notice a merge exactly where linked worktrees make one likeliest.
+   * On any error the answer is "yes", because every caller's safe branch is the one that assumes a merge.
+   */
+  private async mergeInProgress(): Promise<boolean> {
+    try {
+      const p = (await this.git.raw(["rev-parse", "--git-path", "MERGE_HEAD"])).trim();
+      return !!p && fs.existsSync(path.resolve(this.dir, p));
+    } catch {
+      return true;
+    }
+  }
+
+  /**
    * THE QUIET GATE (git_backbone.mdx §6.6). Un-stage and revert every staged modification whose only
    * difference from `HEAD` is VOLATILE — a self-moving field that no user action produced.
    *
@@ -767,6 +790,13 @@ export class GitBackbone {
    * it in the working tree would just re-stage it next pass.
    */
   private async dropVolatileOnlyChanges(): Promise<void> {
+    // A MERGE IN PROGRESS IS NOT OURS TO SECOND-GUESS. Mid-merge, the commit being prepared is the merge
+    // itself, and its content came from the §4.3.1 resolution ladder — not from a device pass. Reverting a
+    // path here would discard that resolution, and if it left nothing staged we would skip the commit and
+    // leave MERGE_HEAD dangling, i.e. an unfinished merge. The merge commit ALWAYS proceeds; the next
+    // ordinary cycle is where quiet applies.
+    if (await this.mergeInProgress()) return;
+
     let modified: string[];
     try {
       // Staged MODIFICATIONS only. A create or a delete is never "volatile-only" — there is no HEAD blob to
@@ -844,8 +874,16 @@ export class GitBackbone {
       const staged = await this.git.status();
       const hasStaged =
         staged.staged.length > 0 || staged.created.length > 0 || staged.renamed.length > 0 || staged.deleted.length > 0;
-      if (hasStaged) {
-        await this.git.commit(composeCommitMessage(staged)); // -m message → no editor invoked
+      // A MERGE MUST ALWAYS BE CONCLUDED, even when it staged nothing (learned from a defect). When §4.3.1's
+      // ladder resolves every conflicted path to OURS, the index ends up identical to HEAD — so `hasStaged`
+      // is false and this used to return without committing, leaving `MERGE_HEAD` dangling. The repo is then
+      // stuck mid-merge: the next cycle's `pull` refuses to run ("You have not concluded your merge"), and
+      // the storage stops syncing until a human runs git by hand. An unfinished merge is far worse than a
+      // redundant commit, so the merge commit is never subject to the quiet rule.
+      const mustConcludeMerge = await this.mergeInProgress();
+      if (hasStaged || mustConcludeMerge) {
+        const message = hasStaged ? composeCommitMessage(staged) : "LFB: merge from another computer";
+        await this.git.commit(message); // -m message → no editor invoked
         result.committed = true;
       }
     } catch (e) {

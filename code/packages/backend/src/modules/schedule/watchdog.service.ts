@@ -12,6 +12,12 @@ import type { WorkerKind } from "@lfb/shared";
 import { workerState, reconcileWorkerSchedules } from "./schedule.service.js";
 import { startRun, runIsActive } from "./run-job.js";
 import { startScan, scanIsRunning } from "../scanner/scan-job.js";
+import {
+  runSelfUpdate,
+  stalePeersAcrossStorages,
+  stalePeerMessage,
+  shouldReportStalePeers,
+} from "./self-update.service.js";
 import { log } from "../../shared/logging.js";
 
 // Re-evaluate every 5 minutes — frequent enough that a dead worker is caught well within its own cadence
@@ -123,9 +129,31 @@ async function tick(): Promise<void> {
         }
       }
     }
+    // THE BUILD IS A WORKER TOO (git_backbone.mdx §6.7). Everything above assumes the code doing the work
+    // is current. On 2026-07-29 it was not: a computer ran a stale build for hours, emitting a commit every
+    // ~16 minutes that no fix in the repo could stop, because the fix was never running there. A watchdog
+    // that repairs its workers but never notices it is itself out of date is covering for the wrong thing.
+    // Best-effort and never fatal — this must not be able to break the worker repair above.
+    try {
+      await checkOwnBuild();
+    } catch (e) {
+      log.warn("watchdog", `self-update check failed: ${(e as Error).message}`);
+    }
   } finally {
     ticking = false;
   }
+}
+
+/** Update this computer if its checkout is behind, and name any PEER that is behind this computer. */
+async function checkOwnBuild(): Promise<void> {
+  runSelfUpdate();
+  // A stale peer is not this computer's fault and not something it can fix, so it is reported rather than
+  // acted on — but it IS reported, because the alternative (what happened) is a user watching a repo take
+  // 348 commits a day with nothing in any UI explaining why. Throttled (shouldReportStalePeers): this tick
+  // runs every 5 minutes and a standing fact repeated 288 times a day buries every other fault in
+  // error.err — the same "don't manufacture noise" rule §6.6 applies to commits, applied to the log.
+  const peers = await stalePeersAcrossStorages();
+  if (shouldReportStalePeers(peers, Date.now())) log.warn("watchdog", stalePeerMessage(peers)!);
 }
 
 /**

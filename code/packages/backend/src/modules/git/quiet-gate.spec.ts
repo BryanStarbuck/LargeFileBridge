@@ -149,6 +149,45 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     expect(fs.readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("the user's own words\n");
   });
 
+  it("stands down mid-merge, so a merge is never left unfinished", async () => {
+    // The one case where the gate must NOT act. Mid-merge the commit being prepared is the merge itself.
+    // Reverting a path here would discard the conflict resolution, and if that left nothing staged we would
+    // skip the commit and leave MERGE_HEAD dangling — an unfinished merge, which is far worse than a
+    // redundant commit.
+    const dir = repoWithDevice(DEVICE);
+    await settleSetup(dir);
+    const file = path.join(dir, "devices", "tower.yaml");
+
+    // A branch that touches ONLY the volatile timestamp — so without the mid-merge guard the gate would
+    // find the merge result canonically equal to HEAD and revert it.
+    git(dir, "checkout", "-q", "-b", "peer");
+    const peerDoc = YAML.parse(fs.readFileSync(file, "utf8"));
+    peerDoc.updated_at = "2026-07-29T18:00:00.000Z";
+    fs.writeFileSync(file, YAML.stringify(peerDoc));
+    git(dir, "commit", "-qam", "peer stamp");
+    git(dir, "checkout", "-q", "main");
+    const ourDoc = YAML.parse(fs.readFileSync(file, "utf8"));
+    ourDoc.updated_at = "2026-07-29T18:30:00.000Z";
+    fs.writeFileSync(file, YAML.stringify(ourDoc));
+    git(dir, "commit", "-qam", "our stamp");
+
+    // Leave a real merge in progress, then run the commit path exactly as the cycle does.
+    try {
+      git(dir, "merge", "--no-commit", "--no-ff", "peer");
+    } catch {
+      git(dir, "checkout", "--ours", "--", "devices/tower.yaml"); // conflicted → resolve like §4.3.1 does
+      git(dir, "add", "devices/tower.yaml");
+    }
+    expect(fs.existsSync(path.join(dir, ".git", "MERGE_HEAD"))).toBe(true);
+
+    const backbone = await GitBackbone.resolve("test-storage", dir);
+    await backbone!.commitAndPush({} as never);
+
+    // The merge was COMPLETED, not abandoned.
+    expect(fs.existsSync(path.join(dir, ".git", "MERGE_HEAD"))).toBe(false);
+    expect(git(dir, "rev-list", "--count", "--merges", "HEAD").trim()).toBe("1");
+  });
+
   it("goes quiet and STAYS quiet across repeated idle cycles", async () => {
     // The whole point: a computer where the user did nothing must add nothing, pass after pass after pass.
     const dir = repoWithDevice(DEVICE);

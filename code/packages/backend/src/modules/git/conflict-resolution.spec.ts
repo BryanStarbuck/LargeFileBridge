@@ -23,6 +23,16 @@ describe("resolutionFor — every file LFB owns has an automatic resolution (§1
     expect(resolutionFor("devices/bryanstarbuck-macbook-pro.yaml")).toBe("ours");
   });
 
+  it("keeps our own copy of a self-owned DEBUG EXPORT", () => {
+    // This path had no rule, and the consequence was the whole point of this file: an add/add conflict on
+    // one debug export aborted the ENTIRE merge on the company tracking repo every cycle, so that storage
+    // stopped syncing while the log repeated "1 conflicted path(s) have no automatic resolution".
+    // Observed live on 2026-07-29.
+    expect(resolutionFor("debug/bryan-mac-pro/debug.yaml")).toBe("ours");
+    expect(resolutionFor("debug/bryanstarbuck-macbook-pro/debug.yaml")).toBe("ours");
+    expect(resolutionFor(".lfbridge/debug/bryan-mac-pro/debug.yaml")).toBe("ours");
+  });
+
   it("unions the append-only lists — at the root AND inside the mirrored per-repo subtree", () => {
     // These are exactly the paths that used to abort a company repo's whole cycle.
     for (const p of [

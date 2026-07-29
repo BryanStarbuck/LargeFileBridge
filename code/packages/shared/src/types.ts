@@ -2134,6 +2134,10 @@ export interface DeviceRecord {
     owner: string | null; // the allow-listed user this computer belongs to
     ipfsPeerId: string | null; // for peer dialing (may change; id above does not)
     hardware: DeviceHardware; // the fingerprint (devices.mdx §7)
+    // Which build of LFB that computer runs (devices.mdx §7.2). 0 = a peer on a build too old to publish
+    // it — which is itself the answer, and the loudest one.
+    appBuild: number;
+    appBuildLabel: string;
   };
   schedule: DeviceSchedule;
   graft: Record<string, DeviceGraftEntry>; // keyed by mapped_dirs.yaml key

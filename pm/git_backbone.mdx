@@ -283,9 +283,16 @@ table one-for-one:
 | Resolution | Applies to | What LFB does |
 | --- | --- | --- |
 | **`regenerate`** | `repo_storage.yaml` (any depth), `files.yaml` | Machine-generated caches whose authoritative copy is Local Storage — **drop the path from the merge**; the next pass rebuilds it. |
-| **`ours`** | `devices/<device>.yaml` | Self-owned (§4.1) — **keep this computer's copy**; other devices' files are different paths and are never touched. |
+| **`ours`** | `devices/<device>.yaml`, `debug/<device>/…` | Self-owned (§4.1) — **keep this computer's copy**; other devices' files are different paths and are never touched. A debug export is self-owned the same way and is a disposable snapshot the user can retake, so "ours" loses nothing (the other side stays in git history). |
 | **`union`** | `manifest.yaml`, `decisions.yaml`, `owner_map.yaml`, `LargeFilesBridge_SyncList.yaml`, `files/<rel>.yaml` sidecars, `history/<device>.txt` | Append-only lists. Reaching a conflict at all means the `merge=union` attribute was **not** in the tree when the merge ran (a fresh clone, a mid-migration repo), so LFB does the union **by hand** — strip the markers, keep **both** bodies, dedupe identical lines. A superset is always safe; losing a line never is. |
 | **`null`** | anything with no rule | **Quarantined**, named, and surfaced — never a reason to stop the backbone. |
+
+> **A missing rule is a stuck storage, not a cosmetic gap (proven live 2026-07-29).** `debug/<device>/…`
+> had no rule. An add/add conflict on one debug export therefore hit the `null` row, and — because a
+> quarantined path still aborts the merge — the company tracking repo aborted **every cycle**, logging
+> *"1 conflicted path(s) have no automatic resolution"* and syncing nothing at all. The lesson is that
+> **any LFB-owned path added later must be added to this ladder in the same change**; the ladder is only as
+> complete as the last file someone introduced.
 
 * **Per file, not per merge.** A mixed conflict resolves the files it can and escalates only the ones it
   genuinely cannot. Resolving nine of ten paths and finishing the merge is strictly better than abandoning
@@ -637,6 +644,24 @@ redundant local write and **nothing more** — no commit, no push, no merge race
 it only ever touches **LFB's own** files. A file LFB does not own, a **creation**, and a **deletion** always
 keep their commit — an unknown file is never provably meaningless, and a vanished file is always news.
 
+**A MERGE IS NEVER SUBJECT TO THE QUIET RULE (LOCKED, learned from a defect found while writing §6.6's
+tests).** Mid-merge the commit being prepared is the **merge itself**, so the gate stands down entirely and
+the merge commit is always made — **even when it staged nothing**.
+
+> The defect: when §4.3.1's ladder resolves every conflicted path to **ours**, the index ends up identical
+> to `HEAD`. The commit step tested "is anything staged?", saw nothing, and returned **without committing**
+> — leaving `MERGE_HEAD` dangling. The repo is then **stuck mid-merge**: the next cycle's pull refuses to
+> run (*"You have not concluded your merge"*), and that storage stops syncing until a human runs git by
+> hand. This is a stuck-backbone fault of exactly the class §6.4 exists to prevent, and a device file
+> resolved to "ours" is the **most common** resolution the ladder performs, so it is not an edge case.
+
+The rule that falls out: **"nothing to say" and "nothing to finish" are different questions.** Quiet is
+about whether this computer has news to author; concluding a merge is about leaving the repository in a
+usable state. An unfinished merge is far worse than a redundant commit.
+
+Always concluding an in-progress merge is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.mergeInProgress()` (asked via `git rev-parse --git-path MERGE_HEAD`, never by joining `.git/`, so a linked worktree's gitlink file cannot hide it), consulted by both `dropVolatileOnlyChanges()` and the commit decision in `commitAndPushInner()`.
+
 Not re-writing an unchanged document, canonically, is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()` (which prepends `updated_at` to the caller's volatile list) and `canonicalize()`.
 
@@ -686,6 +711,77 @@ the tell that its computer is stale.
 
 ---
 
+### 6.7 A FIX THAT IS NOT RUNNING IS NOT A FIX — build staleness & self-update (LOCKED, learned from a defect)
+
+**The rule.** LFB knows which build it is running, publishes it so the rest of the fleet can see it, keeps
+its own checkout up to date, and **says out loud** when this computer or any of the user's other computers
+is behind. A stale computer must never again be invisible.
+
+**The incident (2026-07-29).** Both churn defects in §6.6 were found, fixed, committed and pushed — and the
+flood continued at exactly its old rate, because the computer producing it was running an **older build**.
+The tell was that its device file lacked fields the current schema publishes, which took reading two YAML
+files side by side to notice. Nothing in the product could see the gap, and no amount of further work in
+the repo could have closed it.
+
+Three consequences, all of which the design now assumes:
+
+* **"Fixed in the repo" and "fixed on the fleet" are different states**, and only the second one is worth
+  anything to the user.
+* **Churn diagnosis must start with the build.** Identify *which device file* is churning, then confirm
+  what build that computer runs, **before** concluding anything about the code. Otherwise the next fix gets
+  written against code that was never the problem.
+* **A device file missing fields the current schema publishes is the tell** that its computer is stale.
+
+#### 6.7.1 The build number is a deliberate integer, never the git sha (LOCKED)
+
+Each computer publishes `device.app_build` (+ a short label) into its device file. It is a **monotonic
+integer bumped by hand** when a change matters to other computers — a sync/churn fix, a schema field others
+must publish, a protocol change.
+
+> **It must NOT be the git HEAD sha.** This repo is continuously auto-committed, so the sha moves every few
+> minutes; publishing it into a **synced** file would manufacture a commit per code commit — precisely the
+> flood §6.6 exists to stop, re-created by the very feature meant to police it. The sha *is* used for the
+> **local** "am I running older code than my own checkout?" check, where nothing is published and nothing
+> can churn.
+
+A peer that reports **`0`** is running a build too old to publish the field at all — which is itself the
+answer, and the loudest one.
+
+#### 6.7.2 What the app does about it
+
+1. **Detect (local).** The HEAD sha captured **at boot** is the code actually running. If the checkout's
+   HEAD has since moved, this process is running stale code.
+2. **Upgrade (opt-out, `self_update.enabled`).** When the checkout is behind its remote, **fast-forward it**.
+   Rails, each load-bearing: **fast-forward ONLY** (never a merge, rebase, or force — a diverged branch is
+   reported, never reconciled by a background job); **a dirty tree is never touched**; `check_only` does the
+   detection and writes nothing, for a machine whose source is managed elsewhere.
+3. **Never restart the process itself.** The app runs under a source watcher (`just run` → `pnpm dev` →
+   `tsx watch`), so a successful fast-forward **is** the restart. Calling `process.exit()` would be a bet
+   that something brings us back, and in this deployment nothing would — `just run` starts a detached
+   `nohup pnpm dev` with no supervisor. **A stale app is a bug; a dead app is an outage.** If the process is
+   still on the old build after the source moved, that is *reported*, not acted on.
+4. **Surface (always).** A peer behind this computer is named — the computer, its build, and what to do.
+   *"Something is out of date"* is not actionable; **which computer** is the entire content.
+
+**The report is THROTTLED, and that is the same rule as §6.6 applied to the log.** Its host ticks every 5
+minutes; an unthrottled report would write ~288 WARN lines a day into `error.err` about a condition that
+changes maybe twice a week, burying every other fault in the file. **Repeating a standing fact is not
+reporting it.** So it is said when the **answer changes**, and otherwise at most **hourly** as a reminder
+that it is still true; when the fleet catches up it goes silent, and the *next* problem is fresh news
+again. A monitoring feature that manufactures noise has become the thing it was built to police.
+
+The fetch is **throttled to hourly** even though its host (the watchdog) ticks every 5 minutes: a build does
+not go stale on a 5-minute timescale, and 288 fetches a day would be exactly the pointless background
+traffic §6.6 is about removing.
+
+Knowing and publishing the build is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD` (bump it deliberately), written into the device file by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+
+Detecting staleness, fast-forwarding the checkout, and naming stale peers is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `buildState()` / `runningStaleCode()` / `runSelfUpdate()` / `stalePeersAcrossStorages()` / `stalePeerMessage()`, driven from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `checkOwnBuild()` on the existing watchdog tick, and reported by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /api/health`.
+
+---
+
 ## 7. Compliance boundary — the charter's no-relay posture, in Git terms (LOCKED)
 
 The charter forbids LFB from becoming a gateway/relay for **other people's** content. The Git backbone
@@ -708,6 +804,17 @@ has the same shape of rule and the same default:
   **Local Storage** (+ the sync repo), never the code repo, so no git cycle ever runs against it. Its
   committed `.lfbridge/` holds only Category-A content and is **not** git-ignored
   ([git_ignore.mdx §5.3](./git_ignore.mdx)); it is simply excluded from every tracking-state git cycle.
+
+* **LFB's OWN SOURCE CHECKOUT is the one git target that is not a storage backbone** (§6.7). Self-update
+  runs `fetch` and a **fast-forward-only** `merge` against **the repository this very process is running
+  from** — resolved from the running module's own path, never from a config value, a discovered repo, or
+  anything a third party can point at. It is **inside** the boundary for the same reason a purpose-built
+  tracking repo is: it is unambiguously the user's own, and there is exactly one of it. The rails are
+  narrower than a backbone's — **never a non-FF merge, never a rebase, never a force, never a push** (LFB
+  does not publish to its own source repo), and it is **opt-out** (`self_update.enabled`) with a
+  `check_only` mode that writes nothing. Any code path that would run git against a source tree resolved
+  from anywhere *other* than the running module's own location is a defect of the same class as pointing
+  the backbone at a discovered repo.
 
 Enforcing that Git operations only ever target a user-configured storage backbone (never a merely-discovered code repo) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote()` returns a backbone **only** for an explicit dedicated-repo backing OR a company/personal storage whose own `<root>/.git` exists (a `repo`-type code repo returns null); `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` is constructed only from that resolved remote, and there is no entry point that runs `push`/`fetch` on an arbitrary path.
@@ -774,7 +881,21 @@ Enforcing that Git operations only ever target a user-configured storage backbon
 15. **The gate never swallows real news** (§6.6.2). A created file, a deleted file, a file LFB does not own,
     and any substantive change **always** keep their commit; volatile churn riding along on such a commit is
     free. The gate reverts only what it has **proven** meaningless.
-16. **Quiet is measured, not assumed** (§6.6.3). The idle-computer guarantee is covered by a regression test
+16. **An in-progress merge is ALWAYS concluded** (§6.6.2). The merge commit is made even when the resolution
+    staged nothing (every conflicted path resolved to "ours" leaves the index identical to `HEAD`), so
+    `MERGE_HEAD` is never left dangling and the next cycle's pull is never refused with *"You have not
+    concluded your merge"*. The quiet rule never applies to a merge.
+17. **Every computer publishes which build it runs** (§6.7.1), as a deliberate monotonic integer — never
+    the git sha, which would churn a synced file on every code commit. A peer reporting `0` is on a build
+    too old to publish it, which is itself the answer.
+18. **A stale computer is never invisible** (§6.7.2). LFB detects that this process is running older code
+    than its own checkout, **fast-forwards** that checkout when it is behind (FF only; never a merge,
+    rebase, force, or push; dirty tree untouched; opt-out + `check_only`), and **names** any of the user's
+    other computers that are behind this one — with the computer, its build, and what to do.
+19. **Self-update never restarts the process itself** (§6.7.2). The source watcher performs the restart; a
+    build still stale after the source moved is *reported*, not acted on. A stale app is a bug, a dead app
+    is an outage.
+20. **Quiet is measured, not assumed** (§6.6.3). The idle-computer guarantee is covered by a regression test
     that drives the **real** commit path over a **real** git repo across **repeated** passes and asserts the
     commit count never moves, plus convergence tests proving a repeated identical write goes quiet and
     *stays* quiet. A commit rate above a handful per day with no matching user activity is a **defect**.

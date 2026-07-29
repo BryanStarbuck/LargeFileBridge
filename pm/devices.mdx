@@ -513,6 +513,30 @@ Collecting the fingerprint locally (os/fs + guarded `sysctl`/`system_profiler`, 
 
 ---
 
+### 7.2 The build this computer runs (LOCKED, learned from a defect)
+
+One more fact travels with the fingerprint, and it answers the question that cost the most time on
+2026-07-29: **does that computer have the fix?**
+
+* **`app_build`** — a monotonic integer, bumped deliberately when a change matters to other computers.
+* **`app_build_label`** — a few words saying what that build is, so a stale peer is self-explaining.
+
+Every computer publishes its own, so **the whole fleet's build state is readable from any one of them**.
+During the churn incident this had to be inferred by hand, by noticing that one device file was missing
+fields the current schema publishes — while that computer kept emitting a commit every ~16 minutes that no
+fix in the repo could stop. A peer reporting **`0`** is running a build too old to publish the field at all.
+
+**It is a deliberate integer, never the git sha** — the sha moves every few minutes on this auto-committed
+repo, and publishing it into a **synced** file would manufacture a commit per code commit, re-creating the
+exact flood [git_backbone.mdx §6.6](./git_backbone.mdx) removes. **It is SUBSTANTIVE, not volatile**: it
+moves only when the user upgrades, so the single commit it costs is real news ("this computer now has the
+fix"), and it is the one field here that *should* travel promptly.
+
+Publishing the build, and naming peers that are behind, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD`; written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`; compared across the fleet by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `stalePeersAcrossStorages()` / `stalePeerMessage()`.
+
+---
+
 ## 8. Auto-naming & disambiguation — combine only what differs (LOCKED)
 
 Two problems, one algorithm. **(a) Auto-naming**: a fresh computer needs a sensible default name so the

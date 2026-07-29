@@ -1002,8 +1002,34 @@ A push rejected as non-fast-forward is re-pulled and retried. The retry budget i
 backoff**, not one — a single retry loses to any peer that pushes twice while we are working. After the last
 attempt the commit stays local, the fault is reported, and the ahead-count rule sends it on the next cycle.
 
+### 11.5 A member who did nothing contributes nothing (LOCKED)
+
+A company repo has **several members pushing to one remote**, which makes needless commits far more
+expensive here than on a personal repo: each one is another chance to lose a push race, and the races are
+what §11.4's retry budget then has to survive. So the quiet rule
+([git_backbone.mdx §6.6](./git_backbone.mdx#66-quiet-by-default--the-substantive-change-gate-locked-learned-from-a-defect))
+applies to a company storage with full force:
+
+* A member whose computer performed **no substantive transaction** — nothing pinned, no git-ignore decision,
+  no transcript/AI description/OCR, no compression, no new or changed tracked file — commits and pushes
+  **nothing**, however many cycles run.
+* That member's computer still **fetches and merges every cycle**, so a *colleague's* work lands normally.
+  **Receiving is not authoring**: a pull that brings someone else's commits down must not cause this
+  computer to author a commit of its own.
+* A shared company remote makes the failure mode worse in a way a personal repo hides: with N members each
+  emitting a self-inflicted commit per cycle, the collision rate rises with N, and the symptom the user
+  reports is *"sometimes it just doesn't pull and push"* (§11.4, [git_backbone.mdx §6.5](./git_backbone.mdx)).
+* **Two clones of the same company remote on one computer** both write the same `devices/<self>.yaml` and
+  push to the same branch — that pair rejects each other **every cycle**. Churn is what makes this fatal
+  rather than merely redundant, so it is named every pass (§6.5 rule 3 there).
+
+---
+
 Driving the company tracking repo's autonomous cycle and resolving its conflicts is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (per-file conflict resolution) and `commitAndPush()` (ahead-count push + retry budget), driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `syncStorageTextInner()` under `withStorageGitLock()`.
+
+Refusing to author a commit when nothing substantive changed is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` after `git add -A`.
 
 ---
 

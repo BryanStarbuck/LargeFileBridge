@@ -86,6 +86,22 @@ export const AppConfigSchema = z.object({
       public_gateway: z.boolean().default(false),
     })
     .prefault({}),
+  // SELF-UPDATE (git_backbone.mdx §6.7). A computer running a stale build is invisible to everyone,
+  // including itself: it keeps doing whatever the old code did — on 2026-07-29, a commit every ~16 minutes
+  // that no fix in the repo could stop, because the fix was never running there. So the app watches its own
+  // build the same way the watchdog watches its workers.
+  //   `enabled`     — pull the app's OWN source repo (FAST-FORWARD ONLY, never a merge/rebase/force) when
+  //                   it is behind, so a computer left running for weeks does not sit on a known-bad build.
+  //                   This is the only git LFB runs outside a configured storage backbone; it is its own
+  //                   source checkout, never a discovered or third-party repo (§7 compliance).
+  //   `check_only`  — do the detection and the surfacing, but never write to the checkout. For a machine
+  //                   whose source tree is managed by something else (a package, a deploy job, a human).
+  self_update: z
+    .object({
+      enabled: z.boolean().default(true),
+      check_only: z.boolean().default(false),
+    })
+    .prefault({}),
   // Mass-parallelization policy (parallelization.mdx §4). `max_core_fraction` ∈ (0,1] tunes the
   // MASS-COMPUTE core budget — round(cores × fraction) — used for user-kicked-off batch CPU work
   // (compression, fingerprinting, batch transcode). Default 0.9 = "use up to ~90% of cores". Read LIVE
@@ -952,6 +968,13 @@ export const DeviceFileSchema = z.object({
       owner: z.string().nullable().default(null), // the allow-listed user this computer belongs to
       ipfs_peer_id: z.string().nullable().default(null), // for peer dialing (may change; id above does not)
       hardware: DeviceHardwareSchema, // this device's fingerprint (devices.mdx §7) — travels with the SDL
+      // WHICH BUILD OF LFB THIS COMPUTER IS RUNNING (devices.mdx §7.2, git_backbone.mdx §6.7). Published so
+      // any computer can see the whole fleet's build state — the question that had to be answered by hand
+      // while a stale peer flooded the repo. A deliberate integer, NOT the git sha: the sha changes every
+      // few minutes on an auto-committed repo and would churn this synced file on every code commit.
+      // 0 = a peer running a build too old to publish it at all, which is itself the answer.
+      app_build: z.number().default(0),
+      app_build_label: z.string().default(""),
     })
     .prefault({}),
   schedule: z
