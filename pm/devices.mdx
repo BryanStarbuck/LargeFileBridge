@@ -488,6 +488,23 @@ cached; an IP changes every time a laptop joins a network and a git identity cha
 fixes it. So they are re-read behind a short TTL and overlaid **fresh** at each device write — the
 first-run snapshot in `config.yaml` is never what gets published.
 
+**The network addresses get NO VOTE on whether to write (LOCKED, learned from a defect —
+[git_backbone.mdx §6.6](./git_backbone.mdx#66-quiet-by-default--the-substantive-change-gate-locked-learned-from-a-defect)).**
+`primary_ip`/`ip_addresses` are the one part of the fingerprint that moves **on its own**: a laptop grows
+and drops `fe80::` link-local addresses as interfaces, VPNs and AirDrop come and go, and a DHCP lease
+rotates on its own schedule. Because the device file is **synced**, letting those addresses decide when to
+write turns every network flap into a commit, a push, and — on a shared company remote — a merge race.
+Measured live on 2026-07-29: after the `updated_at` churn was stopped, the address list simply replaced a
+1-line churn with a 25-line one.
+
+So they are **written** — they ride along on the next substantive write, so the Devices table is never
+stale for long — but they are **excluded from the change test** that decides whether a write happens at all.
+`home_user` and the git identity are **not** volatile in this sense: they change only when the user changes
+them, and that is real news worth a commit.
+
+Excluding the addresses from the change test is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`, passing `volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"]` to `writeYamlIfChanged()`; the same paths are re-declared for the backbone's commit gate in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `volatileYamlPathsFor()`.
+
 Re-reading the volatile half (addresses, git identity, home account) is done in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectVolatileHardware()` / `freshVolatileHardware()`, overlaid onto the cached fingerprint at the device write in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`. They surface on the Devices table (IP column) and the View-one-device Identity block in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` and `.../ViewOneDevicePage.tsx`.
 

@@ -780,8 +780,11 @@ export class GitBackbone {
 
     const reverted: string[] = [];
     for (const rel of modified) {
-      const volatilePaths = volatileYamlPathsFor(rel);
-      if (!volatilePaths) continue; // not a file we know the volatile shape of — leave it alone
+      const extra = volatileYamlPathsFor(rel);
+      if (!extra) continue; // not a file we know the volatile shape of — leave it alone
+      // `updated_at` is volatile for EVERY document LFB writes (`writeYaml` stamps it on every call), so the
+      // registry lists only the paths particular to a document and it is added here.
+      const volatilePaths = ["updated_at", ...extra];
       try {
         const headBlob = await this.git.raw(["show", `HEAD:${rel}`]);
         const working = fs.readFileSync(path.join(this.dir, rel), "utf8");

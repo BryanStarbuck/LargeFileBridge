@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { readYaml, writeYamlIfChanged } from "./yaml-store.js";
+import { readYaml, writeYamlIfChanged, canonicalize } from "./yaml-store.js";
 import { resolveLogDir, resolveStateDir } from "../../config/state-dir.js";
 
 const Schema = z.object({
@@ -146,5 +146,77 @@ describe("writeYamlIfChanged — no write when only the timestamp would move", (
     expect(writeYamlIfChanged(file, { a: 1 })).toBe(true);
     expect(fs.existsSync(file)).toBe(true);
     fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+// ── THE CANONICAL COMPARISON (git_backbone.mdx §6.6) ──────────────────────────────────────────────────
+//
+// The first cut of `writeYamlIfChanged` compared `YAML.stringify(rawDiskDoc)` with
+// `YAML.stringify(schemaParsedValue)`. Those two are never textually equal even when they mean the same
+// thing — a zod-parsed object carries the SCHEMA's key order and the schema's injected defaults, while the
+// disk file carries whatever order it was last written in and none of the defaults it predates. So the
+// guard never fired and the churn it was written to stop carried on: 2,437 commits in 7 days on the live
+// personal tracking repo, 2,322 of them a `devices/*.yaml` touch whose diff was one `updated_at` line.
+describe("writeYamlIfChanged — the comparison is canonical, not textual", () => {
+  it("treats a pure key REORDER as no change", () => {
+    const file = tmpYaml("");
+    writeYamlIfChanged(file, { device: { id: "abc", name: "tower", owner: null } });
+    const first = fs.readFileSync(file, "utf8");
+    // Same document, schema order — this is exactly what a zod parse hands back.
+    expect(writeYamlIfChanged(file, { device: { owner: null, name: "tower", id: "abc" } })).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+  });
+
+  it("treats a key set to undefined the same as an absent key", () => {
+    const file = tmpYaml("");
+    writeYamlIfChanged(file, { device: { id: "abc" } });
+    const first = fs.readFileSync(file, "utf8");
+    // YAML omits an undefined value on write, so it must also compare equal to absent on read — otherwise
+    // the volatile-hardware overlay in writeSelfDevice forces a write on every single pass.
+    expect(writeYamlIfChanged(file, { device: { id: "abc", screen_inches: undefined } })).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+  });
+
+  it("converges: a document that gains a new field writes ONCE, then goes quiet forever", () => {
+    const file = tmpYaml("");
+    writeYamlIfChanged(file, { device: { id: "abc" } });
+    // An older file meets a build that publishes one more field: a genuine, one-time repair...
+    expect(writeYamlIfChanged(file, { device: { id: "abc", home_user: "bryan" } })).toBe(true);
+    // ...and then never again. A guard that cannot converge is the churn it was meant to remove.
+    for (let i = 0; i < 5; i++) {
+      expect(writeYamlIfChanged(file, { device: { id: "abc", home_user: "bryan" } })).toBe(false);
+    }
+  });
+});
+
+describe("writeYamlIfChanged — declared volatile paths get no vote", () => {
+  const IPS = ["device.hardware.primary_ip", "device.hardware.ip_addresses"];
+
+  it("does not write when only the network addresses moved", () => {
+    const file = tmpYaml("");
+    const doc = (ips: string[]) => ({
+      device: { hardware: { chip: "M2 Ultra", primary_ip: ips[0], ip_addresses: ips } },
+    });
+    writeYamlIfChanged(file, doc(["192.168.50.167", "fe80::1"]), { volatile: IPS });
+    const first = fs.readFileSync(file, "utf8");
+    // A laptop grows and drops link-local addresses on its own; no user did anything.
+    expect(writeYamlIfChanged(file, doc(["192.168.50.9", "fe80::9", "fe80::2"]), { volatile: IPS })).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+  });
+
+  it("still writes when a NON-volatile field moves alongside the volatile ones", () => {
+    const file = tmpYaml("");
+    writeYamlIfChanged(file, { device: { hardware: { chip: "M2 Ultra", ip_addresses: ["fe80::1"] } } }, { volatile: IPS });
+    // The chip changed — that is real news, and the fresh addresses ride along with it.
+    expect(
+      writeYamlIfChanged(file, { device: { hardware: { chip: "M4 Max", ip_addresses: ["fe80::9"] } } }, { volatile: IPS }),
+    ).toBe(true);
+    expect(fs.readFileSync(file, "utf8")).toMatch(/fe80::9/);
+  });
+
+  it("keeps ARRAY ORDER meaningful — a reordered list is a real change", () => {
+    // Key order is noise; list order can be meaning (a priority list, a ranked address list), so
+    // canonicalize sorts keys and never sorts arrays.
+    expect(canonicalize({ k: ["a", "b"] }, [])).not.toBe(canonicalize({ k: ["b", "a"] }, []));
   });
 });

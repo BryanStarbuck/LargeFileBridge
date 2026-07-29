@@ -520,7 +520,9 @@ pull and push."* Three rules, each learned from a live failure on 2026-07-29:
    identical document still yields a byte-different file. `writeSelfDevice` runs on every device pass
    (10 min), every pin pass (15 min) **and** every artifact sync, for **every** storage — so each cycle
    committed a diff that was exactly one line, `-updated_at:` / `+updated_at:`. Self-owned state is
-   therefore written **only when something other than the timestamp moved**.
+   therefore written **only when something other than the timestamp moved** — and the comparison that
+   decides "moved" must be **canonical**, or the guard silently does nothing (§6.6.2). §6.6 generalizes
+   this rule from the timestamp to **every** self-moving field, and enforces it at the commit itself.
 2. **A machine-local fact never goes in a shared file.** Two computers can pin identical bytes under
    different CIDs (a legacy `Qm…` dag-pb add vs. a raw-leaves `bafk…`); those are different multihashes,
    so `canonicalCid()` cannot bridge them. Foreign-profile **adoption** used to write the local CID into
@@ -540,6 +542,147 @@ Keeping the adopted CID out of the shared manifest is implemented in code:
 
 Naming two storages that share one backbone is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `warnOnDuplicateBackbones()`, called at the top of `pushDeviceBackbone()`.
+
+---
+
+### 6.6 QUIET BY DEFAULT — the substantive-change gate (LOCKED, learned from a defect)
+
+**The invariant.** *When the user did nothing we track, this computer adds nothing.* A machine that sat
+idle — no file added, nothing compressed, no transcript, no AI description, no OCR, no decision changed —
+must produce **zero commits and zero pushes**, indefinitely. It still **pulls** every cycle, so another
+computer's work arrives normally; it simply has nothing of its own to say. Silence is the normal, expected,
+healthy state of an idle computer, and this applies identically to the **personal** and the **company**
+tracking repos.
+
+**Why this is a correctness rule and not a tidiness preference.** Every needless commit costs something
+real:
+
+* On a **shared company remote** it is a chance to lose a push race. Two computers that both commit every
+  cycle collide, re-pull, retry, and eventually log *"attempt 3/3; giving up this cycle"* — the user
+  experiences that as *"sometimes it just doesn't pull and push"* (§6.3, §6.5).
+* It makes `git log` **unreadable and unauditable**. A history in which 95% of commits mean nothing cannot
+  answer *"when did this file arrive?"* — the question the history exists for.
+* It burns bandwidth, remote storage, and battery on every one of the user's computers, forever.
+
+**What was actually happening (measured live on the personal tracking repo, 2026-07-29):**
+
+```
+2,437 commits in 7 days  (~348/day)
+  2,322  touches of devices/*.yaml     ← 95%
+      3  debug exports                 ← user-initiated, legitimate
+      1  merge commit
+     ~1  each .ocr / .transcription     ← the actual work
+and of the last 60 device commits, 58 had a ONE-LINE diff:
+  -updated_at: 2026-07-29T16:19:36.456Z
+  +updated_at: 2026-07-29T16:36:05.339Z
+```
+
+The remaining 2 were a 25-line rewrite of `ip_addresses` — the laptop's `fe80::` link-local addresses
+coming and going. **Not one of those 2,320 commits carried a single thing the user did.**
+
+#### 6.6.1 The transaction taxonomy — what may create a commit
+
+A commit is justified by a **transaction of a kind this product tracks**, and by nothing else.
+
+**SUBSTANTIVE — these, and only these, may create a commit:**
+
+1. A file becomes **tracked / pinned to IPFS**, or stops being (a `sync` decision changes).
+2. A file's **git-ignore decision** changes.
+3. An **artifact is produced**: `.transcription`, `.ai_description`, `.ai_description_rejected`, `.ocr`.
+4. A file is **compressed / converted**, or a compression is **declined** (the never-recompress record).
+5. A tracked file's **content fingerprint** changes — a genuinely new, changed, renamed, or deleted file.
+6. A **manifest CID** changes because content actually moved.
+7. **Device identity** changes: the nice name, the minted id, the owner, the IPFS PeerID, the hardware
+   model, the pin schedule, the graft.
+8. A **user-initiated action** that is by definition a deliberate event — a debug export, an owner mapping
+   accepted, a storage's settings changed.
+
+**NEVER SUBSTANTIVE — these must never, on their own, create a commit:**
+
+* `updated_at` and every other write-stamp or heartbeat. **A timestamp is not a change** (§6.5 rule 1).
+* **Network addresses** — `primary_ip`, `ip_addresses`. A DHCP lease rotates and a laptop grows and drops
+  `fe80::` link-local addresses as interfaces, VPNs and AirDrop come and go, all with no user involved.
+* A file's **mtime/atime moving with its content unchanged** — reading, scanning, copying, and cloud-sync
+  clients all touch timestamps. LFB tracks **content**, not stat metadata.
+* A **scan/pass counter**, a "last checked" marker, or a re-derived cache written back identically.
+* **Key reordering or schema-default fill-in** — a document that means the same thing.
+* A **pull that brought another computer's work down.** Receiving is not authoring. The merge lands, the
+  working tree changes, and this computer still has nothing of its own to commit.
+
+#### 6.6.2 Two layers enforce it, and the second is the one that must hold
+
+**Layer 1 — at the writer.** Self-owned state is written only when something other than a volatile field
+moved. The comparison must be **canonical**: both sides normalized the same way, keys deep-sorted, volatile
+paths removed, `undefined` treated as absent.
+
+> **The trap that made the first fix a no-op.** The original guard compared
+> `YAML.stringify(rawDiskDoc)` against `YAML.stringify(schemaParsedValue)`. Those are **never** textually
+> equal even when they mean the same thing: a zod-parsed object carries the *schema's* key order and the
+> schema's injected defaults (`home_user: ""`, `ip_addresses: []`), while the disk file carries the order it
+> was last written in and none of the defaults it predates. The guard shipped, looked right, and changed
+> nothing — the churn continued at exactly its old rate. **A change-detection comparison must normalize both
+> sides through the same pipeline, and the test for it must prove CONVERGENCE**, i.e. that a repeated
+> identical write goes quiet and *stays* quiet, not merely that one comparison returned false.
+
+**Layer 2 — at the commit choke point.** Layer 1 is a per-writer discipline, and a discipline is only as
+good as the next writer to be added. The backbone therefore refuses the commit itself: after staging, any
+staged **modification** of an LFB-owned YAML whose canonical content equals `HEAD`'s — volatile paths
+removed — is **reverted**, not merely un-staged (leaving it would re-stage it next pass). If nothing
+substantive remains, **no commit is made and no push is attempted**.
+
+This layer is what makes the invariant structural. A future writer that stamps a heartbeat costs a
+redundant local write and **nothing more** — no commit, no push, no merge race.
+
+**Two boundaries the gate must never cross:** it only reverts a change it has **proven** meaningless, and
+it only ever touches **LFB's own** files. A file LFB does not own, a **creation**, and a **deletion** always
+keep their commit — an unknown file is never provably meaningless, and a vanished file is always news.
+
+Not re-writing an unchanged document, canonically, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()` (which prepends `updated_at` to the caller's volatile list) and `canonicalize()`.
+
+Declaring the device file's volatile network fields is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`, passing `volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"]`.
+
+Refusing a commit whose whole diff is volatile is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` immediately after `git add -A`, with the per-document volatile registry in `volatileYamlPathsFor()`.
+
+#### 6.6.3 Policing it — quiet is a health property, so measure it
+
+Quiet is **easy to lose and silent when lost**: nothing breaks, no error is raised, and the only symptom is
+a commit count nobody is looking at. It regressed twice in one day. So it is **measured**, not assumed.
+
+* **The health signal is the commit rate on an idle computer.** On a computer where the user performed no
+  substantive transaction, LFB's own commits over 24h must be **0**. A sustained rate above a handful per
+  day with no matching user activity is a **defect**, and it is the first thing to check when a user reports
+  the backbone misbehaving.
+* **The diagnostic that finds it in one command** — for any tracking repo, the ratio of commits to
+  substantive file touches:
+
+  ```
+  git log --since='24 hours ago' --format='%s' | sort | uniq -c | sort -rn
+  git log --since='24 hours ago' --name-only --format='' | sort | uniq -c | sort -rn | head
+  ```
+
+  A single path dominating that list is churn until proven otherwise. Confirm by reading the diffs: if the
+  changed lines are all one volatile key, it is churn by definition.
+* **Regression tests own this permanently.** The idle-cycle test must run the **real** commit path over a
+  **real** git repo across **repeated** passes and assert the commit count never moves —
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/quiet-gate.spec.ts`, plus the
+  convergence tests in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.spec.ts`.
+  A single-comparison unit test is **not** sufficient evidence — it is exactly what passed while the live
+  repo took 348 commits a day.
+
+#### 6.6.4 A fix only counts once it is RUNNING on every computer
+
+Both churn defects were fixed in the repo while the flood continued, because the machine doing the flooding
+was running an **older build**. Live evidence on 2026-07-29: `bryan-mac-pro`'s device file carried the
+volatile-hardware fields (new build) while `bryanstarbuck-macbook-pro`'s did not (old build) — and it was
+the stale machine emitting a timestamp-only commit every ~16 minutes.
+
+**So the fleet's build state is part of the diagnosis, not a footnote.** When churn is reported, identify
+*which device file* is churning and confirm that computer is running a build that contains the fix, before
+concluding anything about the code. A device file that is missing fields the current schema publishes is
+the tell that its computer is stale.
 
 ---
 
@@ -619,6 +762,22 @@ Enforcing that Git operations only ever target a user-configured storage backbon
     first** and **never** force-pushing (§6.3); every rejection's **cause is logged** with its attempt
     number, a later success clears the earlier problem, and exhausting the budget leaves the commit local
     for §6.1's ahead-count push on the next cycle.
+13. **An idle computer is SILENT** (§6.6). With no substantive transaction — nothing pinned or un-pinned,
+    no git-ignore decision, no transcript/AI description/OCR, no compression, no new/changed/deleted tracked
+    file, no device-identity change, no user-initiated action — LFB makes **zero commits and zero pushes**,
+    pass after pass, on **both** the personal and the company tracking repo. It still **pulls** every cycle,
+    so another computer's work arrives normally; receiving is not authoring.
+14. **A volatile field never becomes a commit** (§6.6.1). `updated_at`, `primary_ip`/`ip_addresses`, an
+    mtime with unchanged content, a re-derived cache, and a pure key-reorder or schema-default fill-in are
+    each **incapable** of producing a commit on their own — enforced both at the writer (canonical
+    change-detection) and at the commit choke point (staged volatile-only modifications are reverted).
+15. **The gate never swallows real news** (§6.6.2). A created file, a deleted file, a file LFB does not own,
+    and any substantive change **always** keep their commit; volatile churn riding along on such a commit is
+    free. The gate reverts only what it has **proven** meaningless.
+16. **Quiet is measured, not assumed** (§6.6.3). The idle-computer guarantee is covered by a regression test
+    that drives the **real** commit path over a **real** git repo across **repeated** passes and asserts the
+    commit count never moves, plus convergence tests proving a repeated identical write goes quiet and
+    *stays* quiet. A commit rate above a handful per day with no matching user activity is a **defect**.
 
 <!--
   AUTHORITATIVE spec for LFB's GIT BACKBONE ENGINE. Turning on a storage's Git backbone (storage_settings
