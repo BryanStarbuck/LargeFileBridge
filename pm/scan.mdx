@@ -699,6 +699,32 @@ The verdict banner, the two scheduleTask worker cards, and the watcher card — 
 The watcher card's data (`enabled` / `watching` / `roots`) is served alongside the two scheduleTasks in the Scans payload, and its on/off toggle is handled, in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (adds `watcher: watcherState()`); toggle route `POST /api/jobs/watcher/:action` in `jobs.router.ts` → `watcher.service.ts` `setWatcherEnabled()`.
 
+#### Header action — Scan / Rescan, and WHEN it last ran (BUILT 2026-07-29)
+
+**This supersedes the "proposed" table below for the discovery kick.** The page carries **one primary
+button, top-right of the header**, and one line of text under it:
+
+* **The button is labelled by state**: **Scan** until this computer has ever run discovery, **Rescan**
+  afterwards, and **Scanning…** (disabled, with a spinner) while a pass is in flight. The label is the
+  status — a user should not have to read the cards to learn whether anything has ever been discovered.
+* **It works whether or not the launchd job is installed.** The schedule being absent, off, or overdue is
+  exactly when a user most wants to run the pass by hand, so the kick never depends on it.
+* **It is single-flighted, not queued twice.** The kick goes through the same fire-and-acknowledge runner
+  launchd uses (`startScan` / `startRun`), so pressing it during a pass coalesces onto that pass and
+  `last_run` is still stamped on **completion**, never at accept time.
+* **Directly beneath it: "Last scan: &lt;date and time&gt; (&lt;relative&gt;)"** — the full clock time, not only
+  *"3h ago"*. A user checking whether the every-2-hours pass actually fired overnight needs the time it
+  fired at; an approximate gap cannot answer that. Each worker card's own last-run line carries the same
+  absolute-plus-relative form.
+* **Every job card also gets a Run now button**, first in its control row, ahead of Install/Turn-on — the
+  same kick for the transfer and device-registration jobs.
+
+The Scan/Rescan header button, the per-card Run now, and the absolute last-scan line render in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `RunNowButton` (label/disabled state) and `ScansPage` / `WorkerCard` (the `absoluteTime(...) (relativeTime(...))` stamps).
+
+Accepting the manual kick and answering with the worker's fresh state is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/jobs.router.ts` — `POST /api/jobs/:worker/run` → `startScan("manual")` / `startRun(worker, "manual")`.
+
 #### Header actions — on-demand kicks (proposed)
 
 Separate from install/enable, a customer wants to **run each job right now** without waiting for its

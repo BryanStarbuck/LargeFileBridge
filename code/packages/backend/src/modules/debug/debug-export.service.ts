@@ -23,7 +23,7 @@ import { writeYaml } from "../../shared/store/yaml-store.js";
 import { computeRepoDetail, folderForRepoId, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote } from "../store-model/units.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
 import { computerLabel, getAppConfig } from "../store-model/config.service.js";
-import { getStorageRow } from "../storage/storage.service.js";
+import { getStorageRow, listStoragesPage } from "../storage/storage.service.js";
 import { trackingBaseDir, legacyTrackingBaseDir } from "../storage/storage-type.service.js";
 import { auditArtifactCommittability } from "../storage/artifact-committability.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
@@ -145,27 +145,55 @@ export interface ExportDebugOptions {
  */
 export function resolveDebugTarget(): DebugExportTarget {
   const computer = repoFolderKey(computerLabel());
+  const destinations: string[] = [];
+
+  // EVERY connected COMPANY sync repo comes first, and that ordering is the whole point of the file: a
+  // debug.yaml in someone's personal repo reaches only their own computers, so the one person who has to
+  // read it — whoever supports the install — never sees it. Writing it into the company sync repo is what
+  // makes "click Export Debug Information and I'll take a look" actually work (debug.mdx §3).
+  for (const row of listStoragesPage().companies) {
+    if (!row.root || !fs.existsSync(row.root)) continue;
+    // trackingBaseDir() is the single choke point for the storage-kind rule (§4.1 rule 1,
+    // artifact_placement_policy.mdx §0). Never join LFBRIDGE_DIR by hand here.
+    destinations.push(path.join(trackingBaseDir(row.root, row.type), "debug", computer, "debug.yaml"));
+  }
+
+  // …then the PERSONAL repo, so the user keeps their own copy across their own computers.
   // "Connected" = the personal storage row RESOLVES and its root is on disk — the same idiom the rest of
   // the product uses (artifact-placement.service.ts gates on `page.personal !== null`). Deliberately NOT
   // `initialized`: that flag only means a `storage.yaml` descriptor was written, and real installs are
   // actively using their personal SDL without one (it already holds `devices/` and `files.yaml`).
   // Requiring it would refuse a working setup — verified against this machine, 2026-07-20.
   const personal = getStorageRow("personal");
-  if (!personal || !personal.root || !fs.existsSync(personal.root)) {
+  if (personal && personal.root && fs.existsSync(personal.root)) {
+    destinations.push(
+      path.join(trackingBaseDir(personal.root, personal.type), "debug", computer, "debug.yaml"),
+    );
+  }
+
+  if (destinations.length === 0) {
     return {
       available: false,
       computer,
       path: null,
+      paths: [],
       reason:
-        "Connect your personal storage repo first — Large File Bridge saves the debug file there so your other computers can read it.",
+        "Connect your company or personal storage repo first — Large File Bridge saves the debug file there so it can reach the computer that needs to read it.",
       lastExportAt: null,
     };
   }
-  // trackingBaseDir() is the single choke point for the storage-kind rule: a personal SDL is a DEDICATED
-  // file repo, so its ROOT is the tracking area and `debug/` hangs directly off it — never `.lfbridge/`
-  // (§4.1 rule 1, artifact_placement_policy.mdx §0). Never join LFBRIDGE_DIR by hand here.
-  const file = path.join(trackingBaseDir(personal.root, personal.type), "debug", computer, "debug.yaml");
-  return { available: true, computer, path: file, reason: null, lastExportAt: lastExportAt(file) };
+
+  // `path` stays the PRIMARY destination (the first company repo, else personal) — it is what the UI
+  // names in the toast and the tooltip. `paths` is the full set actually written.
+  const stamps = destinations.map(lastExportAt).filter((s): s is string => s !== null);
+  return {
+    available: true,
+    computer,
+    path: destinations[0],
+    paths: destinations,
+    reason: null,
+    lastExportAt: stamps.length > 0 ? stamps.sort().at(-1)! : null,
+  };
 }
 
 function lastExportAt(file: string): string | null {
@@ -189,13 +217,30 @@ export async function exportDebugInfo(opts: ExportDebugOptions): Promise<DebugEx
   const folders = foldersInScope(opts);
   const doc = await buildDebugDocument(opts, folders, target.computer);
 
-  await fsp.mkdir(path.dirname(target.path), { recursive: true });
-  writeYaml(target.path, doc as unknown as Record<string, unknown>);
+  // ONE document, written to EVERY destination (§3): every connected company sync repo — so it reaches
+  // whoever supports the install — plus the personal repo. A destination that fails to write is reported
+  // in `errors` and never aborts the others: a company repo the user cannot write to must not cost them
+  // their own copy.
+  const written: string[] = [];
+  const writeErrors: string[] = [];
+  for (const dest of target.paths) {
+    try {
+      await fsp.mkdir(path.dirname(dest), { recursive: true });
+      writeYaml(dest, doc as unknown as Record<string, unknown>);
+      written.push(dest);
+    } catch (e) {
+      writeErrors.push(`${dest}: ${(e as Error).message}`);
+      log.warn("debug", `debug export could not write ${dest}: ${(e as Error).message}`);
+    }
+  }
+  if (written.length === 0) {
+    throw new Error(`Debug export could not be written anywhere: ${writeErrors.join("; ")}`);
+  }
 
   // §10.1 — the artifact is worthless until it reaches the other computer, so say so EXPLICITLY rather
   // than hoping it rides along on some unrelated commit (the stowaway defect, backbone_resilience.mdx).
   try {
-    noteArtifactWritten(target.path, "debug");
+    for (const dest of written) noteArtifactWritten(dest, "debug");
     // …and flush the debounce NOW rather than waiting it out. This is the same exemption the batch
     // completion hook takes (sync-trigger.service.ts `flushArtifactSync`): a one-shot, user-initiated
     // export is "a natural checkpoint and the user is watching for it" — the toast has just named the
@@ -208,16 +253,17 @@ export async function exportDebugInfo(opts: ExportDebugOptions): Promise<DebugEx
   const files = METRIC_KEYS.reduce((n, k) => n + doc.metrics[k].length, 0);
   log.info(
     "debug",
-    `debug export (${opts.scope}) wrote ${files} entries across ${folders.length} units in ${Date.now() - started}ms → ${target.path}`,
+    `debug export (${opts.scope}) wrote ${files} entries across ${folders.length} units in ${Date.now() - started}ms → ${written.join(", ")}`,
   );
   return {
-    path: target.path,
+    path: written[0],
+    paths: written,
     computer: target.computer,
     scope: opts.scope,
     units: folders.length,
     files,
     counts: METRIC_KEYS.reduce<Record<string, number>>((m, k) => ((m[k] = doc.metrics[k].length), m), {}),
-    errors: doc.errors.map((e) => `${e.repo}: ${e.message}`),
+    errors: [...doc.errors.map((e) => `${e.repo}: ${e.message}`), ...writeErrors],
     durationMs: Date.now() - started,
   };
 }
@@ -343,6 +389,14 @@ async function computerBlock(computer: string): Promise<Record<string, unknown>>
     // THE path-rewrite key (§4.5): absolute paths are not comparable across computers, and this is what
     // lets a reader mechanically translate one machine's paths into the other's.
     home_dir: os.homedir(),
+    home_user: hw?.home_user ?? "",
+    // WHO this computer is, as the shared git repos see it — the identity stamped on every commit it
+    // pushes, so a reader can match a suspect commit to the machine that made it (devices.mdx §7.1).
+    git_user_name: hw?.git_user_name ?? "",
+    git_user_email: hw?.git_user_email ?? "",
+    // WHERE this computer is on the network — the addresses the other machines would dial it on.
+    primary_ip: hw?.primary_ip ?? "",
+    ip_addresses: hw?.ip_addresses ?? [],
     // Joins this file to the OTHER computer's peer lists by string equality.
     ipfs_peer_id: await safeAsync(() => ipfs.peerId(), null),
     app_uptime_s: Math.round(process.uptime()),

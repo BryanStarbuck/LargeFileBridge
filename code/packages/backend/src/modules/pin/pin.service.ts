@@ -11,6 +11,7 @@
 // with atomic temp-then-rename (storage.mdx §15).
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { ManifestSchema, UnitStatusSchema, mediaKindForName, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
 import { computerLabel } from "../store-model/config.service.js";
 import {
@@ -52,6 +53,7 @@ import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js
 import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
@@ -185,7 +187,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
         // the pin was lost (GC, or an `ipfs pin rm` outside the app) we must re-pin so reality matches
         // intent rather than trust the stale cache (storage.mdx §9.5). Membership is CANONICAL so a
         // `Qm…`-encoded pin of a `bafy…` manifest CID (same block) still counts (knowledge/ipfs.mdx §5.1).
-        const unchanged = existing?.cid && existing.size === st.size && pinset.has(ipfs.canonicalCid(existing.cid));
+        // `pinsetHasContent` also accepts a CID we have previously established as content-identical to the
+        // recorded one (cid-equivalence.service.ts) — the case where our IPFS add profile differs from the
+        // computer that first recorded the file. Without it, this machine re-hashes those files EVERY pass.
+        const unchanged = existing?.cid && existing.size === st.size && pinsetHasContent(pinset, existing.cid);
         if (unchanged) {
           setPinClaim(existing!, t.label, true);
           counts.skipped++; // eligible but already up-to-date + still pinned (§6 truthful "nothing changed")
@@ -203,10 +208,18 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
           if (already) {
             const canon = ipfs.canonicalCid(already);
             pinset.add(canon);
-            existing.cid = already;
+            // RECORD THE EQUIVALENCE LOCALLY — do NOT rewrite the manifest's CID. The manifest is SHARED and
+            // committed, and the adopted CID is a fact about THIS computer's add profile, not about the file.
+            // Writing it back made two computers with different profiles overwrite each other's entry on
+            // every single pass: a real conflict on a real payload file, every cycle, forever, which is what
+            // kept the company backbone in a permanent merge/retry loop (cid-equivalence.service.ts).
+            noteCidEquivalence(existing.cid, already);
             setPinClaim(existing, t.label, true);
             counts.skipped++;
-            log.info("pin", `Adopted existing foreign-profile pin for ${rel} -> ${already} (no duplicate add).`);
+            log.info(
+              "pin",
+              `Adopted existing foreign-profile pin for ${rel} -> ${already} (no duplicate add; manifest CID ${existing.cid} left as recorded).`,
+            );
             return;
           }
         }
@@ -301,7 +314,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
   // pin pass) are dropped here. Peer claims are left untouched — we can only verify our own.
   for (const entry of byPath.values()) {
     if (!entry.cid) continue;
-    setPinClaim(entry, t.label, pinset.has(ipfs.canonicalCid(entry.cid)));
+    // Content-aware: a file we hold under a different add profile IS pinned here, so the claim stands.
+    // Testing the raw CID alone would drop our own claim every pass and re-churn the shared manifest.
+    setPinClaim(entry, t.label, pinsetHasContent(pinset, entry.cid));
   }
 
   const next: Manifest = ManifestSchema.parse({
@@ -697,6 +712,7 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
  */
 export async function pushDeviceBackbone(): Promise<void> {
   const ids = safeStorageIds();
+  warnOnDuplicateBackbones(ids);
   await runPool(ids, PIN_CONCURRENCY, async (id) => {
     try {
       await ensureDeviceRegistered(id);
@@ -704,6 +720,67 @@ export async function pushDeviceBackbone(): Promise<void> {
       log.error("pin", `device registration for storage ${id} failed: ${(e as Error).message}`);
     }
   });
+}
+
+/**
+ * Two storages on THIS computer whose git backbones push to the SAME remote fight each other on every
+ * single cycle: both write `devices/<self>.yaml` for the same device, both commit, and each push makes the
+ * other's non-fast-forward. The retries mostly win it back, but the cycles they lose are exactly the
+ * "sometimes it just doesn't pull and push" the user sees — and no message anywhere said why.
+ *
+ * We do NOT pick one and disable the other: which clone is the real one is the user's call, and quietly
+ * dropping a configured storage would be worse than the churn. We name it, every pass, so it is visible in
+ * the fault trail and in a debug export.
+ */
+function warnOnDuplicateBackbones(ids: string[]): void {
+  const byRemote = new Map<string, string[]>();
+  for (const id of ids) {
+    let remote: string | null = null;
+    try {
+      remote = getGitBackboneRemote(id)?.remote ?? null;
+    } catch {
+      continue; // a storage we cannot resolve is reported elsewhere (the NO SILENT NULLS warnings)
+    }
+    if (!remote) continue;
+    // Group by the URL the working copy actually pushes to — two different local clone paths of one
+    // GitHub repo are the collision; two storages that merely share a path prefix are not.
+    let url = remote;
+    try {
+      const found = fs.existsSync(path.join(expandHome(remote), ".git"))
+        ? readGitRemoteUrl(expandHome(remote))
+        : null;
+      if (found) url = found;
+    } catch {
+      /* keep the raw remote as the key */
+    }
+    const list = byRemote.get(url) ?? [];
+    list.push(id);
+    byRemote.set(url, list);
+  }
+  for (const [url, list] of byRemote) {
+    if (list.length < 2) continue;
+    log.warn(
+      "pin",
+      `${list.length} storages on this computer share the git backbone ${url} (${list.join(", ")}) — ` +
+        `they write the same device file and push to the same branch, so they will keep rejecting each ` +
+        `other's pushes and losing cycles. Keep ONE of them and remove the others.`,
+    );
+  }
+}
+
+/** The `origin` URL of a working copy, or null. Sync + cheap — this runs once per device pass. */
+function readGitRemoteUrl(dir: string): string | null {
+  try {
+    return (
+      execFileSync("git", ["-C", dir, "config", "--get", "remote.origin.url"], {
+        encoding: "utf8",
+        timeout: 5000,
+        stdio: ["ignore", "pipe", "ignore"],
+      }).trim() || null
+    );
+  } catch {
+    return null;
+  }
 }
 
 /** Pin one storage without letting a per-storage fault throw the pass. */

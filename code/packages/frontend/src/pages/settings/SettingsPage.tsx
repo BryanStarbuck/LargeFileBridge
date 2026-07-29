@@ -245,7 +245,9 @@ function PowerToolsSection() {
     onSuccess: (r) => {
       qc.invalidateQueries({ queryKey: ["debugTarget"] });
       // Never a silent no-op (pin_process.mdx §6): name what and where, and say zero when zero.
-      toast.success(`Debug information exported — ${r.files} entries across ${r.units} repos → ${r.path}`);
+      toast.success(
+        `Debug information exported — ${r.files} entries across ${r.units} repos → ${r.paths.length} destination${r.paths.length === 1 ? "" : "s"} (${r.path})`,
+      );
       if (r.errors.length) toast.warning(`${r.errors.length} repo(s) could not be read; see the errors: block in the file`);
     },
     onError: (e: Error) => { clientLog.error("Settings.debugExport", e); toast.error(e.message); },
@@ -260,11 +262,17 @@ function PowerToolsSection() {
     >
       <p className="text-sm text-black/70">
         <strong>Export debug information</strong> — writes everything Large File Bridge believes about this
-        computer's files to a YAML file in your personal repo, so it can be compared against your other
-        computers.
+        computer's files to a YAML file in every company sync repo you're connected to and in your personal
+        repo, so it reaches whoever needs to compare it against your other computers.
       </p>
       {target?.available ? (
-        <p className="mt-2 break-all font-mono text-xs text-black/50">→ {target.path}</p>
+        <div className="mt-2 space-y-0.5">
+          {target.paths.map((p) => (
+            <p key={p} className="break-all font-mono text-xs text-black/50">
+              → {p}
+            </p>
+          ))}
+        </div>
       ) : (
         <p className="mt-2 text-xs text-[var(--lfb-bad)]">
           {target?.reason ?? "Checking…"}{" "}

@@ -28,6 +28,17 @@ export const DeviceHardwareSchema = z
     hostname: z.string().default(""), // os.hostname()
     username: z.string().default(""), // os.userInfo().username — the logged-in OS user
     home_dir: z.string().default(""), // os.homedir() — the ~ dir; which user this machine belongs to
+    home_user: z.string().default(""), // basename(home_dir) — the account name as it appears in /Users/<name>
+    // The person as GIT knows them (`git config user.name` / `user.email`) — this is the identity stamped
+    // on every commit this computer makes into the shared repos, so it is what ties a device to the
+    // commits it authored. Read from the LOCAL git config only; never over the network.
+    git_user_name: z.string().default(""),
+    git_user_email: z.string().default(""),
+    // Network addresses of this computer (devices.mdx §7.1). Enumerated LOCALLY from the OS interface
+    // table (os.networkInterfaces()) — no packet leaves the machine. `primary_ip` is the LAN IPv4 the
+    // other computers would reach this one on; `ip_addresses` is every non-loopback address found.
+    primary_ip: z.string().default(""),
+    ip_addresses: z.array(z.string()).default([]),
     model_identifier: z.string().default(""), // `sysctl -n hw.model` → Mac14,7
     model_name: z.string().default(""), // system_profiler SPHardwareDataType → Model Name
     marketing_name: z.string().default(""), // resolved from the model table, e.g. "MacBook Pro (14-inch, 2023)"
@@ -858,6 +869,18 @@ export const UnitStatusSchema = z.object({
     .prefault({}),
 });
 export type UnitStatus = z.infer<typeof UnitStatusSchema>;
+
+// ── cid_equivalence.yaml (knowledge/ipfs.mdx §5.1) — MACHINE-LOCAL, never in an SDL ──────────────────
+// "The CID the shared manifest records" → "the CID THIS computer has pinned for the same bytes". Two IPFS
+// add profiles produce different multihashes for identical content, which `canonicalCid()` cannot bridge;
+// recording that equivalence LOCALLY is what stops two computers from rewriting each other's manifest
+// entry on every pass (see cid-equivalence.service.ts for the ping-pong this ended).
+export const CidEquivalenceSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  pairs: z.record(z.string(), z.string()).default({}), // canonical(recorded) → canonical(local)
+});
+export type CidEquivalence = z.infer<typeof CidEquivalenceSchema>;
 
 // ── peers.yaml (storage.mdx §11) ────────────────────────────────────────────
 export const PeersSchema = z.object({

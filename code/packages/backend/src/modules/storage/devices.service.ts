@@ -15,7 +15,7 @@ import {
   type DeviceHardwareDoc,
   type DeviceRow,
 } from "@lfb/shared";
-import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
+import { readYaml, writeYaml, writeYamlIfChanged } from "../../shared/store/yaml-store.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { peerRows } from "../store-model/peers.service.js";
@@ -23,6 +23,7 @@ import { peerRows } from "../store-model/peers.service.js";
 // — safe under NodeNext ESM, same pattern as storage.service <-> storage-settings.service.
 import { readMappedDirsForRoot } from "./storage-settings.service.js";
 import { trackingBaseDir, legacyTrackingBaseDir } from "./storage-type.service.js";
+import { freshVolatileHardware } from "./hardware.service.js";
 import { expandHome } from "../fs/badges.js";
 import { log } from "../../shared/logging.js";
 
@@ -69,6 +70,11 @@ function hwDocToCamel(h: DeviceHardwareDoc): DeviceHardware {
     hostname: h.hostname,
     username: h.username,
     homeDir: h.home_dir,
+    homeUser: h.home_user,
+    gitUserName: h.git_user_name,
+    gitUserEmail: h.git_user_email,
+    primaryIp: h.primary_ip,
+    ipAddresses: h.ip_addresses,
     modelIdentifier: h.model_identifier,
     modelName: h.model_name,
     marketingName: h.marketing_name,
@@ -128,7 +134,12 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
     ipfs_peer_id: cfg.computer.ipfs_peer_id ?? null,
     // Copy THIS machine's fingerprint into the travelling registry so other computers can identify &
     // disambiguate it (devices.mdx §7). Self-owned — only ever this device's own file.
-    hardware: cfg.computer.hardware,
+    //
+    // The VOLATILE fields (IP addresses, git identity, home user) are overlaid FRESH here rather than
+    // taken from config.yaml: that copy is seeded once on first run, so a laptop that has since joined a
+    // different network — or a user who fixed their `git config user.email` — would otherwise keep
+    // publishing the stale value to every other computer forever (devices.mdx §7.1).
+    hardware: { ...cfg.computer.hardware, ...freshVolatileHardware() },
   };
   if (!existed) {
     // A fresh device file: the default schedule matches the 15-min background pass (devices.mdx §3).
@@ -146,8 +157,14 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
       : { local_path: null, wanted: false };
   }
 
-  writeYaml(file, current as unknown as Record<string, unknown>);
-  log.info("storage", `wrote self device "${name}" (${(current.device.id || "?").slice(0, 8)}) at ${storageRoot}`);
+  // ONLY write when something other than the timestamp moved (yaml-store.ts `writeYamlIfChanged`). This
+  // function runs on every device pass, every pin pass and every artifact sync, for every storage — an
+  // unconditional write made each of those a commit whose whole diff was `updated_at`, which is what kept
+  // the backbone in a permanent conflict/retry loop and cost cycles their push.
+  const wrote = writeYamlIfChanged(file, current as unknown as Record<string, unknown>);
+  if (wrote) {
+    log.info("storage", `wrote self device "${name}" (${(current.device.id || "?").slice(0, 8)}) at ${storageRoot}`);
+  }
   return toRecord(readYaml(file, DeviceFileSchema));
 }
 

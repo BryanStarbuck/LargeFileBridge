@@ -1,7 +1,9 @@
 // The Jobs page: both workers' installed/on-off + control (scan.mdx §7, storage.mdx §13).
 import { Router } from "express";
 import { z } from "zod";
-import { jobsPageData, control } from "../schedule/schedule.service.js";
+import { jobsPageData, control, workerState } from "../schedule/schedule.service.js";
+import { startScan } from "../scanner/scan-job.js";
+import { startRun } from "../schedule/run-job.js";
 import { setWatcherEnabled } from "../watcher/watcher.service.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { log } from "../../shared/logging.js";
@@ -35,16 +37,28 @@ jobsRouter.post("/watcher/:action", async (req, res) => {
   }
 });
 
-// POST /api/jobs/:worker/:action  — worker ∈ scan|pin|device, action ∈ install|uninstall|enable|disable
+// POST /api/jobs/:worker/:action  — worker ∈ scan|pin|device,
+// action ∈ install|uninstall|enable|disable|run
 jobsRouter.post("/:worker/:action", async (req, res) => {
   const params = z
     .object({
       worker: z.enum(["scan", "pin", "device"]),
-      action: z.enum(["install", "uninstall", "enable", "disable"]),
+      action: z.enum(["install", "uninstall", "enable", "disable", "run"]),
     })
     .safeParse(req.params);
   if (!params.success) return res.status(400).json({ ok: false, error: "bad worker/action" });
   try {
+    // "run" = the user pressed Scan / Rescan / Run now on the Scans page. It is NOT a schedule change —
+    // it kicks the same pass launchd would have kicked, through the same fire-and-acknowledge runners, so
+    // a manual kick coalesces onto an in-flight pass instead of racing it and still stamps last_run on
+    // COMPLETION (run-job.ts / scan-job.ts). Works whether or not the launchd job is installed: a user
+    // who has not installed the background job can still scan on demand.
+    if (params.data.action === "run") {
+      if (params.data.worker === "scan") startScan("manual");
+      else startRun(params.data.worker, "manual");
+      // Answer with the worker's state so the page re-renders as "Running now" without a round trip.
+      return res.json({ ok: true, data: await workerState(params.data.worker) });
+    }
     const state = await control(params.data.worker, params.data.action);
     res.json({ ok: true, data: state });
   } catch (e) {

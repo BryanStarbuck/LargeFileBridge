@@ -9,6 +9,10 @@ const root = () => resolveStateDir();
 export const appConfigPath = () => path.join(root(), "config.yaml");
 export const peersPath = () => path.join(root(), "peers.yaml");
 export const authSecretPath = () => path.join(root(), ".auth_session_secret");
+// MACHINE-LOCAL and deliberately so (cid-equivalence.service.ts): which locally-pinned CID holds the same
+// bytes as a CID the shared manifest records. A fact about this computer's pinset, never about the fleet's
+// record — putting it in the SDL is what made two machines rewrite each other's manifest forever.
+export const cidEquivalencePath = () => path.join(root(), "cid_equivalence.yaml");
 
 // ── User scope (created lazily) ─────────────────────────────────────────────
 export const userDir = (email: string) => path.join(root(), "users", emailKey(email));

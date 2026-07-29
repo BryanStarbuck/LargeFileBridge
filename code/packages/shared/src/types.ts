@@ -2107,6 +2107,11 @@ export interface DeviceHardware {
   hostname: string;
   username: string; // logged-in OS user
   homeDir: string; // the ~ dir — which user this machine belongs to
+  homeUser: string; // basename(homeDir) — the account name as it appears in /Users/<name>
+  gitUserName: string; // `git config user.name` — the identity stamped on this computer's commits
+  gitUserEmail: string; // `git config user.email`
+  primaryIp: string; // the LAN IPv4 other computers reach this one on ("" if none)
+  ipAddresses: string[]; // every non-loopback address found locally
   modelIdentifier: string; // hw.model, e.g. Mac14,7
   modelName: string; // "MacBook Pro"
   marketingName: string; // "MacBook Pro (14-inch, 2023)" — "" if unknown
@@ -2299,7 +2304,10 @@ export interface CompanyCreateResult {
 export interface DebugExportTarget {
   available: boolean;
   computer: string; // the device slug — identical to devices/<name>.yaml and to the path segment
-  path: string | null; // <personal repo>/debug/<computer>/debug.yaml
+  path: string | null; // the PRIMARY destination — the first company sync repo, else the personal one
+  // EVERY destination the export writes to: each connected company sync repo (so the file reaches
+  // whoever supports the install) followed by the personal repo. `path` is always `paths[0]`.
+  paths: string[];
   reason: string | null; // why it is unavailable (rendered inline / as the menu item's tooltip)
   lastExportAt: string | null;
 }
@@ -2307,7 +2315,8 @@ export interface DebugExportTarget {
 // What one export actually DID — the toast names all of it, and a zero-file export says zero
 // (debug.mdx §9.3, the never-a-silent-no-op rule).
 export interface DebugExportResult {
-  path: string;
+  path: string; // the primary destination actually written
+  paths: string[]; // every destination actually written (company sync repos + personal)
   computer: string;
   scope: "computer" | "repo";
   units: number; // repos walked

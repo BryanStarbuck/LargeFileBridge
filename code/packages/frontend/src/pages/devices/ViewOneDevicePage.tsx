@@ -227,6 +227,26 @@ export function ViewOneDevicePage() {
             <Field label="Nice name" value={device.name} />
             <Field label="Device id" value={device.id} mono copyable={device.id || undefined} />
             <Field label="Owner (OS user)" value={hw?.username || device.owner} />
+            {/* The account name as it appears in the home path (/Users/<name>) — shown only when it says
+                something the OS user name above doesn't (a renamed account or a relocated home). */}
+            {hw?.homeUser && hw.homeUser !== hw.username && (
+              <Field label="Home account" value={hw.homeUser} mono />
+            )}
+            {/* How this computer signs its commits into the shared repos (devices.mdx §7.1) — the line
+                that ties a device to the check-ins it authored. */}
+            <Field label="Git name" value={hw?.gitUserName} />
+            <Field label="Git email" value={hw?.gitUserEmail} copyable={hw?.gitUserEmail || undefined} />
+            <Field
+              label="IP address"
+              value={hw?.primaryIp}
+              mono
+              copyable={hw?.primaryIp || undefined}
+            />
+            {/* Every other address this computer answers on — worth seeing when the primary one isn't
+                the interface you expected (VPN, second NIC, IPv6). */}
+            {hw && hw.ipAddresses.length > 1 && (
+              <Field label="Other addresses" value={hw.ipAddresses.slice(1).join(", ")} mono />
+            )}
             <Field
               label="IPFS Peer ID"
               value={device.ipfsPeerId}

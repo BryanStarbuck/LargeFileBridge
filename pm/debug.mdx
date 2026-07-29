@@ -219,9 +219,28 @@ a **git repo that is already synced between the user's computers by the git back
 ([git_backbone.mdx](./git_backbone.mdx)). Writing there is what makes the artifact **travel**, which is
 what makes it **useful** (§1). A `debug.yaml` that stays on one machine answers nothing.
 
+### 3.0 Every company sync repo is a destination too, and it comes FIRST (revised 2026-07-29)
+
+**This amends the "personal repo only" rule above; it does not relax the no-fallback rule.**
+
+A `debug.yaml` in someone's personal repo reaches only **their own** computers — so the one person who
+actually has to read it, whoever supports the install, never sees it. The export therefore writes the
+**same document to every connected company sync repo, and then to the personal repo**. Company repos come
+first because that is the copy that reaches the support session; the personal copy still travels between
+the user's own machines exactly as before.
+
+* **Available** when **at least one** of those repos is connected (company *or* personal). With none, the
+  export is refused exactly as described below — no state-root fallback, no `/tmp`, no browser download.
+* **One document, many destinations.** A destination that cannot be written is reported in `errors` and
+  never aborts the others: a company repo the user lacks write access to must not cost them their own copy.
+* The UI **names every destination before the click** (the surprise-write rule below applies per repo).
+
+Resolving the destination list (companies first, then personal) and writing the one document to each is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `resolveDebugTarget()` (returns `path` = primary and `paths` = all) and `exportDebugInfo()`.
+
 Therefore:
 
-* **If a personal storage repo is connected** → export runs.
+* **If a company or personal storage repo is connected** → export runs.
 * **If it is not** → the export is **refused**, loudly and specifically. There is **no** fallback to the
   state root, **no** fallback to `/tmp`, **no** "download it to your browser instead". Each of those
   would produce a file that cannot reach the other computer, i.e. a file that silently fails at the one
@@ -903,10 +922,15 @@ into a still-useful comparison rather than a wrong one.
   group, after **Rescan**.
 * **AC-3** — The View-one-repo page **has** a More ⌄ menu (the word *More* + chevron, no `⋮`, no border)
   carrying the §5.1 repo catalog minus *Open repo* — closing the §2.2.1 drift.
-* **AC-4** — With no personal storage repo connected, **both** surfaces render **disabled with a reason**,
-  and the API returns `ok: false` with a stable error — **never** a fallback write to another location.
-* **AC-5** — The file lands at exactly `<personal repo>/debug/<computer>/debug.yaml`, where `<computer>` is
-  byte-identical to the `devices/<name>.yaml` slug, and **never** under `.lfbridge/`.
+* **AC-4** — With **no** company **and** no personal storage repo connected (§3.0), **both** surfaces render
+  **disabled with a reason**, and the API returns `ok: false` with a stable error — **never** a fallback
+  write to another location.
+* **AC-5** — The file lands at exactly `<repo>/debug/<computer>/debug.yaml` in **every** connected company
+  sync repo **and** the personal repo (§3.0), where `<computer>` is byte-identical to the
+  `devices/<name>.yaml` slug, and **never** under `.lfbridge/`.
+* **AC-5a** — With a company sync repo connected, a `debug.yaml` reaches **that** repo — the copy the
+  support session can read. A destination that fails to write is reported in `errors` and does **not**
+  prevent the others from being written.
 * **AC-6** — Two computers exporting concurrently produce **zero** git conflicts.
 * **AC-7** — For **every** metric in the §5.2 catalog, `metrics.<key>` exists as an array — **`[]` when
   empty, never omitted, never null**.

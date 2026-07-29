@@ -105,6 +105,30 @@ export function DevicesPage() {
       cell: (d) => <span>{d.hardware?.username || d.owner || "—"}</span>,
     },
     {
+      // The address the other computers would reach this one on (devices.mdx §7.1). Blank for a bare
+      // peers.yaml entry that has not written a fingerprint yet.
+      id: "ip",
+      header: "IP address",
+      kind: "text",
+      width: "10rem",
+      accessor: (d) => d.hardware?.primaryIp ?? "",
+      cell: (d) =>
+        d.hardware?.primaryIp ? (
+          <code
+            className="text-xs text-black/60"
+            title={
+              d.hardware.ipAddresses.length > 1
+                ? `also: ${d.hardware.ipAddresses.slice(1).join(", ")}`
+                : undefined
+            }
+          >
+            {d.hardware.primaryIp}
+          </code>
+        ) : (
+          <span className="text-black/20">—</span>
+        ),
+    },
+    {
       id: "peerId",
       header: "IPFS Peer ID",
       kind: "text",
@@ -183,7 +207,7 @@ export function DevicesPage() {
         data={rows}
         columns={columns}
         searchKeys={(d) =>
-          `${d.displayLabel} ${d.owner ?? ""} ${d.hardware?.marketingName ?? ""} ${d.hardware?.username ?? ""} ${d.ipfsPeerId ?? ""}`
+          `${d.displayLabel} ${d.owner ?? ""} ${d.hardware?.marketingName ?? ""} ${d.hardware?.username ?? ""} ${d.ipfsPeerId ?? ""} ${(d.hardware?.ipAddresses ?? []).join(" ")} ${d.hardware?.gitUserEmail ?? ""} ${d.hardware?.gitUserName ?? ""}`
         }
         getRowId={(d) => d.id || d.displayLabel}
         // Row click → the device's "View one device" page (devices.mdx §6). Skip rows with no stable id.

@@ -509,6 +509,40 @@ to come from the user's **other computers**, which no local lock can exclude.
 
 ---
 
+### 6.5 A cycle must never manufacture its own conflicts (LOCKED, learned from a defect)
+
+The retry, re-arm and reporting machinery above (§6.3, §6.4) exists for pushes lost to **another
+computer's legitimate work**. It is not a licence to generate churn and then survive it. Every conflict the
+app creates for itself costs a cycle its push, and the user experiences that as *"sometimes it just doesn't
+pull and push."* Three rules, each learned from a live failure on 2026-07-29:
+
+1. **A timestamp is not a change.** `writeYaml` stamps `updated_at: now` on every call, so re-writing an
+   identical document still yields a byte-different file. `writeSelfDevice` runs on every device pass
+   (10 min), every pin pass (15 min) **and** every artifact sync, for **every** storage — so each cycle
+   committed a diff that was exactly one line, `-updated_at:` / `+updated_at:`. Self-owned state is
+   therefore written **only when something other than the timestamp moved**.
+2. **A machine-local fact never goes in a shared file.** Two computers can pin identical bytes under
+   different CIDs (a legacy `Qm…` dag-pb add vs. a raw-leaves `bafk…`); those are different multihashes,
+   so `canonicalCid()` cannot bridge them. Foreign-profile **adoption** used to write the local CID into
+   the **shared** `manifest.yaml`, so two machines with different add profiles overwrote each other's
+   entry on every pass, forever. The adoption is now recorded in a **machine-local** equivalence map and
+   the manifest's CID is left exactly as the fleet recorded it.
+3. **Two storages must not share one backbone.** Two clones of the same remote on one computer both write
+   the same `devices/<self>.yaml` and both push to the same branch, so they reject each other every cycle.
+   LFB does **not** silently disable one — which clone is real is the user's call — but it **names the
+   collision every pass** so it appears in the fault trail and in a debug export.
+
+Not re-writing an unchanged document is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()`, used by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+
+Keeping the adopted CID out of the shared manifest is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/cid-equivalence.service.ts` — `noteCidEquivalence()` / `pinsetHasContent()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`.
+
+Naming two storages that share one backbone is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `warnOnDuplicateBackbones()`, called at the top of `pushDeviceBackbone()`.
+
+---
+
 ## 7. Compliance boundary — the charter's no-relay posture, in Git terms (LOCKED)
 
 The charter forbids LFB from becoming a gateway/relay for **other people's** content. The Git backbone

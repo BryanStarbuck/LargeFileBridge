@@ -4,11 +4,12 @@
 // tucked behind the chevron.
 import { useEffect } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { WorkerKind, WorkerState, WatcherState, BackbonePushState } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
-import { relativeTime } from "../../lib/format.js";
+import { relativeTime, absoluteTime } from "../../lib/format.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { StatusBanner } from "../../components/ui/StatusBanner.js";
 import { DiagnosticCard } from "../../components/ui/DiagnosticCard.js";
@@ -172,7 +173,20 @@ export function ScansPage() {
             ? `Background jobs that keep your big files discovered and pinned on this computer (${data.computerLabel}).`
             : "Background jobs that keep your big files discovered and pinned on this computer."
         }
+        // The page's ONE primary button, top right: run the Discovery pass now. It says "Scan" until this
+        // computer has ever scanned and "Rescan" after that, so the label itself tells the user whether
+        // there is anything behind the numbers on the rest of the site yet.
+        actions={data ? <RunNowButton worker="scan" state={data.scan} /> : undefined}
       />
+
+      {/* WHEN this computer last discovered its files — the question the button above answers, so it is
+          stated right next to it in full (date AND time), not only as "3h ago". */}
+      {data && (
+        <p className="-mt-1 mb-3 text-xs text-black/50">
+          Last scan: {data.scan.lastRunAt ? `${absoluteTime(data.scan.lastRunAt)} (${relativeTime(data.scan.lastRunAt)})` : "never"}
+          {data.scan.running && " · scanning now"}
+        </p>
+      )}
 
       <StatusBanner state={verdict.state} headline={verdict.headline} sub={verdict.sub} />
 
@@ -275,6 +289,56 @@ function WatcherCard({ state }: { state: WatcherState }) {
   );
 }
 
+/**
+ * Run this job NOW. Same button in two places: the page header (Discovery — the "Scan"/"Rescan" the user
+ * came here for) and each job card. It kicks the very pass launchd would have kicked, so it is a fully
+ * legitimate substitute when the schedule is off or overdue — and it is single-flighted server-side, so a
+ * second press during a run coalesces onto the pass already going rather than starting a competing one.
+ *
+ * The label carries the state: "Scan" before this computer has ever run the job, "Rescan" after, and
+ * "Scanning…"/"Running…" while a pass is in flight (when it is also disabled — pressing it again would
+ * do nothing, and a button that appears to do nothing reads as broken).
+ */
+function RunNowButton({ worker, state }: { worker: WorkerKind; state: WorkerState }) {
+  const qc = useQueryClient();
+  const run = useMutation({
+    mutationFn: () => api.runWorker(worker),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+      toast.success(worker === "scan" ? "Scanning now" : "Running now");
+    },
+    onError: (e: Error) => {
+      clientLog.error(`ScansPage.runWorker.${worker}`, e);
+      toast.error(e.message);
+    },
+  });
+  const isScan = worker === "scan";
+  const label = state.running
+    ? isScan
+      ? "Scanning…"
+      : "Running…"
+    : isScan
+      ? state.lastRunAt
+        ? "Rescan"
+        : "Scan"
+      : "Run now";
+  return (
+    <button
+      onClick={() => run.mutate()}
+      disabled={state.running || run.isPending}
+      title={
+        state.running
+          ? "A pass is already running — this button comes back when it finishes."
+          : "Run this job right now, without waiting for its schedule."
+      }
+      className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+    >
+      {(state.running || run.isPending) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+      {label}
+    </button>
+  );
+}
+
 function WorkerCard({
   worker,
   title,
@@ -301,13 +365,17 @@ function WorkerCard({
   });
 
   const h = workerHealth(state);
+  // The full date AND time, with the relative reading in parentheses. "3h ago" alone is not enough to
+  // reason about a schedule — a user checking whether the every-4-hours pass actually fired overnight
+  // needs the clock time it fired at, not an approximation of the gap.
+  const stamp = (iso: string) => `${absoluteTime(iso)} (${relativeTime(iso)})`;
   const lastRun = state.running
     ? // A pass is detached from whatever kicked it and can legitimately run for minutes (run-job.ts) —
       // show that it is working rather than leaving a stale "last run" reading as if nothing is happening.
-      `running now${state.lastRunAt == null ? "" : ` — last finished ${relativeTime(state.lastRunAt)}`}`
+      `running now${state.lastRunAt == null ? "" : ` — last finished ${stamp(state.lastRunAt)}`}`
     : state.lastRunAt == null
       ? "never run"
-      : `last run ${relativeTime(state.lastRunAt)}${
+      : `last run ${stamp(state.lastRunAt)}${
           state.lastRunOk === false ? " — failed" : state.overdue ? " — overdue" : ""
         }`;
   const missed = missedCycleNote(state);
@@ -326,6 +394,9 @@ function WorkerCard({
       }
       fix={
         <div className="flex gap-2">
+          {/* Run-now sits FIRST and is available whether or not the launchd job is installed — the
+              schedule being absent or off is exactly when a user most wants to run the pass by hand. */}
+          <RunNowButton worker={worker} state={state} />
           {!state.installed ? (
             <Btn primary onClick={() => control.mutate("install")}>
               Install

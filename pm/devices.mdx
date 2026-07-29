@@ -145,6 +145,15 @@ device:
     hostname: Bryans-MacBook-Pro   # os.hostname()
     username: bryan                # os.userInfo().username — the logged-in OS user
     home_dir: /Users/bryan         # os.homedir() — the ~ dir; which user this machine belongs to
+    home_user: bryan               # basename(home_dir) — the account name as it appears in /Users/<name>
+    # WHO this computer is to git — the identity stamped on every commit it pushes (§7.1)
+    git_user_name: Bryan Starbuck  # `git config user.name`
+    git_user_email: bryan@thestarbucks.com   # `git config user.email`
+    # WHERE this computer is — read from the OS interface table, never over the network (§7.1)
+    primary_ip: 192.168.1.42       # best LAN IPv4 — what the other computers would dial
+    ip_addresses:                  # every non-loopback address, primary first
+      - 192.168.1.42
+      - fd00::a1b2
     model_identifier: Mac14,7      # `sysctl -n hw.model` — e.g. Mac14,7
     model_name: MacBook Pro        # system_profiler SPHardwareDataType → Model Name
     marketing_name: "MacBook Pro (14-inch, 2023)"   # resolved from the model table (§7); "" if unknown
@@ -454,6 +463,33 @@ into each storage's `devices/<device>.yaml` (§3) so *other* computers can see a
 * **`kind`** is derived: `MacBook*` → **laptop**; `Macmini`/`iMac`/`MacStudio`/`MacPro` → **desktop**;
   `server` mode (`config.server.mode`, [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical))
   or a headless Linux host with no display → **server**.
+
+### 7.1 Who and where — home account, git identity, IP addresses
+
+Three more facts travel with the fingerprint. They answer the questions that come up the moment two
+computers disagree: *whose machine is this, which check-ins did it make, and where is it on the network?*
+
+* **`home_user`** — the account name as it appears in the home path (`/Users/bryan` → `bryan`). Usually
+  identical to `username`; it differs on a renamed account or a relocated home, and it is the name the
+  user actually recognizes.
+* **`git_user_name` / `git_user_email`** — `git config user.name` / `user.email`. This is the identity
+  **stamped on every commit this computer pushes** into the shared repos, so it is what ties a device to
+  the check-ins it authored — the join a support session needs when a repo shows unexplained commits.
+* **`primary_ip` / `ip_addresses`** — every non-loopback address this machine answers on, best LAN IPv4
+  first (private `192.168.`/`10.`/`172.16–31.` ranges outrank link-local and IPv6, so `primary_ip` is the
+  address the user's other computers would actually dial).
+
+**The no-networking rule still holds.** These are read from the kernel's own interface table
+(`os.networkInterfaces()`) and from a local git config file — no packet leaves the machine, nothing is
+resolved externally, nothing phones home.
+
+**They are VOLATILE, unlike the rest of the fingerprint.** Model, chip and RAM are collected once and
+cached; an IP changes every time a laptop joins a network and a git identity changes whenever the user
+fixes it. So they are re-read behind a short TTL and overlaid **fresh** at each device write — the
+first-run snapshot in `config.yaml` is never what gets published.
+
+Re-reading the volatile half (addresses, git identity, home account) is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectVolatileHardware()` / `freshVolatileHardware()`, overlaid onto the cached fingerprint at the device write in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`. They surface on the Devices table (IP column) and the View-one-device Identity block in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` and `.../ViewOneDevicePage.tsx`.
 
 Collecting the fingerprint locally (os/fs + guarded `sysctl`/`system_profiler`, cached, no network) is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()` / `getHardware()`, with the model→marketing/year/screen lookup in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware-models.ts`. Seeding `config.yaml → computer.hardware` (and the default nice name) on first run is done in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`.

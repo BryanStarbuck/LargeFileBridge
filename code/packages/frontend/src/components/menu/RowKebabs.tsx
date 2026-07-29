@@ -150,7 +150,7 @@ export function useRepoActions(repo: RepoMenuEntity, opts?: { omit?: string[]; d
       disabled: opts?.debugPath === null,
       title:
         opts?.debugPath === null
-          ? "Connect your personal storage repo first — Large File Bridge saves the debug file there so your other computers can read it."
+          ? "Connect your company or personal storage repo first — Large File Bridge saves the debug file there so it can reach the computer that needs to read it."
           : (opts?.debugPath ?? undefined),
       onSelect: async () => {
         try {
@@ -160,7 +160,12 @@ export function useRepoActions(repo: RepoMenuEntity, opts?: { omit?: string[]; d
             invokedFrom: "one_repo_more_menu",
           });
           // Never a silent no-op (pin_process.mdx §6): name the count AND the path, and say zero when zero.
-          toast.success(`Debug information exported — ${r.files} entries → ${r.path}`);
+          // With more than one destination (a company sync repo AND the personal one) say so — the whole
+          // reason the export is useful is that it travels to the person who has to read it.
+          toast.success(
+            `Debug information exported — ${r.files} entries → ${r.path}` +
+              (r.paths.length > 1 ? ` (+${r.paths.length - 1} more repo${r.paths.length > 2 ? "s" : ""})` : ""),
+          );
         } catch (e) {
           clientLog.error("RowKebabs.exportDebug", e);
           toast.error(e instanceof Error ? e.message : "Debug export failed");

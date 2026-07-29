@@ -14,7 +14,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
-import { readYaml } from "./yaml-store.js";
+import { readYaml, writeYamlIfChanged } from "./yaml-store.js";
 import { resolveLogDir, resolveStateDir } from "../../config/state-dir.js";
 
 const Schema = z.object({
@@ -93,5 +93,58 @@ describe("test isolation — a spec must never write into the production state r
     expect(() => readYaml(tmpYaml("pinned: 'not a boolean'\n"), Schema)).toThrow(/Invalid schema/);
     const redirected = fs.readFileSync(path.join(resolveLogDir(), "error.err"), "utf8");
     expect(redirected).toMatch(/Schema validation failed/); // the fault IS recorded — just not in prod
+  });
+});
+
+// A TIMESTAMP IS NOT A CHANGE (the 2026-07-29 backbone-churn bug).
+//
+// `writeYaml` stamps `updated_at: now` unconditionally, so re-writing an identical document still produced
+// a byte-different file. `writeSelfDevice` runs on every device pass (10 min), every pin pass (15 min) and
+// every artifact sync, for every storage — so each cycle committed a diff that was exactly one line:
+//
+//     -updated_at: 2026-07-29T14:15:25.865Z
+//     +updated_at: 2026-07-29T14:15:30.942Z
+//
+// With the same remote cloned twice on one machine, both clones wrote the same `devices/<self>.yaml` every
+// cycle, so every cycle ended in a merge conflict, a non-fast-forward push, three retries and "giving up
+// this cycle". `writeYamlIfChanged` is what stops the churn at the source.
+describe("writeYamlIfChanged — no write when only the timestamp would move", () => {
+  it("skips an identical document and leaves updated_at untouched", () => {
+    const file = tmpYaml("");
+    expect(writeYamlIfChanged(file, { device: { id: "abc", name: "tower" } })).toBe(true);
+    const first = fs.readFileSync(file, "utf8");
+    const stamp = first.match(/updated_at: (.+)/)?.[1];
+    expect(stamp).toBeTruthy();
+
+    // Same content again → no write at all, so the stamp (and the bytes git sees) do not move.
+    expect(writeYamlIfChanged(file, { device: { id: "abc", name: "tower" } })).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+  });
+
+  it("writes when any real field changes", () => {
+    const file = tmpYaml("");
+    writeYamlIfChanged(file, { device: { id: "abc", name: "tower" } });
+    const before = fs.readFileSync(file, "utf8");
+    expect(writeYamlIfChanged(file, { device: { id: "abc", name: "laptop" } })).toBe(true);
+    const after = fs.readFileSync(file, "utf8");
+    expect(after).not.toBe(before);
+    expect(after).toMatch(/name: laptop/);
+  });
+
+  it("ignores a differing updated_at in the value it is handed", () => {
+    const file = tmpYaml("");
+    writeYamlIfChanged(file, { device: { id: "abc" }, updated_at: "2020-01-01T00:00:00.000Z" });
+    const first = fs.readFileSync(file, "utf8");
+    // The caller re-reads the doc (carrying the stamp it just wrote) and hands it back — still a no-op.
+    expect(writeYamlIfChanged(file, { device: { id: "abc" }, updated_at: "2026-07-29T00:00:00.000Z" })).toBe(false);
+    expect(fs.readFileSync(file, "utf8")).toBe(first);
+  });
+
+  it("writes when the file does not exist yet", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "lfb-store-"));
+    const file = path.join(dir, "fresh.yaml");
+    expect(writeYamlIfChanged(file, { a: 1 })).toBe(true);
+    expect(fs.existsSync(file)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
   });
 });

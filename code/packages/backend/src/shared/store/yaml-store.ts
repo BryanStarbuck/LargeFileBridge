@@ -151,6 +151,44 @@ export function writeYaml<T extends Record<string, unknown>>(file: string, value
   }
 }
 
+/**
+ * Atomic write, but ONLY when the document actually changed — `updated_at` excluded from the comparison.
+ *
+ * WHY THIS EXISTS (the 2026-07-29 backbone-churn bug). `writeYaml` stamps `updated_at: now` on every call,
+ * so a file rewritten with identical content is still byte-different, and anything watching the working
+ * tree sees a change. `writeSelfDevice` runs on EVERY device pass (10 min), EVERY pin pass (15 min) and
+ * every artifact sync, for EVERY storage — so each cycle produced a commit whose entire diff was one
+ * timestamp line:
+ *
+ *     -updated_at: 2026-07-29T14:15:25.865Z
+ *     +updated_at: 2026-07-29T14:15:30.942Z
+ *
+ * With the same company remote cloned twice on one machine (both clones writing the SAME
+ * `devices/<self>.yaml`), every cycle produced two divergent commits touching the same line — so every
+ * cycle ended in a merge conflict, a non-fast-forward push, three retries and "giving up this cycle".
+ * That is the "sometimes it just doesn't pull/push" the user reported: the schedule fired perfectly, the
+ * churn it generated is what kept losing the race.
+ *
+ * A timestamp is not a change. Skipping the write when nothing else moved means no commit, nothing to
+ * push, and no race — the cycle's pull still runs every time, unchanged.
+ *
+ * Returns true when it wrote, false when the on-disk document was already identical.
+ */
+export function writeYamlIfChanged<T extends Record<string, unknown>>(file: string, value: T): boolean {
+  try {
+    const existing = YAML.parse(fs.readFileSync(file, "utf8")) ?? {};
+    const strip = (o: unknown) => {
+      const { updated_at: _drop, ...rest } = (o ?? {}) as Record<string, unknown>;
+      return YAML.stringify(rest);
+    };
+    if (strip(existing) === strip(value)) return false;
+  } catch {
+    // Missing / unreadable / unparseable — fall through and write, which is also the repair.
+  }
+  writeYaml(file, value);
+  return true;
+}
+
 /** Read-modify-write under the per-file mutex. */
 export async function updateYaml<S extends ZodTypeAny>(
   file: string,

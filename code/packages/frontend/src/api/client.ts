@@ -210,8 +210,11 @@ export const api = {
   recordActivity: () => unwrap<SessionActivityResult>(http.post("/sessions/activity")),
 
   jobsPage: () => unwrap<JobsPageData>(http.get("/jobs")),
-  controlWorker: (worker: WorkerKind, action: "install" | "uninstall" | "enable" | "disable") =>
+  controlWorker: (worker: WorkerKind, action: "install" | "uninstall" | "enable" | "disable" | "run") =>
     unwrap<WorkerState>(http.post(`/jobs/${worker}/${action}`)),
+  // Run a background job NOW (the Scans page's Scan / Rescan button) — the same pass launchd kicks,
+  // single-flighted, so pressing it during a run coalesces instead of racing.
+  runWorker: (worker: WorkerKind) => unwrap<WorkerState>(http.post(`/jobs/${worker}/run`)),
   // The live filesystem watcher (scan.mdx §2.2) — enable/disable only (no install step).
   controlWatcher: (action: "enable" | "disable") =>
     unwrap<WatcherState>(http.post(`/jobs/watcher/${action}`)),
