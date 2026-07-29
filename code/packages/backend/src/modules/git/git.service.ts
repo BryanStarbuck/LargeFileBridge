@@ -747,6 +747,62 @@ export class GitBackbone {
     }
   }
 
+  /**
+   * THE QUIET GATE (git_backbone.mdx §6.6). Un-stage and revert every staged modification whose only
+   * difference from `HEAD` is VOLATILE — a self-moving field that no user action produced.
+   *
+   * WHY IT LIVES HERE AND NOT ONLY AT THE WRITERS. `commitAndPushInner` runs `git add -A` and commits
+   * whatever that staged; it has never had a semantic opinion about *what* changed. So the guarantee "we go
+   * quiet when nothing real happened" was only ever as good as the discipline of every writer that touches
+   * the SDL, and one careless writer re-floods the repo. Measured on the live personal tracking repo:
+   * **2,437 commits in 7 days, 2,322 of them a `devices/*.yaml` touch**, and 58 of the last 60 of those had
+   * a one-line diff (`updated_at`). This gate is the choke point that makes the invariant structural — a
+   * new volatile writer costs a redundant local write, never a commit, never a push, never a merge race.
+   *
+   * It only ever reverts a change it has proven MEANINGLESS: a modified (never created, never deleted) YAML
+   * file whose canonical content — keys deep-sorted, volatile paths removed — equals HEAD's. Reverting is
+   * the right disposition rather than merely un-staging: the churn is by definition worthless, and leaving
+   * it in the working tree would just re-stage it next pass.
+   */
+  private async dropVolatileOnlyChanges(): Promise<void> {
+    let modified: string[];
+    try {
+      // Staged MODIFICATIONS only. A create or a delete is never "volatile-only" — there is no HEAD blob to
+      // be equivalent to, and a vanished file is always news.
+      const out = await this.git.raw(["diff", "--cached", "--name-only", "--diff-filter=M"]);
+      modified = out.split("\n").map((s) => s.trim()).filter(Boolean);
+    } catch (e) {
+      log.warn("git", `${this.dir}: quiet gate could not list staged changes: ${(e as Error).message}`);
+      return; // never block a commit because the gate failed — a noisy commit beats a lost one
+    }
+
+    const reverted: string[] = [];
+    for (const rel of modified) {
+      const volatilePaths = volatileYamlPathsFor(rel);
+      if (!volatilePaths) continue; // not a file we know the volatile shape of — leave it alone
+      try {
+        const headBlob = await this.git.raw(["show", `HEAD:${rel}`]);
+        const working = fs.readFileSync(path.join(this.dir, rel), "utf8");
+        if (canonicalize(YAML.parse(headBlob) ?? {}, volatilePaths) !== canonicalize(YAML.parse(working) ?? {}, volatilePaths)) {
+          continue; // a real change — this is exactly what the backbone exists to carry
+        }
+        // Restore index AND working tree to HEAD, so it does not simply re-stage on the next pass.
+        await this.git.raw(["checkout", "HEAD", "--", rel]);
+        reverted.push(rel);
+      } catch (e) {
+        // Unreadable/unparseable on either side — not provably meaningless, so it keeps its commit.
+        log.warn("git", `${this.dir}: quiet gate skipped ${rel}: ${(e as Error).message}`);
+      }
+    }
+    if (reverted.length > 0) {
+      log.debug(
+        "git",
+        `${this.dir}: quiet gate dropped ${reverted.length} volatile-only change(s) — no commit for ` +
+          `${reverted.slice(0, 5).join(", ")}${reverted.length > 5 ? ", …" : ""}`,
+      );
+    }
+  }
+
   private async aheadCount(branch: string): Promise<number> {
     try {
       const out = await this.git.raw(["rev-list", "--count", `origin/${branch}..HEAD`]);
@@ -779,6 +835,7 @@ export class GitBackbone {
     this.ensureMergeAttributes();
     try {
       await this.git.add(["-A"]); // .gitignore keeps the big bytes out; only SDL text is staged
+      await this.dropVolatileOnlyChanges(); // QUIET GATE (§6.6) — a heartbeat must never become a commit
       const staged = await this.git.status();
       const hasStaged =
         staged.staged.length > 0 || staged.created.length > 0 || staged.renamed.length > 0 || staged.deleted.length > 0;
@@ -948,6 +1005,28 @@ export function pushRetryDelayMs(attempt: number, rnd: () => number = Math.rando
  * Format: `LFB: <comma-separated counted categories>` — categories derived from the staged paths by the same
  * classification the spec's §21 inventory uses.
  */
+/**
+ * The VOLATILE FIELD REGISTRY for the quiet gate (§6.6) — for an LFB-owned YAML document, which paths move
+ * on their own and therefore may never, by themselves, justify a commit. Returns null for a path whose
+ * volatile shape we do not know, which is the safe answer: an unknown file always keeps its commit.
+ *
+ * `updated_at` is added by `writeYamlIfChanged` for every document, so entries here list only the EXTRA
+ * paths particular to that document.
+ */
+export function volatileYamlPathsFor(relPath: string): string[] | null {
+  if (!relPath.endsWith(".yaml")) return null;
+  const p = relPath.replace(/\\/g, "/");
+  // A device file republishes this machine's network addresses on every write. A laptop grows and drops
+  // `fe80::` link-local addresses as interfaces/VPNs come and go, so the list churns with nothing to show
+  // for it — the 25-line diffs measured on the live personal repo (devices.mdx §7.1).
+  if (p.startsWith("devices/") || p.includes("/devices/")) {
+    return ["device.hardware.primary_ip", "device.hardware.ip_addresses"];
+  }
+  // Every other LFB-owned YAML: `updated_at` alone is the whole volatile surface.
+  if (isLfbOwnedSdlPath(p)) return [];
+  return null;
+}
+
 export function composeCommitMessage(staged: {
   staged: string[];
   created: string[];

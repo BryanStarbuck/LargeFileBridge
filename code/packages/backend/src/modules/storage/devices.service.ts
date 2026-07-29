@@ -161,7 +161,16 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
   // function runs on every device pass, every pin pass and every artifact sync, for every storage — an
   // unconditional write made each of those a commit whose whole diff was `updated_at`, which is what kept
   // the backbone in a permanent conflict/retry loop and cost cycles their push.
-  const wrote = writeYamlIfChanged(file, current as unknown as Record<string, unknown>);
+  //
+  // THE NETWORK ADDRESSES DO NOT GET A VOTE (git_backbone.mdx §6.6). `primary_ip`/`ip_addresses` are the
+  // one part of the fingerprint that moves on its own: a laptop grows and drops `fe80::` link-local
+  // addresses as interfaces, VPNs and AirDrop come and go, and a DHCP lease rotates on its own schedule.
+  // Left in the change test they replace the `updated_at` churn with a 25-line churn — measured live in
+  // the personal repo. They are still WRITTEN (they ride along on the next substantive write, so the
+  // Devices table is never stale for long); they simply never justify a commit by themselves.
+  const wrote = writeYamlIfChanged(file, current as unknown as Record<string, unknown>, {
+    volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"],
+  });
   if (wrote) {
     log.info("storage", `wrote self device "${name}" (${(current.device.id || "?").slice(0, 8)}) at ${storageRoot}`);
   }

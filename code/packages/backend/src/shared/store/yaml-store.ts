@@ -172,21 +172,64 @@ export function writeYaml<T extends Record<string, unknown>>(file: string, value
  * A timestamp is not a change. Skipping the write when nothing else moved means no commit, nothing to
  * push, and no race — the cycle's pull still runs every time, unchanged.
  *
- * Returns true when it wrote, false when the on-disk document was already identical.
+ * THE COMPARISON MUST BE CANONICAL (the 2026-07-29 follow-up defect). The first cut of this guard compared
+ * `YAML.stringify(rawDiskDoc)` against `YAML.stringify(schemaParsedValue)` — two documents that are never
+ * textually equal even when they mean the same thing, because:
+ *   • KEY ORDER differs. The disk file carries the order it was last written in; a zod-parsed object carries
+ *     the order the *schema* declares. One reordered field defeats a string compare forever.
+ *   • SCHEMA DEFAULTS are injected on read but absent from an older file on disk (`home_user: ""`,
+ *     `ip_addresses: []`), so `readYaml` → compare → write oscillated on every single pass.
+ * Both sides are therefore normalized the same way — deep key-sorted, volatile paths removed — before they
+ * are compared. Measured on the live personal repo: 58 of the last 60 device commits were a lone
+ * `updated_at` line that this guard, once it actually fires, deletes entirely.
+ *
+ * VOLATILE PATHS beyond `updated_at` may be declared per call (dotted, e.g. `device.hardware.ip_addresses`).
+ * A field is volatile when it changes on its own without the user doing anything — a heartbeat, a counter, a
+ * DHCP lease, the transient `fe80::` link-local addresses a laptop grows and drops as interfaces come and go.
+ * Such a field is still WRITTEN (it rides along on the next substantive write, so it is never stale for
+ * long); it just never gets a vote on whether a write — and therefore a commit, and therefore a push — is
+ * worth making. See git_backbone.mdx §6.6.
+ *
+ * Returns true when it wrote, false when the on-disk document was already equivalent.
  */
-export function writeYamlIfChanged<T extends Record<string, unknown>>(file: string, value: T): boolean {
+export function writeYamlIfChanged<T extends Record<string, unknown>>(
+  file: string,
+  value: T,
+  opts?: { volatile?: readonly string[] },
+): boolean {
+  const volatilePaths = ["updated_at", ...(opts?.volatile ?? [])];
   try {
     const existing = YAML.parse(fs.readFileSync(file, "utf8")) ?? {};
-    const strip = (o: unknown) => {
-      const { updated_at: _drop, ...rest } = (o ?? {}) as Record<string, unknown>;
-      return YAML.stringify(rest);
-    };
-    if (strip(existing) === strip(value)) return false;
+    if (canonicalize(existing, volatilePaths) === canonicalize(value, volatilePaths)) return false;
   } catch {
     // Missing / unreadable / unparseable — fall through and write, which is also the repair.
   }
   writeYaml(file, value);
   return true;
+}
+
+/**
+ * A document's MEANING as a comparable string: volatile paths dropped, object keys deep-sorted, `undefined`
+ * normalized away (YAML omits an undefined value, so a key set to undefined must compare equal to a key that
+ * is simply absent — otherwise the overlay in `writeSelfDevice` alone would force a write every pass).
+ * Array ORDER is preserved: for a list, order can be meaning.
+ */
+export function canonicalize(doc: unknown, volatilePaths: readonly string[]): string {
+  const drop = new Set(volatilePaths);
+  const walk = (node: unknown, trail: string): unknown => {
+    if (Array.isArray(node)) return node.map((v, i) => walk(v, trail ? `${trail}.${i}` : String(i)));
+    if (node === null || typeof node !== "object") return node;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(node as Record<string, unknown>).sort()) {
+      const here = trail ? `${trail}.${key}` : key;
+      if (drop.has(here)) continue;
+      const v = (node as Record<string, unknown>)[key];
+      if (v === undefined) continue; // absent and undefined mean the same thing once serialized
+      out[key] = walk(v, here);
+    }
+    return out;
+  };
+  return JSON.stringify(walk(doc ?? {}, ""));
 }
 
 /** Read-modify-write under the per-file mutex. */
