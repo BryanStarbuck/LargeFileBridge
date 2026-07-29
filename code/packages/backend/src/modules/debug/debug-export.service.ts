@@ -14,11 +14,13 @@
 //   * CHEAP reads only — never `contentPinnedCid`, never a fresh content hash (§10). This reports what
 //     the app already believes; re-deriving truth would make it a different, slower, disagreeing tool.
 import path from "node:path";
+import { createHash } from "node:crypto";
 import os from "node:os";
 import fs, { promises as fsp } from "node:fs";
 import type { DebugExportResult, DebugExportTarget, FileRow, Manifest, ManifestFile } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
+import YAML from "yaml";
 import { writeYaml } from "../../shared/store/yaml-store.js";
 import { computeRepoDetail, folderForRepoId, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote } from "../store-model/units.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
@@ -300,6 +302,11 @@ interface DebugDocument {
   counts: Record<string, number>;
   units: Array<Record<string, unknown>>;
   metrics: Metrics;
+  /** What the §5.6 size budget had to do to fit this document. Always present — a reader must be able to
+   *  tell a complete sample from a trimmed one without guessing. */
+  budget?: { limit_bytes: number; sample_per_metric: number; units_dropped: number };
+  /** How to read a compacted / sampled document (§5.6.2) — stated IN the file so no reader has to infer it. */
+  conventions?: Record<string, string>;
 }
 
 async function buildDebugDocument(
@@ -341,7 +348,7 @@ async function buildDebugDocument(
 
   const first = folders[0];
   const repoScoped = opts.scope === "repo" && first;
-  return {
+  return fitToBudget({
     schema_version: 1,
     generated_at: new Date().toISOString(),
     generated_by: "debug-export.service.ts",
@@ -366,7 +373,163 @@ async function buildDebugDocument(
     counts: METRIC_KEYS.reduce<Record<string, number>>((m, k) => ((m[k] = metrics[k].length), m), {}),
     units,
     metrics,
+  });
+}
+
+// ── §5.6 the SIZE BUDGET — a hard 200 KB ceiling (LOCKED, 2026-07-29) ─────────────────────────────────
+//
+// WHY. The original rule was "complete, never summarized": every metric's FULL file list, so two computers'
+// exports could be diffed. On a real machine that produced a **52.8 MB** YAML — 1.7 M lines, ~83 k file
+// entries — and this artifact is COMMITTED AND PUSHED to the shared company repo. Each export replaces the
+// file whole, so every run adds another ~52 MB blob to git history, per repo, per member, forever. An
+// artifact that destroys the repo it travels in cannot do its job.
+//
+// So the export is now **bounded by construction**: it must never exceed 200 KB and must not grow with the
+// number of files on the computer.
+//
+// WHAT SURVIVES, and why it is still enough to diagnose the A/B/C divergence (§1):
+//   * **Every count, always** — all ~30 metric keys, per computer AND per repo. Counts are what you compare
+//     first, and they are O(metrics), not O(files).
+//   * **A per-metric DIGEST** — a stable checksum over the metric's full sorted path list. Two computers
+//     whose digests MATCH hold exactly the same set for that metric; digests that DIFFER prove divergence.
+//     This is the property the full lists were being used for, in 16 bytes instead of megabytes.
+//   * **A bounded SAMPLE** of real paths per metric (§5.6.1) — enough to see what kind of file is involved
+//     and to start the investigation.
+//   * **The truth about what was dropped** — `sampled: N of M` on every truncated list. Never a silent cap
+//     (the no-silent-caps rule): a reader must never mistake a sample for the whole set.
+//
+// When a digest mismatch names the metric and the sample is not enough, the operator runs a REPO-SCOPED
+// export on the one repo involved — a far smaller set, which fits with a much larger per-metric sample.
+const SIZE_BUDGET_BYTES = 200 * 1024;
+const SAMPLE_LADDER = [40, 25, 15, 8, 4, 2, 1, 0]; // per-metric sample sizes, tried in order
+
+/** A stable digest of a metric's FULL membership — order-independent, so two computers agree iff their
+ *  sets agree. Truncating the list destroys the lists; it must never destroy this. */
+function metricDigest(entries: DebugFileEntry[]): string {
+  // Join on `repo/rel`, never the absolute `path` — the absolute path differs per machine, so digesting it
+  // would make two computers holding the SAME file look divergent (§4.5).
+  const keys = entries.map((e) => `${e.repo}/${e.rel}`).sort();
+  return createHash("sha256").update(keys.join("\n")).digest("hex").slice(0, 16);
+}
+
+/** Replace each metric's full list with {total, digest, sampled, sample[]} at the given sample size. */
+function summarizeMetrics(metrics: Metrics, sampleSize: number): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of METRIC_KEYS) {
+    const all = metrics[k] ?? [];
+    const sample = all.slice(0, sampleSize);
+    out[k] = {
+      total: all.length,
+      // The membership fingerprint of the WHOLE set — computed before truncation, never from the sample.
+      digest: all.length > 0 ? metricDigest(all) : null,
+      // Say plainly that this is a sample and how much of the set it covers (no silent caps).
+      sampled: `${sample.length} of ${all.length}`,
+      sample,
+    };
+  }
+  return out;
+}
+
+/**
+ * Serialize, measure, and shrink until the document fits the budget. The ladder drops the per-metric sample
+ * size first (the only part that scales with the machine); if even a zero-sample document is over budget —
+ * only possible with a pathological number of repos — the per-repo `units` array is trimmed too, and that
+ * trimming is itself reported. The returned document ALWAYS fits.
+ */
+function fitToBudget(doc: DebugDocument): DebugDocument {
+  const measure = (d: unknown) => Buffer.byteLength(YAML.stringify(d), "utf8");
+  // Compact FIRST — it is lossless (§5.6.2) and it is the difference between an export that can afford
+  // real sample paths and one that cannot. Measured on this machine: 185 repos cost 133 KB of a 149 KB
+  // document, and 84% of their count entries were the number zero.
+  const compact = { ...doc, units: doc.units.map(compactUnit), conventions: CONVENTIONS };
+
+  for (const size of SAMPLE_LADDER) {
+    const candidate: DebugDocument = {
+      ...compact,
+      metrics: summarizeMetrics(doc.metrics, size) as unknown as Metrics,
+      budget: { limit_bytes: SIZE_BUDGET_BYTES, sample_per_metric: size, units_dropped: 0 },
+    };
+    if (measure(candidate) <= SIZE_BUDGET_BYTES) return candidate;
+  }
+
+  // Zero samples and still over: the `units` array itself is the bulk. Keep the counts that matter most —
+  // the repos with the most findings — and SAY how many were dropped.
+  const ranked = [...compact.units].sort((a, b) => unitFindingCount(b) - unitFindingCount(a));
+  for (const keep of [200, 100, 50, 25, 10]) {
+    const candidate: DebugDocument = {
+      ...compact,
+      units: ranked.slice(0, keep),
+      metrics: summarizeMetrics(doc.metrics, 0) as unknown as Metrics,
+      budget: {
+        limit_bytes: SIZE_BUDGET_BYTES,
+        sample_per_metric: 0,
+        units_dropped: Math.max(0, doc.units.length - keep),
+      },
+    };
+    if (measure(candidate) <= SIZE_BUDGET_BYTES) return candidate;
+  }
+
+  // Floor: header + counts only. Structurally bounded — this can always be serialized small.
+  return {
+    ...compact,
+    units: [],
+    metrics: summarizeMetrics(doc.metrics, 0) as unknown as Metrics,
+    budget: {
+      limit_bytes: SIZE_BUDGET_BYTES,
+      sample_per_metric: 0,
+      units_dropped: doc.units.length,
+    },
   };
+}
+
+// §5.6.2 — the LOSSLESS compaction, and the convention that makes it lossless.
+//
+// The top-level `metrics`/`counts` keep the §5.3 rule intact: every metric key is ALWAYS present, so a
+// missing key still means "this build did not compute it" and can never be read as zero. Inside a per-repo
+// `units[]` entry the situation is different and far more wasteful: most repos have zero of most things,
+// and on this machine 84% of those entries were literally the number 0. Dropping them is recoverable ONLY
+// if the document says so IN the document — so it does, rather than leaving a reader to infer it.
+const CONVENTIONS = {
+  units_omit_zeros:
+    "Inside units[], a key absent from counts / task_metrics / decision_counts / compress_visibility / " +
+    "artifact_health means ZERO. The authoritative full key list is the top-level `counts` block, which " +
+    "always carries every metric key. This applies ONLY inside units[] — at the top level a missing key " +
+    "still means 'this build did not compute it' (debug.mdx §5.3), never zero.",
+  metrics_are_sampled:
+    "Each metrics.<key> carries `total` (the real size), `digest` (a checksum over the FULL sorted " +
+    "repo/rel membership, computed before truncation) and a bounded `sample`. Compare digests to prove " +
+    "two computers hold the same set; the sample is a starting point, never the whole set.",
+};
+
+/** The per-unit count maps that omit zeros (see CONVENTIONS.units_omit_zeros). */
+const UNIT_COUNT_BLOCKS = [
+  "counts",
+  "task_metrics",
+  "decision_counts",
+  "compress_visibility",
+  "artifact_health",
+] as const;
+
+/** Drop zero counts and null scalars from one repo unit. Lossless under CONVENTIONS.units_omit_zeros. */
+function compactUnit(unit: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(unit)) {
+    if (v === null || v === undefined) continue; // a null scalar says nothing a missing key doesn't
+    if ((UNIT_COUNT_BLOCKS as readonly string[]).includes(k) && v && typeof v === "object") {
+      const kept = Object.entries(v as Record<string, unknown>).filter(([, n]) => n !== 0 && n !== null);
+      if (kept.length > 0) out[k] = Object.fromEntries(kept);
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+/** How many findings a repo unit carries — the ranking used when units must be trimmed. */
+function unitFindingCount(unit: Record<string, unknown>): number {
+  const counts = unit.counts as Record<string, number> | undefined;
+  if (!counts) return 0;
+  return Object.values(counts).reduce((n, v) => n + (typeof v === "number" ? v : 0), 0);
 }
 
 function emptyMetrics(): Metrics {
@@ -839,3 +1002,15 @@ async function safeAsync<T>(fn: () => Promise<T>, fallback: T): Promise<T> {
     return fallback;
   }
 }
+
+/** Test seam — the §1.1.1 size-budget internals. The budget is a TEST, not an intention
+ *  (debug-budget.spec.ts): it is the only thing standing between this artifact and another 52 MB commit
+ *  into the shared company repo. */
+export const __testing = {
+  fitToBudget,
+  summarizeMetrics,
+  metricDigest,
+  compactUnit,
+  METRIC_KEYS,
+  SIZE_BUDGET_BYTES,
+};

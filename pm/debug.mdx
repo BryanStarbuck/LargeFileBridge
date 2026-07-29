@@ -84,6 +84,40 @@ Counts are still written (§4.4) because they make the file skimmable, but they 
 derived from the lists**, never a substitute for them, and a count that disagrees with its list's length
 is a **defect** (§13, AC-9).
 
+### 1.1.1 …but it is CAPPED AT 200 KB, and that cap outranks completeness (LOCKED, 2026-07-29)
+
+**This amends §1.1. Where the two conflict, the size budget wins.**
+
+The completeness rule above was written without a size bound, and on a real machine it produced a
+**52.8 MB** YAML — 1.7 M lines, ~83 k file entries. This artifact is **committed and pushed to the shared
+company repo**, and each export replaces it whole, so every run adds another ~52 MB blob to git history,
+per repo, per member, permanently. **An artifact that destroys the repo it travels in cannot do its job.**
+
+> **A `debug.yaml` MUST never exceed 200 KB, and its size MUST NOT scale with the number of files on the
+> computer.**
+
+The diagnostic power is preserved by changing *what* travels, not by hoping the machine stays small:
+
+| Kept | Why it is enough |
+| --- | --- |
+| **Every count, always** (per computer *and* per repo) | O(metrics), not O(files). It is what you compare first. |
+| **A per-metric `digest`** — a checksum over the metric's **full sorted `repo/rel` list** | Digests **equal** ⇒ the two computers hold exactly the same set. Digests **differ** ⇒ divergence, proven. This is what the full lists were actually being used for, in 16 bytes. Computed **before** truncation, and joined on `repo/rel` (never the machine-specific absolute path, §4.5). |
+| **A bounded `sample`** of real entries per metric | Enough to see what kind of file is involved and start the investigation. |
+| **`sampled: "N of M"` on every list** | **No silent caps.** A reader must never mistake a sample for the whole set. |
+
+**When the sample is not enough**, a digest mismatch has already named the metric — the operator then runs
+a **repo-scoped** export on the one repo involved, whose set is far smaller and fits at a much larger
+sample size. Two cheap exports beat one that cannot be committed.
+
+**The budget is enforced by construction, not by estimate.** The document is serialized and measured; the
+per-metric sample size walks down a ladder (40 → 25 → 15 → 8 → 4 → 2 → 1 → 0) until it fits, and only if a
+zero-sample document is still over — possible only with a pathological repo count — are the per-repo
+`units` trimmed, worst-findings-last. Whatever it had to do is reported in the `budget` block
+(`limit_bytes`, `sample_per_metric`, `units_dropped`), so a trimmed export is never mistaken for a full one.
+
+Measuring the serialized document and shrinking it until it fits is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `fitToBudget()` (the ladder + the `budget` block), `summarizeMetrics()` (total · digest · sampled · sample), and `metricDigest()` (the pre-truncation membership checksum).
+
 ---
 
 ## 2. The two invocation surfaces (LOCKED)
@@ -931,6 +965,12 @@ into a still-useful comparison rather than a wrong one.
 * **AC-5a** — With a company sync repo connected, a `debug.yaml` reaches **that** repo — the copy the
   support session can read. A destination that fails to write is reported in `errors` and does **not**
   prevent the others from being written.
+* **AC-5b** — **The written file is ≤ 200 KB (§1.1.1), on ANY machine, at ANY file count.** Adding 100 k
+  files to the computer must not grow it. The `budget` block states what the cap had to do; a `sample`
+  never appears without its `sampled: "N of M"`.
+* **AC-5c** — Two computers holding the identical set for a metric produce the **identical `digest`** for
+  it, and one differing file changes it. The digest is computed over the **full** set before truncation,
+  and over `repo/rel` — never the absolute path, which differs per machine.
 * **AC-6** — Two computers exporting concurrently produce **zero** git conflicts.
 * **AC-7** — For **every** metric in the §5.2 catalog, `metrics.<key>` exists as an array — **`[]` when
   empty, never omitted, never null**.
