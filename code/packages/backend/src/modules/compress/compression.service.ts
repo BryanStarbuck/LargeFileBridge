@@ -401,6 +401,25 @@ async function imageAlphaUsed(abs: string, tools: CompressTools): Promise<boolea
   return null;
 }
 
+/**
+ * The two source facts every image plan needs, from ONE in-process metadata read where possible:
+ *   * `pages`     — the frame count. > 1 means animated, and a still encoder must never see it (BUG-8).
+ *   * `alphaUsed` — whether transparency is actually USED, which is a stronger question than "does the
+ *                   file have an alpha channel". An opaque PNG screenshot has a channel that is entirely
+ *                   opaque; treating that as "uses alpha" would block safe targets for no reason, and
+ *                   treating "has a channel" as "uses it" is precisely the confusion that let the alpha
+ *                   guard wave 3,248 opaque screenshots through to a JPEG.
+ *
+ * The expensive `%[opaque]` fork is only paid when sharp says an alpha channel EXISTS — when there is no
+ * channel at all the answer is definitively "not used" and costs nothing.
+ */
+async function imageShape(abs: string, tools: CompressTools): Promise<{ alphaUsed: boolean | null; pages: number }> {
+  const meta = await probeImage(abs);
+  if (meta && !meta.hasAlpha) return { alphaUsed: false, pages: meta.pages };
+  const alphaUsed = await imageAlphaUsed(abs, tools);
+  return { alphaUsed, pages: meta?.pages ?? 1 };
+}
+
 async function videoInfo(abs: string, tools: CompressTools): Promise<{ w: number; h: number; pixFmt: string } | null> {
   if (!tools.ffprobe) return null;
   const r = await run("ffprobe", [
@@ -666,8 +685,8 @@ export async function checkFile(input: string): Promise<CompressCheck> {
   const tools = await detectTools();
 
   if (media === "images") {
-    const alphaUsed: boolean | null = await imageAlphaUsed(abs, tools);
-    const plan = pickImageTarget(prefs, tools, srcExt, alphaUsed);
+    const { alphaUsed, pages } = await imageShape(abs, tools);
+    const plan = pickImageTarget(prefs, tools, srcExt, alphaUsed, pages);
     if ("toolMissing" in plan) return { ...base, alphaUsed, toolMissing: plan.toolMissing, action: `needs ${plan.toolMissing}` };
     if ("skip" in plan) return { ...base, alphaUsed, action: plan.skip };
     const noAlphaTarget = !IMAGE_TARGETS[plan.targetKey]?.alpha;
