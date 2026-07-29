@@ -47,6 +47,16 @@ Three properties fall out of that guarantee, and the rest of this spec is how ea
 3. **Anything unrecoverable is visible.** A merge conflict, an auth failure, or a stalled worker becomes
    a surfaced problem on the Scans page — never a swallowed error (§5, §7).
 
+**The mirror-image failure: a flow that never stops.** This spec's guarantee is that the flow must not go
+silent when there **is** something to move. Its counterpart is that the flow **must** go silent when there
+is **not** — an idle computer commits and pushes **nothing**
+([git_backbone.mdx §6.6](./git_backbone.mdx#66-quiet-by-default--the-substantive-change-gate-locked-learned-from-a-defect)).
+The two are the same health property seen from opposite sides, and churn actively **damages** resilience:
+self-inflicted commits are what lose the push races this spec's retries then have to survive (§6, and
+[git_backbone.mdx §6.5](./git_backbone.mdx)). Never treat commit traffic as evidence that the backbone is
+alive — for most of 2026-07 it was evidence of the opposite. Liveness is proven by the watchdog and the
+staleness surfacing (§3, §7), never by counting commits.
+
 ---
 
 ## 2. The failure taxonomy — every way the flow can stop (LOCKED)

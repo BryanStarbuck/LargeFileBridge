@@ -985,6 +985,14 @@ allowed to be a no-op — and on a healthy single-writer machine it always is.
 ### 17.4 Stage 4 — PUSH (CHANGED)
 
 1. `git add -A` (git.service.ts:491, BUILT — keep it; it is why artifacts travel at all).
+1b. **THE QUIET GATE — decide whether this pass has anything to say at all
+   ([git_backbone.mdx §6.6](./git_backbone.mdx#66-quiet-by-default--the-substantive-change-gate-locked-learned-from-a-defect)).**
+   `git add -A` stages whatever moved, including fields that moved **on their own** — a write stamp, this
+   machine's network addresses. Staged modifications of LFB-owned YAML that are canonically identical to
+   `HEAD` once those volatile paths are removed are **reverted here**, and if nothing substantive remains,
+   **stages 2 and 3 do not happen**: no commit, no push. On this repo, unguarded, that was **2,437 commits
+   in 7 days, 95% of them a device file whose diff was one timestamp line**. An idle computer must reach
+   this step and stop.
 2. **Commit with a descriptive message (CHANGED — fixes v1(c)).** The message must state what the commit
    actually carries, composed from the staged set:
 
