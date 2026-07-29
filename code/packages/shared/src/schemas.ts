@@ -154,8 +154,28 @@ export const AppConfigSchema = z.object({
         .object({
           enabled: z.boolean().default(true),
           quality: z.enum(["low", "medium", "high", "lossless"]).default("medium"),
-          prefer: z.array(z.string()).default(["jpeg", "webp"]),
+          // R4 (LOCKED): a LOSSLESS source keeps a LOSSLESS target. `prefer` is consulted for lossy
+          // sources and for the HEIC compatibility convert; it no longer decides what happens to a PNG.
+          // The order is still WebP-before-JPEG so that when conversion IS explicitly allowed, the
+          // alpha-capable target is reached first.
+          prefer: z.array(z.string()).default(["webp", "jpeg"]),
           deny: z.array(z.string()).default(["jpeg2000"]),
+          // ── R4, LOSSLESS NEVER SILENTLY BECOMES LOSSY (compression.mdx §2.1 R4, LOCKED) ────────────
+          // OFF. This one flag is the difference between "3,248 screenshots were re-encoded as quality-85
+          // JPEGs and the PNG originals deleted" and "they were re-deflated losslessly". Measured on the
+          // 16 originals that survived in the trash, the lossless path returns 60-78% of the bytes with
+          // ZERO pixel change, where the lossy conversion took 84-92% and destroyed the image — so this
+          // is not even a quality-vs-size trade. Turning it on additionally requires clearing
+          // `min_size_gain_lossless_to_lossy` (50%) AND keeps the original in trash.
+          allow_lossless_to_lossy: z.boolean().default(false),
+          // The lossless PNG palette attempt (image-encode.ts encodePng). Pixel-exact by verification —
+          // the candidate is decoded back and compared byte-for-byte, and discarded unless identical.
+          // Big win on flat-colour UI screenshots; costs one bounded raw decode, so it is switchable.
+          png_palette: z.boolean().default(true),
+          // R1 for VIDEO's sibling case, and for images the auditable half of the chroma rule: refuse an
+          // output whose chroma sampling is COARSER than the input's. Kept as a setting only so a
+          // diagnosis can turn the guard off; the 4:4:4 encode itself is not optional.
+          guard_chroma: z.boolean().default(true),
           // File-type conversion policy (images.mdx §2, settings.mdx §4.1.1). Both DEFAULT ON.
           // convert_types: may a compress CHANGE the format to a better/compatible target (HEIC→JPEG,
           // PNG→JPEG)? false = format-preserving (re-encode in place, never change the extension).
@@ -173,6 +193,15 @@ export const AppConfigSchema = z.object({
           deny: z.array(z.string()).default(["av1"]),
           convert_types: z.boolean().default(true), // same policy for video (images.mdx §1.4)
           skip_exts: z.array(z.string()).default([]),
+          // R1 applied to video. The encoder used to hard-code `-pix_fmt yuv420p`, which SILENTLY halves
+          // the colour planes of a 4:2:2 or 4:4:4 source — the same defect as the image 4:2:0 bug, in the
+          // other media type. ON = keep the source's chroma when it is finer than 4:2:0. A COMPATIBILITY
+          // convert (a forced codec, for playability) is exempt and still normalises to yuv420p, because
+          // that is the entire point of that conversion.
+          preserve_chroma: z.boolean().default(true),
+          // x264/x265 `-preset`. `slow` spends more CPU searching, which buys back the bytes that the
+          // higher quality target (lower CRF) costs — the video analogue of using mozjpeg for stills.
+          preset: z.enum(["veryfast", "faster", "fast", "medium", "slow", "slower"]).default("slow"),
         })
         .prefault({}),
       audio: z
@@ -187,6 +216,19 @@ export const AppConfigSchema = z.object({
         .prefault({}),
       preserve_resolution: z.boolean().default(true), // LOCKED on (compression.mdx §5)
       replace_original_to_trash: z.boolean().default(true), // recoverable replace (compression.mdx §8)
+      // ── R3, the SIZE-GAIN FLOOR (compression.mdx §2.1 R3, LOCKED) ──────────────────────────────────
+      // A compress is committed only when the candidate is meaningfully smaller. The old gate was
+      // `afterBytes >= beforeBytes` — i.e. ONE BYTE of gain was enough — and it is how a lossless PNG got
+      // destroyed for a 1.4% saving (Document.png, 56,243 → 55,440) and another for 10.2%. Quality is only
+      // worth trading for a real win.
+      min_size_gain: z.number().min(0).max(0.9).default(0.2),
+      // The floor for a transform that costs NOTHING — a lossless source re-encoded losslessly (PNG
+      // re-deflate, a jpegtran repack). There is no quality being traded, so any real gain is free money
+      // and the 20% floor would only throw it away.
+      min_size_gain_lossless: z.number().min(0).max(0.9).default(0.02),
+      // The floor for the one genuinely destructive transform: a LOSSLESS source becoming LOSSY. Paired
+      // with `allow_lossless_to_lossy` below, which gates it off entirely by default.
+      min_size_gain_lossless_to_lossy: z.number().min(0).max(0.99).default(0.5),
     })
     .prefault({}),
   // AI description providers (ai_description.mdx §5). Vision models the app may call to describe a local

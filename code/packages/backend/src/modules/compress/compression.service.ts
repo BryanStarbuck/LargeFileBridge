@@ -20,6 +20,26 @@ import type {
   PerceptualFingerprint,
 } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
+import type { CompressionOutcome } from "@lfb/shared";
+import {
+  MARKER_PREFIX,
+  markerPayload,
+  isAnyMarker,
+  markerCodec,
+  canStampInFile,
+  readImageMarker,
+  stampImageMarker,
+  webpmuxStampArgs,
+} from "./compress-marker.js";
+import {
+  encodeImage,
+  encodeHeicPrimary,
+  probeImage,
+  jpegChromaSampling,
+  chromaGotCoarser,
+  CHROMA_444,
+} from "./image-encode.js";
+import { ledgerSaysDone, writeLedger, buildRecord } from "./compress-ledger.js";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { expandHome, compressInfo } from "../fs/badges.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
@@ -39,13 +59,32 @@ import { log } from "../../shared/logging.js";
 // ── settings (compression.mdx §7) ─────────────────────────────────────────────
 export function getCompressionSettings(): CompressionSettings {
   const c = getAppConfig().compression;
-  const map = (m: { enabled: boolean; quality: CompressMediaPrefs["quality"]; prefer: string[]; deny: string[]; convert_types: boolean; skip_exts: string[] }): CompressMediaPrefs => ({
+  const map = (m: {
+    enabled: boolean;
+    quality: CompressMediaPrefs["quality"];
+    prefer: string[];
+    deny: string[];
+    convert_types: boolean;
+    skip_exts: string[];
+    allow_lossless_to_lossy?: boolean;
+    png_palette?: boolean;
+    guard_chroma?: boolean;
+    preserve_chroma?: boolean;
+    preset?: string;
+  }): CompressMediaPrefs => ({
     enabled: m.enabled,
     quality: m.quality,
     prefer: m.prefer,
     deny: m.deny,
     convertTypes: m.convert_types,
     skipExts: m.skip_exts.map(normExt),
+    // Read with explicit fallbacks rather than `?? true`-by-accident: a config written before these keys
+    // existed must land on the SAFE value, and for R4 the safe value is "no, do not turn a PNG into a JPEG".
+    allowLosslessToLossy: m.allow_lossless_to_lossy ?? false,
+    pngPalette: m.png_palette ?? true,
+    guardChroma: m.guard_chroma ?? true,
+    preserveChroma: m.preserve_chroma ?? true,
+    preset: m.preset ?? "slow",
   });
   return {
     images: map(c.images),
@@ -53,12 +92,30 @@ export function getCompressionSettings(): CompressionSettings {
     audio: map(c.audio),
     preserveResolution: c.preserve_resolution,
     replaceOriginalToTrash: c.replace_original_to_trash,
+    minSizeGain: c.min_size_gain ?? 0.2,
+    minSizeGainLossless: c.min_size_gain_lossless ?? 0.02,
+    minSizeGainLosslessToLossy: c.min_size_gain_lossless_to_lossy ?? 0.5,
   };
 }
 
 export async function setCompressionSettings(patch: Partial<CompressionSettings>): Promise<CompressionSettings> {
   await updateAppConfig((cfg) => {
-    const applyMedia = (dst: { enabled: boolean; quality: string; prefer: string[]; deny: string[]; convert_types: boolean; skip_exts: string[] }, src?: Partial<CompressMediaPrefs>) => {
+    const applyMedia = (
+      dst: {
+        enabled: boolean;
+        quality: string;
+        prefer: string[];
+        deny: string[];
+        convert_types: boolean;
+        skip_exts: string[];
+        allow_lossless_to_lossy?: boolean;
+        png_palette?: boolean;
+        guard_chroma?: boolean;
+        preserve_chroma?: boolean;
+        preset?: string;
+      },
+      src?: Partial<CompressMediaPrefs>,
+    ) => {
       if (!src) return;
       if (src.enabled !== undefined) dst.enabled = src.enabled;
       if (src.quality !== undefined) dst.quality = src.quality;
@@ -66,12 +123,22 @@ export async function setCompressionSettings(patch: Partial<CompressionSettings>
       if (src.deny !== undefined) dst.deny = src.deny;
       if (src.convertTypes !== undefined) dst.convert_types = src.convertTypes;
       if (src.skipExts !== undefined) dst.skip_exts = src.skipExts.map(normExt);
+      if (src.allowLosslessToLossy !== undefined) dst.allow_lossless_to_lossy = src.allowLosslessToLossy;
+      if (src.pngPalette !== undefined) dst.png_palette = src.pngPalette;
+      if (src.guardChroma !== undefined) dst.guard_chroma = src.guardChroma;
+      if (src.preserveChroma !== undefined) dst.preserve_chroma = src.preserveChroma;
+      if (src.preset !== undefined) dst.preset = src.preset as typeof dst.preset;
     };
     applyMedia(cfg.compression.images, patch.images);
     applyMedia(cfg.compression.video, patch.video);
     applyMedia(cfg.compression.audio, patch.audio);
     if (patch.preserveResolution !== undefined) cfg.compression.preserve_resolution = patch.preserveResolution;
     if (patch.replaceOriginalToTrash !== undefined) cfg.compression.replace_original_to_trash = patch.replaceOriginalToTrash;
+    if (patch.minSizeGain !== undefined) cfg.compression.min_size_gain = patch.minSizeGain;
+    if (patch.minSizeGainLossless !== undefined) cfg.compression.min_size_gain_lossless = patch.minSizeGainLossless;
+    if (patch.minSizeGainLosslessToLossy !== undefined) {
+      cfg.compression.min_size_gain_lossless_to_lossy = patch.minSizeGainLosslessToLossy;
+    }
     return cfg;
   });
   return getCompressionSettings();
@@ -226,22 +293,17 @@ function run(bin: string, args: string[], timeoutMs = 10 * 60 * 1000): Promise<{
 }
 
 // ── the already-compressed marker (compression.mdx §8.4) ───────────────────────
-// A durable "LFBridge already compressed this" signal written INTO the compressed file's own container
-// metadata (the `comment` tag), so it rides with the file's bytes over IPFS. On a re-run — or on ANOTHER
-// computer in the mesh that already holds the compressed file — a file carrying this marker is skipped
-// BEFORE any transcode, instead of being re-encoded just to discover "no gain". No new tool: it is written
-// inline by the SAME encoder we already run (ffmpeg `-metadata` for video, `magick -set` for images) and
-// read back with the fast ffprobe / `magick identify` probes. `v1` lets a future re-tuned engine invalidate
-// old marks by bumping the version.
-const MARKER_PREFIX = "LFBcompressed;";
-function markerPayload(codec: string): string {
-  return `${MARKER_PREFIX}v1;${codec}`;
-}
-
-// Read our marker's `comment` from a file (empty string if absent/unreadable). Fast async probe.
+// The marker itself lives in compress-marker.ts: a durable "Large File Bridge already compressed this"
+// stamp spliced into the compressed file's OWN container metadata, so it rides with the bytes over IPFS,
+// through a git checkout, onto a USB stick. Any computer that receives the file knows not to redo the work.
+//
+// This function is the READ side. Images are answered by a bounded head-slice buffer walk — no child
+// process — which matters because this is the single most-called probe in a bulk run (the old code forked
+// `magick identify` once per file just to ask "is it marked?"). Video and audio still need ffprobe, since
+// their metadata atom is not guaranteed to sit near the front of the container.
 async function readMarker(abs: string, media: CompressMedia, tools: CompressTools): Promise<string> {
   try {
-    if (media === "video") {
+    if (media === "video" || media === "audio") {
       if (!tools.ffprobe) return "";
       const r = await run("ffprobe", [
         "-v", "error",
@@ -249,19 +311,78 @@ async function readMarker(abs: string, media: CompressMedia, tools: CompressTool
         "-of", "default=noprint_wrappers=1:nokey=1",
         abs,
       ]);
-      return r.out.trim();
+      const out = r.out.trim();
+      return isAnyMarker(out) ? out : "";
     }
-    if (!tools.magick) return "";
-    const r = await run(magickBin(), ["identify", "-format", "%c", abs]);
-    return r.out.trim();
+    const inFile = readImageMarker(abs);
+    if (inFile) return inFile;
+    // Compatibility fallback: a file marked by the ORIGINAL engine could carry the stamp in a container slot
+    // the pure-TS reader does not walk (a TIFF/GIF `comment` tag, say). One fork, only for the formats the
+    // fast path cannot answer, and only when the fast path came back empty.
+    if (!canStampInFile(abs) && tools.magick) {
+      const r = await run(magickBin(), ["identify", "-format", "%c", abs]);
+      const out = r.out.trim();
+      return isAnyMarker(out) ? out : "";
+    }
+    return "";
   } catch {
     return "";
   }
 }
 
-// The skip signal (§8.4) is `readMarker(...).startsWith(MARKER_PREFIX)`, tested inline at the top of
-// compressFile — the RAW marker string is kept there so the record backfill can read the codec out of it.
-// A mark from an OLDER version fails the prefix test, so an improved engine re-sweeps those files.
+/**
+ * Stamp the durable marker onto a freshly-encoded output, LOSSLESSLY.
+ *
+ * This is the fix for the defect that made files compress over and over: the old engine could only stamp a
+ * marker by handing `-set comment` to the ENCODER, so the oxipng (PNG→PNG) and cwebp (→WebP) paths — which
+ * take no such flag — wrote no marker at all, and every one of those files was re-encoded on every run
+ * forever. Stamping is now a separate post-encode metadata splice that does not care which encoder ran.
+ *
+ * Video and audio are NOT stamped here: ffmpeg writes their marker inline during the transcode we were
+ * already running, which is free. Returns whether the file now carries a marker; false is not a failure —
+ * the ledger records the state for formats that have nowhere to put one.
+ */
+async function stampMarker(out: string, codec: string, tools: CompressTools): Promise<boolean> {
+  const text = markerPayload(codec);
+  const ext = path.extname(out).toLowerCase();
+  if (ext === ".webp") {
+    // WebP needs its RIFF container promoted to extended (VP8X) form to hold a metadata chunk. `webpmux`
+    // does that surgery without touching the VP8/VP8L bitstream. Absent → no in-file marker, ledger only.
+    if (!onPath("webpmux")) return false;
+    const tmp = `${out}.mux.tmp`;
+    const r = await runAsync("webpmux", webpmuxStampArgs(out, tmp, text), 60_000);
+    if (r.code === 0 && safeSize(tmp)) {
+      try {
+        fs.renameSync(tmp, out);
+        return true;
+      } catch {
+        tryUnlink(tmp);
+        return false;
+      }
+    }
+    tryUnlink(tmp);
+    return false;
+  }
+  if (stampImageMarker(out, text)) return true;
+  // Last resort for the formats with no pure-TS writer (GIF/TIFF/BMP). These are LOSSLESS targets, so a
+  // re-write through ImageMagick costs no quality — but it does cost a pass, so it is the fallback, never
+  // the path. A failure here is silent by design: the ledger still records the state.
+  if (tools.magick) {
+    const tmp = `${out}.mark.tmp${path.extname(out)}`;
+    const r = await runAsync(magickBin(), [out, "-set", "comment", text, tmp], 5 * 60_000);
+    if (r.code === 0 && safeSize(tmp)) {
+      try {
+        fs.renameSync(tmp, out);
+        return true;
+      } catch {
+        tryUnlink(tmp);
+        return false;
+      }
+    }
+    tryUnlink(tmp);
+  }
+  return false;
+}
 
 async function imageDims(abs: string, tools: CompressTools): Promise<{ w: number; h: number } | null> {
   if (!tools.magick) return null;
@@ -313,15 +434,35 @@ const LOSSLESS_IMAGE_EXT = new Set([".png", ".bmp", ".tif", ".tiff", ".gif"]);
 // ImageMagick when targeting WebP (a GIF handed to cwebp fails with "Cannot read input picture file").
 const CWEBP_READABLE = new Set([".png", ".jpg", ".jpeg", ".tif", ".tiff", ".webp"]);
 
+// ── the quality ladder (compression.mdx §2.1 R2, LOCKED) ───────────────────────
+// The default sits 75% of the way toward BEST quality, not at the midpoint.
+//
+// The old ladder put "medium" at the exact middle of the band — quality 85 — and that is the number that
+// rewrote 3,248 images. The rule is now explicit and the arithmetic is auditable: on the usable JPEG band
+// 70..100, 75% toward best is 70 + 0.75 × 30 = 92.5 → q92. Paired with 4:4:4 chroma (image-encode.ts) and
+// mozjpeg, which is 15-25% more byte-efficient at the same visual quality — that efficiency is what pays
+// for the higher target instead of the files simply getting bigger.
+const JPEG_BAND = { worst: 70, best: 100 } as const;
 function jpegQuality(q: CompressMediaPrefs["quality"]): number {
-  return q === "high" ? 92 : q === "low" ? 70 : q === "lossless" ? 100 : 85;
+  if (q === "lossless") return 100;
+  const t = q === "high" ? 0.87 : q === "low" ? 0.27 : 0.75; // medium = the documented 75/25 policy
+  return Math.round(JPEG_BAND.worst + t * (JPEG_BAND.best - JPEG_BAND.worst));
 }
+
+// Same 75/25 policy on the video band, where LOWER CRF is better quality. The usable H.264 band is 28
+// (visibly degraded) .. 18 (near-transparent); 75% toward best is 28 − 0.75 × 10 = 20.5 → CRF 20. HEVC's
+// band sits ~3 higher for the same perceived quality → CRF 23. Both are paired with `-preset slow`
+// (settings), which spends search effort to buy back the bytes the lower CRF costs.
+const CRF_BAND: Record<string, { worst: number; best: number }> = {
+  h264: { worst: 28, best: 18 },
+  hevc: { worst: 31, best: 21 },
+  av1: { worst: 40, best: 26 },
+};
 function videoCrf(codec: string, q: CompressMediaPrefs["quality"]): number {
-  const base = codec === "hevc" ? 24 : 21; // medium
   if (q === "lossless") return 0;
-  if (q === "high") return base - 3;
-  if (q === "low") return base + 5;
-  return base;
+  const band = CRF_BAND[codec] ?? CRF_BAND.h264;
+  const t = q === "high" ? 0.87 : q === "low" ? 0.27 : 0.75;
+  return Math.round(band.worst - t * (band.worst - band.best));
 }
 
 function mediaOf(name: string): CompressMedia | null {
@@ -342,82 +483,150 @@ interface Plan {
   // guard and may legitimately grow the file (images.mdx §4.1, compression.mdx §5). Resolution + alpha
   // invariants are never waived.
   formatConvert?: boolean;
+  // Was the SOURCE a lossless format (PNG/BMP/TIFF/GIF)? Together with `lossless` this classifies the
+  // transform, which is what selects the size-gain floor (R3): lossless→lossless is free and takes the low
+  // floor, lossy→lossy takes the 20% floor, and lossless→lossy is the destructive one and takes 50% on top
+  // of needing an explicit opt-in.
+  losslessSource?: boolean;
+  // Multi-frame source (animated GIF / animated WebP). A still encoder handed one of these writes out-0,
+  // out-1, … instead of the path we asked for — the failure that left stray frame files in the temp dir —
+  // or silently drops every frame but the first.
+  animated?: boolean;
 }
 
 // A plan may resolve to a deliberate SKIP (not an error, not a tool gap) — e.g. conversion is turned off
 // and there is no in-place compressor for this format. The caller reports it as `skipped`.
 type PlanResult = Plan | { toolMissing: string } | { skip: string };
 
-function pickImageTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt: string, alphaUsed: boolean | null): PlanResult {
+/**
+ * Choose the output format for an image.
+ *
+ * THE ORDER OF THE TESTS BELOW *IS* THE POLICY, and it is the single most important change in this file.
+ *
+ * The old version consulted the user's `prefer` list FIRST, and the shipped default was `["jpeg", …]` with
+ * `convert_types: true`. So the very first question asked of a lossless PNG screenshot was "may I make it a
+ * JPEG?", the answer was yes, and 3,248 lossless originals became quality-85 4:2:0 JPEGs — after which the
+ * originals were deleted. The alpha guard did not stop it, because an opaque screenshot's alpha is UNUSED
+ * and the guard only protects transparency that is actually in use.
+ *
+ * Now `isLosslessSrc` is asked FIRST (R4). A PNG/BMP/TIFF/GIF gets a LOSSLESS target unless the user has
+ * deliberately turned `allow_lossless_to_lossy` on — and even then the transform must clear a 50% size
+ * floor and keeps the original in trash. This is not a quality-vs-size compromise: measured on the 16 real
+ * originals this app destroyed, the lossless path returns 60-78% of the bytes with zero pixel change, where
+ * the lossy path took 84-92% and threw the image away.
+ */
+function pickImageTarget(
+  prefs: CompressMediaPrefs,
+  tools: CompressTools,
+  srcExt: string,
+  alphaUsed: boolean | null,
+  pages = 1,
+): PlanResult {
   const denied = new Set(prefs.deny);
   const isLosslessSrc = LOSSLESS_IMAGE_EXT.has(srcExt);
   const isHeicFamily = HEIC_FAMILY_EXT.has(srcExt);
-  // Lossless quality, or a PNG we keep as PNG → oxipng lossless recompress.
   const wantLossless = prefs.quality === "lossless";
+  const animated = pages > 1;
 
-  // ── convert_types OFF → FORMAT-PRESERVING only (images.mdx §2.1). No target may change the extension.
-  if (!prefs.convertTypes) {
-    if (isLosslessSrc) {
-      if (!tools.oxipng && !tools.magick) return { toolMissing: "oxipng (brew install oxipng)" };
-      const useOxi = tools.oxipng && srcExt === ".png";
-      return { media: "images", targetKey: "png", targetCodec: useOxi ? "PNG (lossless)" : "recompress", ext: srcExt, action: "lossless recompress", lossless: true };
+  // ── ANIMATION GUARD (BUG-8). A multi-frame source handed to a STILL encoder either writes `out-0.ext,
+  // out-1.ext, …` instead of the path we asked for — which is how stray frame files accumulated in the temp
+  // directory — or silently keeps only frame 0 and throws the animation away. Neither is acceptable, so a
+  // multi-frame source may only go to a target that carries every frame.
+  if (animated) {
+    if (denied.has("webp")) return { skip: `animated source (${pages} frames) and WebP is denied — nothing can carry the animation` };
+    // Animated → lossless animated WebP. Same frames, same pixels, typically far smaller than an animated
+    // GIF. This changes the extension, so it obeys the same convert_types gate as any other conversion.
+    if (!prefs.convertTypes && srcExt !== ".webp") {
+      return { skip: `animated source (${pages} frames) — converting it to animated WebP needs file-type conversion turned on` };
     }
-    if (srcExt === ".jpg" || srcExt === ".jpeg" || srcExt === ".webp") {
-      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
-      return { media: "images", targetKey: srcExt === ".webp" ? "webp" : "jpeg", targetCodec: srcExt === ".webp" ? "WebP" : "JPEG", ext: srcExt, action: `re-encode (${prefs.quality})`, lossless: false };
-    }
-    // HEIC/HEIF/AVIF (and any other) have no in-place compressor here → nothing to do when convert is off.
-    return { skip: "conversion is turned off in settings (no in-place compression for this type)" };
+    return {
+      media: "images", targetKey: "webp", targetCodec: "WebP (animated)",
+      ext: srcExt === ".webp" ? ".webp" : ".webp",
+      action: `→ animated WebP (lossless, ${pages} frames)`,
+      lossless: true, losslessSource: isLosslessSrc, animated: true,
+    };
   }
 
-  // ── HEIC/HEIF/AVIF → JPEG COMPATIBILITY conversion (images.mdx §4). Primary-still decode happens in
-  // imageCommand(); here we only pick the target. JPEG unless transparency is used (then lossless WebP).
+  // ── HEIC/HEIF/AVIF → JPEG COMPATIBILITY conversion (images.mdx §4). Exists for playability, not
+  // shrinkage, so it is exempt from the size-gain floors. Primary-still decoding happens in the encoder.
   if (isHeicFamily) {
-    if (!tools.heif) return { toolMissing: "libheif for ImageMagick (brew install imagemagick libheif)" };
+    if (!tools.heif) return { toolMissing: "HEIC/HEIF support (reinstall the app's image codecs)" };
     if (alphaUsed === true) {
-      if (!denied.has("webp") && tools.magick) {
-        return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (lossless, keeps alpha)`, lossless: true, formatConvert: true };
+      if (!denied.has("webp")) {
+        return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: "→ WebP (lossless, keeps alpha)", lossless: true, formatConvert: true };
       }
       return { skip: "HEIC has used transparency and JPEG can't keep it (allow WebP to convert it)" };
     }
     if (!denied.has("jpeg")) {
-      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
       return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality}, primary image)`, lossless: false, formatConvert: true };
     }
-    if (!denied.has("webp") && tools.magick) {
+    if (!denied.has("webp")) {
       return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (${prefs.quality}, primary image)`, lossless: wantLossless, formatConvert: true };
     }
     return { skip: "JPEG and WebP are both denied for images — nothing to convert HEIC to" };
   }
 
-  for (const key of prefs.prefer) {
-    const t = IMAGE_TARGETS[key];
-    if (!t || denied.has(key)) continue;
-    // A no-alpha target is unsafe when transparency is used or undeterminable → skip it (steer onward).
-    if (!t.alpha && alphaUsed !== false) continue;
-    if (key === "webp") {
-      if (!tools.cwebp && !tools.magick) return { toolMissing: "cwebp (brew install webp)" };
-      const lossless = wantLossless || alphaUsed === true;
-      return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP${lossless ? " (lossless)" : ` (${prefs.quality})`}`, lossless };
-    }
-    if (key === "jpeg") {
-      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
-      return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality})`, lossless: false };
-    }
-    if (key === "jpeg2000") {
-      if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
-      return { media: "images", targetKey: "jpeg2000", targetCodec: "JPEG 2000", ext: ".jp2", action: `→ JPEG 2000 (${prefs.quality})`, lossless: false };
-    }
-  }
-  // Fallback: a lossless recompress of the source format (safe, keeps pixels + alpha).
+  // ── R4: A LOSSLESS SOURCE KEEPS A LOSSLESS TARGET. Asked before `prefer` is even read.
   if (isLosslessSrc) {
-    if (!tools.oxipng && !tools.magick) return { toolMissing: "oxipng (brew install oxipng)" };
-    const useOxi = tools.oxipng && srcExt === ".png";
-    return { media: "images", targetKey: "png", targetCodec: useOxi ? "PNG (lossless)" : "recompress", ext: srcExt, action: "lossless recompress", lossless: true };
+    const losslessPlan = (): PlanResult => {
+      // Format-PRESERVING wherever the format can hold its own lossless re-encode (R6 — no silent
+      // renames): a .png stays a .png, so no markdown, HTML, CSS or manifest reference to it can break.
+      if (srcExt === ".png") {
+        return { media: "images", targetKey: "png", targetCodec: "PNG (lossless)", ext: ".png", action: "lossless recompress (same pixels)", lossless: true, losslessSource: true };
+      }
+      // BMP / TIFF / single-frame GIF have no useful in-place lossless recompression — PNG is their
+      // lossless home. That IS a rename, so it needs file-type conversion turned on.
+      if (!prefs.convertTypes) {
+        return { skip: `${srcExt} compresses losslessly only by becoming a PNG, and file-type conversion is turned off` };
+      }
+      if (denied.has("png")) return { skip: "PNG is denied for images — nothing lossless to convert this to" };
+      return { media: "images", targetKey: "png", targetCodec: "PNG (lossless)", ext: ".png", action: "→ PNG (lossless, same pixels)", lossless: true, losslessSource: true };
+    };
+    // The destructive path, and it takes THREE deliberate settings to reach: conversion on, the R4 opt-in
+    // on, and a non-lossless quality. It still has to clear the 50% floor downstream, and the original
+    // still goes to trash rather than being deleted.
+    if (prefs.convertTypes && prefs.allowLosslessToLossy === true && !wantLossless) {
+      for (const key of prefs.prefer) {
+        const t = IMAGE_TARGETS[key];
+        if (!t || denied.has(key)) continue;
+        if (!t.alpha && alphaUsed !== false) continue; // would drop transparency → steer past it
+        if (key === "webp") {
+          return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (${prefs.quality}) — lossless source, opted in`, lossless: false, losslessSource: true };
+        }
+        if (key === "jpeg") {
+          return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality}) — lossless source, opted in`, lossless: false, losslessSource: true };
+        }
+      }
+    }
+    return losslessPlan();
   }
-  // Already-lossy source (jpeg/webp) → re-encode at quality (may be no gain).
-  if (!tools.magick) return { toolMissing: "ImageMagick (brew install imagemagick)" };
-  return { media: "images", targetKey: srcExt === ".webp" ? "webp" : "jpeg", targetCodec: srcExt === ".webp" ? "WebP" : "JPEG", ext: srcExt, action: `re-encode (${prefs.quality})`, lossless: false };
+
+  // ── An ALREADY-LOSSY source (JPEG / WebP). Its information is already gone; re-encoding cannot restore
+  // it and only adds a fresh generation of loss, so the default is a format-PRESERVING re-encode and the
+  // caller additionally runs the "is the source already at or below our target?" test (BUG-6) before
+  // spending anything. Conversion between the two lossy formats is only reached via `prefer`.
+  if (prefs.convertTypes) {
+    for (const key of prefs.prefer) {
+      const t = IMAGE_TARGETS[key];
+      if (!t || denied.has(key)) continue;
+      if (!t.alpha && alphaUsed !== false) continue;
+      if (key === "webp" && srcExt !== ".webp") {
+        return { media: "images", targetKey: "webp", targetCodec: "WebP", ext: ".webp", action: `→ WebP (${prefs.quality})`, lossless: false };
+      }
+      if (key === "jpeg" && srcExt !== ".jpg" && srcExt !== ".jpeg") {
+        return { media: "images", targetKey: "jpeg", targetCodec: "JPEG", ext: ".jpg", action: `→ JPEG (${prefs.quality})`, lossless: false };
+      }
+      break; // the first allowed preference that is not already the source format decides
+    }
+  }
+  return {
+    media: "images",
+    targetKey: srcExt === ".webp" ? "webp" : "jpeg",
+    targetCodec: srcExt === ".webp" ? "WebP" : "JPEG",
+    ext: srcExt,
+    action: `re-encode (${prefs.quality})`,
+    lossless: false,
+  };
 }
 
 function pickVideoTarget(prefs: CompressMediaPrefs, tools: CompressTools, srcExt: string, force?: string): PlanResult {

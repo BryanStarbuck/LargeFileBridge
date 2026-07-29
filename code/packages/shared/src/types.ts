@@ -1377,6 +1377,13 @@ export interface CompressMediaPrefs {
   deny: string[];   // codecs the user never wants chosen
   convertTypes: boolean; // may a compress CHANGE the format (HEIC→JPEG…)? false = format-preserving
   skipExts: string[];    // per-extension OPT-OUT (lowercase, leading-dot); [] = every ext in scope
+  // ── images only ──
+  allowLosslessToLossy?: boolean; // R4 — OFF: a PNG/BMP/TIFF/GIF may not become a JPEG (compression.mdx §2.1)
+  pngPalette?: boolean;           // attempt the verified pixel-exact palette PNG variant
+  guardChroma?: boolean;          // refuse an output whose chroma sampling is coarser than the input's
+  // ── video only ──
+  preserveChroma?: boolean;       // R1 for video — never silently drop a 4:2:2/4:4:4 source to yuv420p
+  preset?: string;                // x264/x265 -preset; "slow" pays for the higher quality target
 }
 export interface CompressionSettings {
   images: CompressMediaPrefs;
@@ -1384,6 +1391,13 @@ export interface CompressionSettings {
   audio: CompressMediaPrefs;
   preserveResolution: boolean; // LOCKED on — never downscale (compression.mdx §5)
   replaceOriginalToTrash: boolean; // recoverable replace (compression.mdx §8)
+  // R3 — the size-gain floors (compression.mdx §2.1). A compress is committed only when it actually wins:
+  // `minSizeGain` for a normal lossy re-encode, `minSizeGainLossless` for a free lossless-to-lossless
+  // transform (no quality is being traded, so a small win is still a pure win), and
+  // `minSizeGainLosslessToLossy` for the one destructive transform.
+  minSizeGain: number;
+  minSizeGainLossless: number;
+  minSizeGainLosslessToLossy: number;
 }
 
 // Which brew tools are on PATH (compression.mdx §2).
@@ -2133,10 +2147,27 @@ export interface BookmarksResult {
 }
 
 // ── Compression record (syncable_data_location.mdx §4.3) — travels in the SDL ─
+// How a compress attempt ENDED. Recorded for every terminal outcome, not just the successful ones: a file
+// we deliberately declined ("the only candidate was 1.4% smaller — keep the original") must remember that
+// decision, or every later sweep pays the full transcode again to reach the identical conclusion.
+//   compressed — the bytes were replaced with a smaller output.
+//   declined   — we looked, and keeping the original was the right answer. Do not re-offer it.
+//   blocked    — a safety guard refused (alpha loss, resolution/chroma change, corrupt output). Not a
+//                settled state: the file stays eligible, because a fixed engine should retry it.
+export type CompressionOutcome = "compressed" | "declined" | "blocked";
+
 export interface CompressionRecord {
   source: string; // the CURRENT (compressed) path, relative to the storage root
   original: { name: string; extension: string; size: number };
   compressed: { codec: string | null; size: number; ratio: number; at: string };
+  // Added with the 2026-07 engine rebuild. All optional so a record written by the older engine still
+  // parses (an absent `outcome` reads as "compressed", which is what those records meant).
+  outcome?: CompressionOutcome;
+  reason?: string | null;     // why, for `declined` — surfaced in the UI so a skip reads as a decision
+  chroma?: string | null;     // the output's chroma sampling ("1x1,1x1,1x1" = 4:4:4) — the auditable proof
+  lossless?: boolean;         // was the transform provably pixel-identical?
+  engine?: string | null;     // what produced it, e.g. "mozjpeg q92 4:4:4"
+  markerVersion?: number;     // the marker generation, so a re-tuned engine can invalidate old marks
 }
 
 // ── Per-storage settings (storage_settings.mdx) ─────────────────────────────
