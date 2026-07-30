@@ -278,6 +278,22 @@ to build and organize this app.
   `cli/`, `justfile`; pnpm workspace with `packages/`).
 * **`~/BGit/Bryan_git/EmailDeliveryHero/`** — sister webapp (has its own
   `CLAUDE.md`, `code/`, `pm/`, `justfile`, `fix_log/`).
+* **`~/BGit/Bryan_git/we_the_citizens/`** — sister webapp, **We The Citizens** (has its
+  own `CLAUDE.md`, `code/`, `pm/`, `data/`, `justfile`; pnpm workspace). Local-first,
+  citizen-powered decision-making platform — citizens record positions on societal
+  issues, compare them against the social contract, have AI verify the reasoning from
+  first principles, and optionally publish to We The Citizens Social. NestJS +
+  Vite/React with a paired CLI over the same flat-file state; Google login via
+  OpenAuthFederated. http://localhost:4444/ (frontend) · API http://localhost:9333/
+
+Other sibling web apps on this machine, for reference:
+
+| Sister app | URL(s) | Directory |
+|---|---|---|
+| Marketing AI | http://localhost:7700/ | `~/BGit/all/marketing/ai/` |
+| We The Citizens Social — Go backend | http://localhost:3081/ (consumer) · http://localhost:3082/ (admin + law enforcement) | `~/BGit/act3/AI_Coding/` |
+| We The Citizens Social — React UI | http://localhost:8000/ (consumer) · admin http://localhost:8001/ · law enforcement http://localhost:8002/ | `~/BGit/act3/Front_AI_Coding/` |
+| Starbuck Family Hub | http://localhost:1111/ (frontend) · API http://localhost:9322/ | `~/BGit/Bryan_git/the_starbucks/` |
 
 ## Per-file tracking metadata (in the YAML)
 
