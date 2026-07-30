@@ -27,9 +27,25 @@ export const NOT_LFBRIDGE = "not-lfbridge";
 
 // ── paths + consent (same pattern as decisions.service.ts) ─────────────────────
 
-/** WHERE this repo's sidecars live — the content-threshold placement (artifact_placement_policy.mdx §3):
- *  the machine-local state root pre-threshold, `<repo>/.lfbridge/` once transcribed/described. */
-function trackingDir(repoRoot: string): string {
+// PER-REPO MEMO of the storage settings these two helpers read.
+//
+// `readStorageSettings` is NOT cheap: it resolves the storage row (a filesystem discovery walk) and then
+// does a `readFileSync` + `YAML.parse` + zod-parse of the storage's config. Both helpers below are on the
+// PER-FILE path — `readSidecar`/`writeSidecar` call `trackingDir` for every single file a scan touches —
+// so a scan re-derived the same repo's settings once per file. Together with the uncached discovery walk
+// underneath it, that was the dominant cost of a scan (see the note on `discoverRows` in
+// storage.service.ts) and it blocked the event loop while doing it.
+//
+// Memoized per repo root with a short TTL. Settings changes flow through the settings router (a user
+// action, seconds apart at most), so a brief staleness window is invisible in practice, while a scan's
+// thousands of repeat lookups collapse into one.
+const SETTINGS_TTL_MS = 5_000;
+const settingsMemo = new Map<string, { at: number; relocated: string | null | undefined; keeps: boolean }>();
+
+function repoTrackingSettings(repoRoot: string): { relocated: string | null | undefined; keeps: boolean } {
+  const now = Date.now();
+  const hit = settingsMemo.get(repoRoot);
+  if (hit && now - hit.at <= SETTINGS_TTL_MS) return hit;
   let relocated: string | null | undefined;
   let keeps = true;
   try {
@@ -39,15 +55,20 @@ function trackingDir(repoRoot: string): string {
   } catch {
     /* no per-storage settings yet → defaults */
   }
+  const val = { at: now, relocated, keeps };
+  settingsMemo.set(repoRoot, val);
+  return val;
+}
+
+/** WHERE this repo's sidecars live — the content-threshold placement (artifact_placement_policy.mdx §3):
+ *  the machine-local state root pre-threshold, `<repo>/.lfbridge/` once transcribed/described. */
+function trackingDir(repoRoot: string): string {
+  const { relocated, keeps } = repoTrackingSettings(repoRoot);
   return resolveTrackingRoot(repoRoot, { relocated, keepsLfbridge: keeps });
 }
 
 function keepsLfbridge(repoRoot: string): boolean {
-  try {
-    return readStorageSettings(storageSid(repoRoot)).lfbridge.enabled;
-  } catch {
-    return true; // documented default: keep .lfbridge/
-  }
+  return repoTrackingSettings(repoRoot).keeps; // documented default on failure: keep .lfbridge/
 }
 
 /**

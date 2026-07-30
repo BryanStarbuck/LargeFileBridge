@@ -40,6 +40,7 @@ import { parseRemoteOwner } from "./repo-identity.js";
 import { resolveBackingLocations } from "./storage-settings.service.js";
 import { readSelfGraft } from "./devices.service.js";
 import { log } from "../../shared/logging.js";
+import { existsAt } from "../../shared/fs-probe.js";
 
 export type ArtifactOwner = "repo" | "storage-root" | "dedicated-repo" | "beside";
 
@@ -57,12 +58,7 @@ export interface ArtifactPlacement {
 }
 
 function exists(p: string): boolean {
-  try {
-    fs.statSync(p);
-    return true;
-  } catch {
-    return false;
-  }
+  return existsAt(p); // shared/fs-probe — non-throwing
 }
 
 /** True when `child` is `parent` itself or nested beneath it (both already absolute + resolved). */

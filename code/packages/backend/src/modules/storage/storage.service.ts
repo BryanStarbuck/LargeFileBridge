@@ -145,7 +145,8 @@ export function writeDescriptor(root: string, desc: StorageDescriptor): void {
   out.clones = { google_drive: desc.clones.googleDrive, dropbox: desc.clones.dropbox };
   fs.writeFileSync(path.join(root, STORAGE_YAML), YAML.stringify(out), "utf8");
   // The one choke point every descriptor write passes through — the Storages pages learn live
-  // (performance.mdx Aspect 6b).
+  // (performance.mdx Aspect 6b), and the discovery cache must not serve a pre-write view.
+  invalidateStorageRows();
   bumpTopic(STORAGES_TOPIC);
 }
 
@@ -356,11 +357,42 @@ function localRow(): StorageRow {
   };
 }
 
-/** All non-repo directory-based storages as rows (repos are represented by a link, not listed). */
+// DISCOVERY IS CACHED — it is on a PER-FILE hot path, and it is not cheap.
+//
+// `discoverRows()` runs `discoverRoots()` (a depth-3 recursive `readdirSync` of every scanner root) and
+// then `buildRow()` per root (each a `readDescriptor` = exists + readFileSync + YAML.parse). That is fine
+// once; the problem is how often it is reached. Every scanned file calls
+//
+//   readSidecar → trackingDir → readStorageSettings → requireRow → getStorageRow → findRowById → discoverRows
+//
+// so a scan ran the ENTIRE storage-discovery walk once PER FILE. A JIT-resolved CPU profile of a live scan
+// attributed **71.7% of all main-thread time** to `reconcileExternalState`, essentially all of it under
+// this call — and because the walk is synchronous, it also blocked the HTTP server, which is what made
+// page loads and the ⋯ menu time out while a scan ran.
+//
+// The cache is keyed on `scanner.roots` (so changing the roots in settings takes effect immediately) and
+// held for a short TTL, and EVERY descriptor write invalidates it through `writeDescriptor` — the one
+// choke point all descriptor writes pass through. So a newly created/initialized storage is visible at
+// once; the TTL only ever collapses the redundant re-walks inside a single burst of work.
+const ROWS_TTL_MS = 5_000;
+let rowsCache: { at: number; key: string; rows: StorageRow[] } | null = null;
+
+/** Drop the discovery cache. Called on every descriptor write; exported for other mutation paths. */
+export function invalidateStorageRows(): void {
+  rowsCache = null;
+}
+
+/** All non-repo directory-based storages as rows (repos are represented by a link, not listed).
+ *  Rows are treated as READ-ONLY by every caller (they only `find`/`filter`/`map` over them). */
 function discoverRows(): StorageRow[] {
-  return discoverRoots()
+  const key = getAppConfig().scanner.roots.join("\n");
+  const now = Date.now();
+  if (rowsCache && rowsCache.key === key && now - rowsCache.at <= ROWS_TTL_MS) return rowsCache.rows;
+  const rows = discoverRoots()
     .map(buildRow)
     .filter((r) => r.type !== "repo");
+  rowsCache = { at: now, key, rows };
+  return rows;
 }
 
 // ── public API (the router calls these) ────────────────────────────────────────
@@ -552,11 +584,9 @@ export function analyzeStorageFile(id: string, rel: string): { path: string; out
  */
 export function findStorageRootForPath(absPath: string): string | null {
   let cur = path.resolve(absPath);
-  try {
-    if (fs.statSync(cur).isFile()) cur = path.dirname(cur);
-  } catch {
-    cur = path.dirname(cur);
-  }
+  // Non-throwing (shared/fs-probe). NOTE the original semantics: a MISSING path also walks up to the
+  // parent, same as a file — only a real directory stays put.
+  if (!isDirAt(cur)) cur = path.dirname(cur);
   for (;;) {
     // A working repo is marked by its hidden `.lfbridge/`; an SDL has NO `.lfbridge/` (§0), so it is marked
     // by its root descriptor instead. Probing only for `.lfbridge/` would walk straight past every SDL.

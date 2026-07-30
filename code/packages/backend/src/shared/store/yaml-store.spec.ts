@@ -220,3 +220,58 @@ describe("writeYamlIfChanged — declared volatile paths get no vote", () => {
     expect(canonicalize({ k: ["a", "b"] }, [])).not.toBe(canonicalize({ k: ["b", "a"] }, []));
   });
 });
+
+// ── the parsed-document cache ────────────────────────────────────────────────
+//
+// `readYaml` caches the PRE-schema parsed document keyed on the file's identity (inode + size + mtime),
+// because building the repos list re-parsed ~185 unit YAMLs on every request (~40% of GET /api/repos).
+// A read cache is only ever as good as its invalidation, and the failure it would cause — serving a stale
+// document as if it were current state — is silent and data-shaped. These tests pin the two properties
+// that make it safe: it must SEE every change, and callers must not be able to corrupt it.
+describe("readYaml parsed-document cache", () => {
+  it("sees a change written through writeYaml", () => {
+    const file = tmpYaml("pinned: false\n");
+    expect(readYaml(file, Schema).pinned).toBe(false);
+    writeYamlIfChanged(file, { pinned: true, sync_repo: {}, nested: {}, owner_override: null });
+    expect(readYaml(file, Schema).pinned).toBe(true);
+  });
+
+  it("sees an EXTERNAL change (another process / a git checkout), not just our own writes", () => {
+    const file = tmpYaml("pinned: false\n");
+    expect(readYaml(file, Schema).pinned).toBe(false);
+    // Written behind the store's back — exactly what a `git pull`, the device worker, or a hand edit does.
+    // Only the identity check can catch this, so it is the property most worth pinning.
+    fs.writeFileSync(file, "pinned: true\n");
+    expect(readYaml(file, Schema).pinned).toBe(true);
+  });
+
+  it("returns a FRESH object each call, so a caller mutating the result cannot poison the cache", () => {
+    const file = tmpYaml("pinned: true\nnested:\n  inner:\n    n: 3\n");
+    const a = readYaml(file, Schema);
+    expect(a.nested.inner.n).toBe(3);
+    a.pinned = false;
+    a.nested.inner.n = 999; // a read-modify-write caller doing its thing
+    const b = readYaml(file, Schema);
+    expect(b).not.toBe(a);
+    expect(b.pinned).toBe(true);
+    expect(b.nested.inner.n).toBe(3); // untouched by the mutation above
+  });
+
+  it("a repeat read of an UNCHANGED file returns an equal value (the cache-hit path)", () => {
+    const file = tmpYaml("pinned: true\nnested:\n  inner:\n    n: 5\n");
+    expect(readYaml(file, Schema)).toEqual(readYaml(file, Schema));
+  });
+
+  it("a file that DISAPPEARS falls back to schema defaults rather than serving the cached parse", () => {
+    const file = tmpYaml("pinned: true\n");
+    expect(readYaml(file, Schema).pinned).toBe(true);
+    fs.rmSync(file);
+    expect(readYaml(file, Schema).pinned).toBe(false); // defaults-on-absence
+  });
+
+  it("still applies the empty-block repair on a cache HIT, not just the first read", () => {
+    const file = tmpYaml("pinned: true\nsync_repo:\n");
+    expect(readYaml(file, Schema).sync_repo).toEqual({});
+    expect(readYaml(file, Schema).sync_repo).toEqual({}); // second call is served from cache
+  });
+});

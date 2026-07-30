@@ -6,8 +6,36 @@ import YAML from "yaml";
 import { z, type ZodTypeAny } from "zod";
 import { log } from "../logging.js";
 import { ensureDir } from "../../config/state-dir.js";
+import { statOrNull } from "../fs-probe.js";
 
 const mutexes = new Map<string, Promise<unknown>>();
+
+// ── the parsed-document cache ────────────────────────────────────────────────
+//
+// EVERY state read in the app funnels through `readYaml`, and the same files are re-read constantly:
+// building the repos list re-parses each of ~185 repos' unit YAML on every request. A JIT-resolved CPU
+// profile of `GET /api/repos` attributed **~40% of the whole request to `readYaml` → YAML.parse**
+// (parseDocument/compose/lex), with the filesystem itself a rounding error. Parsing the same unchanged
+// bytes over and over is pure waste, and it also drove the GC churn that showed up alongside it.
+//
+// What is cached is the RAW parsed document (post-`YAML.parse`, PRE-schema). Validation still runs on
+// every call, so:
+//   * callers keep getting a FRESH zod output object and can mutate it freely — a read-modify-write
+//     (`updateYaml`) can never corrupt what the next reader sees, which caching the validated result
+//     would have allowed;
+//   * schema changes, the empty-block repair, and every error path behave exactly as before.
+//
+// Freshness is the file's IDENTITY — inode + size + mtime — the same technique `getAppConfig` uses for
+// config.yaml and `readStorageIndex` uses for its row cache. Any write through this module also drops
+// the entry explicitly, so a same-millisecond rewrite of identical length cannot serve a stale document.
+const RAW_CACHE_MAX = 4096;
+const rawCache = new Map<string, { ino: number; size: number; mtimeMs: number; raw: unknown }>();
+
+/** Forget the cached parse of `file` (or the whole cache). Called on every write through this module. */
+export function invalidateYamlCache(file?: string): void {
+  if (file === undefined) rawCache.clear();
+  else rawCache.delete(file);
+}
 
 /** Serialize read-modify-write per absolute file path (storage.mdx §15). */
 async function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
@@ -33,23 +61,41 @@ async function withLock<T>(file: string, fn: () => Promise<T>): Promise<T> {
  * Malformed file -> logged loudly and rethrown (storage.mdx §15: never silently trust).
  */
 export function readYaml<S extends ZodTypeAny>(file: string, schema: S): z.output<S> {
-  let raw: string;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch (e) {
-    // A missing file is the normal defaults-on-absence path; but a permission/I/O error would
-    // silently mask real state (and let a later write clobber it), so surface anything but ENOENT.
-    if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
-      log.warn("store", `read failed (using defaults): ${file}: ${(e as Error).message}`);
-    }
-    return schema.parse({}) as z.output<S>; // defaults-on-absence (our schemas are all objects)
-  }
+  // Identity probe first (non-throwing). On a hit this replaces the read AND the parse; on a miss it is
+  // one extra cheap stat. See the rawCache note above for why only the PRE-schema document is cached.
+  const st = statOrNull(file);
   let parsed: unknown;
-  try {
-    parsed = YAML.parse(raw) ?? {};
-  } catch (e) {
-    log.error("store", `YAML parse failed: ${file}: ${(e as Error).message}`);
-    throw new Error(`Corrupt YAML at ${file}`);
+  const hit = st ? rawCache.get(file) : undefined;
+  if (st && hit && hit.ino === st.ino && hit.size === st.size && hit.mtimeMs === st.mtimeMs) {
+    parsed = hit.raw;
+  } else {
+    let raw: string;
+    try {
+      raw = fs.readFileSync(file, "utf8");
+    } catch (e) {
+      // A missing file is the normal defaults-on-absence path; but a permission/I/O error would
+      // silently mask real state (and let a later write clobber it), so surface anything but ENOENT.
+      if ((e as NodeJS.ErrnoException).code !== "ENOENT") {
+        log.warn("store", `read failed (using defaults): ${file}: ${(e as Error).message}`);
+      }
+      rawCache.delete(file);
+      return schema.parse({}) as z.output<S>; // defaults-on-absence (our schemas are all objects)
+    }
+    try {
+      parsed = YAML.parse(raw) ?? {};
+    } catch (e) {
+      rawCache.delete(file);
+      log.error("store", `YAML parse failed: ${file}: ${(e as Error).message}`);
+      throw new Error(`Corrupt YAML at ${file}`);
+    }
+    // Only cache when the stat SUCCEEDED — without an identity we have no way to notice a later change.
+    if (st) {
+      if (rawCache.size >= RAW_CACHE_MAX) {
+        const oldest = rawCache.keys().next().value; // insertion order = eviction order
+        if (oldest !== undefined) rawCache.delete(oldest);
+      }
+      rawCache.set(file, { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, raw: parsed });
+    }
   }
   let result = schema.safeParse(parsed);
   if (!result.success) {
@@ -140,12 +186,16 @@ export function writeYaml<T extends Record<string, unknown>>(file: string, value
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fs.renameSync(tmp, file);
+    // The bytes changed — drop the cached parse so a same-millisecond, same-length rewrite can never be
+    // served stale by the identity check.
+    invalidateYamlCache(file);
   } catch (e) {
     try {
       fs.unlinkSync(tmp);
     } catch {
       /* ignore cleanup failure */
     }
+    invalidateYamlCache(file);
     log.error("store", `Write failed: ${file}: ${(e as Error).message}`);
     throw e;
   }

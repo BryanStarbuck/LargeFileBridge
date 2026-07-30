@@ -19,6 +19,7 @@ import path from "node:path";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig } from "../store-model/units.service.js";
 import { detectCloudRoots } from "./cloud-roots.js";
+import { isDirAt } from "../../shared/fs-probe.js";
 
 function expandHome(p: string): string {
   return p.replace(/^~(?=\/|$)/, os.homedir());
@@ -77,7 +78,7 @@ export function allowedRoots(): string[] {
   for (const r of rawRoots()) {
     try {
       const abs = canonicalize(path.resolve(r));
-      if (fs.statSync(abs).isDirectory()) out.push(abs);
+      if (isDirAt(abs)) out.push(abs); // non-throwing (shared/fs-probe) — on the per-request path
     } catch {
       /* skip a root that isn't a real directory */
     }

@@ -22,6 +22,7 @@ import { bumpTopic, STORAGES_TOPIC } from "../events/state-events.service.js";
 // .service imports both). Reuses ownerForRepoConfig so a manual company owner carries its friendly name.
 import { listRepoFolders, getRepoConfig, ownerForRepoConfig, repoIdFromPath } from "../store-model/units.service.js";
 import { log } from "../../shared/logging.js";
+import { isDirAt } from "../../shared/fs-probe.js";
 
 const CONVENTION_SUFFIX = "_large_files_bridge";
 const LFB_MIRROR_DIR = "LFB";
@@ -61,13 +62,8 @@ function detectDropboxBase(): string | null {
     >;
     for (const acct of ["personal", "business"] as const) {
       const p = info[acct]?.path;
-      if (p) {
-        try {
-          if (fs.statSync(p).isDirectory()) return p;
-        } catch {
-          /* recorded but not present on this machine */
-        }
-      }
+      // Non-throwing (shared/fs-probe) — recorded-but-not-present is the expected miss.
+      if (p && isDirAt(p)) return p;
     }
   } catch {
     /* no info.json (Dropbox not installed / not linked) — fall through to the candidates */
@@ -79,11 +75,7 @@ function detectDropboxBase(): string | null {
     path.join(os.homedir(), "Library", "CloudStorage", "Dropbox"),
   ];
   for (const c of candidates) {
-    try {
-      if (fs.statSync(c).isDirectory()) return c;
-    } catch {
-      /* not this one */
-    }
+    if (isDirAt(c)) return c; // non-throwing — most candidates legitimately don't exist
   }
   return null;
 }

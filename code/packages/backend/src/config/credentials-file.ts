@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import crypto from "node:crypto";
 import { log } from "../shared/logging.js";
+import { isFileAt } from "../shared/fs-probe.js";
 
 export interface GoogleCreds {
   clientId: string;
@@ -70,12 +71,7 @@ export function credentialsFileInfo(): {
 } {
   const p = credsFilePath();
   const usingEnv = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET);
-  let exists = false;
-  try {
-    exists = fs.statSync(p).isFile();
-  } catch {
-    exists = false;
-  }
+  const exists = isFileAt(p); // shared/fs-probe — non-throwing
   return {
     configured: hasGoogleCreds(),
     usingEnv,

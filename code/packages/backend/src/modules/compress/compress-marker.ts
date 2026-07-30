@@ -36,6 +36,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import zlib from "node:zlib";
+import { sizeOrZero } from "../../shared/fs-probe.js";
 
 // The marker text itself. `v<N>` lets a re-tuned engine invalidate every older mark at once: a file marked
 // by an older version fails `isCurrentMarker` and is swept again by the improved engine. v1 = the original
@@ -71,7 +72,8 @@ const HEAD_SLICE_BYTES = 512 * 1024;
 function readHead(abs: string, bytes = HEAD_SLICE_BYTES): Buffer | null {
   let fd: number | null = null;
   try {
-    const size = fs.statSync(abs).size;
+    // Non-throwing (shared/fs-probe): readHead runs per file in a bulk run over thousands of files.
+    const size = sizeOrZero(abs);
     const len = Math.min(bytes, size);
     if (len <= 0) return null;
     const buf = Buffer.alloc(len);

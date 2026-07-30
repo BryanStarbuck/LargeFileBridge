@@ -32,6 +32,7 @@ import type { CompressionRecord, CompressionOutcome } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { trackingBaseDir, legacyTrackingBaseDir } from "../storage/storage-type.service.js";
 import { log } from "../../shared/logging.js";
+import { sizeOrNull, isFileAt } from "../../shared/fs-probe.js";
 
 const ANALYSIS_DIR = "analysis";
 const RECORD_FILE = "compression.yaml";
@@ -74,17 +75,14 @@ export interface LedgerHit {
  */
 export function readLedger(root: string, rel: string): LedgerHit | null {
   const mediaAbs = path.join(root, rel);
-  let currentSize: number;
-  try {
-    currentSize = fs.statSync(mediaAbs).size;
-  } catch {
-    return null; // media gone → nothing to protect
-  }
+  // Non-throwing (shared/fs-probe): readLedger is asked per file across whole trees.
+  const currentSize = sizeOrNull(mediaAbs);
+  if (currentSize === null) return null; // media gone → nothing to protect
   for (const dir of recordDirs(root, rel)) {
     const file = path.join(dir, RECORD_FILE);
     let rec: CompressionRecord | null = null;
     try {
-      if (!fs.statSync(file).isFile()) continue;
+      if (!isFileAt(file)) continue; // non-throwing — most files have no record at all
       rec = YAML.parse(fs.readFileSync(file, "utf8")) as CompressionRecord | null;
     } catch {
       continue; // unreadable record → keep looking; never claim "done" on one we could not parse

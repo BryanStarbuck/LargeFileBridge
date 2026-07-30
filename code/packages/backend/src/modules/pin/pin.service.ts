@@ -58,6 +58,7 @@ import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 import { whenOnline, hostFromRemote } from "../../shared/net-transient.js";
+import { statOrNull } from "../../shared/fs-probe.js";
 
 // One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
 // (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
@@ -176,12 +177,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
       ipfsLimiter.run(async () => {
         const abs = t.resolveAbs(rel);
         if (abs === null) return; // not placeable here (ungrafted mapped dir) — known-but-absent
-        let st: fs.Stats;
-        try {
-          st = fs.statSync(abs);
-        } catch {
-          return; // decided-but-absent — leave for a later fetch
-        }
+        // Non-throwing (shared/fs-probe): runs per pinned file, and decided-but-absent is a NORMAL
+        // second-computer state, not an exceptional one.
+        const st = statOrNull(abs);
+        if (!st) return; // decided-but-absent — leave for a later fetch
         const existing = byPath.get(rel);
         // "Unchanged" means same bytes AND still really pinned. A size match alone is NOT enough — if
         // the pin was lost (GC, or an `ipfs pin rm` outside the app) we must re-pin so reality matches

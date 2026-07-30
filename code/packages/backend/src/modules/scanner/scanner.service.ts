@@ -424,11 +424,19 @@ async function walkUnit(
       log.debug("scan", `readdir skipped ${dir}: ${(e as Error).message}`);
       continue;
     }
-    if ((sinceYield += entries.length) >= YIELD_EVERY) {
-      sinceYield = 0;
-      await yieldToLoop();
-    }
     for (const ent of entries) {
+      // Yield every N ENTRIES ACTUALLY PROCESSED — not once per directory. This used to add
+      // `entries.length` to the counter and yield BEFORE the loop, which meant a single big directory
+      // (a media folder with 10k files) ran its ENTIRE inner loop — 10k blocking `statSync`s — without
+      // ever handing the event loop back. On a cloud mount each of those stats can block for tens of
+      // milliseconds, so one directory could freeze the HTTP server for a minute or more, which is what
+      // surfaced as "Couldn't load actions: timeout of 10000ms exceeded" and hung page loads while a
+      // scan ran (scan.mdx §10). Counting processed entries bounds the block to YIELD_EVERY stats,
+      // matching the rollup walk in entity.service.ts and listDirectory in fs.service.ts.
+      if ((sinceYield += 1) >= YIELD_EVERY) {
+        sinceYield = 0;
+        await yieldToLoop();
+      }
       const abs = path.join(dir, ent.name);
       if (opts.maskPaths.some((m) => abs === m || abs.startsWith(m + path.sep))) continue;
       if (ent.isSymbolicLink()) continue;
