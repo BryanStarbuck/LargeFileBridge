@@ -1,5 +1,4 @@
 // Typed accessor for the app-level, computer-wide config.yaml (storage.mdx §3, settings.mdx).
-import fs from "node:fs";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { AppConfigSchema, type AppConfig, type FileFlags, defaultDeviceName } from "@lfb/shared";
@@ -8,6 +7,7 @@ import { appConfigPath } from "../../shared/store/scopes.js";
 import { collectHardware } from "../storage/hardware.service.js";
 import { bumpTopicThrottled, SETTINGS_TOPIC } from "../events/state-events.service.js";
 import { RETIRED_GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from "../describe/models.js";
+import { mtimeMsOrNull } from "../../shared/fs-probe.js";
 
 // ── config.yaml read cache (mtime-keyed) ─────────────────────────────────────────────────────────────
 // getAppConfig() was UNMEMOIZED, and effectiveFlags() calls it PER FILE — so GET /api/repos (repos ×
@@ -29,12 +29,10 @@ export function getAppConfig(): AppConfig {
   const p = appConfigPath();
   // Serve the cache when the file is unchanged since we parsed it. A missing file (mtimeMs stays -1) falls
   // through to readYaml, which returns schema defaults — an uncacheable transient we simply don't cache.
-  let mtimeMs = -1;
-  try {
-    mtimeMs = fs.statSync(p).mtimeMs;
-  } catch {
-    /* not present yet → read (seed) below; don't serve/keep a cache for a file that doesn't exist */
-  }
+  // Non-throwing (shared/fs-probe): getAppConfig is one of the hottest calls in the app, and a
+  // not-present config must not cost a V8 exception per call. Missing → stays -1 → read (seed) below;
+  // we never serve or keep a cache for a file that doesn't exist.
+  let mtimeMs = mtimeMsOrNull(p) ?? -1;
   if (mtimeMs >= 0 && configCache && configCache.mtimeMs === mtimeMs) return configCache.cfg;
 
   const cfg = readYaml(p, AppConfigSchema);
@@ -96,11 +94,7 @@ export function getAppConfig(): AppConfig {
       writeYaml(p, cfg as unknown as Record<string, unknown>);
       // The write bumped the mtime — re-stat so the cache key matches the file on disk (otherwise the very
       // next call would see a newer mtime and needlessly re-parse).
-      try {
-        mtimeMs = fs.statSync(p).mtimeMs;
-      } catch {
-        mtimeMs = -1;
-      }
+      mtimeMs = mtimeMsOrNull(p) ?? -1;
     } catch {
       /* best-effort persist — a failure just re-seeds on the next call until a write succeeds */
     }

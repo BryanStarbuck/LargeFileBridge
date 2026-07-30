@@ -9,6 +9,7 @@ import type { StorageFileRow, StorageType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { compressInfo, HARD_SKIP } from "../fs/badges.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
+import { isFileAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 import { repoStateDir, resolveStateSyncRepo } from "./tracking-root.service.js";
 import {
@@ -111,13 +112,11 @@ function filesYamlPath(root: string, type?: StorageType): string {
  *  `.lfbridge/` base (§0.3). */
 export function analysisOutputs(root: string, rel: string, type?: StorageType): string[] {
   const out: string[] = [];
-  const isFileAt = (p: string): boolean => {
-    try {
-      return fs.statSync(p).isFile();
-    } catch {
-      return false;
-    }
-  };
+  // isFileAt comes from shared/fs-probe (non-throwing statSync). This function fires ~12 probes per
+  // file across every artifact placement and nearly all of them MISS, so the old
+  // `try { statSync(p).isFile() } catch { false }` idiom paid a full V8 Error + stack capture per miss
+  // — profiling showed that single pattern owning ~64% of the backend's CPU. Same semantics, 6–9×
+  // cheaper per miss. See shared/fs-probe.ts.
   const t = type ?? resolveStorageType(root);
   // Detect the artifact in EVERY placement (placement_radios.mdx): under the tracking base (the default) OR
   // beside the media (the opt-in beside-media layout) OR, for an SDL awaiting migration, the legacy
@@ -200,7 +199,7 @@ function compressionRecordFresh(recordAbs: string, mediaAbs: string): boolean {
     } | null;
     const recSize = rec?.compressed?.size;
     if (recSize == null) return true;
-    return fs.statSync(mediaAbs).size === recSize;
+    return statOrNull(mediaAbs)?.size === recSize; // missing media → not "done" (undefined !== recSize)
   } catch {
     return false; // unreadable record / missing media → never claim "done" on it
   }

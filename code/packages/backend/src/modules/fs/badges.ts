@@ -12,6 +12,7 @@ import { listRepoFolders, getRepoConfig, isGitWorkingTree } from "../store-model
 import { nearestGitAtOrAbove, checkIgnoreAsync } from "../git/git.service.js";
 // One source of truth for the never-descend set — shared with the scanner (scan.mdx §4).
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
+import { mtimeMsOrNull, sizeOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 
 // IPFS list artifacts (directory.mdx §3.4, ipfs_share_files.mdx §3). Case-insensitive match.
@@ -368,22 +369,14 @@ export function computeDirInterest(
   // Fresh cache hit?
   const cached = interestCache.get(dirAbs);
   if (cached && Date.now() - cached.at <= INTEREST_TTL_MS) {
-    let mtimeMs: number;
-    try {
-      mtimeMs = fs.statSync(dirAbs).mtimeMs;
-    } catch {
-      return undefined;
-    }
+    const mtimeMs = mtimeMsOrNull(dirAbs);
+    if (mtimeMs === null) return undefined;
     if (mtimeMs === cached.mtimeMs) return cached.interest;
     interestCache.delete(dirAbs);
   }
 
-  let rootMtimeMs: number;
-  try {
-    rootMtimeMs = fs.statSync(dirAbs).mtimeMs;
-  } catch {
-    return undefined; // vanished/unreadable → unknown, not "not interesting"
-  }
+  const rootMtimeMs = mtimeMsOrNull(dirAbs);
+  if (rootMtimeMs === null) return undefined; // vanished/unreadable → unknown, not "not interesting"
 
   let foundVideo = false;
   let foundImage = false;
@@ -419,12 +412,11 @@ export function computeDirInterest(
       const isUncompressedImg = IMAGE_UNCOMPRESSED_EXT.has(ext);
       // Every file needs a size stat: the big-file check applies to ALL files, and the image floor
       // needs the size too. (Big is the only early-exit; video/image just set the running flags.)
-      let size: number;
-      try {
-        size = fs.statSync(path.join(dir, ent.name)).size;
-      } catch {
-        continue;
-      }
+      // Non-throwing stat: this runs for EVERY file of every directory walked, and a vanished/
+      // unreadable entry is routine — paying a V8 exception per miss here was a top CPU cost
+      // (shared/fs-probe.ts).
+      const size = sizeOrNull(path.join(dir, ent.name));
+      if (size === null) continue;
       if (size >= threshold) {
         cacheInterest(dirAbs, rootMtimeMs, "big");
         return "big"; // highest priority — stop immediately

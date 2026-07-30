@@ -17,6 +17,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { CloudProvider } from "@lfb/shared";
+import { isDirAt } from "../../shared/fs-probe.js";
 
 export interface CloudRoot {
   provider: CloudProvider;
@@ -34,13 +35,9 @@ export function cloudStorageDir(): string {
 }
 
 function isRealDir(p: string): boolean {
-  try {
-    // statSync (follows symlinks) — a placeholder/broken mount that isn't a real directory is skipped,
-    // so an offline or half-removed iCloud/Drive mount never shows a dead row.
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
+  // Follows symlinks — a placeholder/broken mount that isn't a real directory is skipped, so an offline
+  // or half-removed iCloud/Drive mount never shows a dead row. Non-throwing (shared/fs-probe).
+  return isDirAt(p);
 }
 
 /**

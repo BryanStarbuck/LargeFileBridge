@@ -42,6 +42,7 @@ import { writeSelfDevice } from "./devices.service.js";
 import { ensureRepoStorageDoc } from "./repo-storage.service.js";
 import { log } from "../../shared/logging.js";
 import { stableGitBin } from "../git/git-bin.js";
+import { isDirAt } from "../../shared/fs-probe.js";
 
 const STORAGE_YAML = "storage.yaml";
 const CONVENTION_SUFFIX = "_large_files_bridge";
@@ -50,11 +51,7 @@ const DISCOVER_DEPTH = 3; // how deep under each scanner root we look for storag
 
 // ── helpers ──────────────────────────────────────────────────────────────────
 function safeIsDir(p: string): boolean {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
+  return isDirAt(p); // shared/fs-probe — non-throwing
 }
 function exists(p: string): boolean {
   try {

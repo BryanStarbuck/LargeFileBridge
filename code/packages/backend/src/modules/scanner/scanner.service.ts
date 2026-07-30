@@ -40,6 +40,7 @@ import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
 import { HARD_SKIP, isMacPackageDir, isMediaFile, isAnalysisCandidate, isTransientDownloadFile } from "../../shared/scan-filters.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
+import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 
 interface Candidate {
@@ -449,12 +450,12 @@ async function walkUnit(
       const rel = path.relative(root, abs);
       const relForIgnore = opts.rootLabelAbsolute ? abs : rel;
       if (excl.ignores(rel)) continue;
-      let st: fs.Stats;
-      try {
-        st = fs.statSync(abs); // metadata only — never open the file (scan.mdx §1)
-      } catch (e) {
-        // File vanished or is unstattable between readdir and stat — skip it; routine, debug only.
-        log.debug("scan", `stat skipped ${abs}: ${(e as Error).message}`);
+      // Metadata only — never open the file (scan.mdx §1). Non-throwing: a file that vanished or is
+      // unstattable between readdir and stat is ROUTINE, and this runs once per scanned file, so
+      // throwing ENOENT here cost a V8 Error + stack capture per miss (shared/fs-probe.ts).
+      const st = statOrNull(abs);
+      if (!st) {
+        log.debug("scan", `stat skipped ${abs}: missing or unreadable`);
         continue;
       }
       const bigEnough = st.size >= threshold;
@@ -779,9 +780,5 @@ function expandHome(p: string): string {
   return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
 }
 function safeIsDir(p: string): boolean {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
+  return isDirAt(p); // shared/fs-probe — non-throwing
 }

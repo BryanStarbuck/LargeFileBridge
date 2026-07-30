@@ -56,6 +56,7 @@ import { ensureDir } from "../../config/state-dir.js";
 import { getPeers } from "./peers.service.js";
 import { readLedger, foldLedger, type FoldedDecision } from "../storage/decisions.service.js";
 import { effectiveFlags, getAppConfig, computerLabel } from "./config.service.js";
+import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 
 export function repoIdFromPath(absPath: string): string {
@@ -902,7 +903,10 @@ function rollupStatus(
 export function isGitWorkingTree(dir: string): boolean {
   try {
     const gitPath = path.join(dir, ".git");
-    const st = fs.statSync(gitPath);
+    // Non-throwing (shared/fs-probe): this is asked of EVERY directory walked, and the overwhelming
+    // majority have no `.git` at all — so the not-found case is the common case, not the exception.
+    const st = statOrNull(gitPath);
+    if (!st) return false;
     if (st.isDirectory()) return true;
     // A .git FILE is a worktree/submodule pointer ("gitdir: <path>"). When the pointed-at gitdir no
     // longer exists (the parent repo moved, or `git worktree prune` never ran — the stale
@@ -911,7 +915,7 @@ export function isGitWorkingTree(dir: string): boolean {
     const target = resolveGitdir(gitPath);
     // The gitdir target is always a DIRECTORY when healthy; resolveGitdir's ".git" fallback on a
     // malformed pointer file resolves back to the pointer file itself, which isDirectory() rejects.
-    return fs.statSync(path.isAbsolute(target) ? target : path.join(dir, target)).isDirectory();
+    return isDirAt(path.isAbsolute(target) ? target : path.join(dir, target));
   } catch {
     return false;
   }
@@ -920,7 +924,8 @@ export function isGitWorkingTree(dir: string): boolean {
 export function readGitRemote(dir: string): string | null {
   try {
     const gitPath = path.join(dir, ".git");
-    const st = fs.statSync(gitPath);
+    const st = statOrNull(gitPath); // non-throwing — no `.git` is the common case (shared/fs-probe)
+    if (!st) return null;
     const configFile = st.isDirectory()
       ? path.join(gitPath, "config")
       : path.join(dir, resolveGitdir(gitPath), "config");

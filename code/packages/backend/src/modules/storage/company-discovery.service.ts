@@ -48,6 +48,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { readYaml, updateYaml } from "../../shared/store/yaml-store.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { log } from "../../shared/logging.js";
+import { isDirAt } from "../../shared/fs-probe.js";
 
 const run = promisify(execFile);
 
@@ -116,11 +117,7 @@ export function storagesParentDir(): { dir: string; configured: boolean } {
 }
 
 function safeIsDir(p: string): boolean {
-  try {
-    return fs.statSync(p).isDirectory();
-  } catch {
-    return false;
-  }
+  return isDirAt(p); // shared/fs-probe — non-throwing
 }
 
 // ── the membership test (§10.2, LOCKED) ───────────────────────────────────────────────────────────────

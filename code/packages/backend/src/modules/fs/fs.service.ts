@@ -7,6 +7,7 @@ import type { FsEntry, FsEntryKind, FsListing, FlatFileListing } from "@lfb/shar
 import { buildBadgeContext, computeBadges, computeDirInterest, HARD_SKIP, isMacPackageDir } from "./badges.js";
 import { homeDir, isHomeDir, resolveDir } from "./paths.js";
 import { detectCloudRoots } from "./cloud-roots.js";
+import { statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 import {
   walkFilesFlatStreaming,
@@ -96,12 +97,12 @@ export async function listDirectory(
     let sizeBytes: number | null = null;
     let modifiedAt: string | null = null;
     if (kind === "file") {
-      try {
-        const st = fs.statSync(abs);
+      // Non-throwing (shared/fs-probe): one stat per listed file, and a missing entry is routine —
+      // keep the nulls rather than paying a V8 exception per miss.
+      const st = statOrNull(abs);
+      if (st) {
         sizeBytes = st.size;
         modifiedAt = st.mtime.toISOString();
-      } catch {
-        /* keep nulls */
       }
     }
 

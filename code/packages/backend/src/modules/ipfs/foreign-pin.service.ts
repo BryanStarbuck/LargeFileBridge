@@ -11,6 +11,7 @@ import path from "node:path";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { canonicalCid, keptCidSet, keptSizeIndex, contentPinnedCidDetailed } from "./ipfs.service.js";
 import { log } from "../../shared/logging.js";
+import { statOrNull } from "../../shared/fs-probe.js";
 
 // ── on-disk stores under the state root (tier-1 local persistence — foreign_pin_discovery §5) ─────────
 // The fingerprint CACHE: a file's (size, mtime) → the CID it is pinned under, or null (a NEGATIVE cache so we
@@ -102,12 +103,8 @@ interface FileIdentity {
 }
 
 function fileIdentity(file: string): FileIdentity | null {
-  try {
-    const st = fs.statSync(file);
-    return { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
-  } catch {
-    return null;
-  }
+  const st = statOrNull(file); // shared/fs-probe — non-throwing
+  return st && { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
 }
 
 const sameIdentity = (a: FileIdentity | null, b: FileIdentity | null): boolean =>

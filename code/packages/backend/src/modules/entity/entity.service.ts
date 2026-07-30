@@ -46,6 +46,7 @@ import {
 // The reconciled peer manifest — the ONLY thing that can tell "the file is gone" from "another of your
 // computers has it and this one doesn't yet" (files.mdx §2.1).
 import { readRepoTrackingManifest } from "../pin/manifest.service.js";
+import { sizeOrNull, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
@@ -66,10 +67,10 @@ export function resolveEntity(input: string | undefined): ResolvedEntity {
   const abs0 = path.resolve(expandHome(raw));
   if (abs0.includes("\0")) throw new Error("invalid path");
   const abs = assertAllowedPath(abs0); // confine to the allow-roots (security audit finding 2)
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(abs);
-  } catch {
+  // Non-throwing (shared/fs-probe): "does not exist" is a FIRST-CLASS answer here — a remote-only file
+  // on a second computer legitimately isn't on disk — so it must not cost a V8 exception.
+  const st = statOrNull(abs);
+  if (!st) {
     return { abs, exists: false, kind: "file", sizeBytes: null, createdAt: null, modifiedAt: null };
   }
   const kind: "file" | "dir" = st.isDirectory() ? "dir" : "file";
@@ -352,14 +353,11 @@ async function buildDirRollup(dirAbs: string, match: RepoMatch | null): Promise<
       if (!ent.isFile()) continue;
       const abs = path.join(dir, ent.name);
       // Size stat once per file (bounded by the same budget) — feeds both the media and big-file counts.
-      let size = 0;
-      try {
-        size = fs.statSync(abs).size;
-      } catch {
-        // Intentional best-effort: a file that vanished/denied mid-walk is skipped. Not logged —
-        // this runs per-file across huge trees and would flood error.err.
-        continue;
-      }
+      // Intentional best-effort: a file that vanished/denied mid-walk is skipped. Not logged — this runs
+      // per-file across huge trees and would flood error.err. Non-throwing for the same reason it isn't
+      // logged: at this call rate the exception itself was the cost (shared/fs-probe.ts).
+      const size = sizeOrNull(abs);
+      if (size === null) continue;
       const comp = compressInfo(ent.name);
       // Only count media worth compressing: a real video/image is non-trivial in size. This floor also
       // stops extension collisions (e.g. TypeScript `.ts` vs MPEG-TS `.ts` in badges.ts's VIDEO set)

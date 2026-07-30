@@ -5,6 +5,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { assertAllowedPath } from "./allow-root.js";
+import { statOrNull } from "../../shared/fs-probe.js";
 
 export function homeDir(): string {
   return os.homedir();
@@ -31,12 +32,8 @@ export function resolveDir(input: string | undefined): string {
   const abs = path.resolve(expanded);
   if (abs.includes("\0")) throw new Error("invalid path");
   const confined = assertAllowedPath(abs); // throws "path not allowed" for an out-of-root/secret path
-  let st: fs.Stats;
-  try {
-    st = fs.statSync(confined);
-  } catch {
-    throw new Error("directory not found");
-  }
+  const st = statOrNull(confined); // shared/fs-probe — non-throwing
+  if (!st) throw new Error("directory not found");
   if (!st.isDirectory()) throw new Error("not a directory");
   return confined;
 }

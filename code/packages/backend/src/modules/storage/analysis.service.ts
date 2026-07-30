@@ -16,15 +16,12 @@ import { log } from "../../shared/logging.js";
 
 import { trackingBaseDir } from "./storage-type.service.js";
 import { resolveTrackingRoot } from "./tracking-root.service.js";
+import { isFileAt } from "../../shared/fs-probe.js";
 
 const ANALYSIS_DIR = "analysis";
 
 function isFile(abs: string): boolean {
-  try {
-    return fs.statSync(abs).isFile();
-  } catch {
-    return false;
-  }
+  return isFileAt(abs); // shared/fs-probe — non-throwing
 }
 
 function writeYaml(file: string, data: unknown): void {
