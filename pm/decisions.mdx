@@ -749,6 +749,19 @@ PATCH /api/repos/:repoId/files
 The endpoint contract (both bodies, relative-path keys, session-derived `decided_by`, tombstone on legacy `undecided`) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; frontend callers `api.setFileDecisions` (two-axis) and `api.setDecision` (legacy) in `packages/frontend/src/api/client.ts`.
 
+### 19.1 An IPFS-on decision MOVES BYTES — the decision-triggered pin (dated revision 2026-08-03)
+
+Recording a decision that turns the **IPFS axis on** immediately kicks a **targeted pin of exactly the
+decided paths** (fire-and-forget, so the response stays instant). The checkbox is the user's explicit ask;
+before this, a repo whose `pinned` flag was never flipped by a manual "Pin now" recorded the intent but
+**never pinned, never assigned a CID, never published a manifest** — so the file never travelled to the
+company sync repo and every other computer's **Pull down** stayed 0 forever (the 2026-08-03 `all`-repo
+defect). The targeted pin runs with `manual: true`: a per-file decision **is** the repo's opt-in, so it also
+flips `pinned=true` and the 15-minute background pass keeps the pin fresh from then on. An IPFS-off /
+gitignore-only / both-off decision still writes only the ledger — no bytes move.
+Decision-triggered pin fires in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (the `settingIpfsOn` branch) → `pinRepoFolder(folder, paths, { manual: true })` in `packages/backend/src/modules/pin/pin.service.ts`.
+
 ---
 
 ## 20. Edge cases & failure states (LOCKED)

@@ -468,6 +468,18 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
         `${folder}: decided ${paths.length} file(s) ipfs=${!!body.data.ipfs} gitignore=${!!body.data.gitignore} by ${decidedBy ?? "?"}`,
       );
     }
+    // A decision that turns the IPFS axis ON must MOVE BYTES, not just write the ledger (decisions.mdx §1:
+    // the checkbox is the user's explicit ask). Without this, a repo whose `pinned` flag was never flipped
+    // by a manual "Pin now" NEVER pinned or published anything — the decided file had no CID, no manifest
+    // entry travelled to the company sync repo, and every other computer's Pull-down stayed 0 forever.
+    // Fire-and-forget targeted pin of exactly the decided paths; `manual: true` because a decision IS the
+    // explicit opt-in (it also enables the 15-min background pass for this repo, keeping the pin fresh).
+    if (settingIpfsOn) {
+      const repoName = getRepoConfig(folder).repo.name || folder;
+      void track("pin", repoName, () => pinRepoFolder(folder, new Set(paths), { manual: true })).catch((e) =>
+        log.error("repos", `${folder}: decision-triggered pin failed: ${(e as Error).message}`),
+      );
+    }
     const detail: RepoDetail = await repoDetailWithPins(folder);
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
     res.json({ ok: true, data: detail });

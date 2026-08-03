@@ -359,7 +359,14 @@ export async function pinRepoFolder(
   const cfg = getRepoConfig(folder);
   if (!cfg.pinned) {
     if (!opts.manual) {
-      log.info("pin", `Skip ${folder}: pinned=false.`);
+      // The SEND opt-in (`pinned`) must not gate the RECEIVE half (storage_company.mdx §8.4.3): a peer's
+      // manifest that arrived in the sync repo still has to fold into Local Storage, or the Pull-down
+      // metric reads 0 forever on any repo the user never pressed "Pin now" on — the exact break that
+      // hid teammates' pinned files. Marker + reconcile only; no bytes move, no manifest is published.
+      const repoPath = expandHome(cfg.repo.path);
+      ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
+      reconcileFromSyncRepo(repoPath);
+      log.info("pin", `Skip ${folder}: pinned=false (reconciled peer state only).`);
       return zeroCounts(); // background scheduler respects the opt-in — an honest no-op tally
     }
     await updateRepoConfig(folder, (c) => ({ ...c, pinned: true }));

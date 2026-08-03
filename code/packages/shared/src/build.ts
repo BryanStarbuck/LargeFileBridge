@@ -19,9 +19,9 @@
  */
 export const APP_BUILD = {
   /** Monotonic. Higher = newer. Compared across computers to find who is behind. */
-  number: 4,
+  number: 5,
   /** What this build is, in a few words — shown next to the number so a stale peer is self-explaining. */
-  label: "quiet backbone; merges always conclude; debug/ conflicts auto-resolve",
+  label: "IPFS decisions pin + publish; pull-down feed reconciles even when pinned=false",
 } as const;
 
 export type AppBuild = typeof APP_BUILD;

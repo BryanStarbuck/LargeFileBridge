@@ -2429,6 +2429,22 @@ unchanged; only its input is non-empty now.
 The warning's headline, educate copy, options and targets are built in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildPullDownWarning()` (reads `RepoDetail.missingPinned`), ranked into the header primary by `topRecommendation()`.
 
+**The feed must not be gated by the repo's `pinned` opt-in (dated revision 2026-08-03).** Two more ways
+this warning was "never fed", both closed:
+
+* **Send half.** A teammate ticking **Add to IPFS** on a file recorded the intent but moved no bytes: the
+  pin pass was the only thing that assigns a CID and publishes the manifest, and it only ran for repos whose
+  `pinned` flag a manual "Pin now" had flipped. On a repo nobody ever pressed that button for (the
+  2026-08-03 `~/BGit/all` case), no manifest ever reached the company sync repo — so every other computer's
+  Pull down read 0, correctly, forever. Fixed by the **decision-triggered pin**
+  ([decisions.mdx §19.1](./decisions.mdx)).
+* **Receive half.** The background pin pass skipped a `pinned=false` repo **before** writing its sync-repo
+  marker and reconciling — so even when a peer's manifest DID arrive in the company repo, an opted-out repo
+  never folded it in. The send opt-in (`pinned`) must never gate receiving: the skip path still runs
+  `ensureSyncRepoMarker` + `reconcileFromSyncRepo` (marker + fold only — no bytes move, nothing publishes).
+Receive-while-opted-out runs in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (the `!cfg.pinned` background branch).
+
 **Acceptance (this warning).**
 
 * With the Tower having pinned a git-ignored big file in a company-owned working repo, the laptop's One-Repo
