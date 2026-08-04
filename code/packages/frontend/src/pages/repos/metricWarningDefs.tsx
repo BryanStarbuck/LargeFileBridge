@@ -246,7 +246,10 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
           name: "compress",
           label: "Compress",
           helper: "queue a compress pass once the bytes arrive",
-          defaultChecked: true,
+          // OFF by default (warnings.mdx §10.8.12 B): pulling a file down must copy it EXACTLY as the
+          // peer has it — never alter bytes unless the user deliberately opts in. Default-on also made
+          // the composed action button lead with "Compress", reading as if the pull's job was to compress.
+          defaultChecked: false,
         },
       ],
       actionLabel: "",

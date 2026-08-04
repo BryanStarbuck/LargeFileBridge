@@ -505,11 +505,25 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
   const by = currentUser(req).email;
   try {
     const repoRoot = repoRootFor(folder);
+    log.info("repos", `${folder}: pull starting for ${body.data.paths.length} file(s) by ${by ?? "?"}`);
     const counts = await pullMissing(repoRoot, body.data.paths, { compress: !!body.data.compress, by });
     log.info(
       "repos",
       `${folder}: pulled ${counts.pulled} file(s), ${counts.failed} failed (compress=${!!body.data.compress}) by ${by ?? "?"}`,
     );
+    // A pull that failed (fully or partially) must SAY so — the old unconditional 200 made the popup's
+    // progress card report "N files pulled" while zero bytes arrived and the metric stayed put (the
+    // 2026-08-04 defect). Partial success still errors: the refreshed metric shows what actually landed.
+    if (counts.failed > 0) {
+      const why = counts.errors[0] ?? "see the server log";
+      return res.status(502).json({
+        ok: false,
+        error:
+          counts.pulled > 0
+            ? `Pulled ${counts.pulled} of ${body.data.paths.length} — ${counts.failed} failed: ${why}`
+            : `Could not pull ${counts.failed} file${counts.failed === 1 ? "" : "s"}: ${why}`,
+      });
+    }
     const detail: RepoDetail = await repoDetailWithPins(folder);
     detail.missingPinned = await missingPinnedSafe(repoRoot);
     res.json({ ok: true, data: detail });

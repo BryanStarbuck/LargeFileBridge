@@ -298,6 +298,27 @@ Local-Storage copy and the sync-repo mirror, which stay byte-identical):
 The payoff: two computers editing *different* files never conflict; only two computers editing the
 *same* file's bytes produce a real content fork, which is exactly the case hub §5.3 wants surfaced.
 
+### 6.1 Path separators are POSIX (`/`) on the wire — always (LOCKED, added 2026-08-04)
+
+Every `path` in a manifest is **repo-relative with `/` separators**, regardless of the writing OS. A
+Windows computer that builds entries with `path.relative` naturally produces `\` — and on macOS/Linux a
+`\` is a **literal filename character**, so `jfk\training\videos\clip.mp4` never matches the working
+tree: the pull-down list never clears, and a pull materializes a stray file literally named
+`jfk\training\...` at the repo **root** (the 2026-08-04 defect — 7 files from a Windows laptop).
+
+* **Write side:** the deterministic serializer converts `\` → `/` unconditionally, and entries are sorted
+  **after** normalizing so the order is separator-independent.
+* **Read side (the heal):** every manifest reader normalizes `\` → `/` on load and **folds** entries that
+  then collide (a `\` and a `/` spelling of the same file): keep the entry that knows more (has a CID;
+  else the newer `modified_at`) and **union** the `pinned_by` claims. This heals manifests already written
+  by older Windows builds without waiting for the peer to update.
+* Both read paths obey this — the primary reader **and** the sync-repo mirror's best-effort reader (a
+  merge of an unnormalized incoming copy would re-introduce the duplicate spellings on every reconcile).
+
+*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest-normalize.ts` —
+`normalizeManifestPaths()`, applied in `manifest.service.ts` `readManifestFile()` / `serializeDeterministic()`
+and `tracking-sync.service.ts` `readManifestBestEffort()`. *Regression test:* `manifest-paths.spec.ts`.
+
 ---
 
 ## 7. Publishing — regenerate into Local Storage, mirror to the sync repo

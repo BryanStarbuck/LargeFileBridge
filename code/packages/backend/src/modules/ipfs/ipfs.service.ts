@@ -326,8 +326,8 @@ const PIN_ADD_RETRY_MS = 5_000;
  * on an already-200 response) was read as success and the CID was recorded as pinned here when it was
  * not. Absence of the `Pins` record is now a failure.
  */
-async function pinAddOnce(cid: string): Promise<void> {
-  const guard = stallGuard(PIN_ADD_STALL_MS);
+async function pinAddOnce(cid: string, stallMs: number = PIN_ADD_STALL_MS): Promise<void> {
+  const guard = stallGuard(stallMs);
   guard.touch();
   try {
     const url = `${apiBase()}/pin/add?arg=${encodeURIComponent(cid)}&recursive=true&progress=true`;
@@ -356,18 +356,23 @@ async function pinAddOnce(cid: string): Promise<void> {
  * daemon busy with GC) before giving up, and THROWS when the pin did not land — callers must treat that
  * as "not pinned here" and never record a pin claim for it (see pin.service `runUnitPin`/`pullMissing`).
  */
-export async function pinAdd(cid: string): Promise<void> {
+export async function pinAdd(cid: string, opts: { stallMs?: number; attempts?: number } = {}): Promise<void> {
+  // Interactive callers (the pull-down popup) pass a TIGHTER stall budget — a user is watching, and bytes
+  // that ARE flowing keep resetting the guard, so a short idle deadline only fails genuinely-dead peers
+  // faster. Background pin passes keep the generous default.
+  const stallMs = opts.stallMs ?? PIN_ADD_STALL_MS;
+  const attempts = opts.attempts ?? PIN_ADD_ATTEMPTS;
   for (let attempt = 1; ; attempt++) {
     try {
-      await pinAddOnce(cid);
+      await pinAddOnce(cid, stallMs);
       bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
       return;
     } catch (e) {
       const stalledOrAborted = isAbortError(e);
-      if (stalledOrAborted && attempt < PIN_ADD_ATTEMPTS) {
+      if (stalledOrAborted && attempt < attempts) {
         log.info(
           "ipfs",
-          `pin add ${cid} stalled (no progress for ${PIN_ADD_STALL_MS}ms) on attempt ${attempt} — retrying`,
+          `pin add ${cid} stalled (no progress for ${stallMs}ms) on attempt ${attempt} — retrying`,
         );
         await delay(retryDelayMs(PIN_ADD_RETRY_MS, attempt));
         continue;
@@ -375,6 +380,48 @@ export async function pinAdd(cid: string): Promise<void> {
       log.error("ipfs", `pin add failed for ${cid} after ${attempt} attempt(s): ${(e as Error).message}`);
       throw e;
     }
+  }
+}
+
+/**
+ * Fast availability probe: is ANY peer providing this CID right now? Streams `routing/findprovs`
+ * (num-providers=1) for up to `timeoutMs` and answers as soon as one provider record arrives. Used by
+ * `pullMissing` as a PRE-FLIGHT so a pull whose only holder is an offline laptop fails in seconds with a
+ * "that computer looks offline" message instead of wedging a pin/add for its full 3 × 10-minute stall
+ * budget (the 2026-08-04 "the metric never updates" hang). Best-effort and non-throwing: an RPC error or
+ * a daemon that doesn't support the command answers `null` ("unknown"), which callers must treat as
+ * "proceed with the pull" — only a clean zero-provider timeout is evidence of absence.
+ */
+export async function hasProvider(cid: string, timeoutMs = 30_000): Promise<boolean | null> {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs); // FIXED wall clock — routing chatter must not extend it
+  t.unref?.();
+  try {
+    const url = `${apiBase()}/routing/findprovs?arg=${encodeURIComponent(cid)}&num-providers=1`;
+    const res = await fetch(url, { method: "POST", signal: ctrl.signal });
+    if (!res.ok) return null;
+    // Reuse the NDJSON line reader with an inert guard (the real deadline is the wall clock above).
+    const inert = stallGuard(timeoutMs * 10);
+    try {
+      for await (const line of ndjsonLines(res, inert)) {
+        let rec: { Type?: number };
+        try {
+          rec = JSON.parse(line) as typeof rec;
+        } catch {
+          continue;
+        }
+        if (rec.Type === 4) return true; // Type 4 = a Provider record was found
+      }
+    } finally {
+      inert.clear();
+    }
+    return false; // stream ended with no provider record
+  } catch (e) {
+    if (isAbortError(e)) return false; // our timeout fired with zero providers seen
+    log.warn("ipfs", `findprovs failed for ${cid} (treating availability as unknown): ${(e as Error).message}`);
+    return null;
+  } finally {
+    clearTimeout(t);
   }
 }
 

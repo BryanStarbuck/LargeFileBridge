@@ -108,7 +108,15 @@ http.interceptors.response.use(
 
 // Unwrap the { ok, data } envelope; throw the error string on failure.
 export async function unwrap<T>(p: Promise<{ data: { ok: boolean; data?: T; error?: string } }>): Promise<T> {
-  const res = await p;
+  let res: { data: { ok: boolean; data?: T; error?: string } };
+  try {
+    res = await p;
+  } catch (e) {
+    // A non-2xx response still carries our { ok:false, error } envelope — surface the SERVER'S reason
+    // ("the computer holding it looks offline"), not axios's generic "Request failed with status 502".
+    const serverError = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
+    throw serverError ? new Error(serverError) : e;
+  }
   if (!res.data.ok) throw new Error(res.data.error || "request failed");
   return res.data.data as T;
 }

@@ -102,7 +102,10 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
         } catch (e) {
           clientLog.error("Progress.run", e);
           failures.push(spec.target);
-          toast.error(`${verb(spec.kind)} ${spec.target} failed`);
+          // Carry the server's reason when it has one — "Pin all failed" alone tells the user nothing
+          // when the real answer is "the computer holding the file looks offline".
+          const why = e instanceof Error && e.message ? ` — ${e.message}` : "";
+          toast.error(`${verb(spec.kind)} ${spec.target} failed${why}`, { duration: 10000 });
         } finally {
           setJob(id, null); // the card leaves the instant its job finishes (success OR error)
         }

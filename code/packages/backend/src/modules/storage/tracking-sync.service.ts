@@ -24,6 +24,7 @@ export { mergeManifests } from "./manifest-merge.js";
 import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
+import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 // The working-tree gate — a LEAF module (logging + path only), so no cycle with the git service.
 import { deferWhileBusy } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
@@ -194,7 +195,13 @@ function readManifestBestEffort(file: string, unit: Manifest["unit"]): Manifest 
     if (raw.includes("<<<<<<<")) return empty; // conflict markers — treat as nothing to merge
     const parsed = YAML.parse(raw) as Partial<Manifest> | null;
     if (!parsed || !Array.isArray(parsed.files)) return empty;
-    return { schema_version: parsed.schema_version ?? 1, unit: parsed.unit ?? unit, files: parsed.files as ManifestFile[] };
+    // Same POSIX-separator heal as the primary reader (manifest.service.ts): a Windows peer's mirrored
+    // copy carries `\` paths, and merging those unnormalized would re-introduce duplicate spellings of
+    // the same file into Local Storage on every reconcile.
+    return normalizeManifestPaths(
+      { schema_version: parsed.schema_version ?? 1, unit: parsed.unit ?? unit, files: parsed.files as ManifestFile[] },
+      file,
+    );
   } catch {
     return empty;
   }

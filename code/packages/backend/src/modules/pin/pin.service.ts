@@ -953,7 +953,7 @@ export async function pullMissing(
   repoRoot: string,
   checkedPaths: string[],
   opts: { compress?: boolean; by?: string | null } = {},
-): Promise<{ pulled: number; failed: number }> {
+): Promise<{ pulled: number; failed: number; errors: string[] }> {
   let manifest: Manifest;
   try {
     // The SAME manifest `missingPinnedFromPeers` built the list from (storage_company.mdx §8.6). This read
@@ -963,13 +963,14 @@ export async function pullMissing(
     manifest = readRepoTrackingManifest(repoRoot);
   } catch (e) {
     log.warn("pin", `pullMissing: cannot read tracking manifest for ${repoRoot}: ${(e as Error).message}`);
-    return { pulled: 0, failed: checkedPaths.length };
+    return { pulled: 0, failed: checkedPaths.length, errors: [(e as Error).message] };
   }
   const byPath = new Map(manifest.files.map((f) => [f.path, f]));
   const pinset = await pinnedCidSet();
   const by = opts.by ?? null;
   let pulled = 0;
   let failed = 0;
+  const errors: string[] = []; // first few per-file failure reasons — the route surfaces these to the popup
   let healed = false; // any wrapper-directory CID rewritten below → persist the manifest afterwards
 
   // Bounded fan-out through the same global IPFS limiter the pin pass uses, so many pulls don't stampede
@@ -980,6 +981,7 @@ export async function pullMissing(
         const entry = byPath.get(rel);
         if (!entry || !entry.cid) {
           failed++;
+          if (errors.length < 3) errors.push(`${rel}: no manifest CID`);
           log.warn("pin", `pullMissing: no manifest CID for ${rel} in ${repoRoot} — skipping`);
           return;
         }
@@ -995,7 +997,34 @@ export async function pullMissing(
             healed = true;
           }
           if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
-            await ipfs.pinAdd(entry.cid); // fetch + hold the bytes locally (does NOT re-add / mint a new CID)
+            // PRE-FLIGHT (warnings.mdx §10.8.12 C): is any computer actually providing these bytes right
+            // now? The only holder is often a laptop that is asleep/offline — without this check the
+            // pin/add below wedges for its full 3 × 10-minute stall budget per file while the user watches
+            // a metric that "never updates". A clean zero-provider answer fails the file in seconds with a
+            // message that names the peer; an inconclusive probe (null) proceeds — absence of evidence
+            // from a quick DHT query must never block a pull that would have worked.
+            const avail = await ipfs.hasProvider(entry.cid);
+            if (avail === false) {
+              const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
+              throw new Error(
+                `no computer is currently providing this file — ${holder} looks offline. Bring it online and try again.`,
+              );
+            }
+            // Tight interactive stall budget (2 min idle × 2 attempts): a user is watching this pull. A
+            // transfer that is MOVING keeps resetting the guard (never cut off); one with zero bytes for
+            // 2 minutes — a stale DHT provider record for an offline laptop that slipped past the
+            // pre-flight — fails in ~4 minutes instead of the background pass's 30.
+            try {
+              await ipfs.pinAdd(entry.cid, { stallMs: 2 * 60_000, attempts: 2 }); // fetch + hold locally (no re-add)
+            } catch (e) {
+              if (/abort|stall/i.test((e as Error).message ?? "") || (e as Error).name === "AbortError") {
+                const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
+                throw new Error(
+                  `the transfer never started — ${holder} looks offline. Bring it online and try again.`,
+                );
+              }
+              throw e;
+            }
             pinset.add(ipfs.canonicalCid(entry.cid));
           }
           if (!fs.existsSync(abs)) {
@@ -1005,6 +1034,7 @@ export async function pullMissing(
           log.info("pin", `Pulled ${rel} <- ${entry.cid} (added by ${entry.pinned_by.find((d) => d !== computerLabel()) ?? "a peer"})`);
         } catch (e) {
           failed++;
+          if (errors.length < 3) errors.push(`${path.basename(rel)}: ${(e as Error).message}`);
           log.warn("pin", `pullMissing: pull failed for ${rel} (${entry.cid}): ${(e as Error).message}`);
           return;
         }
@@ -1053,7 +1083,7 @@ export async function pullMissing(
   }
 
   log.info("pin", `pullMissing ${path.basename(repoRoot)}: pulled ${pulled}, failed ${failed} (compress=${Boolean(opts.compress)}).`);
-  return { pulled, failed };
+  return { pulled, failed, errors };
 }
 
 function expandHome(p: string): string {
