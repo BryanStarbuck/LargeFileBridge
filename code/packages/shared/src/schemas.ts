@@ -102,6 +102,15 @@ export const AppConfigSchema = z.object({
       check_only: z.boolean().default(false),
     })
     .prefault({}),
+  // The Git backbone's WRITE switch (git_backbone.mdx §6). `auto_commit` OFF makes every backbone on this
+  // computer READ-ONLY: cycles still fetch and fast-forward so other computers' edits land here, but LFB
+  // never creates a commit (checkpoint, merge, or SDL write-back) and never pushes from this machine. A
+  // merge that cannot fast-forward is surfaced as a problem instead of being committed.
+  git_backbone: z
+    .object({
+      auto_commit: z.boolean().default(true),
+    })
+    .prefault({}),
   // Mass-parallelization policy (parallelization.mdx §4). `max_core_fraction` ∈ (0,1] tunes the
   // MASS-COMPUTE core budget — round(cores × fraction) — used for user-kicked-off batch CPU work
   // (compression, fingerprinting, batch transcode). Default 0.9 = "use up to ~90% of cores". Read LIVE

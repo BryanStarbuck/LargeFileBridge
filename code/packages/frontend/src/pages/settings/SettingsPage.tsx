@@ -147,6 +147,27 @@ export function SettingsPage() {
       </Section>
 
       <Section
+        title="Git auto-commit"
+        subtitle="Whether Large File Bridge may commit and push tracking text from this computer."
+      >
+        <label className="flex items-start gap-2">
+          <input
+            type="checkbox"
+            checked={data.gitBackbone.autoCommit}
+            onChange={(e) => save.mutate({ gitBackbone: { autoCommit: e.target.checked } })}
+            className="mt-0.5"
+          />
+          <span className="text-sm text-black/70">
+            Automatically commit and push from this computer
+            <span className="mt-1 block text-xs text-black/50">
+              When off, this computer becomes read-only: it still fetches your other computers' changes
+              (fast-forward only), but Large File Bridge never creates a commit or pushes anything from here.
+            </span>
+          </span>
+        </label>
+      </Section>
+
+      <Section
         title="Authentication"
         state={authConfigured ? "ok" : "bad"}
         right={

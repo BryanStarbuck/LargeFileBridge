@@ -38,6 +38,7 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
     },
     allowedEmails: c.access.allowed_emails,
     access: getSecurityAccess(),
+    gitBackbone: { autoCommit: c.git_backbone.auto_commit },
     performance: {
       maxCoreFraction: c.performance.max_core_fraction,
       cores: logicalCores(),
@@ -86,6 +87,8 @@ const SettingsPatch = z.object({
     })
     .partial()
     .optional(),
+  // The Git backbone's write switch (git_backbone.mdx §6) — read LIVE by the engine, no restart needed.
+  gitBackbone: z.object({ autoCommit: z.boolean() }).partial().optional(),
 });
 
 settingsRouter.patch("/", async (req, res) => {
@@ -126,6 +129,7 @@ settingsRouter.patch("/", async (req, res) => {
         if (p.ipfs.reprovideStrategy !== undefined) c.ipfs.reprovide_strategy = p.ipfs.reprovideStrategy;
         if (p.ipfs.publicGateway !== undefined) c.ipfs.public_gateway = p.ipfs.publicGateway;
       }
+      if (p.gitBackbone?.autoCommit !== undefined) c.git_backbone.auto_commit = p.gitBackbone.autoCommit;
       return c;
     });
     res.json({ ok: true, data: await toGlobalSettings() });

@@ -22,6 +22,7 @@ import { canonicalize } from "../../shared/store/yaml-store.js";
 import { storageUnitDir } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
+import { getAppConfig } from "../store-model/config.service.js";
 import { LFBRIDGE_DIR } from "../storage/storage-type.service.js";
 import { stableGitBin } from "./git-bin.js";
 // The working-tree gate: no outside writer may dirty a working copy while git is mid-cycle in it
@@ -200,6 +201,17 @@ export function resolutionFor(p: string): ConflictResolution {
 }
 
 export type RemoteKind = "local" | "url";
+
+/** The Git write switch (settings `git_backbone.auto_commit`). OFF = every backbone on this computer is
+ *  READ-ONLY: fetch + fast-forward only, no commits of any kind, no push. Read LIVE each cycle so a
+ *  settings change lands on the next pass with no restart; an unreadable config never blocks the flow. */
+export function gitAutoCommitEnabled(): boolean {
+  try {
+    return getAppConfig().git_backbone.auto_commit;
+  } catch {
+    return true;
+  }
+}
 
 /** The outcome of one Git cycle — enough for the caller to surface a problem or report what happened. */
 export interface GitCycleResult {
@@ -487,6 +499,10 @@ export class GitBackbone {
   }
 
   private async pullInner(result: GitCycleResult): Promise<void> {
+    // AUTO-COMMIT OFF ⇒ READ-ONLY PULL. The normal path below writes the tree (heals) and creates commits
+    // (checkpoint, merge, conflict resolution) — none of which this computer may do when the user has
+    // switched the backbone's writes off. Fetch + fast-forward keeps incoming edits landing here.
+    if (!gitAutoCommitEnabled()) return this.pullReadOnly(result);
     // Write the union-merge `.gitattributes` BEFORE the merge (not only in commitAndPush, which runs
     // after): git reads `.gitattributes` from the working tree at merge time, so the shared SDL lists
     // (SyncList, manifest, decisions ledger) only fold conflict-free once this file is present. On a fresh
@@ -575,6 +591,33 @@ export class GitBackbone {
       await this.git.merge(["--abort"]).catch(() => {});
       result.conflicts = conflicts;
       result.problem = `Git merge conflict on ${conflicts.length || "several"} file(s) — resolve with your Git tools. (${(e as Error).message})`;
+    }
+  }
+
+  /** The read-only pull (`git_backbone.auto_commit` off): fetch, then FAST-FORWARD ONLY. This machine may
+   *  not create a merge commit, so a diverged branch is SURFACED as a problem instead of merged, and the
+   *  working tree is never written (no heals, no checkpoint, no quarantine). */
+  private async pullReadOnly(result: GitCycleResult): Promise<void> {
+    const branch = await this.branch();
+    try {
+      await this.git.fetch("origin", branch);
+      result.fetched = true;
+    } catch (e) {
+      const failure = classifyRemoteFailure(e as Error);
+      result.problem = failure.problem;
+      if (failure.kind === "offline") result.offline = true;
+      return;
+    }
+    try {
+      const before = await this.git.revparse(["HEAD"]).catch(() => "");
+      await this.git.merge(["--ff-only", `origin/${branch}`]);
+      const after = await this.git.revparse(["HEAD"]).catch(() => "");
+      result.merged = before !== after;
+    } catch (e) {
+      result.problem =
+        `Auto-commit is disabled on this computer, so the fetched origin/${branch} was not merged ` +
+        `(fast-forward not possible: ${(e as Error).message.split("\n")[0]}). ` +
+        `Merge with your Git tools or re-enable auto-commit in Settings.`;
     }
   }
 
@@ -862,6 +905,11 @@ export class GitBackbone {
    */
   async commitAndPush(result: GitCycleResult): Promise<void> {
     if (result.conflicts?.length) return; // don't commit on top of an unresolved conflict
+    if (!gitAutoCommitEnabled()) {
+      // The user's switch, not a fault — the skip is still SAID (no silent no-ops), once per cycle.
+      log.info("git", `${this.dir}: auto-commit is disabled in settings — nothing committed or pushed`);
+      return;
+    }
     return withWorktreeBusy(this.dir, () => this.commitAndPushInner(result));
   }
 

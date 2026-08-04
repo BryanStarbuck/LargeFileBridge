@@ -198,6 +198,7 @@ export const api = {
     personalAccounts?: PersonalAccount[];
     ipfs?: Record<string, unknown>;
     performance?: { maxCoreFraction: number };
+    gitBackbone?: { autoCommit: boolean };
   }) => unwrap<GlobalSettings>(http.patch("/settings", patch)),
   // Pending cross-member company-ownership mappings awaiting this member's review (repo_owner_propagation.mdx §4).
   companyMappingsPending: () => unwrap<PendingCompanyMapping[]>(http.get("/company-mappings/pending")),

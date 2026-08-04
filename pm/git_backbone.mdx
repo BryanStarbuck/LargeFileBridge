@@ -780,6 +780,20 @@ Knowing and publishing the build is implemented in code:
 Detecting staleness, fast-forwarding the checkout, and naming stale peers is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `buildState()` / `runningStaleCode()` / `runSelfUpdate()` / `stalePeersAcrossStorages()` / `stalePeerMessage()`, driven from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `checkOwnBuild()` on the existing watchdog tick, and reported by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /api/health`.
 
+### 6.8 The write switch — auto-commit can be turned OFF per computer
+
+A setting (`git_backbone.auto_commit` in `config.yaml`, on the Settings page as "Git auto-commit",
+default **on**) makes every backbone on this computer **read-only** when turned off. The cycle still
+**fetches and fast-forwards**, so the other computers' edits keep landing here — but this machine may
+not author anything: no checkpoint commit, no merge commit, no SDL write-back commit, no artifact
+commit, **no push**. A remote that cannot be fast-forwarded is *surfaced as a problem*, never merged
+(a merge is a commit). The `.gitattributes`/`.gitignore` heals are also skipped — a heal is a working-tree
+write that would sit uncommitted in the repo. The switch is read **live** each cycle, so flipping it
+needs no restart; the skip is logged, never silent.
+
+Reading the switch and the read-only pull are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `gitAutoCommitEnabled()` / `GitBackbone.pullReadOnly()`, gating `GitBackbone.commitAndPush()`; artifact delivery honors it in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `convergeWorkingRepoFromOrigin()`.
+
 ---
 
 ## 7. Compliance boundary — the charter's no-relay posture, in Git terms (LOCKED)

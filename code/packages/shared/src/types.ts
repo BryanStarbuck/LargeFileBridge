@@ -693,6 +693,9 @@ export interface GlobalSettings {
   };
   allowedEmails: string[];
   access: SecurityAccess; // full allow-list (companies + individuals) — security.mdx §7.3
+  // The Git backbone's write switch (git_backbone.mdx §6). OFF = this computer only fetches/fast-forwards;
+  // it never auto-commits or pushes tracking text or artifacts.
+  gitBackbone: { autoCommit: boolean };
   // Mass-parallelization knob (parallelization.mdx §4 / settings.mdx §4.3). `maxCoreFraction` is the
   // fraction of CPU cores the mass-compute Core Budget may use for background compression & processing
   // (0.01–1, default 0.9 = 90%); `cores` is this machine's logical-core count (read-only) so the UI can

@@ -24,7 +24,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { RepoSyncBlock } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
-import { openRepo, parseBlockedPaths } from "../git/git.service.js";
+import { openRepo, parseBlockedPaths, gitAutoCommitEnabled } from "../git/git.service.js";
 import { isTransientNetworkError, hostFromGitError, whenOnline } from "../../shared/net-transient.js";
 import { repairLegacyArtifactIgnores } from "../git/gitignore.service.js";
 import { resolveStorageType, usesLfbridgeDir, LFBRIDGE_DIR } from "../storage/storage-type.service.js";
@@ -76,6 +76,12 @@ export async function syncWorkingRepoArtifacts(repoRoot: string): Promise<RepoAr
   const root = path.resolve(expandHome(repoRoot));
   if (!isWorkingGitRepo(root)) return result;
   if (!fs.existsSync(path.join(root, LFBRIDGE_DIR))) return result; // no quarantine → nothing of ours to ship
+  if (!gitAutoCommitEnabled()) {
+    // The user's write switch (settings `git_backbone.auto_commit`) covers artifact delivery too — not
+    // even the `.gitignore` heal may write this repo. The skip is said, never silent.
+    log.info("sync", `${root}: auto-commit is disabled in settings — artifact commit + push skipped`);
+    return result;
+  }
   result.ran = true;
 
   result.healed = repairLegacyArtifactIgnores(root);
@@ -157,7 +163,9 @@ export async function convergeWorkingRepoFromOrigin(
     return { converged: false, problem: null };
   }
   // Heal locally too: a poisoned .gitignore on the RECEIVING machine would re-strand its own future writes.
-  const healed = repairLegacyArtifactIgnores(root);
+  // Skipped when auto-commit is off — the heal is a write that would then sit uncommitted in the user's
+  // repo (and block every future fast-forward that touches .gitignore).
+  const healed = gitAutoCommitEnabled() ? repairLegacyArtifactIgnores(root) : [];
   try {
     const git = openRepo(root);
     const remotes = await git.getRemotes();
