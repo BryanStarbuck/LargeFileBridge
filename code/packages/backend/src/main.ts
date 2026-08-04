@@ -44,6 +44,7 @@ import { eventsRouter } from "./modules/events/events.router.js";
 import { syncBackboneOnBoot } from "./modules/storage/backbone-freshness.service.js";
 import { startWatchdog } from "./modules/schedule/watchdog.service.js";
 import { schedulePullRetryIfPending } from "./modules/pin/pull-retry.service.js";
+import { startAutoSyncIn } from "./modules/pin/auto-sync-in.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { resolveStateDir } from "./config/state-dir.js";
@@ -118,6 +119,14 @@ async function bootstrapState(): Promise<void> {
   void schedulePullRetryIfPending().catch((e) =>
     log.warn("main", `pull-retry boot check failed: ${(e as Error).message}`),
   );
+  // Arm the hourly auto-sync-in timer (storage_company.mdx §14.3): companies with the machine-local
+  // auto_sync_in radio ON automatically pull down teammates' pinned+decided files. The timer always runs;
+  // a run with the setting off everywhere is a no-op list filter, so idle cost is effectively zero.
+  try {
+    startAutoSyncIn();
+  } catch (e) {
+    log.warn("main", `auto-sync-in failed to start: ${(e as Error).message}`);
+  }
   // Fetch + reconcile every storage's backbone ONCE at boot (storage_company.mdx §8.9). The app that has
   // just been opened should show what the user's other computers already know on its FIRST page, not its
   // second. Deliberately NOT awaited: boot must never wait on the network. This is also the belt to the

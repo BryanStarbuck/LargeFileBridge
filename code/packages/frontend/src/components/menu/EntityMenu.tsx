@@ -64,7 +64,7 @@ export interface Action {
 // "Create" fronts the page-action menu (page_actions.mdx) — the producing actions (Create Transcriptions /
 // Create AI descriptions) sit above the page's Work offers (compress / git-ignore). The rest are the
 // per-entity catalog groups (menus.mdx §5).
-const GROUP_ORDER = ["Create", "Open", "IPFS", "Decision", "Work", "Config", "Flag", "Copy", "Danger"];
+const GROUP_ORDER = ["Create", "Open", "IPFS", "Sync", "Decision", "Work", "Config", "Flag", "Copy", "Danger"];
 
 // ── Position ───────────────────────────────────────────────────────────────────
 export interface MenuPos {
@@ -221,7 +221,11 @@ export function MenuList({
   actions: Action[];
   run: (fn: () => void | Promise<void>) => () => Promise<void>;
 }) {
-  const groups = GROUP_ORDER.filter((g) => actions.some((a) => a.group === g));
+  // Known groups render in canonical order; a group NOT in GROUP_ORDER still renders (appended at the
+  // end) rather than silently dropping its items — a typo'd group must never yield an empty menu.
+  const known = GROUP_ORDER.filter((g) => actions.some((a) => a.group === g));
+  const unknown = [...new Set(actions.map((a) => a.group))].filter((g) => !GROUP_ORDER.includes(g));
+  const groups = [...known, ...unknown];
   return (
     <>
       {groups.map((g, gi) => (

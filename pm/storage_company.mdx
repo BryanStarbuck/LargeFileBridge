@@ -1125,6 +1125,163 @@ a company.
 12. **The §12 narrative passes end to end** on a machine with 32 orgs: 3 companies, correct adoption, nothing
     created without consent, every repo under exactly one company, and no user-run git (§12.2).
 
+## 14. Auto-sync-in — automatically pulling down what teammates pinned (per-company, LOCAL, default OFF)
+
+Everything up to here makes a teammate's pinned file **visible** on this computer: §8's chain delivers the
+manifest, the red remote-only row, the `Pull down` tile, and the To-Do batch — and then **waits for a
+click**. Auto-sync-in is the opt-in that removes the click: for **one specific company**, this computer
+may **automatically download** the files that other people in the company have IPFS-pinned **and marked
+for sync**, placing each file at the **same relative location** the teammate put it.
+
+### 14.1 The setting — a radio pair on the company's settings page (LOCKED)
+
+On the **company storage's settings page** ([storage_settings.mdx](./storage_settings.mdx)) there is a
+section titled **"Automatically sync in teammates' files"** with a **radio group** — exactly two radio
+buttons, exactly one selected:
+
+* **On** — *"Add files under any repo with this GitHub organization that are IPFS pinned and marked for
+  sync by others in the company. They will automatically sync in."*
+* **Off** — *"Files pinned by teammates appear as recommendations only — nothing downloads to this
+  computer without your click."*
+
+Rules:
+
+* **Default OFF.** A fresh install, a fresh company storage, and every existing machine read **Off** until
+  the user flips it. Automatic byte-downloading is exactly the kind of behavior the charter says the user
+  must opt into — LFB surfaces and offers; it acts only when told.
+* **The setting is MACHINE-LOCAL and per-company.** It is saved in the storage's local settings file
+  (`<state>/pin/s/<storage_id>/config.yaml` — the same machine-local `config.yaml` that carries `pinned`,
+  [storage_settings.mdx §5](./storage_settings.mdx)), **never** in the committed `storage.yaml`. One
+  teammate turning it on must not turn it on for anyone else, and a laptop on hotel Wi-Fi may keep it off
+  while the tower at home keeps it on. A user in three companies decides three times.
+* **Radio, not a checkbox — on purpose.** The two states carry different consequences (bytes appear on
+  disk on their own vs. never), so both are spelled out and the user picks one explicitly.
+* **Company storages only.** The section renders only when `type: company`. Personal already syncs the
+  user's own decisions; a community storage has its own rules.
+
+The machine-local flag (plus the pass's cursor, §14.3) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `StorageUnitConfigSchema.auto_sync_in`, read/written by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (the `autoSyncIn` patch field).
+
+### 14.2 What qualifies a file — all four, always (LOCKED)
+
+A file is auto-synced in **only when every one** of these holds:
+
+1. **It lives under a repo owned by this company** — the repo's git remote names an org this company
+   claims (`company.owner_slugs`, §8.4.4), or the repo was manually reassigned into the company. The
+   setting the user turned on names **this** company; it must never pull another company's — or
+   Personal's — files.
+2. **Someone in the company IPFS-pinned it** — the reconciled manifest entry has a **CID** and a
+   `pinned_by` claim from **at least one device that is not this one** (§8.4.3's merged pin claims).
+3. **It is marked for sync** — the travelling decisions ledger records the **`sync`** decision
+   ([decisions.mdx](./decisions.mdx)). A pin without the sync decision is a teammate keeping a private
+   copy; it is not an instruction to distribute.
+4. **It is not already on this disk** — same "decided-but-missing" predicate the manual pull-down and the
+   pull-retry pass use (`missingPinnedFromPeers`). Present bytes are never re-downloaded or overwritten.
+
+**Placement** is the manifest entry's repo-relative path joined to **this computer's** working-repo root —
+the file lands **exactly where the teammate put it** (`videos/clip.mp4` on their machine is
+`videos/clip.mp4` here), because the path travels inside the mirrored `repos/<repoUid>/` manifest
+(§8.4.1) and each computer resolves its own root. No new placement rule is invented: auto-sync-in calls
+the **same** `pullMissing()` the manual action calls, so history events, sidecar events, wrapper-CID
+healing, and provider pre-flight all behave identically.
+
+### 14.3 The hourly background pass — wake, check, act or vanish (LOCKED)
+
+When at least one company has the setting **On**, a background pass runs **once an hour**:
+
+1. **Wake.** An in-process hourly timer (the same self-arming, never-overlapping shape as the 3-hour
+   pull-retry pass). It holds nothing open and does nothing between runs.
+2. **Refresh the company repo.** Run the company SDL's normal backbone cycle (fetch → merge → reconcile →
+   push, §11) so the local checkout reflects what teammates pushed. This also folds their manifests and
+   decisions into Local Storage (§8.4.3) — the reconcile is what makes step 4's predicate see their work.
+3. **"Did anything change since I last ran?"** Compare the backbone checkout's **`HEAD` commit** against
+   the **stored cursor** — the last commit this pass fully processed, kept next to the setting in the same
+   machine-local `config.yaml` (`auto_sync_in.last_seen_sha`). **Unchanged ⇒ shut down immediately.** The
+   whole run is one git cycle and one string compare; an idle hour costs effectively nothing.
+4. **Process.** HEAD moved ⇒ teammates checked something in. For **every repo owned by this company** on
+   this machine, compute the qualifying set (§14.2) and `pullMissing()` it — bytes land at their correct
+   relative paths, history and sidecar events append, and the rows turn from red to local.
+5. **Advance the cursor only on a clean run.** If **every** qualifying file landed, record HEAD as
+   `last_seen_sha`. If any pull failed (holder offline, IPFS unreachable), the cursor **stays**, so the
+   next hourly wake retries — and the existing pull-retry pass is armed too, exactly as after a failed
+   manual pull. A cursor that advances past work it did not finish is a silent data loss of the
+   "it said it synced" kind.
+
+More rules the pass obeys:
+
+* **Per company.** Each company with the setting On is processed independently, under its own storage git
+  lock (§11.3); one company's failure never blocks another's.
+* **Never overlapping.** A run that is still going when the next hour fires is not doubled — same
+  single-flight rule as every other worker in the product.
+* **IPFS down ⇒ do nothing, loudly.** Log it, leave the cursor, try next hour. Never half-run.
+* **Quiet in the log means success**; every skip names its reason (§11.2's "every silent null becomes
+  loud" applies).
+* **This changes no defaults elsewhere.** With the setting Off, behavior is exactly today's: reconcile
+  still runs, rows still appear, recommendations still count — only the automatic download is gated.
+
+The hourly pass is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/auto-sync-in.service.ts` — `startAutoSyncIn()` (the hourly self-arming timer) and `runAutoSyncIn()` (steps 2–5), armed at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+
+### 14.3a Manual trigger — the storage-detail ⋮ menu (power-user)
+
+The storage detail page's header has a **⋮ power-user menu** between the **Index files** button and the
+settings gear. For a **company** storage it holds **"Sync IPFS pinned files from coworkers"**: clicking it
+kicks the **same** hourly pass (§14.3, steps 2–5) **immediately, in the background** — no waiting for the
+next scheduled hour, and the request returns at once. Rules:
+
+* It **forces this company into the run even when its hourly radio (§14.1) is Off**, without flipping the
+  radio — a one-shot pull, not a settings change.
+* It is the **identical code path** as the scheduled hour: same qualifying set (§14.2), same
+  `pullMissing()`, same cursor/pull-retry semantics (§14.3 step 5). Nothing about the manual trigger may
+  fork the behavior.
+* A pass already in flight is reported honestly ("already running") — never doubled (single-flight).
+* Primary use: debugging/testing sync between two computers — invoke it, then verify arrival — instead of
+  waiting up to an hour.
+
+The manual trigger is handled in code:
+route `POST /api/storages/:id/auto-sync-in/run` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts`, calling `runAutoSyncIn({ forceStorageId })` in `auto-sync-in.service.ts`; the ⋮ menu lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` (`powerActions`).
+
+### 14.4 The settings page names the ORGANIZATION the company maps to (LOCKED)
+
+The auto-sync-in sentence says *"any repo with this GitHub organization"* — so the settings page must
+leave **zero doubt which organization that is.** A company storage's settings page shows an
+**Organization** section:
+
+* It displays the **forge org slug(s)** this company claims — `company.owner_slugs` from the committed
+  `storage.yaml` (§8.4.4) — rendered as code (e.g. `ACT3ai`), with the host when known.
+* It explains where the slug comes from: **the organization is a segment of each repo's git remote URL** —
+  the part `git remote -v` shows between the host and the repo name,
+  `https://github.com/`**`ACT3ai`**`/charlie-kirk.git`. That is the string LFB reads out of
+  `.git/config` (§10.1, offline, no forge API), and it is the join deciding which repos this company —
+  and therefore auto-sync-in — covers.
+* **No org bound yet ⇒ say so**, not blank: *"No organization is bound to this company yet — it binds
+  automatically when a repo whose remote names an org resolves to this company (§8.4.4)."* An empty
+  Organization section with auto-sync-in On would be a switch wired to nothing, and the page must never
+  present that silently.
+
+Surfacing the bound org slugs on the settings read is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the `ownerSlugs` field, from `readDescriptor(root).company.owner_slugs`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx`.
+
+### 14.5 Acceptance criteria — §14
+
+1. The company settings page shows the **radio pair** (§14.1) — exactly one selected, **Off by default**,
+   with the On/Off wording above; flipping it persists to the machine-local `config.yaml` and never to the
+   committed `storage.yaml`, so no other member's computer changes behavior.
+2. With the setting **On**, an hourly pass runs: backbone cycle → HEAD-vs-cursor compare → **fast
+   shutdown when nothing changed**; when HEAD moved, every §14.2-qualifying file under every repo owned by
+   this company downloads over IPFS to its **correct repo-relative path** via the same `pullMissing()`
+   as the manual action.
+3. All **four** §14.2 conditions gate every download — company-owned repo, non-self pin claim with a CID,
+   the `sync` decision, absent locally. A pin without the sync decision downloads **nothing**; another
+   company's files download **nothing**; present files are never overwritten.
+4. The cursor (`last_seen_sha`) advances **only on a clean run**; any failed pull leaves it in place and
+   arms the pull-retry pass, so nothing is silently skipped forever.
+5. With the setting **Off** (the default), behavior is exactly the pre-§14 product — rows, tiles, and
+   To-Do recommendations appear, and no byte downloads without a click.
+6. The company settings page's **Organization** section shows the bound org slug(s) with the
+   remote-URL-segment explanation (§14.4), and states plainly when no org is bound yet.
+
 <!--
   Company storage = a company's SHARED big files, one per company. The root (e.g.
   ~/BGit/Bryan_git/act3_large_files_bridge/) is the storage's SYNCABLE DATA LOCATION (small travelling
@@ -1217,4 +1374,20 @@ a company.
   all three resolution rules plus write-back via recordOwnerSlug(). The remaining gap is narrowed to the real
   one: deriveOwnerForRemote() in git.service.ts still returns companyId: null, so the owner block the product
   reads is not yet joined to a company storage row. §8.4.4's code line no longer says the function is missing.
+
+  §14 (NEW, LOCKED) AUTO-SYNC-IN: per-company MACHINE-LOCAL radio pair (On/Off, default OFF) on the company
+  settings page — "automatically sync in IPFS files pinned and marked for sync by other people in the company
+  for repos that map to this company." Saved in pin/s/<id>/config.yaml auto_sync_in (NEVER the committed
+  storage.yaml — one member's opt-in must not opt in the team). Hourly in-process pass (pull-retry shape:
+  self-arming setTimeout, unref, single-flight): backbone cycle → compare HEAD vs auto_sync_in.last_seen_sha
+  cursor → unchanged = shut down fast; changed = for every company-owned repo, pull the qualifying set via the
+  SAME pullMissing() as the manual action. FOUR gates all required: company-owned repo (owner_slugs/manual),
+  CID + NON-SELF pinned_by claim, `sync` decision in the travelling ledger, absent locally. Placement = the
+  manifest's repo-relative path under THIS computer's working-repo root (travels via repos/<repoUid>/).
+  Cursor advances ONLY on a clean run; failures leave it + arm pull-retry. §14.4 the settings page shows the
+  ORGANIZATION the company maps to: owner_slugs rendered as code with the git-remote-URL-segment explanation
+  (github.com/<ORG>/<repo> — read from .git/config, offline), and says so plainly when none is bound.
+  Code: schemas.ts StorageUnitConfigSchema.auto_sync_in; storage-settings.service readStorageSettings
+  (autoSyncIn + ownerSlugs) / writeStorageSettings; modules/pin/auto-sync-in.service.ts startAutoSyncIn/
+  runAutoSyncIn armed from main.ts; StorageSettingsPage.tsx radio pair + Organization section.
 -->

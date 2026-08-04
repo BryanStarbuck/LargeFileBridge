@@ -3,7 +3,7 @@
 // files, and queue media Analysis (transcript / description / visuals-by-time) for a media file.
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
-import { ChevronLeft, RefreshCw, Sparkles, Captions, Settings } from "lucide-react";
+import { ChevronLeft, RefreshCw, Sparkles, Captions, Settings, DownloadCloud } from "lucide-react";
 import { toast } from "sonner";
 import type { StorageFileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName, viewerRouteForName } from "@lfb/shared";
@@ -13,7 +13,7 @@ import { runDescribeFile } from "@/lib/describe";
 import { runOcrFile } from "@/lib/ocr";
 import { PageActions, producingActions } from "@/components/menu/PageActions";
 import { compressAllVideos } from "@/components/menu/domainActions";
-import type { Action } from "@/components/menu/EntityMenu";
+import { ActionsKebab, type Action } from "@/components/menu/EntityMenu";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { DataTable } from "@/components/table/DataTable";
 import type { LfbColumn } from "@/components/table/types";
@@ -57,8 +57,39 @@ export function StorageDetailPage() {
     onError: (e: Error) => { clientLog.error("StorageDetail.transcribeScan", e); toast.error(e.message); },
   });
 
+  // The header ⋮ power-user menu's manual peer sync (storage_company.mdx §14): kick the hourly
+  // auto-sync-in pass NOW in the background instead of waiting for the next scheduled hour.
+  const peerSync = useMutation({
+    mutationFn: () => api.runStoragePeerSync(storageId),
+    onSuccess: (r) => {
+      toast.success(
+        r.alreadyRunning
+          ? "A peer sync is already running — it will pick up teammates' pinned files"
+          : "Peer sync started in the background — pinned files from coworkers will pull in shortly",
+      );
+    },
+    onError: (e: Error) => { clientLog.error("StorageDetail.peerSync", e); toast.error(e.message); },
+  });
+
   const s = data?.storage;
   const d = data?.descriptor;
+
+  // The header ⋮ kebab (between Index files and the settings gear) — power-user actions. The peer-sync
+  // item applies to COMPANY storages only (peers/coworkers are a company concept).
+  const powerActions: Action[] = [
+    ...(s?.type === "company"
+      ? [
+          {
+            id: "peer-sync",
+            label: peerSync.isPending ? "Starting sync…" : "Sync IPFS pinned files from coworkers",
+            icon: <DownloadCloud className="h-3.5 w-3.5" />,
+            group: "Sync",
+            disabled: peerSync.isPending,
+            onSelect: () => peerSync.mutate(),
+          } satisfies Action,
+        ]
+      : []),
+  ];
 
   // The action-links row (page_actions.mdx §4 — Storage detail): producing pair · Compress all videos… ·
   // Re-index files. Index files stays the header primary.
@@ -165,6 +196,8 @@ export function StorageDetailPage() {
             >
               <RefreshCw className={`h-4 w-4 ${index.isPending ? "animate-spin" : ""}`} /> {index.isPending ? "Indexing…" : "Index files"}
             </button>
+            {/* Power-user ⋮ menu — between Index files and the gear. Holds the manual peer sync. */}
+            {powerActions.length > 0 && <ActionsKebab actions={powerActions} title="More actions" />}
             {/* Per-storage settings gear (storage_settings.mdx §1) — keep .lfbridge/ + backing locations. */}
             {s && (
               <Link

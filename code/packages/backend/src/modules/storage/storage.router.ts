@@ -13,7 +13,10 @@ import {
   analyzeStorageFile,
   readBookmarks,
   setBookmark,
+  getStorageRow,
 } from "./storage.service.js";
+// Manual peer-sync trigger (storage_company.mdx §14) — the same pass the hourly timer runs.
+import { runAutoSyncIn, autoSyncInRunning } from "../pin/auto-sync-in.service.js";
 import { readStorageSettings, writeStorageSettings, getMappedDirsView, patchMappedDirs, getOwnedRepos } from "./storage-settings.service.js";
 // Org → company discovery (storage_company.mdx §10): a company IS a forge organization, read off the repos'
 // git remotes. Discovery is read-only; creation happens only from the explicit click below.
@@ -27,6 +30,7 @@ storagesRouter.use(requireAllowListed);
 const BackingPatch = z.object({ enabled: z.boolean(), path: z.string().nullable() }).partial();
 const StorageSettingsPatch = z.object({
   pinned: z.boolean().optional(),
+  autoSyncIn: z.boolean().optional(), // company-only auto-sync-in radio (storage_company.mdx §14.1)
   lfbridge: z.object({ enabled: z.boolean(), path: z.string().nullable() }).partial().optional(),
   backing: z
     .object({
@@ -146,6 +150,29 @@ storagesRouter.post("/:id/index", async (req, res) => {
     res.json({ ok: true, data: await indexStorageById(req.params.id) });
   } catch (e) {
     log.warn("storage", `index ${req.params.id} failed: ${(e as Error).message}`);
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/storages/:id/auto-sync-in/run — the storage-detail ⋮ menu's manual "Sync IPFS pinned files
+// from peers" trigger (storage_company.mdx §14). Kicks the SAME hourly auto-sync-in pass immediately in
+// the background (forcing this company even if its hourly radio is OFF) and returns at once; progress
+// lands in the log like any scheduled run.
+storagesRouter.post("/:id/auto-sync-in/run", (req, res) => {
+  try {
+    const row = getStorageRow(req.params.id);
+    if (!row) throw new Error(`unknown storage ${req.params.id}`);
+    if (row.type !== "company") throw new Error("peer sync applies to company storages only");
+    if (autoSyncInRunning()) {
+      res.json({ ok: true, data: { started: false, alreadyRunning: true } });
+      return;
+    }
+    log.info("pin", `auto-sync-in: manual trigger for ${req.params.id}`);
+    void runAutoSyncIn({ forceStorageId: req.params.id }).catch((e) =>
+      log.warn("pin", `auto-sync-in manual run failed: ${(e as Error).message}`),
+    );
+    res.json({ ok: true, data: { started: true, alreadyRunning: false } });
+  } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
 });

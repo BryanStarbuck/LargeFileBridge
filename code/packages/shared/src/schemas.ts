@@ -817,6 +817,18 @@ export const StorageUnitConfigSchema = z.object({
   // OFF — a storage is known & visited every pass, but its mapped-dir bytes are added/pinned/fetched only
   // once the user opts in. Charter: never pin content without an explicit, user-confirmed action.
   pinned: z.boolean().default(false),
+  // Auto-sync-in (storage_company.mdx §14) — company storages only. When ON, an hourly pass automatically
+  // pulls down files that OTHER members IPFS-pinned AND marked for sync in this company's owned repos.
+  // Default OFF (charter: bytes never appear on disk without an explicit opt-in). Machine-local by design:
+  // one member turning it on must not turn it on for anyone else. `last_seen_sha` is the pass's cursor —
+  // the company backbone HEAD it last FULLY processed; it advances only on a clean run (§14.3).
+  auto_sync_in: z
+    .object({
+      enabled: z.boolean().default(false),
+      last_seen_sha: z.string().nullable().default(null),
+      last_run_at: iso.optional(),
+    })
+    .prefault({}),
   lfbridge: z
     .object({
       enabled: z.boolean().default(true), // keep .lfbridge/ on this computer (default ON — §3)

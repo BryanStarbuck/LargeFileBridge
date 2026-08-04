@@ -443,6 +443,9 @@ export const api = {
   indexStorage: (id: string) => unwrap<StorageIndexResult>(http.post(`/storages/${id}/index`)),
   analyzeStorageFile: (id: string, path: string) =>
     unwrap<StorageAnalyzeResult>(http.post(`/storages/${id}/analyze`, { path })),
+  // Manual peer sync (storage_company.mdx §14) — kick the hourly auto-sync-in pass now, in the background.
+  runStoragePeerSync: (id: string) =>
+    unwrap<{ started: boolean; alreadyRunning: boolean }>(http.post(`/storages/${id}/auto-sync-in/run`)),
   // Per-storage settings (storage_settings.mdx §5): keep .lfbridge/ + where, and the three backing
   // locations (dedicated repo / Google Drive / Dropbox) each ON/OFF with its own path.
   storageSettings: (id: string) => unwrap<StorageSettings>(http.get(`/storages/${id}/settings`)),

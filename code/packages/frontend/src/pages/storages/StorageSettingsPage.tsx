@@ -69,6 +69,69 @@ export function StorageSettingsPage() {
         />
       </Section>
 
+      {/* storage_company.mdx §14.4 — the ORGANIZATION this company maps to. The org is the segment of each
+          repo's git remote URL between the host and the repo name (git remote -v →
+          https://github.com/<ORG>/<repo>.git), read offline from .git/config; it decides which repos this
+          company — and therefore auto-sync-in below — covers. Never rendered blank: an unbound company says so. */}
+      {s.type === "company" && (
+        <Section
+          title="Organization"
+          subtitle="The GitHub (forge) organization this company maps to. Every repo whose git remote names this organization belongs to this company. The organization is the segment of the remote URL between the host and the repo name — run `git remote -v` in a repo to see it."
+        >
+          {s.ownerSlugs.length > 0 ? (
+            <div className="space-y-1">
+              {s.ownerSlugs.map((slug) => (
+                <div key={slug} className="text-sm">
+                  <code className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-[13px] dark:bg-neutral-800">{slug}</code>
+                  <span className="ml-2 font-mono text-xs text-black/40">github.com/{slug}/&lt;repo&gt;.git</span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-amber-700">
+              No organization is bound to this company yet — it binds automatically when a repo whose remote
+              names an organization resolves to this company.
+            </p>
+          )}
+        </Section>
+      )}
+
+      {/* storage_company.mdx §14.1 — the auto-sync-in radio pair. Machine-local, default OFF: this
+          computer's choice only; it never travels to teammates. */}
+      {s.type === "company" && (
+        <Section
+          title="Automatically sync in teammates' files"
+          subtitle="Automatically sync in IPFS files pinned and marked for sync by other people in the company, for repos that map to this company. Checked once an hour; files land at the same location in each repo where your teammate put them. This is a choice for this computer only."
+        >
+          <label className="flex items-start gap-2 py-1 text-sm">
+            <input
+              type="radio"
+              name="autoSyncIn"
+              className="mt-0.5"
+              checked={s.autoSyncIn}
+              onChange={() => patch.mutate({ autoSyncIn: true })}
+            />
+            <span>
+              <span className="font-medium">On</span> — add files under any repo with this GitHub organization
+              that are IPFS pinned and marked for sync by others in the company. They will automatically sync in.
+            </span>
+          </label>
+          <label className="flex items-start gap-2 py-1 text-sm">
+            <input
+              type="radio"
+              name="autoSyncIn"
+              className="mt-0.5"
+              checked={!s.autoSyncIn}
+              onChange={() => patch.mutate({ autoSyncIn: false })}
+            />
+            <span>
+              <span className="font-medium">Off</span> — files pinned by teammates appear as recommendations
+              only; nothing downloads to this computer without your click. (default)
+            </span>
+          </label>
+        </Section>
+      )}
+
       {/* §3 the tracking area. The `.lfbridge/` control is `repo`-ONLY: a dedicated Large File Bridge file
           repo (personal / company / community) has NO hidden .lfbridge/ — its root IS the tracking area
           (artifact_placement_policy.mdx §0). So there is nothing to toggle or relocate for one, and offering

@@ -2212,6 +2212,12 @@ export interface StorageSettings {
   type: StorageType;
   root: string;
   pinned: boolean;         // the per-storage IPFS-pinning opt-in (default OFF) — gates mapped-dir byte work
+  // Auto-sync-in (storage_company.mdx §14) — company only, machine-local, default OFF: hourly pass pulls
+  // down files teammates pinned + marked for sync in this company's owned repos.
+  autoSyncIn: boolean;
+  // The forge org slug(s) this company claims (company.owner_slugs in the committed storage.yaml —
+  // storage_company.mdx §8.4.4/§14.4). Empty for non-company storages and for an unbound company.
+  ownerSlugs: string[];
   lfbridge: {
     enabled: boolean;      // keep .lfbridge/ on THIS computer (default ON — §3)
     path: string | null;   // null = default <root>/.lfbridge/ ; else an absolute override
@@ -2232,6 +2238,7 @@ export interface StorageBackingPatch {
 }
 export interface StorageSettingsPatch {
   pinned?: boolean;
+  autoSyncIn?: boolean; // company-only auto-sync-in radio (storage_company.mdx §14.1)
   lfbridge?: { enabled?: boolean; path?: string | null };
   backing?: {
     dedicatedRepo?: StorageBackingPatch;

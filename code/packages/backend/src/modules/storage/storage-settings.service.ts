@@ -154,6 +154,8 @@ export function readStorageSettings(storageId: string): StorageSettings {
     type: row.type,
     root: row.root,
     pinned: cfg.pinned,
+    autoSyncIn: cfg.auto_sync_in.enabled,
+    ownerSlugs: ownerSlugsForRow(row),
     lfbridge: {
       enabled: cfg.lfbridge.enabled,
       path: cfg.lfbridge.path,
@@ -177,6 +179,11 @@ export async function writeStorageSettings(storageId: string, patch: StorageSett
     // Identity mirror is written from the live row (read-only on the page — §5).
     c.storage = { id: row.id, name: row.name, type: row.type, root: row.root };
     if (patch.pinned !== undefined) c.pinned = patch.pinned; // the IPFS-pinning opt-in (the pin pass gates byte work on it)
+    // The auto-sync-in radio (storage_company.mdx §14.1) — company-only, machine-local, default OFF.
+    if (patch.autoSyncIn !== undefined) {
+      if (row.type !== "company") throw new Error("auto-sync-in is a company-storage setting");
+      c.auto_sync_in.enabled = patch.autoSyncIn;
+    }
     if (patch.lfbridge) {
       if (patch.lfbridge.enabled !== undefined) c.lfbridge.enabled = patch.lfbridge.enabled;
       if (patch.lfbridge.path !== undefined) c.lfbridge.path = patch.lfbridge.path;
@@ -227,6 +234,43 @@ export function resolveBackingAbsPath(loc: StorageBackingLocation): string {
  * pass gates a storage's mapped-dir byte work on this, mirroring the repo/computer-unit `pinned` opt-in
  * (pin_process.mdx §1). Reading a not-yet-configured storage returns the schema default (false).
  */
+/** The forge org slug(s) a company storage claims (`company.owner_slugs`, storage_company.mdx §8.4.4/§14.4). */
+function ownerSlugsForRow(row: StorageRow): string[] {
+  if (row.type !== "company") return [];
+  const raw = readDescriptor(row.root)?.company?.owner_slugs;
+  return Array.isArray(raw) ? raw.filter((s): s is string => typeof s === "string" && s.length > 0) : [];
+}
+
+/**
+ * This computer's per-company auto-sync-in opt-in (storage_company.mdx §14.1, default OFF). Gates the
+ * hourly pass that automatically pulls down teammates' pinned+decided files. Machine-local on purpose.
+ */
+export function getStorageAutoSyncIn(storageId: string): boolean {
+  try {
+    return readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).auto_sync_in.enabled;
+  } catch {
+    return false;
+  }
+}
+
+/** The auto-sync-in pass's cursor: the company backbone HEAD it last FULLY processed (§14.3), or null. */
+export function readAutoSyncCursor(storageId: string): string | null {
+  try {
+    return readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).auto_sync_in.last_seen_sha;
+  } catch {
+    return null;
+  }
+}
+
+/** Record an auto-sync-in run: always stamps `last_run_at`; advances the cursor only when `sha` is given. */
+export async function writeAutoSyncCursor(storageId: string, sha: string | null): Promise<void> {
+  await updateYaml(storageConfigPath(storageId), StorageUnitConfigSchema, (c) => {
+    c.auto_sync_in.last_run_at = new Date().toISOString();
+    if (sha !== null) c.auto_sync_in.last_seen_sha = sha;
+    return c;
+  });
+}
+
 export function getStoragePinned(storageId: string): boolean {
   try {
     return readYaml(storageConfigPath(storageId), StorageUnitConfigSchema).pinned;
@@ -440,6 +484,28 @@ function normalizeCompanyName(s: string | null | undefined): string {
  * §3/§6). This mirrors how computePendingMappings treats companyId (manual) while still surfacing the auto
  * no-org repos §4c asks for.
  */
+/**
+ * The tracked-repo FOLDERS owned by a company storage, with each repo's working-tree root — the unit the
+ * auto-sync-in pass iterates (storage_company.mdx §14.3 step 4). Same ownership join as getOwnedRepos,
+ * but keyed by folder so callers can reach getRepoConfig(folder).decisions.
+ */
+export function getOwnedRepoFolders(storageId: string): Array<{ folder: string; repoRoot: string }> {
+  const row = requireRow(storageId);
+  if (row.type !== "company") return [];
+  const out: Array<{ folder: string; repoRoot: string }> = [];
+  for (const folder of listRepoFolders()) {
+    try {
+      const cfg = getRepoConfig(folder);
+      if (!ownerMatchesCompany(ownerForRepoConfig(cfg), row)) continue;
+      if (!cfg.repo.path) continue;
+      out.push({ folder, repoRoot: expandHome(cfg.repo.path) });
+    } catch {
+      /* an unreadable repo config is skipped here; getOwnedRepos already logs it */
+    }
+  }
+  return out;
+}
+
 function ownerMatchesCompany(owner: RepoOwner, row: StorageRow): boolean {
   if (owner.kind !== "company") return false;
   if (owner.companyId) return owner.companyId === row.id;
