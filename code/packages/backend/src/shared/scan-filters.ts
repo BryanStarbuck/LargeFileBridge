@@ -127,6 +127,29 @@ export function isTransientDownloadFile(name: string): boolean {
   return YTDLP_FORMAT_RE.test(name) || TEMP_SUFFIX_RE.test(name) || PART_FRAG_RE.test(name);
 }
 
+// Live database working files — the on-disk internals of an embedded database engine that a RUNNING
+// process rewrites continuously. The canonical case: AI_Coding's Go backend keeps a Badger store at
+// data/badger/, whose memtables (.mem), value logs (.vlog), and tables (.sst) are created and deleted
+// every few seconds by compaction. Each of those add/deletes passed the watcher's big-threshold test and
+// queued ANOTHER full discovery rescan, so the scan progress bar never went away — the moment a 188-repo
+// walk finished, the queued follow-up started (observed 2026-08-04). These files are never payload
+// (opaque engine internals, not user media), never a candidate, and never a reason to wake the watcher.
+//   * Badger: .vlog / .mem / .sst  * LevelDB/RocksDB: .ldb / .sst / MANIFEST-*  * SQLite: -wal / -shm /
+//     -journal  * Redis: .aof  — extension- and exact-name-based, matched on the basename alone.
+const DB_WORKING_EXT = new Set([".vlog", ".mem", ".sst", ".ldb", ".aof"]);
+const DB_WORKING_NAME = new Set(["MANIFEST", "KEYREGISTRY", "DISCARD", "LOCK", "CURRENT"]);
+const SQLITE_SIDECAR_RE = /-(wal|shm|journal)$/i;
+const MANIFEST_NUM_RE = /^MANIFEST-\d+$/;
+
+/** True when `name` is a live database engine's working file (Badger/LevelDB/RocksDB/SQLite scratch) —
+ *  skipped by the scan walk and the watcher's qualifying test so DB compaction churn can never queue a
+ *  rescan or become a candidate row. */
+export function isDatabaseWorkingFile(name: string): boolean {
+  if (DB_WORKING_EXT.has(path.extname(name).toLowerCase())) return true;
+  if (DB_WORKING_NAME.has(name) || MANIFEST_NUM_RE.test(name)) return true;
+  return SQLITE_SIDECAR_RE.test(name);
+}
+
 // Documents that are not media (no player, no IPFS payload) but ARE analysis targets — today just PDF, which
 // the OCR tab reads by rasterizing each page (ocr.mdx §1.7.1). Kept SEPARATE from isMediaFile on purpose: a
 // PDF must never be treated as pin payload or a compress candidate, only admitted for analysis (rule 5).

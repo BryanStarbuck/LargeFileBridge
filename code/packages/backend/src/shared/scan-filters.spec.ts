@@ -6,7 +6,7 @@
 //      failed with file_not_found and auto-decide pinned a path that no longer existed.
 //   2. Real media files — including ones with dots, dashes, and long numeric names — are untouched.
 import { describe, it, expect } from "vitest";
-import { isTransientDownloadFile, isMediaFile } from "./scan-filters.js";
+import { isTransientDownloadFile, isMediaFile, isDatabaseWorkingFile } from "./scan-filters.js";
 
 describe("isTransientDownloadFile", () => {
   it("matches yt-dlp per-format intermediates (the bug's exact filenames)", () => {
@@ -46,5 +46,38 @@ describe("isTransientDownloadFile", () => {
     // This is exactly why the walk needs the separate transient test: extension alone admits it.
     expect(isMediaFile("2079684519762993659.fhls-662.mp4")).toBe(true);
     expect(isTransientDownloadFile("2079684519762993659.fhls-662.mp4")).toBe(true);
+  });
+});
+
+// The database-working-file filter (2026-08-04): a running Badger store (AI_Coding data/badger/)
+// churned big .mem/.vlog adds every few seconds; each one queued another full discovery rescan, so
+// the scan progress bar never ended. Contract: DB engine internals never qualify, real media does.
+describe("isDatabaseWorkingFile", () => {
+  it("matches Badger / LevelDB / RocksDB working files", () => {
+    expect(isDatabaseWorkingFile("04975.mem")).toBe(true);
+    expect(isDatabaseWorkingFile("047384.vlog")).toBe(true);
+    expect(isDatabaseWorkingFile("050851.sst")).toBe(true);
+    expect(isDatabaseWorkingFile("000123.ldb")).toBe(true);
+    expect(isDatabaseWorkingFile("MANIFEST")).toBe(true);
+    expect(isDatabaseWorkingFile("MANIFEST-000042")).toBe(true);
+    expect(isDatabaseWorkingFile("KEYREGISTRY")).toBe(true);
+    expect(isDatabaseWorkingFile("DISCARD")).toBe(true);
+    expect(isDatabaseWorkingFile("LOCK")).toBe(true);
+    expect(isDatabaseWorkingFile("CURRENT")).toBe(true);
+  });
+
+  it("matches SQLite sidecars and Redis AOF", () => {
+    expect(isDatabaseWorkingFile("app.db-wal")).toBe(true);
+    expect(isDatabaseWorkingFile("app.db-shm")).toBe(true);
+    expect(isDatabaseWorkingFile("app.db-journal")).toBe(true);
+    expect(isDatabaseWorkingFile("appendonly.aof")).toBe(true);
+  });
+
+  it("never matches real media or ordinary files", () => {
+    expect(isDatabaseWorkingFile("movie.mp4")).toBe(false);
+    expect(isDatabaseWorkingFile("photo.jpg")).toBe(false);
+    expect(isDatabaseWorkingFile("manifest.json")).toBe(false);
+    expect(isDatabaseWorkingFile("lockscreen.png")).toBe(false);
+    expect(isDatabaseWorkingFile("notes.txt")).toBe(false);
   });
 });

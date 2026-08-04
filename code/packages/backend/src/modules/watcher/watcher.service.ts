@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { WatcherState } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
-import { HARD_SKIP, isMediaFile, isTransientDownloadFile } from "../../shared/scan-filters.js";
+import { HARD_SKIP, isDatabaseWorkingFile, isMediaFile, isTransientDownloadFile } from "../../shared/scan-filters.js";
 import { startScan } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
 
@@ -163,6 +163,9 @@ function isQualifying(abs: string, threshold: number): boolean {
   // fragment became a permanent row (scan.mdx §4.3.1). The final merged file's own appearance still
   // qualifies, so the rescan that matters is never lost.
   if (isTransientDownloadFile(name)) return false;
+  // A running embedded database (Badger/LevelDB/SQLite) churns big working files every few seconds; each
+  // one queued another full rescan, keeping the scan bar up forever (scan.mdx §2.2 / 2026-08-04).
+  if (isDatabaseWorkingFile(name)) return false;
   if (isMediaFile(name)) return true; // video/image/audio — add or delete both matter
   try {
     const st = fs.statSync(abs); // present → this is an add/appear; size decides

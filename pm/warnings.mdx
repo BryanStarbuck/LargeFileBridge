@@ -2378,6 +2378,13 @@ file runs a fast **provider probe** (`routing/findprovs`, first provider record 
 command → `null`) proceeds to the pull — absence of evidence from a quick DHT query must never block a pull
 that would have worked. *Probe in:* `code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `hasProvider(cid)`,
 called from `pullMissing()`.
+The probe can pass on a **stale DHT provider record** for a peer that has since gone offline, so the pull
+path also uses a **tight interactive stall budget** on `pin add` (2-minute idle × 2 attempts, vs the
+background pass's 10 × 3) — safe because a transfer that is *moving* keeps resetting the guard. And the
+stall guard itself had to be fixed to make ANY of this work: Kubo emits an **unchanged `{"Progress": n}`
+heartbeat every second even when zero blocks are arriving**, and resetting the guard on every received
+chunk defeated the watchdog completely (the eternal-hang defect) — the guard now resets **only when the
+Progress value increases** (`pinAddOnce()`).
 And the route is **honest about failure**: `POST /:repoId/pull` returns an **error (502)** whenever ≥1
 checked file failed — carrying the first per-file reason — instead of the old unconditional 200 that made
 the progress card toast "N files pulled" while zero bytes arrived. Partial success still errors; the

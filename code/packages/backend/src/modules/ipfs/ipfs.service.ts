@@ -329,12 +329,20 @@ const PIN_ADD_RETRY_MS = 5_000;
 async function pinAddOnce(cid: string, stallMs: number = PIN_ADD_STALL_MS): Promise<void> {
   const guard = stallGuard(stallMs);
   guard.touch();
+  // Kubo emits an UNCHANGED {"Progress": n} heartbeat every second even when ZERO blocks are arriving, so
+  // resetting the stall guard on every received chunk (what ndjsonLines does) defeats the watchdog
+  // completely — a pull whose only provider is an offline laptop "progressed" forever and never stalled
+  // (the 2026-08-04 eternal-hang defect). The guard must reset ONLY on evidence of real progress: an
+  // INCREASED Progress value (more DAG nodes fetched). ndjsonLines therefore gets an inert guard (its
+  // per-chunk touch becomes a no-op); the real guard is touched here, on value increase alone.
+  const inert: StallGuard = { signal: guard.signal, touch() {}, clear() {}, stalled: false };
+  let lastProgress = -1;
   try {
     const url = `${apiBase()}/pin/add?arg=${encodeURIComponent(cid)}&recursive=true&progress=true`;
     const res = await fetch(url, { method: "POST", signal: guard.signal });
     if (!res.ok) throw new Error(`ipfs pin/add -> ${res.status} ${await res.text()}`);
     let confirmed = false;
-    for await (const line of ndjsonLines(res, guard)) {
+    for await (const line of ndjsonLines(res, inert)) {
       let rec: { Pins?: string[]; Progress?: number; Message?: string };
       try {
         rec = JSON.parse(line) as typeof rec;
@@ -343,9 +351,16 @@ async function pinAddOnce(cid: string, stallMs: number = PIN_ADD_STALL_MS): Prom
       }
       // Kubo signals a failure DISCOVERED AFTER the 200 header as a trailing {"Message":…} record.
       if (rec.Message && !rec.Pins) throw new Error(`ipfs pin/add: ${rec.Message}`);
+      if (typeof rec.Progress === "number" && rec.Progress > lastProgress) {
+        lastProgress = rec.Progress;
+        guard.touch(); // real progress — more nodes fetched since the last record
+      }
       if (Array.isArray(rec.Pins) && rec.Pins.length > 0) confirmed = true;
     }
-    if (!confirmed) throw new Error(`ipfs pin/add gave no confirmation for ${cid} (pin not established)`);
+    if (!confirmed) {
+      if (guard.stalled) throw new Error(`ipfs pin/add stalled for ${cid} (no progress for ${stallMs}ms)`);
+      throw new Error(`ipfs pin/add gave no confirmation for ${cid} (pin not established)`);
+    }
   } finally {
     guard.clear();
   }
