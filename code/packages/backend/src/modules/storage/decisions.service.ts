@@ -368,7 +368,16 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
   // Stamps per §13: `decided_by:"migrated"`, `decided_at:` the config file's mtime (best-known time, and
   // deliberately OLD so any real teammate event for the same path wins the last-writer fold).
   try {
-    const cacheOnly = Object.entries(getRepoConfig(folder).decisions).filter(([p]) => !folded.has(p));
+    // Compare and stamp POSIX-normalized paths, exactly like the fold. A Windows-era enum key
+    // (`jfk\training\...`) that only differs from a folded POSIX key by separators is NOT cache-only —
+    // treating it as one re-appended the same "migrated" events with a fresh mtime on EVERY reconcile
+    // (2026-08-04: 1,500+ "LFB: 1 decisions" commits/day and a 122k-line decisions.yaml).
+    const cacheOnlyByKey = new Map<string, string>();
+    for (const [p, d] of Object.entries(getRepoConfig(folder).decisions)) {
+      const key = p.replace(/\\/g, "/");
+      if (!folded.has(key)) cacheOnlyByKey.set(key, d);
+    }
+    const cacheOnly = [...cacheOnlyByKey.entries()];
     if (cacheOnly.length > 0) {
       const sid = decisionSid(folder, repoRoot);
       let decidedAt: string;
@@ -411,6 +420,15 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
   const changed: string[] = [];
   await updateRepoConfig(folder, (c) => {
     changed.length = 0; // reset in case updateYaml re-runs this mutator (read-modify-write retry)
+    // Heal Windows-era backslash keys in place: fold them onto their POSIX form so the same file never
+    // exists under two keys (the duplicate is what fed the backfill loop above). POSIX value wins a clash.
+    for (const [p, d] of Object.entries(c.decisions)) {
+      const key = p.replace(/\\/g, "/");
+      if (key !== p) {
+        delete c.decisions[p];
+        if (!(key in c.decisions)) c.decisions[key] = d;
+      }
+    }
     for (const rec of folded.values()) {
       const prev = c.decisions[rec.path]; // "sync" | "ignore" | undefined (undecided)
       const next = !rec.asked ? undefined : rec.ipfs ? "sync" : "ignore";
@@ -752,12 +770,18 @@ export async function seedMigratedLedger(
   const repoRoot = repoRootFor(folder);
   if (!keepsLfbridge(repoRoot)) return -1; // consent off → don't touch the repo root; caller may retry later
   const existing = readLedger(repoRoot);
-  const alreadyMigrated = new Set(existing.filter((e) => e.decided_by === "migrated").map((e) => e.path));
+  // POSIX-normalize both sides of the idempotence check (and the stamped path) so a Windows-era
+  // backslash key can never be re-seeded as a "new" path (same defect shape as the reconcile backfill).
+  const alreadyMigrated = new Set(
+    existing.filter((e) => e.decided_by === "migrated").map((e) => e.path.replace(/\\/g, "/")),
+  );
   const sid = decisionSid(folder, repoRoot);
   const events: DecisionEvent[] = [];
-  for (const [p, v] of Object.entries(enumMap)) {
+  for (const [rawPath, v] of Object.entries(enumMap)) {
+    const p = rawPath.replace(/\\/g, "/");
     if (v !== "sync" && v !== "ignore") continue; // only real decisions; "undecided"/others are skipped
     if (alreadyMigrated.has(p)) continue; // idempotent — don't double-seed a path
+    alreadyMigrated.add(p); // two enum keys folding to one POSIX path seed only once
     events.push({
       sid,
       path: p,
