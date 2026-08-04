@@ -11,7 +11,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import type { Manifest, ManifestFile } from "@lfb/shared";
+import { RepoStorageDocSchema, type Manifest, type ManifestFile } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
 import { repoUidFor } from "./repo-identity.js";
 // The per-entry merge lives in a LEAF module so units.service can fold both manifests on the read path
@@ -169,11 +169,32 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     // "it eventually shows up" is indistinguishable from "it is broken" while you are staring at the screen.
     // The trigger resolves the SDL by root prefix, and `dst` IS inside the SDL, so it lands correctly here
     // (the case it cannot resolve is a path inside a working repo — not this one).
+    // Scrub the machine-local scan heartbeat from the MIRRORED repo_storage.yaml. `last_scan.at` re-stamps
+    // on EVERY scan, and every backbone pull triggers scans — so mirroring it verbatim made each storage's
+    // auto-commit re-dirty the other storage's sync repo in an endless last_scan ping-pong (the 2026-08-04
+    // "two sync repos fighting" defect; same churn shape as backbone_resilience.mdx's device-file fix).
+    // With last_scan held at its schema default here, the mirror's bytes change only when REAL state
+    // (counts, name, policy) changes, so a pure-heartbeat scan produces zero commits.
+    scrubVolatileRepoStorage(path.join(dst, "repo_storage.yaml"));
     noteArtifactWritten(dst, "tracking-state");
     return true;
   } catch (e) {
     log.warn("storage", `mirrorToSyncRepo(${repoRoot}) failed (path missing/unwritable): ${(e as Error).message}`);
     return false;
+  }
+}
+
+/** Rewrite a MIRROR copy of repo_storage.yaml with `last_scan` reset to its schema default, serialized
+ *  exactly like writeRepoStorage (deterministic key order) so an otherwise-unchanged doc is byte-stable
+ *  across mirrors. Best-effort: an unparseable file is left as copied. */
+function scrubVolatileRepoStorage(file: string): void {
+  try {
+    const parsed = RepoStorageDocSchema.safeParse(YAML.parse(fs.readFileSync(file, "utf8")) ?? {});
+    if (!parsed.success) return;
+    parsed.data.repo_storage.last_scan = RepoStorageDocSchema.parse({ repo_storage: {} }).repo_storage.last_scan;
+    fs.writeFileSync(file, YAML.stringify(parsed.data, { sortMapEntries: true }), "utf8");
+  } catch {
+    /* missing/unreadable mirror copy — nothing to scrub */
   }
 }
 
@@ -249,8 +270,27 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
       fs.mkdirSync(dst, { recursive: true });
       fs.writeFileSync(localLedger, serializeLedger(merged), "utf8");
     }
+    // 2b. repo_storage.yaml — a MERGE that PRESERVES the local `last_scan` stamp. The mirror's copy is
+    // scrubbed of last_scan on purpose (see mirrorToSyncRepo); a wholesale copy would blank this machine's
+    // stamp on every pull, making the stale-scan trigger re-scan constantly — which re-stamps and re-mirrors,
+    // i.e. the exact churn loop the scrub exists to break.
+    const incomingStorage = path.join(src, "repo_storage.yaml");
+    if (fs.existsSync(incomingStorage)) {
+      try {
+        const incoming = RepoStorageDocSchema.safeParse(YAML.parse(fs.readFileSync(incomingStorage, "utf8")) ?? {});
+        if (incoming.success) {
+          const localFile = path.join(dst, "repo_storage.yaml");
+          const local = RepoStorageDocSchema.safeParse(YAML.parse(readFileOrNull(localFile) ?? "") ?? {});
+          if (local.success) incoming.data.repo_storage.last_scan = local.data.repo_storage.last_scan;
+          fs.mkdirSync(dst, { recursive: true });
+          fs.writeFileSync(localFile, YAML.stringify(incoming.data, { sortMapEntries: true }), "utf8");
+        }
+      } catch (e) {
+        log.warn("storage", `reconcile: repo_storage fold failed for ${dst}: ${(e as Error).message}`);
+      }
+    }
     // 3. everything else — append-only / union-folded shapes tolerate a copy
-    copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml"]));
+    copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"]));
     return true;
   } catch (e) {
     log.warn("storage", `reconcileFromSyncRepo(${repoRoot}) failed: ${(e as Error).message}`);
