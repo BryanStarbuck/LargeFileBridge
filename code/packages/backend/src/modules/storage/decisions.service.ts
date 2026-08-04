@@ -141,7 +141,13 @@ export function readLedger(repoRoot: string): DecisionEvent[] {
 export function foldLedger(events: DecisionEvent[]): Map<string, FoldedDecision> {
   const latest = new Map<string, DecisionEvent>();
   for (const e of events) {
-    const key = e.path; // fold by PATH ALONE (ledger is per-storage); sid is provenance, NOT a fold key
+    // Fold by PATH ALONE (ledger is per-storage); sid is provenance, NOT a fold key. The path is
+    // POSIX-normalized (`\` → `/`) HERE, at the fold — not in the union merge, whose event identity must
+    // stay byte-exact — so a Windows peer's `jfk\training\...` events and this computer's
+    // `jfk/training/...` events resolve to ONE decision per file (repo__list_syns.mdx §6.1; without this,
+    // a Windows-recorded pin decision never matched the normalized manifest path and the background
+    // fetch-missing pass skipped the file forever).
+    const key = e.path.replace(/\\/g, "/");
     const prev = latest.get(key);
     if (
       !prev ||
@@ -152,10 +158,10 @@ export function foldLedger(events: DecisionEvent[]): Map<string, FoldedDecision>
     }
   }
   const folded = new Map<string, FoldedDecision>();
-  for (const e of latest.values()) {
-    folded.set(e.path, {
+  for (const [key, e] of latest.entries()) {
+    folded.set(key, {
       sid: e.sid,
-      path: e.path,
+      path: key,
       asked: e.asked,
       ipfs: e.ipfs,
       gitignore: e.gitignore,

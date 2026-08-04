@@ -43,6 +43,7 @@ import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules
 import { eventsRouter } from "./modules/events/events.router.js";
 import { syncBackboneOnBoot } from "./modules/storage/backbone-freshness.service.js";
 import { startWatchdog } from "./modules/schedule/watchdog.service.js";
+import { schedulePullRetryIfPending } from "./modules/pin/pull-retry.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { resolveStateDir } from "./config/state-dir.js";
@@ -112,6 +113,11 @@ async function bootstrapState(): Promise<void> {
   } catch (e) {
     log.warn("main", `pin watchdog failed to start: ${(e as Error).message}`);
   }
+  // Arm the 3-hour pull-retry timer iff any user-decided pull is still waiting for its bytes (an offline
+  // holder computer — warnings.mdx §10.8.12 C.3). Self-stopping at zero pending; a failed pull re-arms it.
+  void schedulePullRetryIfPending().catch((e) =>
+    log.warn("main", `pull-retry boot check failed: ${(e as Error).message}`),
+  );
   // Fetch + reconcile every storage's backbone ONCE at boot (storage_company.mdx §8.9). The app that has
   // just been opened should show what the user's other computers already know on its FIRST page, not its
   // second. Deliberately NOT awaited: boot must never wait on the network. This is also the belt to the

@@ -440,6 +440,24 @@ export async function hasProvider(cid: string, timeoutMs = 30_000): Promise<bool
   }
 }
 
+/**
+ * NUDGE: dial a specific peer directly (`swarm/connect /p2p/<peerId>`). Kubo finds providers passively,
+ * but a peer that just came back online behind NAT may not be discovered for a while — an explicit dial
+ * makes "is that computer reachable right now?" a question we ASK instead of wait on, and an established
+ * connection lets the very next pin/add fetch from it immediately. Best-effort: false on any failure
+ * (peer offline / unroutable), never throws. Used by the pull-retry pass (pull_retry.mdx / warnings.mdx
+ * §10.8.12 C.3).
+ */
+export async function swarmConnect(peerId: string, timeoutMs = 20_000): Promise<boolean> {
+  try {
+    await rpc("swarm/connect", { args: [`/p2p/${peerId}`], timeoutMs });
+    return true;
+  } catch (e) {
+    log.info("ipfs", `swarm connect to ${peerId} failed (peer offline?): ${(e as Error).message}`);
+    return false;
+  }
+}
+
 export async function pinRm(cid: string): Promise<void> {
   try {
     await rpc("pin/rm", { args: [cid], query: { recursive: "true" } });

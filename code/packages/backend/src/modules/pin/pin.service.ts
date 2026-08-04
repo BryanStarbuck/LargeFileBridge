@@ -292,6 +292,14 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
               entry.cid = fileCid; // persisted below by t.writeManifest — the bad CID stops being retried
             }
             if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
+              // Same fast availability probe as the interactive pull (warnings.mdx §10.8.12 C.1): when the
+              // only holder is offline, fail this file in seconds instead of spending the full pin-add
+              // stall budget on it EVERY 15-minute pass. Inconclusive (null) proceeds.
+              if ((await ipfs.hasProvider(entry.cid)) === false) {
+                counts.failed++;
+                log.warn("pin", `fetch skipped for ${entry.path}: no computer is currently providing it (holder offline?)`);
+                return;
+              }
               await ipfs.pinAdd(entry.cid); // hold a local copy first…
               pinset.add(ipfs.canonicalCid(entry.cid));
               counts.pinned++;

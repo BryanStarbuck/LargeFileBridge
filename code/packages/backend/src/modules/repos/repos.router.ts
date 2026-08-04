@@ -17,11 +17,14 @@ import {
 } from "../store-model/units.service.js";
 import { startScan, getScanJob, maybeTriggerStaleScan } from "../scanner/scan-job.js";
 import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing } from "../pin/pin.service.js";
+import { schedulePullRetry } from "../pin/pull-retry.service.js";
 import {
   recordDecision,
   readDecisionPolicy,
   setDecisionPolicy,
   shareStatus,
+  readLedger,
+  foldLedger,
 } from "../storage/decisions.service.js";
 import { effectiveFlags } from "../store-model/config.service.js";
 import { ensureSyncRepoMarker } from "../storage/tracking-sync.service.js";
@@ -506,6 +509,21 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
   try {
     const repoRoot = repoRootFor(folder);
     log.info("repos", `${folder}: pull starting for ${body.data.paths.length} file(s) by ${by ?? "?"}`);
+    // Record the PIN DECISION first (decisions.mdx §1): clicking "Add to IPFS (pin)" in the pull-down
+    // popup IS the user's sync decision for these files. Persisting it — before the transfer, so a
+    // failed pull still keeps the intent — takes each file out of the offer-only `knownFromPeers` set,
+    // which means the 15-minute background pin pass AUTO-FETCHES it the moment the peer computer comes
+    // back online; the user never has to press the button again. Each file's existing git-ignore axis is
+    // preserved (recordDecision coerces an omitted axis to false, so it must be passed explicitly).
+    try {
+      const folded = foldLedger(readLedger(repoRoot));
+      const ignored = body.data.paths.filter((p) => folded.get(p)?.gitignore === true);
+      const notIgnored = body.data.paths.filter((p) => folded.get(p)?.gitignore !== true);
+      if (ignored.length) await recordDecision(folder, ignored, { ipfs: true, gitignore: true }, by);
+      if (notIgnored.length) await recordDecision(folder, notIgnored, { ipfs: true }, by);
+    } catch (e) {
+      log.warn("repos", `${folder}: could not record pull-down pin decisions: ${(e as Error).message}`);
+    }
     const counts = await pullMissing(repoRoot, body.data.paths, { compress: !!body.data.compress, by });
     log.info(
       "repos",
@@ -515,6 +533,10 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
     // progress card report "N files pulled" while zero bytes arrived and the metric stayed put (the
     // 2026-08-04 defect). Partial success still errors: the refreshed metric shows what actually landed.
     if (counts.failed > 0) {
+      // The decision above is recorded, so these files auto-retry: the 15-min pin pass keeps trying, and
+      // the 3-hour pull-retry pass adds a direct dial of the holder's IPFS peer (self-stopping at zero
+      // pending — warnings.mdx §10.8.12 C.3).
+      schedulePullRetry(`${counts.failed} pull(s) failed for ${folder} — holder offline?`);
       const why = counts.errors[0] ?? "see the server log";
       return res.status(502).json({
         ok: false,

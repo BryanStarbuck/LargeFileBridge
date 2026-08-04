@@ -2385,6 +2385,34 @@ stall guard itself had to be fixed to make ANY of this work: Kubo emits an **unc
 heartbeat every second even when zero blocks are arriving**, and resetting the guard on every received
 chunk defeated the watchdog completely (the eternal-hang defect) — the guard now resets **only when the
 Progress value increases** (`pinAddOnce()`).
+
+**(C.2) The click IS the decision — a failed pull auto-retries (added 2026-08-04).** Clicking **Add to
+IPFS (pin)** in this popup records a **`sync` decision** (`ipfs: true`, existing git-ignore axis
+preserved) for every checked file **before** the transfer is attempted, so the intent survives a failed
+pull. A recorded `sync` decision takes the file out of the offer-only `knownFromPeers` set
+([storage_company.mdx §8.5](./storage_company.mdx)), which means the **15-minute background pin pass
+auto-fetches it** — the moment the peer computer comes back online, the bytes arrive with **no further
+user action**, and the Pull-down metric drains on its own. The background fetch-missing pass runs the same
+provider probe first, so an offline holder costs it seconds per pass, not the pin-add stall budget.
+*Decision write in:* `repos.router.ts` `POST /:repoId/pull` (before `pullMissing`); *auto-fetch in:*
+`pin.service.ts` `runUnitPin()` fetch-missing block.
+
+**(C.3) The 3-hour pull-retry pass with a direct peer dial (added 2026-08-04).** On top of the 15-minute
+pass, a dedicated retry wakes **every 3 hours** scoped to exactly the decided-but-not-here set (decision
+`sync` ∧ missing locally — a DERIVED list, never a second ledger: files that land simply drop out of
+`missingPinnedFromPeers` on the next computation). What it adds over the 15-minute pass is the **nudge**:
+before pulling, it **dials each holder device's IPFS peer directly** (`swarm/connect /p2p/<peerId>`, peer
+id from the travelling device registry `devices/<name>.yaml`), so a laptop that just came back online
+behind NAT is found by asking instead of waiting on passive discovery — and an established connection lets
+the very next `pin add` fetch from it immediately. **Self-stopping at zero:** the timer re-arms only while
+something is still pending; when a run finds nothing left it does not reschedule. Re-armed by its kick
+points — server boot (only if pending) and every pull-down Apply that reports failures.
+*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pull-retry.service.ts` —
+`schedulePullRetry()` / `runPullRetry()` / `schedulePullRetryIfPending()`; peer dial in
+`ipfs.service.ts` — `swarmConnect(peerId)`. Interval override for tests: `LFB_PULL_RETRY_MS`. **Prerequisite:** `foldLedger()`
+(`decisions.service.ts`) folds ledger paths POSIX-normalized (`\` → `/`), because a Windows peer's ledger
+events otherwise never match the normalized manifest paths and the background pass would skip the file
+forever (repo__list_syns.mdx §6.1 applies to the decisions ledger fold too).
 And the route is **honest about failure**: `POST /:repoId/pull` returns an **error (502)** whenever ≥1
 checked file failed — carrying the first per-file reason — instead of the old unconditional 200 that made
 the progress card toast "N files pulled" while zero bytes arrived. Partial success still errors; the
