@@ -47,6 +47,7 @@ import {
 // computers has it and this one doesn't yet" (files.mdx §2.1).
 import { readRepoTrackingManifest } from "../pin/manifest.service.js";
 import { sizeOrNull, statOrNull } from "../../shared/fs-probe.js";
+import { relPosix } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
@@ -180,7 +181,7 @@ export async function buildEntityView(
   let peers: string[] = [];
   let pinnedForeign: boolean | undefined;
   if (match) {
-    const rel = path.relative(match.repoPath, e.abs);
+    const rel = relPosix(match.repoPath, e.abs);
     repo = { repoId: match.repoId, name: match.repoName, relPath: rel };
     if (e.kind === "file") {
       const cfg = getRepoConfig(match.folder);
@@ -238,7 +239,7 @@ function remoteOnlyEntity(
 ): { repo: EntityView["repo"]; decision: Decision; cid: string | null; peers: string[]; sizeBytes: number; addedByDevice: string | null } | null {
   const match = enclosingRepo(abs);
   if (!match) return null; // outside every registered repo → no manifest could know it
-  const rel = path.relative(match.repoPath, abs);
+  const rel = relPosix(match.repoPath, abs);
   let manifest: Manifest;
   try {
     manifest = readRepoTrackingManifest(match.repoPath);
@@ -288,7 +289,7 @@ async function buildDirRollup(dirAbs: string, match: RepoMatch | null): Promise<
     const status = getRepoStatus(match.folder);
     scannedAt = status.last_scan_at;
     const cfg = getRepoConfig(match.folder);
-    const dirRelPrefix = path.relative(match.repoPath, dirAbs);
+    const dirRelPrefix = relPosix(match.repoPath, dirAbs);
     for (const c of status.candidates) {
       const under = dirRelPrefix === "" || c.path === dirRelPrefix || c.path.startsWith(dirRelPrefix + "/");
       if (!under) continue;
@@ -424,7 +425,7 @@ export async function setEntityFlags(
     const match = enclosingRepo(abs);
     if (match) {
       await updateRepoConfig(match.folder, (c) => {
-        const relPrefix = path.relative(match.repoPath, abs);
+        const relPrefix = relPosix(match.repoPath, abs);
         for (const rel of Object.keys(c.decisions)) {
           const isUnder =
             relPrefix === "" || rel === relPrefix || rel.startsWith(relPrefix + "/");
@@ -448,7 +449,7 @@ export async function setEntityDecision(input: string, decision: Decision): Prom
   }
   const match = enclosingRepo(abs);
   if (!match) throw new Error("This file isn't inside a registered repo, so it can't be added to IPFS yet.");
-  const rel = path.relative(match.repoPath, abs);
+  const rel = relPosix(match.repoPath, abs);
   await updateRepoConfig(match.folder, (c) => {
     if (decision === "undecided") delete c.decisions[rel];
     else c.decisions[rel] = decision;

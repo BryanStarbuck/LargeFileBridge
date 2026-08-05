@@ -14,6 +14,7 @@ import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
 import { resolveHome } from "../../shared/home-path.js";
+import { joinRel } from "../../shared/rel-path.js";
 
 export const FILES_LIST_CATEGORY_KEYS: FilesListCategoryKey[] = [
   "compress",
@@ -112,7 +113,7 @@ export async function listFilesByCategory(
       continue;
     }
     for (const row of rows) {
-      const abs = path.join(root, row.path);
+      const abs = joinRel(root, row.path);
       if (scope !== "all" && isUnder(scope, root) && !isUnder(abs, scope)) continue;
       for (const key of wanted) if (MATCH[key](row)) buckets.get(key)!.add(abs);
     }
@@ -130,7 +131,7 @@ export async function listFilesByCategory(
     if (!unitInScope(root, scope)) continue;
     unitsSearched++;
     for (const f of readStorageIndex(root, storage.type)) {
-      const abs = path.join(root, f.path);
+      const abs = joinRel(root, f.path);
       if (scope !== "all" && isUnder(scope, root) && !isUnder(abs, scope)) continue;
       const kind = mediaKindForName(f.path);
       if (wanted.includes("compress") && f.compressible !== null) buckets.get("compress")!.add(abs);

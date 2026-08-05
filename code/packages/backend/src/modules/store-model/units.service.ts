@@ -41,6 +41,8 @@ import { resolveStorageType } from "../storage/storage-type.service.js";
 // Leaf modules only — the read path must not pull tracking-sync.service (and its storage.service edge) in.
 import { repoStateDir } from "../storage/tracking-root.service.js";
 import { mergeManifests } from "../storage/manifest-merge.js";
+import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
+import { joinRel, healPathKeyedMap } from "../../shared/rel-path.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { bumpTopics, repoTopic, REPOS_TOPIC } from "../events/state-events.service.js";
 import {
@@ -82,10 +84,26 @@ export function listRepoFolders(): string[] {
 
 // ── Repo unit reads/writes ──────────────────────────────────────────────────
 export function getRepoConfig(folder: string): RepoUnitConfig {
-  return readYaml(unitConfigPath(repoUnitDir(folder)), RepoUnitConfigSchema);
+  const cfg = readYaml(unitConfigPath(repoUnitDir(folder)), RepoUnitConfigSchema);
+  // `decisions` is keyed by the repo-relative path, so it obeys §6.1 like the manifest does. A Windows
+  // build (or a peer-seeded decision) spelled those keys with `\`, and every lookup in this file is
+  // `cfg.decisions[cand.path]` against a POSIX candidate — so the decision silently read as Undecided and
+  // the pin pass skipped the file. An already-POSIX key wins any collision: it is this computer's own.
+  const decisions = healPathKeyedMap(cfg.decisions, (posix) => posix);
+  return decisions === cfg.decisions ? cfg : { ...cfg, decisions };
 }
+/**
+ * The UNIT manifest — healed on read like every other manifest reader (repo__list_syns.mdx §6.1).
+ *
+ * This reader was the §6.1 hole. `manifest.service.ts` heals the committed/tracking copies, but the unit
+ * manifest is read straight out of the state store, so a `\` entry that reached it before the heal existed
+ * stayed there forever: `mergeManifests` keys by exact path, so the `\` and `/` spellings never folded, and
+ * `remoteOnlyRows` then emitted a SECOND red pull-down row for the same file — a `\` path can never match the
+ * working tree, so `fs.existsSync` said "not here" every time. That is the duplicate-row defect.
+ */
 export function getRepoManifest(folder: string): Manifest {
-  return readYaml(unitManifestPath(repoUnitDir(folder)), ManifestSchema);
+  const file = unitManifestPath(repoUnitDir(folder));
+  return normalizeManifestPaths(readYaml(file, ManifestSchema), file);
 }
 export function getRepoStatus(folder: string): UnitStatus {
   return readYaml(unitStatusPath(repoUnitDir(folder)), UnitStatusSchema);
@@ -128,7 +146,10 @@ export function writeRepoStatus(folder: string, status: UnitStatus): void {
   bumpTopics(repoTopicsFor(folder));
 }
 export function writeRepoManifest(folder: string, manifest: Manifest): void {
-  writeYaml(unitManifestPath(repoUnitDir(folder)), { ...manifest });
+  const file = unitManifestPath(repoUnitDir(folder));
+  // Heal on the way OUT as well, so the state file itself stops carrying `\` rather than being re-healed on
+  // every read forever. Idempotent: a clean manifest is returned untouched.
+  writeYaml(file, { ...normalizeManifestPaths(manifest, file) });
   bumpTopics(repoTopicsFor(folder));
 }
 /** Exported so other write paths (the reconcile fold) publish the SAME topic set — one repo, one answer. */
@@ -318,7 +339,10 @@ function mergeRepoManifests(folder: string, cfg: RepoUnitConfig): Manifest {
   if (!root) return unit;
   try {
     const abs = path.resolve(expandHome(root));
-    const tracking = readYaml(path.join(repoStateDir(abs), "manifest.yaml"), ManifestSchema);
+    const trackingFile = path.join(repoStateDir(abs), "manifest.yaml");
+    // Healed BEFORE the merge (§6.1): mergeManifests keys by exact path, so folding two manifests that
+    // still disagree about separators just carries both spellings through into the rows.
+    const tracking = normalizeManifestPaths(readYaml(trackingFile, ManifestSchema), trackingFile);
     return mergeManifests(unit, tracking);
   } catch (e) {
     log.debug("units", `tracking manifest fold skipped for ${folder}: ${(e as Error).message}`);
@@ -400,7 +424,7 @@ function composeFileRows(
   const ignoreLookup = repoRootAbs
     ? checkIgnoreVerboseDetailed(
         repoRootAbs,
-        status.candidates.map((c) => path.join(repoRootAbs, c.path)),
+        status.candidates.map((c) => joinRel(repoRootAbs, c.path)),
       )
     : { rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() };
   const ignoreRules = ignoreLookup.rules;
@@ -420,7 +444,7 @@ function composeFileRows(
     // Cheap per-row config read; never let a flag lookup break row composition.
     let neverIpfs = false;
     try {
-      if (repoRootAbs) neverIpfs = effectiveFlags(path.join(repoRootAbs, cand.path)).neverIpfs;
+      if (repoRootAbs) neverIpfs = effectiveFlags(joinRel(repoRootAbs, cand.path)).neverIpfs;
     } catch {
       /* flags unavailable → default false */
     }
@@ -443,7 +467,7 @@ function composeFileRows(
       // this hot path. Only meaningful when the file isn't already surfacing as a decided/sync pin.
       pinnedForeign:
         repoRootAbs && decision !== "sync"
-          ? !!foreignPinByAbsPath(path.join(repoRootAbs, cand.path))
+          ? !!foreignPinByAbsPath(joinRel(repoRootAbs, cand.path))
           : undefined,
       changedAt: cand.modified_at ?? status.last_scan_at ?? new Date(0).toISOString(),
       decidedBy: prov?.decidedBy ?? null,
@@ -515,7 +539,7 @@ export function remoteOnlyRows(
     const peers = (m.pinned_by ?? []).filter((d) => d && d !== selfLabel);
     if (peers.length === 0) continue; // only WE ever claimed it → not a peer's file, just a stale entry
     try {
-      if (fs.existsSync(path.join(repoRootAbs, m.path))) continue; // present here → not remote-only
+      if (fs.existsSync(joinRel(repoRootAbs, m.path))) continue; // present here → not remote-only
     } catch {
       continue; // can't tell → don't invent a row
     }
@@ -594,7 +618,7 @@ function gitIgnoreAxis(
   unknown?: Set<string>,
 ): Pick<FileRow, "gitignore" | "gitignoreLocked" | "gitignoreRule"> {
   if (!repoRootAbs) return { gitignore: false };
-  const abs = path.join(repoRootAbs, relPath);
+  const abs = joinRel(repoRootAbs, relPath);
   // git could not answer for this path (repo gone, not a repo, or check-ignore genuinely failed on it).
   // Leave `gitignore` UNDEFINED — "not determined" — so the ⊘ column, the bigNotIgnored metric and the
   // `ignore` category all skip it instead of asserting a verdict git never gave (git_ignore.mdx §5.4).
@@ -873,7 +897,7 @@ function repoRowStats(
       transferFor(decision, m?.cid ?? null, peers, selfLabel),
       peers,
       cand.analysisOnly === true,
-      !!(repoRootAbs && decision !== "sync" && foreignPinByAbsPath(path.join(repoRootAbs, cand.path))),
+      !!(repoRootAbs && decision !== "sync" && foreignPinByAbsPath(joinRel(repoRootAbs, cand.path))),
     );
   }
   // Files only another of the user's computers holds (storage_company.mdx §8.5). Composed, not

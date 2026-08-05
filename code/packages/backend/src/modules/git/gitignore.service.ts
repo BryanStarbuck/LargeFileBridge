@@ -30,6 +30,7 @@ import type {
 import { expandHome } from "../fs/badges.js";
 import { nearestGitAtOrAbove, checkIgnore, checkIgnoreVerbose } from "./git.service.js";
 import { RESERVED_SDL_ROOT_NAMES, resolveStorageType, usesLfbridgeDir } from "../storage/storage-type.service.js";
+import { relPosix } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
 /** One classified target: an existing file/dir, its owning repo, and its repo-root-relative POSIX path. */
@@ -62,7 +63,7 @@ function isSdlRootPayload(abs: string): boolean {
 
 /** Repo-root-relative, POSIX-separated path (git .gitignore lines are always `/`-separated). */
 function repoRel(repo: string, abs: string): string {
-  return path.relative(repo, abs).split(path.sep).join("/");
+  return relPosix(repo, abs);
 }
 
 /** The anchored .gitignore line(s) for one target (git_ignore.mdx §5.2). */

@@ -51,6 +51,7 @@ import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
+import { relPosix } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { collapseHome } from "../../shared/home-path.js";
 import { stableGitBin } from "../git/git-bin.js";
@@ -1162,7 +1163,7 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
     try {
       const repoRoot = findStorageRootForPath(finalPath);
       if (repoRoot) {
-        const relFinal = path.relative(repoRoot, finalPath);
+        const relFinal = relPosix(repoRoot, finalPath);
         // A format change (extension differs) is a CONVERT (HEIC→JPEG / GIF→PNG) and moves the file to a
         // new path; a same-extension re-encode is a COMPRESS in place. This split drives the event kind,
         // the format:{from,to} field, and whether a decision re-stamp is needed (only on a path change).
@@ -1208,7 +1209,7 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
         if (isConvert) {
           const folder = folderForRepoId(repoIdFromPath(repoRoot));
           if (folder) {
-            const oldRel = path.relative(repoRoot, abs);
+            const oldRel = relPosix(repoRoot, abs);
             await restampOnTransform(folder, oldRel, relFinal, o.by ?? null);
           }
         }
@@ -1256,7 +1257,7 @@ async function alreadyHandled(
   const hasMarker = isAnyMarker(marker);
 
   const root = safeStorageRoot(abs);
-  const rel = root ? path.relative(root, abs) : null;
+  const rel = root ? relPosix(root, abs) : null;
   const hit = root && rel ? ledgerSaysDone(root, rel) : null;
 
   if (!hasMarker && !hit) return null;
@@ -1320,7 +1321,7 @@ function recordOutcome(
   try {
     const root = safeStorageRoot(finalAbs);
     if (!root) return; // a file outside every tracked storage has only its in-file marker — by design
-    const rel = path.relative(root, finalAbs);
+    const rel = relPosix(root, finalAbs);
     writeLedger(
       root,
       rel,

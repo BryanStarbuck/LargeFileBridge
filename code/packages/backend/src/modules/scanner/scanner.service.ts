@@ -41,6 +41,7 @@ import { computerUnitDir, unitConfigPath, unitStatusPath } from "../../shared/st
 import { HARD_SKIP, isMacPackageDir, isMediaFile, isAnalysisCandidate, isTransientDownloadFile, isDatabaseWorkingFile } from "../../shared/scan-filters.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
+import { relPosix, joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
 
@@ -447,7 +448,7 @@ async function walkUnit(
         // tested only on FILES (below), so an excluded directory was still descended into in full — every
         // file inside it stat'd and matched before being thrown away. Pruning here means an excluded tree
         // costs nothing and can never consume the candidate budget.
-        const relDir = path.relative(root, abs);
+        const relDir = relPosix(root, abs);
         if (relDir && dirIsExcluded(relDir)) continue;
         stack.push(abs);
         continue;
@@ -459,7 +460,12 @@ async function walkUnit(
       // A live embedded database's working files (Badger .mem/.vlog/.sst, LevelDB, SQLite -wal) are
       // engine internals rewritten every few seconds — never payload, and gone before any action runs.
       if (isDatabaseWorkingFile(ent.name)) continue;
-      const rel = path.relative(root, abs);
+      // POSIX from the moment it is BUILT (repo__list_syns.mdx §6.1). This value becomes the candidate's
+      // key in status.yaml and, from there, the key in the manifest, the decision ledger and every sidecar,
+      // so a native `\` here is what put Windows spellings into shared state in the first place. It is also
+      // what the `ignore` package expects — a gitignore pattern is POSIX by definition, so on Windows the
+      // native spelling silently failed to match every rule the user wrote.
+      const rel = relPosix(root, abs);
       const relForIgnore = opts.rootLabelAbsolute ? abs : rel;
       if (excl.ignores(rel)) continue;
       // Metadata only — never open the file (scan.mdx §1). Non-throwing: a file that vanished or is
@@ -599,7 +605,7 @@ export async function reconcileExternalState(
   // Probe it, but BOUNDED: only when the node is reachable and the size-prune admits it, and cached so an
   // unchanged file is never re-hashed. This is the background pass paying the hash once (never on a read).
   if (!pinnedCid && ctx.discovery && ctx.discovery.keptSizes.length > 0 && ctx.repoRoot) {
-    const abs = path.join(ctx.repoRoot, file.path);
+    const abs = joinRel(ctx.repoRoot, file.path);
     const mtimeMs = file.modified ? Date.parse(file.modified) : 0;
     try {
       const hit = await discoverForeignPin(abs, file.size, mtimeMs, ctx.discovery);
@@ -630,7 +636,7 @@ export async function reconcileExternalState(
       recordForeignPin({
         cid: priorCid,
         profile: (prior as { ipfs?: { profile?: string } }).ipfs?.profile ?? "recorded",
-        absPath: path.join(ctx.repoRoot, file.path),
+        absPath: joinRel(ctx.repoRoot, file.path),
         size: file.size,
         repoRoot,
       });

@@ -41,6 +41,7 @@ import { resolveBackingLocations } from "./storage-settings.service.js";
 import { readSelfGraft } from "./devices.service.js";
 import { log } from "../../shared/logging.js";
 import { existsAt } from "../../shared/fs-probe.js";
+import { relPosix } from "../../shared/rel-path.js";
 
 export type ArtifactOwner = "repo" | "storage-root" | "dedicated-repo" | "beside";
 
@@ -162,12 +163,15 @@ function resolveOwningStorage(abs: string, index: OwnerStorage[]): { storage: Ow
       }
     }
   }
-  if (best) return { storage: best.storage, rel: path.join(best.key, path.relative(best.localPath, abs)) };
+  // POSIX (repo__list_syns.mdx §6.1): this `rel` is the storage-relative key that travels in the manifest,
+  // and `pin.service resolveStorageAbs` splits it on `/` to find the mapped-dir key. A native `\` join on
+  // Windows makes the whole path one segment — no mapped dir ever matches and the bytes land at the root.
+  if (best) return { storage: best.storage, rel: `${best.key}/${relPosix(best.localPath, abs)}` };
 
   const personal = index.find((s) => s.isPersonal);
   if (personal) {
     const home = path.resolve(os.homedir());
-    if (isUnder(abs, home)) return { storage: personal, rel: path.relative(home, abs) };
+    if (isUnder(abs, home)) return { storage: personal, rel: relPosix(home, abs) };
   }
   return null;
 }
@@ -245,7 +249,7 @@ export function resolveArtifactPlacement(input: string): ArtifactPlacement {
     // must travel with the repo (header comment above + artifact_placement_policy.mdx §0). The old `true`
     // here described the retired beside-media nudge era — and a `.gitignore` that actually excludes
     // `.lfbridge/` strands artifacts (repaired by artifact-committability.service.ts).
-    return { root: containing, rel: path.relative(containing, abs), gitIgnore: false, owner, needsSetup: false };
+    return { root: containing, rel: relPosix(containing, abs), gitIgnore: false, owner, needsSetup: false };
   }
 
   // B. Owning company/personal storage → its dedicated repo (no gitignore), else its own root.

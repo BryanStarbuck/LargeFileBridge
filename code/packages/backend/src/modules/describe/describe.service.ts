@@ -44,6 +44,7 @@ import {
 // The provider-account gate (to_fix.mdx §2): preflight before a batch, circuit breaker on an account fault.
 import { preflightProvider, noteProviderFailure, noteProviderSuccess, circuitStatuses, resumeProvider } from "./provider-health.service.js";
 import { fitMediaUnderLimit } from "./fit-media.js";
+import { relPosix } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { txn, txnBegin, txnEnd, type TxnOutcome, type TxnFields } from "../../shared/transactions.js";
 
@@ -191,7 +192,7 @@ function writeRejection(p: {
   fs.writeFileSync(
     p.rejectedPath,
     YAML.stringify({
-      source: path.relative(p.root, p.abs),
+      source: relPosix(p.root, p.abs),
       status: "rejected",
       engine: r.model,
       provider: r.provider,
@@ -446,7 +447,7 @@ export async function describeOne(
         fs.writeFileSync(
           descriptionPath,
           YAML.stringify({
-            source: path.relative(root, abs),
+            source: relPosix(root, abs),
             status: "done",
             engine: model,
             provider: adapter.id,

@@ -14,6 +14,7 @@ import { nearestGitAtOrAbove, checkIgnoreAsync } from "../git/git.service.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { mtimeMsOrNull, sizeOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
+import { relPosix } from "../../shared/rel-path.js";
 import { expandHome } from "../../shared/home-path.js";
 
 // IPFS list artifacts (directory.mdx §3.4, ipfs_share_files.mdx §3). Case-insensitive match.
@@ -219,7 +220,7 @@ function fileIsPinned(fileAbs: string, ctx: FsBadgeContext): boolean {
     }
   }
   if (!best) return false;
-  const rel = path.relative(best.path, fileAbs);
+  const rel = relPosix(best.path, fileAbs);
   return best.decisions[rel] === "sync";
 }
 

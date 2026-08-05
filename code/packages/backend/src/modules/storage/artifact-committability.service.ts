@@ -21,6 +21,7 @@
 import path from "node:path";
 import fs from "node:fs";
 import { execFile } from "node:child_process";
+import { relPosix } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { stableGitBin } from "../git/git-bin.js";
 import { LFBRIDGE_DIR } from "./tracking.service.js";
@@ -81,7 +82,7 @@ export async function ensureArtifactCommittable(absArtifactPath: string): Promis
     const okAt = verifiedOk.get(root);
     if (okAt && now - okAt < VERIFY_TTL_MS) return;
 
-    const rel = path.relative(root, path.resolve(absArtifactPath));
+    const rel = relPosix(root, path.resolve(absArtifactPath));
     // exit 0 = ignored, 1 = not ignored, 128 = error (not a repo, etc.).
     const check = await run(root, ["check-ignore", "-q", "--", rel]);
     if (check.code === 1) {
@@ -181,12 +182,12 @@ export async function auditArtifactCommittability(root: string): Promise<Artifac
   const ls = await run(root, ["ls-files", "-z", "--", LFBRIDGE_DIR]);
   const tracked = new Set(ls.stdout.split("\0").filter(Boolean));
   const untrackedPaths = onDisk
-    .map((p) => path.relative(root, p))
+    .map((p) => relPosix(root, p))
     .filter((rel) => !tracked.has(rel));
 
   // Probe with a path that need not exist — check-ignore evaluates rules, not the filesystem.
   const probe = path.join(LFBRIDGE_DIR, "__lfb_probe__", "probe.mp4.transcription");
-  const probeRel = onDisk.length ? path.relative(root, onDisk[0]) : probe;
+  const probeRel = onDisk.length ? relPosix(root, onDisk[0]) : probe;
   const blocked = await run(root, ["check-ignore", "-v", "--", probeRel]);
 
   const ahead = await run(root, ["rev-list", "--count", "@{upstream}..HEAD"]);

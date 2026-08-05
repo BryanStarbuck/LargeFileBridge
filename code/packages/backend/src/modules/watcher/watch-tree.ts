@@ -22,6 +22,7 @@ import path from "node:path";
 import ignore from "ignore";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { lstatOrNull } from "../../shared/fs-probe.js";
+import { relPosix } from "../../shared/rel-path.js";
 
 const YIELD_EVERY = 500; // hand the event loop back every N directories bound — boot must not block
 const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
@@ -68,7 +69,7 @@ export function makeWatchFilter(root: string, globs: string[]): WatchFilter {
   // Same reasoning, same three probes as `dirIsExcluded` in scanner.service.ts: the gitignore grammar
   // spells "this whole directory" as `foo`, `foo/`, or `foo/**`, and `ignores()` is literal about each.
   const hasNegation = globs.some((g) => g.trimStart().startsWith("!"));
-  const rel = (abs: string): string => path.relative(root, abs).split(path.sep).join("/");
+  const rel = (abs: string): string => relPosix(root, abs);
   const outsideRoot = (r: string): boolean => r === "" || r === ".." || r.startsWith("../");
   const dirIgnored = (r: string): boolean =>
     ignores(r) || ignores(`${r}/`) || (!hasNegation && ignores(`${r}/.lfb-prune-probe`));

@@ -312,12 +312,70 @@ tree: the pull-down list never clears, and a pull materializes a stray file lite
   then collide (a `\` and a `/` spelling of the same file): keep the entry that knows more (has a CID;
   else the newer `modified_at`) and **union** the `pinned_by` claims. This heals manifests already written
   by older Windows builds without waiting for the peer to update.
-* Both read paths obey this — the primary reader **and** the sync-repo mirror's best-effort reader (a
-  merge of an unnormalized incoming copy would re-introduce the duplicate spellings on every reconcile).
+* **EVERY** manifest reader obeys this — the committed reader, the sync-repo mirror's best-effort reader,
+  **and the unit manifest** (`pin/r/<repo>/manifest.yaml`, read straight out of the state store). Missing
+  the last one is what let the defect survive its own fix: `mergeManifests` keys by exact path, so an
+  unhealed `\` entry never folded against the `/` spelling, and the One-Repo table showed **two rows for
+  one file** — a red pull-down row the user could never clear, because a `\` path matches nothing on disk.
+  The unit manifest is healed on WRITE too, so the file itself stops carrying `\` instead of being
+  re-healed forever.
 
 *Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest-normalize.ts` —
-`normalizeManifestPaths()`, applied in `manifest.service.ts` `readManifestFile()` / `serializeDeterministic()`
-and `tracking-sync.service.ts` `readManifestBestEffort()`. *Regression test:* `manifest-paths.spec.ts`.
+`normalizeManifestPaths()`, applied in `manifest.service.ts` `readManifestFile()` / `serializeDeterministic()`,
+`tracking-sync.service.ts` `readManifestBestEffort()`, and `units.service.ts` `getRepoManifest()` /
+`writeRepoManifest()` / `mergeRepoManifests()`. *Regression tests:* `manifest-paths.spec.ts`,
+`unit-manifest-paths.spec.ts`.
+
+### 6.1a The same rule holds for EVERY stored relative path — three distinct operations
+
+A manifest is not the only thing keyed by a repo-relative path. The scan's `status.yaml` candidates, the
+unit config's `decisions:` map, the fingerprint index (`files.yaml`), the per-file sidecars, the decision
+ledger and every analysis artifact's `source:` all use the same key, and they all join against each other.
+One `\` spelling anywhere makes a file **invisible to the join**: the decision reads as Undecided, the pin
+pass skips it, the compress/transcribe tabs lose it, and the rollups under-count it.
+
+Three operations, deliberately kept apart — conflating them **is** the bug:
+
+| Operation | Function | Rule |
+|---|---|---|
+| **Produce** a stored key from an absolute path | `relPosix(root, abs)` | Separator-**aware** (splits on `path.sep`). A POSIX file whose *name* contains `\` keeps it; a Windows separator becomes `/`. |
+| **Consume** a stored key into a local absolute path | `joinRel(root, rel)` | Splits on `/`, re-joins natively. This is the function that decides **where fetched bytes are written**. |
+| **Repair** a key a peer already wrote wrong | `healWindowsPath(p)` | Character-**blind**. Read path of shared/wire state ONLY — never on a path just derived from this computer's disk. |
+
+The per-file sidecar is the sharpest case: its path is mirrored into its **filename**, so a `\` key wrote a
+flat file literally named `jfk\training\clip.mp4.yaml`. That file is a *different* file from the real
+sidecar (the file's history silently forks in two), and `\` is not a legal filename character on Windows —
+so the committed sync repo carrying it **fails to check out** on the very machine that produced it.
+
+*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/rel-path.ts` —
+`relPosix()` / `joinRel()` / `healWindowsPath()` / `healPathKeyedMap()`. Producers: `scanner.service.ts`
+(candidate `rel`), `tracking.service.ts` (index `rel`), `file-sidecar.service.ts` `sidecarPath()`,
+`artifact-placement.service.ts` `owningStorage()`. Consumers: `pin.service.ts` `resolveAbs` /
+`resolveStorageAbs()`, `units.service.ts` `composeFileRows()` / `remoteOnlyRows()`.
+*Regression test:* `rel-path.spec.ts`.
+
+### 6.1b Repairing the damage already on disk (one-time migration)
+
+A read-time heal hides the damage; it does not remove it, and two kinds cannot be healed by a reader at all
+— state files whose keys are `\`-spelled (they keep re-supplying the bad spelling and ship it to peers on
+the next mirror), and the **stray files the defect materialized**. So a one-time, idempotent, marker-guarded
+startup migration:
+
+* rewrites the `\` keys in `pin/r/<repo>/{manifest,status,config}.yaml`, folding collisions by the same
+  rule §6.1 uses on read — and **skips the computer unit**, whose entries are absolute paths where `C:\…`
+  is legitimate;
+* **moves** each stray root file (`jfk\training\clip.mp4`) to the path its own name always described. Never
+  destructive: when the proper path is already taken the stray is left alone and the collision is logged;
+* **merges** a forked sidecar history rather than choosing a side — the `events:` list is append-only, so
+  the two spellings are two halves of one history (on the live repo: one computer's `pull`+`ipfs_pin` in
+  the stray, another's in the proper file). Union the events, keep the correctly-spelled file's identity
+  fields, then drop the stray;
+* repairs the **committed sync-repo mirror** as well. `copyTree` is additive and never deletes, so a stray
+  fixed locally would otherwise live on in the mirror — and that copy is the one Windows cannot clone.
+
+*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-posix-paths.ts` —
+`migratePosixPaths()`, called from `main.ts` before any state is read. *Regression test:*
+`migrate-posix-paths.spec.ts`.
 
 ---
 

@@ -28,6 +28,7 @@ import { selectEngine, engineStatus, ocrLanguage } from "./engines.js";
 import { extractFrames, videoToolsPresent, probeVideo, frameCountFor, collapseDuplicates } from "./frames.js";
 import { renderPdfPages, pdfToolsPresent } from "./pdf.js";
 import { coreBudget } from "../../shared/concurrency.js";
+import { relPosix } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { txn, txnBegin, txnEnd, type TxnOutcome, type TxnFields } from "../../shared/transactions.js";
 
@@ -212,7 +213,7 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
       fs.writeFileSync(
         ocrPath,
         YAML.stringify({
-          source: path.relative(root, abs),
+          source: relPosix(root, abs),
           status: "done",
           engine: engine.id,
           level,

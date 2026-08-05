@@ -40,6 +40,7 @@ import { openRepo } from "../git/git.service.js";
 import { queueDepth, workerUtilization } from "../jobqueue/jobqueue.service.js";
 import { getHardware } from "../storage/hardware.service.js";
 import { expandHome } from "../../shared/home-path.js";
+import { relPosix } from "../../shared/rel-path.js";
 
 // ── the metric catalog (pm/debug.mdx §5.2 — LOCKED) ──────────────────────────────────────────────────
 // Every key here is emitted, ALWAYS, even when empty (§5.3): `[]` means "computed, genuinely zero";
@@ -921,7 +922,7 @@ function makeArtifactProber(root: string, gitCtx: ArtifactGitContext | null): (f
       ];
       const hit = candidates.find(([, p]) => isFileAt(p));
       const expectedAbs = hit ? hit[1] : candidates[0]![1];
-      const rel = path.relative(root, expectedAbs).split(path.sep).join("/");
+      const rel = relPosix(root, expectedAbs);
       out[op] = {
         expected_rel: rel,
         exists: !!hit,

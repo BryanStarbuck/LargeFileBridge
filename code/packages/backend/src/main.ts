@@ -53,6 +53,7 @@ import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
 import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
 import { migrateSyncRepoDefault, repairEmptySyncRepoBlocks } from "./config/migrate-sync-repo-default.js";
+import { migratePosixPaths } from "./config/migrate-posix-paths.js";
 import { log, flushLogs, logError } from "./shared/logging.js";
 import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
 import { recordSessionStart } from "./shared/session.js";
@@ -309,6 +310,11 @@ async function main(): Promise<void> {
   // removed the block's only child. It made every repo unit config unreadable; this must run before anything
   // below reads one.
   repairEmptySyncRepoBlocks(resolveStateDir());
+  // Repair the Windows-separator damage a peer's `\`-spelled paths left on disk (repo__list_syns.mdx §6.1):
+  // rewrite the `\` keys in this computer's unit state and MOVE the stray files a pull materialized at the
+  // repo root (`jfk\training\clip.mp4`) to the path that name always meant. Runs before the state is read,
+  // so the first scan/pin pass already sees one spelling per file. Never destructive, never throws.
+  migratePosixPaths(resolveStateDir());
 
   // One-time, idempotent backfill of the SHARED per-file decision ledger from the legacy machine-local
   // `decisions:` enum (decisions.mdx §13). Runs AFTER the sync→pin migration (it reads pin/r/<repo>/config.yaml)

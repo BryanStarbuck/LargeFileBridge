@@ -20,6 +20,7 @@ import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { storageSid } from "./storage.service.js";
 import { readStorageSettings } from "./storage-settings.service.js";
 import { selfDeviceName } from "./devices.service.js";
+import { joinRel, healWindowsPath } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
 /** The sentinel `by` value for an action LFBridge did NOT do — a scan merely observed it (§3.3). */
@@ -77,7 +78,12 @@ function keepsLfbridge(repoRoot: string): boolean {
  * Honors a relocated `.lfbridge/`.
  */
 export function sidecarPath(repoRoot: string, relPath: string): string {
-  return path.join(trackingDir(repoRoot), "files", `${relPath}.yaml`);
+  // MIRROR the hierarchy — `relPath` is a POSIX key (repo__list_syns.mdx §6.1), so it is split on `/` and
+  // re-joined natively. Interpolating it raw made a `\`-spelled key from a Windows peer into a FLAT file
+  // literally named `jfk\training\…mp4.yaml`, which (a) is a different file from the real sidecar, so the
+  // file's history forked in two, and (b) cannot be checked out on Windows at all — `\` is not a legal
+  // filename character there, so the whole sync repo failed to clone on the machine that wrote it.
+  return `${joinRel(path.join(trackingDir(repoRoot), "files"), healWindowsPath(relPath))}.yaml`;
 }
 
 // ── read / write ───────────────────────────────────────────────────────────────
@@ -155,10 +161,14 @@ export interface SidecarSeed {
 
 /** Build a fresh sidecar doc (identity + empty events) — the create-on-first-special seed. */
 function buildSeed(relPath: string, seed?: SidecarSeed): FileSidecar {
+  // The recorded identity is the POSIX key too (§6.1) — the sidecar travels, and `file.path` is what a peer
+  // joins on. `basename` off the POSIX spelling, so a `\`-spelled key doesn't name the file after its
+  // whole path.
+  const rel = healWindowsPath(relPath);
   return FileSidecarSchema.parse({
     file: {
-      path: relPath,
-      name: seed?.name ?? path.basename(relPath),
+      path: rel,
+      name: seed?.name ?? path.posix.basename(rel),
       categories: seed?.categories ?? [],
       size: seed?.size ?? null,
       created: seed?.created,

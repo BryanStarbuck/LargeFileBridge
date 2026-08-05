@@ -2,6 +2,7 @@
 // tracking-sync.service.ts's best-effort mirror reader — share the one heal without an import cycle.
 import type { Manifest, ManifestFile } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
+import { healWindowsPath, hasWindowsSeparator } from "../../shared/rel-path.js";
 
 /**
  * Manifest paths are POSIX (`/`) ON THE WIRE — always (repo__list_syns.mdx §6.1). A Windows peer that
@@ -10,12 +11,17 @@ import { log } from "../../shared/logging.js";
  * materializes a stray file literally named `jfk\training\...` at the repo ROOT (the 2026-08-04 defect).
  * So EVERY manifest read normalizes `\` → `/` and FOLDS entries that then collide (a `\` and a `/`
  * spelling of the same file): keep the entry with a CID / newest modified_at, union the `pinned_by` claims.
+ *
+ * NOT the computer unit. Its entries are ABSOLUTE paths (pin.service `resolveAbs` is home-expand identity),
+ * so `C:\Users\…` is a legitimate value there and healing it would destroy it. §6.1 is a statement about
+ * REPO-RELATIVE keys; only repo and storage units have them.
  */
 export function normalizeManifestPaths(manifest: Manifest, file: string): Manifest {
-  if (!manifest.files.some((f) => f.path.includes("\\"))) return manifest;
+  if (manifest.unit === "computer") return manifest;
+  if (!manifest.files.some((f) => hasWindowsSeparator(f.path))) return manifest;
   const byPath = new Map<string, ManifestFile>();
   for (const f of manifest.files) {
-    const p = f.path.replace(/\\/g, "/");
+    const p = healWindowsPath(f.path);
     const prev = byPath.get(p);
     if (!prev) {
       byPath.set(p, { ...f, path: p });

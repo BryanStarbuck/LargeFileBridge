@@ -10,6 +10,7 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { compressInfo, HARD_SKIP } from "../fs/badges.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { isFileAt, statOrNull } from "../../shared/fs-probe.js";
+import { relPosix, healWindowsPath, hasWindowsSeparator } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { repoStateDir, resolveStateSyncRepo } from "./tracking-root.service.js";
 import {
@@ -296,7 +297,9 @@ export async function indexStorageFiles(root: string, type?: StorageType): Promi
         continue;
       }
       collected.push({
-        rel: path.relative(root, abs),
+        // POSIX from the moment it is built (repo__list_syns.mdx §6.1) — this is the key every row in
+        // `files.yaml` is stored under, and the join key the manifest / sidecars / decisions all use.
+        rel: relPosix(root, abs),
         name,
         abs,
         size: st.size,
@@ -537,8 +540,12 @@ export function readStorageIndex(root: string, type?: StorageType): StorageFileR
     return [];
   }
   const files = doc.files ?? {};
-  const rows: StorageFileRow[] = Object.entries(files).map(([rel, f]) => ({
-    path: rel,
+  // Heal `\` keys a Windows build wrote (repo__list_syns.mdx §6.1). These rows are joined against manifest
+  // and candidate paths all over the app — an unhealed key matches nothing, so the file reads as
+  // un-fingerprinted, un-compressible and absent from every rollup. A collision between the two spellings
+  // folds to ONE row (last wins; the rows carry only derived facts, so either copy is equivalent).
+  let rows: StorageFileRow[] = Object.entries(files).map(([rel, f]) => ({
+    path: healWindowsPath(rel),
     sizeBytes: Number(f.size ?? 0),
     modifiedAt: (f.modified as string) ?? null,
     createdAt: (f.created as string) ?? null,
@@ -546,6 +553,11 @@ export function readStorageIndex(root: string, type?: StorageType): StorageFileR
     compressible: (f.compressible as "video" | "image" | null) ?? null,
     analysis: Array.isArray(f.analysis) ? (f.analysis as string[]) : [],
   }));
+  if (Object.keys(files).some(hasWindowsSeparator)) {
+    // Healing can make two keys collide; a duplicated path would double-count the file in every rollup
+    // built from this index. The rows carry only derived facts, so the later (POSIX-spelled) one wins.
+    rows = [...new Map(rows.map((r) => [r.path, r])).values()];
+  }
   storeRows(p, rows);
   // Hand back a copy for the same reason the cache stores its own: callers own their rows (see storeRows).
   return rows.map((r) => ({ ...r }));

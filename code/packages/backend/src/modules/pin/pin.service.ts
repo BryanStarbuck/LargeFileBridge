@@ -56,6 +56,7 @@ import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { joinRel, healWindowsPath } from "../../shared/rel-path.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
 import { classifyAbsent } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
@@ -506,7 +507,10 @@ export async function pinRepoFolder(
       label: computerLabel(),
       decisions: cfg.decisions,
       fetchMissing: cfg.pin.fetch_missing,
-      resolveAbs: (rel) => path.join(repoPath, rel),
+      // joinRel, not path.join: a manifest key is POSIX (repo__list_syns.mdx §6.1), and this is the
+      // function that decides WHERE a fetched file's bytes are written. `path.join(root, 'a\\b.mp4')` on
+      // macOS/Linux writes one file literally named `a\b.mp4` at the repo root — the 2026-08-04 defect.
+      resolveAbs: (rel) => joinRel(repoPath, rel),
       manifest: unitManifest,
       status: getRepoStatus(folder),
       writeManifest: (m) => writeRepoManifest(folder, m),
@@ -569,16 +573,16 @@ async function pinRepoSafe(folder: string): Promise<void> {
  * This is the pin-pass call site the graft resolver was built for (syncable_data_location.mdx §5).
  */
 function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): string | null {
-  const sep = rel.indexOf(path.sep) >= 0 ? path.sep : "/";
-  const cut = rel.indexOf(sep);
-  if (cut > 0) {
-    const key = rel.slice(0, cut);
-    if (mappedKeys.has(key)) {
-      // A mapped hierarchy: the graft decides where (or whether) it lives here.
-      return resolveGraftedPath(root, key, rel.slice(cut + 1));
-    }
+  // Manifest keys are POSIX (repo__list_syns.mdx §6.1) — heal a `\` spelling from an older Windows writer
+  // before splitting, or the whole path reads as ONE segment: no mapped-dir key ever matches, and the
+  // fallback join materializes the bytes in a file literally named `dir\sub\clip.mp4` at the SDL root.
+  const key = healWindowsPath(rel);
+  const cut = key.indexOf("/");
+  if (cut > 0 && mappedKeys.has(key.slice(0, cut))) {
+    // A mapped hierarchy: the graft decides where (or whether) it lives here.
+    return resolveGraftedPath(root, key.slice(0, cut), key.slice(cut + 1));
   }
-  return path.join(root, rel); // pre-mapped-dir model: the file lives under the SDL root
+  return joinRel(root, key); // pre-mapped-dir model: the file lives under the SDL root
 }
 
 // Serialize all Git-cycle work PER STORAGE. The every-10-min device worker, the every-15-min pin pass, a

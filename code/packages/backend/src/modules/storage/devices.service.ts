@@ -26,6 +26,7 @@ import { readMappedDirsForRoot } from "./storage-settings.service.js";
 import { trackingBaseDir, legacyTrackingBaseDir } from "./storage-type.service.js";
 import { freshVolatileHardware } from "./hardware.service.js";
 import { expandHome } from "../fs/badges.js";
+import { joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
 const DEVICES_DIR = "devices";
@@ -346,7 +347,9 @@ export function resolveGraftedPath(storageRoot: string, mappedKey: string, relPa
   }
   const g = doc.graft[mappedKey];
   if (!g || !g.wanted || !g.local_path) return null;
-  return path.join(expandHome(g.local_path), relPath);
+  // `relPath` is a POSIX key (repo__list_syns.mdx §6.1) — joinRel splits it on `/` so it lands as real
+  // directories on this computer, whatever separator this OS uses.
+  return joinRel(expandHome(g.local_path), relPath);
 }
 
 // A mutable accumulator row before disambiguation (devices.mdx §6).
