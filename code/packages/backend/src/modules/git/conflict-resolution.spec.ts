@@ -7,7 +7,8 @@
 // until a human ran git by hand. Since the mirrored `repos/<repoUid>/` payload now rides in every company
 // repo, that was the common case. Every path LFB owns must have a rule.
 import { describe, it, expect } from "vitest";
-import { resolutionFor } from "./git.service.js";
+import YAML from "yaml";
+import { resolutionFor, unionConflictedText } from "./git.service.js";
 
 describe("resolutionFor — every file LFB owns has an automatic resolution (§11.1)", () => {
   it("regenerates machine-generated caches rather than picking a side", () => {
@@ -61,5 +62,53 @@ describe("resolutionFor — every file LFB owns has an automatic resolution (§1
     const mixed = ["repos/abc123def456/repo_storage.yaml", "README.md"];
     const verdicts = mixed.map(resolutionFor);
     expect(verdicts).toEqual(["regenerate", null]);
+  });
+});
+
+// The "union" rung, applied to a STRUCTURED file. The hand-rolled union deduped identical lines across the
+// WHOLE file — correct for a flat log, catastrophic for YAML, where `sha256: null` and `pinned_by:` repeat
+// once per entry. Every entry after the first would have lost those keys and the file would stop parsing.
+describe("unionConflictedText — a union must never delete a line from a structured file", () => {
+  const conflicted = [
+    "schema_version: 1",
+    "unit: repo",
+    "files:",
+    "<<<<<<< HEAD",
+    "  - path: a.mp4",
+    "    cid: bafyA",
+    "    sha256: null",
+    "    pinned_by:",
+    "      - bryan-mac-pro",
+    "=======",
+    "  - path: b.mp4",
+    "    cid: bafyB",
+    "    sha256: null",
+    "    pinned_by:",
+    "      - bryan-mac-pro",
+    ">>>>>>> origin/main",
+    "",
+  ].join("\n");
+
+  it("keeps BOTH entries intact, including their repeated keys", () => {
+    const out = unionConflictedText("repos/eb94a756b52e/manifest.yaml", conflicted);
+    expect(out).not.toMatch(/^[<>=|]{7}/m); // markers gone
+    expect(out.match(/sha256: null/g)).toHaveLength(2); // the repeated key survived
+    expect(out.match(/pinned_by:/g)).toHaveLength(2);
+    expect(out.match(/ {6}- bryan-mac-pro/g)).toHaveLength(2); // the repeated device claim survived
+  });
+
+  it("produces YAML that still parses, with both sides' entries present", () => {
+    const doc = YAML.parse(unionConflictedText("manifest.yaml", conflicted)) as {
+      files: Array<{ path: string; cid: string; pinned_by: string[] }>;
+    };
+    expect(doc.files.map((f) => f.path)).toEqual(["a.mp4", "b.mp4"]);
+    expect(doc.files.every((f) => f.pinned_by.includes("bryan-mac-pro"))).toBe(true);
+  });
+
+  it("still dedupes a FLAT log, so a repeated merge cannot grow history/<device>.txt without bound", () => {
+    const log = ["2026-08-05 pulled a.mp4", "<<<<<<< HEAD", "2026-08-05 pulled a.mp4", "=======", "2026-08-05 pulled b.mp4", ">>>>>>> origin/main"].join("\n");
+    const out = unionConflictedText("repos/eb94a756b52e/history/bryan-mac-pro.txt", log);
+    expect(out.match(/pulled a\.mp4/g)).toHaveLength(1);
+    expect(out).toContain("pulled b.mp4");
   });
 });

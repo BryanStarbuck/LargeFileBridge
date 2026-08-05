@@ -16,7 +16,7 @@ import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMar
 import { repoUidFor } from "./repo-identity.js";
 // The per-entry merge lives in a LEAF module so units.service can fold both manifests on the read path
 // without dragging this service (and its storage.service dependency) into an import cycle.
-import { mergeManifests } from "./manifest-merge.js";
+import { mergeManifests, serializeManifest } from "./manifest-merge.js";
 export { mergeManifests } from "./manifest-merge.js";
 // The decision-ledger union merge is a LEAF for the same reason — the ledger, like the manifest, is
 // SHARED state that must union, never last-writer-copy (decisions.mdx §5; the 2026-07-20 "not backed up:
@@ -162,7 +162,23 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     // the copy is last-writer-wins and silently erases the other writer's events.
     const mirrorLedgerFile = path.join(dst, "decisions.yaml");
     const priorMirrorEvents = parseLedgerBestEffort(readFileOrNull(mirrorLedgerFile));
+    // THE MANIFEST NEEDS THE SAME PROTECTION, AND DID NOT HAVE IT. The two files are the same kind of thing —
+    // SHARED state whose entries arrive from several computers — yet only the ledger was captured here, so
+    // `copyTree` below stamped this machine's whole view of the manifest over every peer's. Measured on the
+    // live `all` repo: commit a6cf284e6 deleted 6 entries and 13 pin claims one commit after the peer that
+    // owned them pushed them, and 8 commits in that file's history dropped entries this way. `mergeManifests`
+    // has always documented "absence is NEVER a delete"; the mirror simply never called it.
+    const mirrorManifestFile = path.join(dst, "manifest.yaml");
+    const priorMirrorManifest = readManifestBestEffort(mirrorManifestFile, "repo");
     copyTree(repoStateDir(repoRoot), dst);
+    if (priorMirrorManifest.files.length > 0) {
+      try {
+        const localManifest = readManifestBestEffort(path.join(repoStateDir(repoRoot), "manifest.yaml"), "repo");
+        fs.writeFileSync(mirrorManifestFile, serializeManifest(mergeManifests(localManifest, priorMirrorManifest)), "utf8");
+      } catch (e) {
+        log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
+      }
+    }
     if (priorMirrorEvents.length > 0) {
       try {
         const localEvents = parseLedgerBestEffort(readFileOrNull(path.join(repoStateDir(repoRoot), "decisions.yaml")));
@@ -261,7 +277,9 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         readManifestBestEffort(incomingManifest, "repo"),
       );
       fs.mkdirSync(dst, { recursive: true });
-      fs.writeFileSync(localPath, YAML.stringify(merged), "utf8");
+      // The CANONICAL serializer, not a bare stringify: this file is also written by manifest.service, and
+      // two spellings of one document make each writer re-dirty what the other just wrote (§6).
+      fs.writeFileSync(localPath, serializeManifest(merged), "utf8");
     }
     // 2. the decision ledger — ALSO a merge, never a copy (decisions.mdx §5). A copy replaces the local
     // log with whatever the mirror last held; events recorded here but not yet mirrored (or erased from

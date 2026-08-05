@@ -178,6 +178,34 @@ export function parseBlockedPaths(message: string): string[] {
   return [...new Set(out)];
 }
 
+/**
+ * Strip git's conflict markers from `raw` and keep BOTH sides' content — the by-hand equivalent of the
+ * `merge=union` attribute, used when a conflict reaches us anyway (a fresh clone, a mid-migration tree).
+ * Exported as a pure function so the rule below is testable without a working copy.
+ *
+ * THE LINE DEDUPE IS ONLY LEGAL FOR FLAT LOGS. It exists so a repeated merge cannot grow a
+ * `history/<device>.txt` without bound, and on a line-per-record log it is exactly right. Applied to
+ * STRUCTURED YAML it is catastrophic: a manifest repeats `    sha256: null`, `    pinned_by:` and every
+ * device name once per entry, so a file-wide dedupe deletes all but the FIRST occurrence of each and leaves
+ * YAML that no longer parses — a whole-file loss dressed up as a conflict resolution. YAML therefore keeps
+ * every line from both sides, exactly as git's own union driver would; the readers fold duplicate entries by
+ * path (`foldManifestFiles`), so a superset is always safe here and a lost line never is.
+ */
+export function unionConflictedText(rel: string, raw: string): string {
+  const structured = /\.ya?ml$/i.test(rel);
+  const kept: string[] = [];
+  const seen = new Set<string>();
+  for (const line of raw.split("\n")) {
+    if (/^(<{7}|={7}|>{7}|\|{7})/.test(line)) continue; // drop the markers, keep every side's content
+    // Keep blank lines as-is; dedupe only meaningful, repeated content lines, and only in a flat log.
+    if (structured || line.trim() === "" || !seen.has(line)) {
+      if (!structured && line.trim() !== "") seen.add(line);
+      kept.push(line);
+    }
+  }
+  return kept.join("\n");
+}
+
 export function resolutionFor(p: string): ConflictResolution {
   const base = p.split("/").pop() ?? p;
   // Regenerable caches — rebuilt from Local Storage on the next pass.
@@ -838,26 +866,12 @@ export class GitBackbone {
     return { resolved, unresolved };
   }
 
-  /**
-   * Union two conflicted sides of an append-only file by stripping git's conflict markers and keeping BOTH
-   * bodies. Deduplicates identical lines so a repeated merge does not grow the file without bound. Returns
-   * false when the file cannot be read/written, so the caller can report it rather than assume success.
-   */
+  /** Apply {@link unionConflictedText} to a conflicted file and stage it. Returns false when the file cannot
+   *  be read/written, so the caller can report it rather than assume success. */
   private async unionMergeFile(rel: string): Promise<boolean> {
     const abs = path.join(this.dir, rel);
     try {
-      const raw = fs.readFileSync(abs, "utf8");
-      const kept: string[] = [];
-      const seen = new Set<string>();
-      for (const line of raw.split("\n")) {
-        if (/^(<{7}|={7}|>{7}|\|{7})/.test(line)) continue; // drop the markers, keep every side's content
-        // Keep blank lines and comments as-is; dedupe only meaningful, repeated content lines.
-        if (line.trim() === "" || !seen.has(line)) {
-          if (line.trim() !== "") seen.add(line);
-          kept.push(line);
-        }
-      }
-      fs.writeFileSync(abs, kept.join("\n"), "utf8");
+      fs.writeFileSync(abs, unionConflictedText(rel, fs.readFileSync(abs, "utf8")), "utf8");
       await this.git.add(rel);
       return true;
     } catch (e) {

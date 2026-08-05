@@ -50,6 +50,7 @@ import {
   reconcileMirroredRepos,
   mergeManifests,
 } from "../storage/tracking-sync.service.js";
+import { foldManifestFiles } from "../storage/manifest-merge.js";
 import { recordDecision } from "../storage/decisions.service.js";
 import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js";
 import { appendHistory } from "../storage/history-log.service.js";
@@ -164,7 +165,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   }
   await ipfs.enforceCompliance();
 
-  const byPath = new Map(t.manifest.files.map((f) => [f.path, f]));
+  // FOLD, don't just key: a `merge=union` manifest legitimately carries the same path twice, and keying the
+  // raw list is last-wins — the twin holding the CID or a peer's pin claim would vanish from the manifest
+  // this pass rewrites wholesale below (§8.4.3: absence is never a delete).
+  const byPath = new Map(foldManifestFiles(t.manifest.files, t.kind).map((f) => [f.path, f]));
 
   // Learn from the filesystem which CIDs are REALLY pinned right now. The local IPFS pinset is the
   // source of truth; our manifest `pinned_by` is a stale cache we verify and refresh against it every
@@ -1143,12 +1147,18 @@ export async function pullMissing(
                 `no computer is currently providing this file — ${holder} looks offline. Bring it online and try again.`,
               );
             }
-            // Tight interactive stall budget (2 min idle × 2 attempts): a user is watching this pull. A
-            // transfer that is MOVING keeps resetting the guard (never cut off); one with zero bytes for
-            // 2 minutes — a stale DHT provider record for an offline laptop that slipped past the
-            // pre-flight — fails in ~4 minutes instead of the background pass's 30.
+            // Tight interactive IDLE budget (2 min × 2 attempts): a user is watching this pull. A transfer
+            // that is MOVING keeps resetting the guard (never cut off); one that goes quiet for 2 minutes
+            // mid-flight is dead and fails fast.
+            //
+            // DISCOVERY IS NOT IDLENESS and gets its own 6 minutes. The 2-minute number was being applied to
+            // the phase BEFORE any byte exists — Kubo walking the DHT and dialling a NAT'd peer through a
+            // relay, reporting `Progress:0` the whole way — so a pull with a perfectly good provider was
+            // hung up on at 2:00 and again at 4:00, and the user was told "the transfer never started" when
+            // in truth we never let it. Observed live on 2026-08-05: 13 files aborted in two bursts, the
+            // daemon logging `context canceled` for every one of them.
             try {
-              await ipfs.pinAdd(entry.cid, { stallMs: 2 * 60_000, attempts: 2 }); // fetch + hold locally (no re-add)
+              await ipfs.pinAdd(entry.cid, { stallMs: 2 * 60_000, discoveryMs: 6 * 60_000, attempts: 2 });
             } catch (e) {
               if (/abort|stall/i.test((e as Error).message ?? "") || (e as Error).name === "AbortError") {
                 const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";

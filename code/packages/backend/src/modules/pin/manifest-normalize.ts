@@ -1,8 +1,10 @@
-// LEAF module (no intra-app imports beyond logging) so BOTH manifest readers — manifest.service.ts and
-// tracking-sync.service.ts's best-effort mirror reader — share the one heal without an import cycle.
-import type { Manifest, ManifestFile } from "@lfb/shared";
+// LEAF module (logging + the pure manifest-merge leaf, nothing else) so BOTH manifest readers —
+// manifest.service.ts and tracking-sync.service.ts's best-effort mirror reader — share the one heal
+// without an import cycle.
+import type { Manifest } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
-import { healWindowsPath, hasWindowsSeparator } from "../../shared/rel-path.js";
+import { hasWindowsSeparator } from "../../shared/rel-path.js";
+import { foldManifestFiles } from "../storage/manifest-merge.js";
 
 /**
  * Manifest paths are POSIX (`/`) ON THE WIRE — always (repo__list_syns.mdx §6.1). A Windows peer that
@@ -12,30 +14,24 @@ import { healWindowsPath, hasWindowsSeparator } from "../../shared/rel-path.js";
  * So EVERY manifest read normalizes `\` → `/` and FOLDS entries that then collide (a `\` and a `/`
  * spelling of the same file): keep the entry with a CID / newest modified_at, union the `pinned_by` claims.
  *
+ * THE FOLD RUNS UNCONDITIONALLY, not only when a `\` is present. `manifest.yaml` carries `merge=union`, so a
+ * conflicting merge concatenates both sides and the file holds the SAME `/`-spelled path twice — 27 of the
+ * 92 commits on the live `all` mirror did. Reading those with the old separator-gated fold handed callers a
+ * list with duplicates, and every caller keyed it into a Map (last wins), which is where a peer's pin claim
+ * quietly died. Folding on read is the only place that catches every reader at once.
+ *
  * NOT the computer unit. Its entries are ABSOLUTE paths (pin.service `resolveAbs` is home-expand identity),
  * so `C:\Users\…` is a legitimate value there and healing it would destroy it. §6.1 is a statement about
  * REPO-RELATIVE keys; only repo and storage units have them.
  */
 export function normalizeManifestPaths(manifest: Manifest, file: string): Manifest {
-  if (manifest.unit === "computer") return manifest;
-  if (!manifest.files.some((f) => hasWindowsSeparator(f.path))) return manifest;
-  const byPath = new Map<string, ManifestFile>();
-  for (const f of manifest.files) {
-    const p = healWindowsPath(f.path);
-    const prev = byPath.get(p);
-    if (!prev) {
-      byPath.set(p, { ...f, path: p });
-      continue;
-    }
-    // Collision: the same file spelled both ways. Prefer the entry that knows more (has a CID; else the
-    // newer modified_at) and union the pinned_by device claims so no peer's pin claim is dropped.
-    const winner =
-      (f.cid && !prev.cid) || (!!f.cid === !!prev.cid && (f.modified_at ?? "") > (prev.modified_at ?? ""))
-        ? { ...f, path: p }
-        : prev;
-    winner.pinned_by = [...new Set([...prev.pinned_by, ...f.pinned_by])];
-    byPath.set(p, winner);
-  }
-  log.info("manifest", `${file}: normalized Windows path separators (${manifest.files.length} -> ${byPath.size} entries)`);
-  return { ...manifest, files: [...byPath.values()] };
+  const healed = manifest.unit !== "computer" && manifest.files.some((f) => hasWindowsSeparator(f.path));
+  const files = foldManifestFiles(manifest.files, manifest.unit);
+  if (!healed && files.length === manifest.files.length) return manifest;
+  log.info(
+    "manifest",
+    `${file}: normalized (${manifest.files.length} -> ${files.length} entries` +
+      `${healed ? "; Windows path separators healed" : ""})`,
+  );
+  return { ...manifest, files };
 }

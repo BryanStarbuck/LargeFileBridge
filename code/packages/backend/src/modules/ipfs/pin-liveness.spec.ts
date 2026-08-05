@@ -84,6 +84,45 @@ describe("pinAdd — long pins survive, failed pins are never claimed", () => {
     fetchMock.mockResolvedValue(ndjsonResponse(['{"Progress":7}']));
     await expect(pinAdd(CID)).rejects.toThrow(/no confirmation/);
   });
+
+  // ── DISCOVERY IS NOT IDLENESS (the 2026-08-05 false-abort burst) ────────────────────────────────────
+  // Kubo answers pin/add immediately, then walks the DHT and dials the provider — emitting {"Progress":0}
+  // once a second the whole way. The idle deadline was being spent on that phase, so 13 interactive pulls
+  // were hung up on at exactly 2:00 and again at 4:00 while the daemon logged `context canceled` for each.
+  it("does NOT abort during provider discovery — a run of {\"Progress\":0} is not a stall", async () => {
+    // Idle budget 40ms, discovery budget 5s. Zero-progress heartbeats stretch well past the idle budget;
+    // the pin must still land. With the old guard (one window, and Progress:0 counted as movement) the
+    // clock would be the 40ms one and this aborts.
+    fetchMock.mockResolvedValueOnce(
+      ndjsonResponse(['{"Progress":0}', '{"Progress":0}', '{"Progress":0}', '{"Progress":0}', `{"Pins":["${CID}"]}`], 25),
+    );
+    await expect(pinAdd(CID, { stallMs: 40, discoveryMs: 5_000, attempts: 1 })).resolves.toBeUndefined();
+  });
+
+  it("still aborts a discovery that produces nothing at all within its own budget", async () => {
+    // The watchdog must not become toothless: a provider that is never found still has to fail. Either
+    // wording is correct — whether the abort interrupts the read or the body ends first is a race.
+    fetchMock.mockResolvedValue(ndjsonResponse(['{"Progress":0}'], 400));
+    await expect(pinAdd(CID, { stallMs: 30, discoveryMs: 60, attempts: 1 })).rejects.toThrow(/abort|stalled/i);
+  });
+
+  it("RETRIES a watchdog failure that surfaced as our own 'stalled' message, not just a raw abort", async () => {
+    // The retry ladder tested `/abort/i` alone, so the more informative wording silently skipped every
+    // retry — the exact failure mode behind "pin add failed … after 2 attempt(s)" on a 3-attempt budget.
+    fetchMock
+      .mockResolvedValueOnce(ndjsonResponse(['{"Progress":0}'], 120))
+      .mockResolvedValueOnce(ndjsonResponse([`{"Pins":["${CID}"]}`]));
+    await expect(pinAdd(CID, { stallMs: 20, discoveryMs: 40, attempts: 3 })).resolves.toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("never lets a tight interactive idle budget shorten the discovery window", async () => {
+    // pullMissing passes a 2-min idle budget; discovery is clamped to at least that, never below it.
+    fetchMock.mockResolvedValueOnce(
+      ndjsonResponse(['{"Progress":0}', '{"Progress":0}', `{"Pins":["${CID}"]}`], 25),
+    );
+    await expect(pinAdd(CID, { stallMs: 5_000, discoveryMs: 10, attempts: 1 })).resolves.toBeUndefined();
+  });
 });
 
 describe("listPins — enumeration is streamed, and a failure is never a partial list", () => {

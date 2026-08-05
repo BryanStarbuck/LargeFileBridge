@@ -73,19 +73,36 @@ interface StallGuard {
   readonly stalled: boolean;
 }
 
-function stallGuard(stallMs: number): StallGuard {
+/**
+ * `discoveryMs` is the budget for the FIRST window only — before any real progress has been reported.
+ *
+ * THE BUG IT FIXES. "No progress yet" and "stalled" are not the same state, and treating them alike aborted
+ * pins that were working. Kubo answers `pin/add` immediately and then walks the DHT for providers, dials
+ * them (often through a relay, for a peer behind NAT), and only then starts fetching blocks — emitting
+ * `{"Progress":0}` once a second throughout. The watchdog resets only on an INCREASE, so the whole discovery
+ * phase looks byte-for-byte identical to a wedged transfer and burned the idle deadline before the first
+ * block could ever arrive. Observed live on 2026-08-05: 13 interactive pulls aborting in two bursts at
+ * exactly the 2-minute mark, with the daemon logging `pin/pin.go:176 context canceled` for each — the
+ * daemon was fine; we hung up on it. Discovery gets its own, longer window; the idle deadline starts
+ * counting only once bytes have actually moved.
+ */
+function stallGuard(stallMs: number, discoveryMs: number = stallMs): StallGuard {
   const ctrl = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   let stalled = false;
+  let armed = 0;
   return {
     signal: ctrl.signal,
     touch() {
       if (ctrl.signal.aborted) return;
       if (timer) clearTimeout(timer);
+      // The first arm is the pre-flight one every caller does before its fetch — that window covers
+      // discovery. Every later arm is evidence of real movement, so it gets the idle deadline.
+      const ms = armed++ === 0 ? discoveryMs : stallMs;
       timer = setTimeout(() => {
         stalled = true;
         ctrl.abort(); // default AbortError, so isAbortError() below still recognizes it
-      }, stallMs);
+      }, ms);
       timer.unref?.(); // a watchdog must never hold the process open
     },
     clear() {
@@ -98,9 +115,16 @@ function stallGuard(stallMs: number): StallGuard {
   };
 }
 
-/** Did this failure come from an abort (ours or the runtime's)? Retryable; a protocol error is not. */
+/**
+ * Did this failure come from an abort or a stall (ours or the runtime's)? Retryable; a protocol error is not.
+ *
+ * "stall" belongs here as much as "abort". When the watchdog fires, WHICH of the two words comes out is a
+ * race: if the abort interrupts the read we get the runtime's `This operation was aborted`, but if the body
+ * happens to end cleanly first we raise our own, more informative `pin/add stalled for <cid>` — the same
+ * event, and the more useful message was the one that silently lost the retry.
+ */
 const isAbortError = (e: unknown): boolean =>
-  (e as Error)?.name === "AbortError" || /abort/i.test((e as Error)?.message ?? "");
+  (e as Error)?.name === "AbortError" || /abort|stalled/i.test((e as Error)?.message ?? "");
 
 const delay = (ms: number): Promise<void> =>
   new Promise((resolve) => {
@@ -313,7 +337,12 @@ export async function catToFile(cid: string, destPath: string): Promise<string> 
 // many minutes. It was running on the 15s control-call cap, which aborted it mid-transfer: "pin add
 // failed … This operation was aborted", i.e. the file was NOT held on this computer while the pin pass
 // moved on. No wall clock now; a stall watchdog fed by Kubo's own progress stream instead.
-const PIN_ADD_STALL_MS = 10 * 60_000; // 10 min with ZERO progress ⇒ genuinely wedged, not merely slow
+// Every budget is env-tunable so a slow network can be widened without a rebuild (0/unset = the default).
+const envMs = (name: string, fallback: number): number => Number(process.env[name]) || fallback;
+const PIN_ADD_STALL_MS = envMs("LFB_IPFS_PIN_STALL_MS", 10 * 60_000); // ZERO progress this long ⇒ wedged, not slow
+/** How long Kubo may spend finding + dialling a provider before the first block, with no progress reported.
+ *  Separate from the idle deadline above (see stallGuard): discovery legitimately reports nothing at all. */
+const PIN_ADD_DISCOVERY_MS = envMs("LFB_IPFS_PIN_DISCOVERY_MS", 10 * 60_000);
 const PIN_ADD_ATTEMPTS = 3; // an aborted/stalled pin is RETRIED — never silently accepted
 const PIN_ADD_RETRY_MS = 5_000;
 
@@ -326,8 +355,12 @@ const PIN_ADD_RETRY_MS = 5_000;
  * on an already-200 response) was read as success and the CID was recorded as pinned here when it was
  * not. Absence of the `Pins` record is now a failure.
  */
-async function pinAddOnce(cid: string, stallMs: number = PIN_ADD_STALL_MS): Promise<void> {
-  const guard = stallGuard(stallMs);
+async function pinAddOnce(
+  cid: string,
+  stallMs: number = PIN_ADD_STALL_MS,
+  discoveryMs: number = PIN_ADD_DISCOVERY_MS,
+): Promise<void> {
+  const guard = stallGuard(stallMs, discoveryMs);
   guard.touch();
   // Kubo emits an UNCHANGED {"Progress": n} heartbeat every second even when ZERO blocks are arriving, so
   // resetting the stall guard on every received chunk (what ndjsonLines does) defeats the watchdog
@@ -336,7 +369,10 @@ async function pinAddOnce(cid: string, stallMs: number = PIN_ADD_STALL_MS): Prom
   // INCREASED Progress value (more DAG nodes fetched). ndjsonLines therefore gets an inert guard (its
   // per-chunk touch becomes a no-op); the real guard is touched here, on value increase alone.
   const inert: StallGuard = { signal: guard.signal, touch() {}, clear() {}, stalled: false };
-  let lastProgress = -1;
+  // Starts at 0, NOT -1: `{"Progress":0}` is what Kubo reports throughout provider discovery, and counting
+  // it as progress would swap the discovery window for the (shorter) idle deadline before a single block
+  // had arrived — re-introducing the very abort the discovery grace exists to prevent.
+  let lastProgress = 0;
   try {
     const url = `${apiBase()}/pin/add?arg=${encodeURIComponent(cid)}&recursive=true&progress=true`;
     const res = await fetch(url, { method: "POST", signal: guard.signal });
@@ -371,15 +407,21 @@ async function pinAddOnce(cid: string, stallMs: number = PIN_ADD_STALL_MS): Prom
  * daemon busy with GC) before giving up, and THROWS when the pin did not land — callers must treat that
  * as "not pinned here" and never record a pin claim for it (see pin.service `runUnitPin`/`pullMissing`).
  */
-export async function pinAdd(cid: string, opts: { stallMs?: number; attempts?: number } = {}): Promise<void> {
+export async function pinAdd(
+  cid: string,
+  opts: { stallMs?: number; discoveryMs?: number; attempts?: number } = {},
+): Promise<void> {
   // Interactive callers (the pull-down popup) pass a TIGHTER stall budget — a user is watching, and bytes
   // that ARE flowing keep resetting the guard, so a short idle deadline only fails genuinely-dead peers
-  // faster. Background pin passes keep the generous default.
+  // faster. Background pin passes keep the generous default. `discoveryMs` is deliberately NOT tightened in
+  // step with it: finding a provider takes as long as it takes on either path, and a short interactive
+  // deadline applied to discovery kills pulls that were about to succeed.
   const stallMs = opts.stallMs ?? PIN_ADD_STALL_MS;
+  const discoveryMs = Math.max(opts.discoveryMs ?? PIN_ADD_DISCOVERY_MS, stallMs);
   const attempts = opts.attempts ?? PIN_ADD_ATTEMPTS;
   for (let attempt = 1; ; attempt++) {
     try {
-      await pinAddOnce(cid, stallMs);
+      await pinAddOnce(cid, stallMs, discoveryMs);
       bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
       return;
     } catch (e) {
@@ -387,7 +429,8 @@ export async function pinAdd(cid: string, opts: { stallMs?: number; attempts?: n
       if (stalledOrAborted && attempt < attempts) {
         log.info(
           "ipfs",
-          `pin add ${cid} stalled (no progress for ${stallMs}ms) on attempt ${attempt} — retrying`,
+          `pin add ${cid} stalled (no progress for ${stallMs}ms, or no provider within ${discoveryMs}ms) ` +
+            `on attempt ${attempt} — retrying`,
         );
         await delay(retryDelayMs(PIN_ADD_RETRY_MS, attempt));
         continue;

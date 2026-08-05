@@ -8,13 +8,15 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { ManifestSchema, type Manifest, type ManifestFile } from "@lfb/shared";
+import { ManifestSchema, type Manifest } from "@lfb/shared";
 import { resolveTrackingRoot } from "../storage/tracking-root.service.js";
 import { trackingBaseDir } from "../storage/storage-type.service.js";
 import { mirrorToSyncRepo } from "../storage/tracking-sync.service.js";
 import { log } from "../../shared/logging.js";
 import { normalizeManifestPaths } from "./manifest-normalize.js";
-import { healWindowsPath } from "../../shared/rel-path.js";
+// The canonical byte-stable serializer is a LEAF (manifest-merge.ts) so the sync-repo mirror and the
+// reconcile — neither of which may import this module — write the identical bytes (repo__list_syns.mdx §6).
+import { serializeManifest } from "../storage/manifest-merge.js";
 
 /** The committed manifest for an SDL storage lives at the storage ROOT — `<root>/manifest.yaml` — because an
  *  SDL has NO `.lfbridge/` at all: `.lfbridge/` is a working-repo-only concept and the SDL root IS the
@@ -104,7 +106,7 @@ function writeManifestFile(file: string, manifest: Manifest): void {
   } catch {
     /* best effort */
   }
-  const body = serializeDeterministic(manifest);
+  const body = serializeManifest(manifest);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
     const fd = fs.openSync(tmp, "w");
@@ -146,29 +148,3 @@ export function writeRepoTrackingManifest(repoRoot: string, manifest: Manifest):
   mirrorToSyncRepo(repoRoot);
 }
 
-/**
- * Canonical, byte-stable YAML for the committed list (repo__list_syns.mdx §6):
- *   • file entries sorted by `path` (a stable total order),
- *   • stable key order within every mapping (path, cid, size, sha256, modified_at, pinned_by),
- *   • `pinned_by` sorted so peer-order churn never diffs,
- *   • NO volatile timestamp (`generated_at`/`updated_at` omitted) so an unchanged list is byte-identical.
- */
-function serializeDeterministic(manifest: Manifest): string {
-  const files = manifest.files
-    .map((f: ManifestFile) => ({
-      // POSIX separators on the wire, unconditionally (§6.1) — a Windows writer must never re-introduce `\`.
-      path: healWindowsPath(f.path),
-      cid: f.cid,
-      size: f.size,
-      sha256: f.sha256,
-      modified_at: f.modified_at,
-      pinned_by: [...f.pinned_by].sort((a, b) => a.localeCompare(b)),
-    }))
-    .sort((a, b) => a.path.localeCompare(b.path)); // sort AFTER normalizing so the order is separator-independent
-  const canonical = {
-    schema_version: manifest.schema_version,
-    unit: manifest.unit,
-    files,
-  };
-  return YAML.stringify(canonical);
-}
