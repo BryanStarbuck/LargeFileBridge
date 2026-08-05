@@ -36,6 +36,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 // (repoUid) without importing this heavy module — one parser, no cycle (storage_company.mdx §8.4.1).
 import { parseRemoteOwner } from "../storage/repo-identity.js";
 export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
+import { healWindowsPath } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 // "The machine was offline" is its own class of remote failure — recoverable, retried on reconnect, and
 // deliberately NOT written into the durable fault trail (net-transient.ts, bug #15).
@@ -1171,7 +1172,7 @@ export function pushRetryDelayMs(attempt: number, rnd: () => number = Math.rando
  */
 export function volatileYamlPathsFor(relPath: string): string[] | null {
   if (!relPath.endsWith(".yaml")) return null;
-  const p = relPath.replace(/\\/g, "/");
+  const p = healWindowsPath(relPath);
   // A device file republishes this machine's network addresses on every write. A laptop grows and drops
   // `fe80::` link-local addresses as interfaces/VPNs come and go, so the list churns with nothing to show
   // for it — the 25-line diffs measured on the live personal repo (devices.mdx §7.1).

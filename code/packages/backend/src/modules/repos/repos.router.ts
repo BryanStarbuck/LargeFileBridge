@@ -45,6 +45,7 @@ import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { currentUser } from "../auth/current-user.js";
+import { joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
 
@@ -155,7 +156,7 @@ function syncRepoSetting(c: ReturnType<typeof getRepoConfig>): RepoSettings["syn
  *  for these at the write path. The flag is path-scoped (own entry OR any ancestor dir), read via the SAME
  *  accessor the policy engine uses (config.service `effectiveFlags`). */
 function neverIpfsPaths(repoRoot: string, relPaths: string[]): string[] {
-  return relPaths.filter((rel) => effectiveFlags(path.join(repoRoot, rel)).neverIpfs);
+  return relPaths.filter((rel) => effectiveFlags(joinRel(repoRoot, rel)).neverIpfs);
 }
 
 export const reposRouter = Router();

@@ -14,6 +14,7 @@ import { trackingBaseDir } from "../storage/storage-type.service.js";
 import { mirrorToSyncRepo } from "../storage/tracking-sync.service.js";
 import { log } from "../../shared/logging.js";
 import { normalizeManifestPaths } from "./manifest-normalize.js";
+import { healWindowsPath } from "../../shared/rel-path.js";
 
 /** The committed manifest for an SDL storage lives at the storage ROOT — `<root>/manifest.yaml` — because an
  *  SDL has NO `.lfbridge/` at all: `.lfbridge/` is a working-repo-only concept and the SDL root IS the
@@ -156,7 +157,7 @@ function serializeDeterministic(manifest: Manifest): string {
   const files = manifest.files
     .map((f: ManifestFile) => ({
       // POSIX separators on the wire, unconditionally (§6.1) — a Windows writer must never re-introduce `\`.
-      path: f.path.replace(/\\/g, "/"),
+      path: healWindowsPath(f.path),
       cid: f.cid,
       size: f.size,
       sha256: f.sha256,

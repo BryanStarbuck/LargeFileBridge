@@ -377,6 +377,38 @@ startup migration:
 `migratePosixPaths()`, called from `main.ts` before any state is read. *Regression test:*
 `migrate-posix-paths.spec.ts`.
 
+### 6.1c The heal must be CONTINUOUS, not one-time — the bounce (LOCKED, added 2026-08-05)
+
+A one-time migration is **not sufficient on its own**, and assuming it was is a second-order version of the
+same mistake. The migration is marker-guarded and runs once; the mirror and the reconcile run **every
+cycle** and `copyTree` is **additive — it never deletes**. So while ANY computer in the fleet still runs an
+older build:
+
+1. that computer re-creates `files/jfk\training\clip.mp4.yaml` in its own tracking root,
+2. its mirror pass copies it into the shared sync repo and pushes it,
+3. every other computer's reconcile copies it **back** onto their disks,
+4. their next mirror pushes it out again — forever.
+
+Measured on the live repo on 2026-08-05: the strays were removed and pushed at **14:23**, a peer's commit
+re-added them at **15:36**, and the reconcile had them back on disk at **15:38**. Deleting them again only
+restarts the loop.
+
+**So both copy directions heal the filename as they copy.** An entry whose NAME contains `\` is written to
+the path that name describes; when the correctly-spelled file already exists, the sidecar **merge** runs
+(§6.1b) so the arriving computer's events are absorbed rather than dropped. The bad name is therefore never
+on this disk and never re-mirrored: a peer may keep sending it, and it **stops here**. This also makes the
+loop terminate without waiting for every machine to update — which matters, because an un-updatable machine
+would otherwise hold the whole fleet hostage.
+
+Decision writes are normalized at the funnel for the same reason: `recordDecision()` heals every path it
+stamps, so no NEW `\` event is ever recorded on any OS (it also repairs the fingerprint join, which is
+POSIX-keyed and silently matched nothing for a `\` path).
+
+*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/sidecar-heal.ts` —
+`isStrayPathName()` / `copyHealed()` / `mergeSidecarFiles()`, applied in `tracking-sync.service.ts`
+`copyTree()` (mirror out) and `copyTreeExcept()` (reconcile in), and shared with `migrate-posix-paths.ts` so
+the two can never drift on what "the same event" means. *Regression test:* `sidecar-heal.spec.ts`.
+
 ---
 
 ## 7. Publishing — regenerate into Local Storage, mirror to the sync repo

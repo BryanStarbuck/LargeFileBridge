@@ -41,7 +41,7 @@ import { resolveBackingLocations } from "./storage-settings.service.js";
 import { readSelfGraft } from "./devices.service.js";
 import { log } from "../../shared/logging.js";
 import { existsAt } from "../../shared/fs-probe.js";
-import { relPosix } from "../../shared/rel-path.js";
+import { relPosix, joinRel } from "../../shared/rel-path.js";
 
 export type ArtifactOwner = "repo" | "storage-root" | "dedicated-repo" | "beside";
 
@@ -348,10 +348,10 @@ export function artifactPathForPlacement(
   placement: PlacementChoice,
   owner?: ArtifactOwner,
 ): string {
-  if (placement === "beside") return path.join(root, rel) + ext;
+  if (placement === "beside") return joinRel(root, rel) + ext;
   if (placement === "sync_repo") {
     const sync = resolveStateSyncRepo(root);
-    if (sync) return path.join(sync, rel) + ext;
+    if (sync) return joinRel(sync, rel) + ext;
     // No state-sync repo configured yet → fall back to the default tracking base.
   }
   return lfbridgeArtifactPath(root, rel, ext, owner);

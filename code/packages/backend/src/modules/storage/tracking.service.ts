@@ -10,7 +10,7 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { compressInfo, HARD_SKIP } from "../fs/badges.js";
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { isFileAt, statOrNull } from "../../shared/fs-probe.js";
-import { relPosix, healWindowsPath, hasWindowsSeparator } from "../../shared/rel-path.js";
+import { relPosix, healWindowsPath, hasWindowsSeparator, joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { repoStateDir, resolveStateSyncRepo } from "./tracking-root.service.js";
 import {
@@ -126,8 +126,8 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
   const legacy = legacyTrackingBaseDir(root, t);
   const bases = [
     path.join(trackingBaseDir(root, t), rel), // full filename kept; ext appended below
-    path.join(root, rel), // beside the media
-    ...(legacy ? [path.join(legacy, rel)] : []), // legacy pre-migration SDL layout
+    joinRel(root, rel), // beside the media
+    ...(legacy ? [joinRel(legacy, rel)] : []), // legacy pre-migration SDL layout
   ];
   if (bases.some((b) => isFileAt(b + TRANSCRIPTION_EXT))) out.push("transcript");
   if (bases.some((b) => isFileAt(b + AI_DESCRIPTION_EXT))) out.push("description");
@@ -162,7 +162,7 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
     for (const d of recordDirs) {
       const f = path.join(d, COMPRESSION_RECORD_FILE);
       if (!isFileAt(f)) continue;
-      if (compressionRecordFresh(f, path.join(root, rel))) out.push("compression");
+      if (compressionRecordFresh(f, joinRel(root, rel))) out.push("compression");
       break; // first record found decides — a stale record never falls through to another copy
     }
   }

@@ -31,6 +31,7 @@ import YAML from "yaml";
 import type { CompressionRecord, CompressionOutcome } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { trackingBaseDir, legacyTrackingBaseDir } from "../storage/storage-type.service.js";
+import { joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { sizeOrNull, isFileAt } from "../../shared/fs-probe.js";
 
@@ -74,7 +75,7 @@ export interface LedgerHit {
  * without ever letting an UNCHANGED file be compressed twice.
  */
 export function readLedger(root: string, rel: string): LedgerHit | null {
-  const mediaAbs = path.join(root, rel);
+  const mediaAbs = joinRel(root, rel);
   // Non-throwing (shared/fs-probe): readLedger is asked per file across whole trees.
   const currentSize = sizeOrNull(mediaAbs);
   if (currentSize === null) return null; // media gone → nothing to protect

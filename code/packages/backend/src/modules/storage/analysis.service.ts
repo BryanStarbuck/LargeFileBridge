@@ -12,6 +12,7 @@ import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
 import { mediaKindForName, type CompressionRecord } from "@lfb/shared";
+import { joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
 import { trackingBaseDir } from "./storage-type.service.js";
@@ -35,7 +36,7 @@ function writeYaml(file: string, data: unknown): void {
  * Throws when the target isn't a media file.
  */
 export function analyzeFile(root: string, rel: string): string[] {
-  const abs = path.join(root, rel);
+  const abs = joinRel(root, rel);
   if (!isFile(abs)) throw new Error("analyze: target must be an existing file");
   const kind = mediaKindForName(path.basename(rel)); // "image" | "video" | "audio" | null
   if (!kind) throw new Error("analyze: not a media file (video / audio / image)");

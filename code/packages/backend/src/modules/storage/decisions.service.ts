@@ -39,6 +39,7 @@ import { repoUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { getRepoConfig, updateRepoConfig, repoBumpTopics } from "../store-model/units.service.js";
 import { bumpTopics, bumpTopicsThrottled } from "../events/state-events.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
+import { healWindowsPath, joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
 
@@ -148,7 +149,7 @@ export function foldLedger(events: DecisionEvent[]): Map<string, FoldedDecision>
     // `jfk/training/...` events resolve to ONE decision per file (repo__list_syns.mdx §6.1; without this,
     // a Windows-recorded pin decision never matched the normalized manifest path and the background
     // fetch-missing pass skipped the file forever).
-    const key = e.path.replace(/\\/g, "/");
+    const key = healWindowsPath(e.path);
     const prev = latest.get(key);
     if (
       !prev ||
@@ -281,16 +282,23 @@ export async function recordDecision(
     /* no index yet → fingerprints stay null */
   }
 
-  const events: DecisionEvent[] = relPaths.map((p) => ({
-    sid,
-    path: p,
-    fingerprint: fpByPath.get(p) ?? null,
-    asked, // asked:false is a TOMBSTONE that returns the file to Undecided (decisions.mdx §2)
-    ipfs: !!axes.ipfs,
-    gitignore: !!axes.gitignore,
-    decided_by: stampedBy,
-    decided_at: decidedAt,
-  }));
+  // THE WRITE FUNNEL for every decision surface (router, entity menu, compress re-stamp, pin tombstone), so
+  // normalizing here is what guarantees no NEW `\` event is ever recorded, on any OS (repo__list_syns.mdx
+  // §6.1a). It also repairs the fingerprint join: the tracking index is POSIX-keyed, so a `\` path silently
+  // looked up nothing and every Windows-recorded decision lost its fingerprint.
+  const events: DecisionEvent[] = relPaths.map((raw) => {
+    const p = healWindowsPath(raw);
+    return {
+      sid,
+      path: p,
+      fingerprint: fpByPath.get(p) ?? null,
+      asked, // asked:false is a TOMBSTONE that returns the file to Undecided (decisions.mdx §2)
+      ipfs: !!axes.ipfs,
+      gitignore: !!axes.gitignore,
+      decided_by: stampedBy,
+      decided_at: decidedAt,
+    };
+  });
 
   // The ledger is ALWAYS written — to Local Storage, unconditionally (decisions.mdx §6, LOCKED). It never
   // touches the working repo, so the keep-`.lfbridge/` consent (which now governs only Category-A content
@@ -375,7 +383,7 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
     // (2026-08-04: 1,500+ "LFB: 1 decisions" commits/day and a 122k-line decisions.yaml).
     const cacheOnlyByKey = new Map<string, string>();
     for (const [p, d] of Object.entries(getRepoConfig(folder).decisions)) {
-      const key = p.replace(/\\/g, "/");
+      const key = healWindowsPath(p);
       if (!folded.has(key)) cacheOnlyByKey.set(key, d);
     }
     const cacheOnly = [...cacheOnlyByKey.entries()];
@@ -424,7 +432,7 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
     // Heal Windows-era backslash keys in place: fold them onto their POSIX form so the same file never
     // exists under two keys (the duplicate is what fed the backfill loop above). POSIX value wins a clash.
     for (const [p, d] of Object.entries(c.decisions)) {
-      const key = p.replace(/\\/g, "/");
+      const key = healWindowsPath(p);
       if (key !== p) {
         delete c.decisions[p];
         if (!(key in c.decisions)) c.decisions[key] = d;
@@ -571,7 +579,7 @@ export async function applyDefaultPolicy(
 
     // Never-IPFS is the standing exception the policy must honor (§17): force the IPFS axis off; the
     // git-ignore axis still applies. effectiveFlags walks this path + its ancestors.
-    const neverIpfs = effectiveFlags(path.join(repoRoot, rel)).neverIpfs;
+    const neverIpfs = effectiveFlags(joinRel(repoRoot, rel)).neverIpfs;
     const ipfs = neverIpfs ? false : kind.ipfs;
     const gitignore = kind.gitignore;
 
@@ -774,12 +782,12 @@ export async function seedMigratedLedger(
   // POSIX-normalize both sides of the idempotence check (and the stamped path) so a Windows-era
   // backslash key can never be re-seeded as a "new" path (same defect shape as the reconcile backfill).
   const alreadyMigrated = new Set(
-    existing.filter((e) => e.decided_by === "migrated").map((e) => e.path.replace(/\\/g, "/")),
+    existing.filter((e) => e.decided_by === "migrated").map((e) => healWindowsPath(e.path)),
   );
   const sid = decisionSid(folder, repoRoot);
   const events: DecisionEvent[] = [];
   for (const [rawPath, v] of Object.entries(enumMap)) {
-    const p = rawPath.replace(/\\/g, "/");
+    const p = healWindowsPath(rawPath);
     if (v !== "sync" && v !== "ignore") continue; // only real decisions; "undecided"/others are skipped
     if (alreadyMigrated.has(p)) continue; // idempotent — don't double-seed a path
     alreadyMigrated.add(p); // two enum keys folding to one POSIX path seed only once

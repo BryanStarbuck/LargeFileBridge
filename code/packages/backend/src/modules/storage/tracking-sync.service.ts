@@ -25,6 +25,7 @@ import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./led
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
+import { isStrayPathName, copyHealed } from "./sidecar-heal.js";
 // The working-tree gate — a LEAF module (logging + path only), so no cycle with the git service.
 import { deferWhileBusy } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
@@ -115,6 +116,13 @@ function copyTree(src: string, dst: string, top = true): void {
     const s = path.join(src, e.name);
     const d = path.join(dst, e.name);
     try {
+      // A `\` in the NAME is a whole relative path that lost its separators (§6.1b). Copying it verbatim
+      // is what makes the bad spelling travel — and a `\` filename cannot be checked out on Windows at
+      // all, so mirroring it breaks the clone for the machine that produced it. Heal it here instead.
+      if (e.isFile() && isStrayPathName(e.name)) {
+        copyHealed(s, dst, e.name);
+        continue;
+      }
       if (e.isDirectory()) copyTree(s, d, false);
       else if (e.isFile()) fs.copyFileSync(s, d);
     } catch (err) {
@@ -384,6 +392,14 @@ function copyTreeExcept(src: string, dst: string, skip: Set<string>): void {
     const s = path.join(src, e.name);
     const d = path.join(dst, e.name);
     try {
+      // THE INGRESS HEAL (§6.1b). This is the direction that put the strays back on this disk 2 minutes
+      // after they were deleted: a peer on an older build re-added `files/jfk\training\clip.mp4.yaml` to
+      // the shared sync repo, and this copy materialized it locally again. Normalize on arrival, and the
+      // bounce becomes one-way — the peer can keep sending it, it stops here.
+      if (e.isFile() && isStrayPathName(e.name)) {
+        copyHealed(s, dst, e.name);
+        continue;
+      }
       if (e.isDirectory()) copyTree(s, d, false);
       else if (e.isFile()) fs.copyFileSync(s, d);
     } catch (err) {

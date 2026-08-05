@@ -28,6 +28,7 @@ import { parse, stringify } from "yaml";
 import { log } from "../shared/logging.js";
 import { resolveHome } from "../shared/home-path.js";
 import { hasWindowsSeparator, healWindowsPath } from "../shared/rel-path.js";
+import { mergeSidecarFiles } from "../modules/storage/sidecar-heal.js";
 
 const MARKER = ".posix-paths-repaired";
 
@@ -242,36 +243,15 @@ function relocateStraySidecars(filesDir: string, tally: Repair): void {
   }
 }
 
-/** Union the stray sidecar's events into the correctly-spelled one, then remove the stray. */
+/** Union the stray sidecar's events into the correctly-spelled one, then remove the stray. The merge
+ *  itself is `sidecar-heal.ts` — ONE implementation shared with the continuous reconcile/mirror heal, so
+ *  the two can never drift on what "same event" means. Only the delete is this migration's own call: on
+ *  disk the stray IS ours to remove, whereas the copy paths do not own their source. */
 function mergeSidecarInto(strayFile: string, keepFile: string): boolean {
-  try {
-    const stray = readDoc(strayFile);
-    const keep = readDoc(keepFile);
-    const strayFileBlock = stray?.file as Record<string, unknown> | undefined;
-    const keepFileBlock = keep?.file as Record<string, unknown> | undefined;
-    if (!keep || !keepFileBlock) return false; // unreadable survivor — leave both alone, lose nothing
-    const merged = new Map<string, unknown>();
-    for (const ev of [...eventList(keepFileBlock), ...eventList(strayFileBlock)]) {
-      // Identity = when + what + where. Two computers can record the same KIND at the same instant only by
-      // coincidence, and `on_device` separates even that.
-      const r = ev as Record<string, unknown>;
-      merged.set(`${String(r.at)}|${String(r.kind)}|${String(r.on_device)}`, ev);
-    }
-    keepFileBlock.events = [...merged.values()].sort((a, b) =>
-      String((a as Record<string, unknown>).at).localeCompare(String((b as Record<string, unknown>).at)),
-    );
-    writeDoc(keepFile, keep);
-    fs.rmSync(strayFile, { force: true });
-    log.info("migrate", `POSIX path repair: merged ${strayFile} into ${keepFile} (${merged.size} event(s) kept)`);
-    return true;
-  } catch (e) {
-    log.warn("migrate", `POSIX path repair: sidecar merge failed for ${strayFile}: ${(e as Error).message}`);
-    return false;
-  }
-}
-
-function eventList(fileBlock: Record<string, unknown> | undefined): unknown[] {
-  return Array.isArray(fileBlock?.events) ? (fileBlock.events as unknown[]) : [];
+  if (!mergeSidecarFiles(strayFile, keepFile)) return false;
+  fs.rmSync(strayFile, { force: true });
+  log.info("migrate", `POSIX path repair: merged ${strayFile} into ${keepFile}`);
+  return true;
 }
 
 /** This repo's subtree in the company/Personal sync repo, from its `.sync-repo` marker (two lines: the
