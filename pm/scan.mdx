@@ -231,15 +231,52 @@ is one cross-platform Node/TS program**; only the *scheduler that launches it* d
 worker code path is identical everywhere — only path normalization and the schedule installer branch
 on platform.
 
-| OS | Scheduler | Unit | Primary? |
-| --- | --- | --- | --- |
-| **macOS** | **launchd** | a `.plist` LaunchAgent (`StartInterval` = 14400) | **Yes — primary target** |
-| **Linux** | cron **or** systemd timer | a crontab line / `.timer` + `.service` | secondary |
-| **Windows** | Task Scheduler | a scheduled task (4-hour trigger) | secondary |
+| OS | Scheduler | Unit | Primary? | Built? |
+| --- | --- | --- | --- | --- |
+| **macOS** | **launchd** | a `.plist` LaunchAgent (`StartInterval` = 14400) | **Yes — primary target** | yes (§3.1) |
+| **Windows** | Task Scheduler | a scheduled task (`TimeTrigger` + repetition) | secondary | yes (§3.2) |
+| **Linux** | systemd **user** timer | a `.timer` + a `oneshot` `.service` | secondary | yes (§3.3) |
 
 The **Mac launchd plist is the primary, first-class implementation** ("the plist for Mac … the Mac
-equivalent specific one"). Windows and Linux schedulers are supported and follow the same
-installed / on-off model, implemented per-OS behind one installer interface.
+equivalent specific one"). Windows and Linux follow the same installed / on-off model behind the same
+installer interface.
+
+**The no-op installer is now the last resort, not a platform.** It remains for a machine with no
+scheduler we can drive — a non-systemd Linux, anything else — where the workers are driven ONLY by the
+in-process watchdog ([backbone_resilience.mdx §3](./backbone_resilience.mdx)), with two consequences a
+user should know: a worker runs only while the web app is up, and it runs on the watchdog's overdue
+threshold (2× its own interval) rather than its configured cadence. Windows and Linux were both in
+exactly that state until §3.2 / §3.3 were built, and the symptom was reported as "auto-commit and sync
+don't really work" — the every-10-minute device worker (the git pull/commit/push for every storage) was
+in practice a ~22-minute one that stopped entirely when the app was closed.
+
+### 3.0 Installed and On are separate — and the installer has to be told which
+
+"Installed" and "on/off" are two different choices (§7), and on macOS keeping them apart is free: a
+plist is an inert file until `launchctl bootstrap` loads it. **A Windows scheduled task is not** — it
+is live the moment `schtasks /Create` accepts it. So the desired ON/OFF state travels WITH the install
+options (`InstallOpts.enabled`, read from `<worker>_process.enabled`), and a scheduler whose unit is
+live-on-registration renders it into the registration. Without that, every install — including the
+routine drift re-render inside `reconcileWorkerSchedules()` — silently switched a worker the user had
+turned OFF back ON, and for the `device` worker that means the computer quietly resumed committing and
+pushing every 10 minutes while the UI showed the switch off.
+
+**Config is the decision; the OS is made to match it in BOTH directions**, for both flags:
+
+| `config.yaml` | the OS | reconcile does |
+| --- | --- | --- |
+| `installed: true` | no unit | installs it (this is what heals a platform that gained an installer) |
+| `installed: false` | unit present | **uninstalls it** |
+| `enabled: true` | not running | re-registers and starts it |
+| `enabled: false` | running | stops it |
+
+The `installed: false` / unit-present row is what makes turning a worker off actually stick: a unit left
+behind by a hand-edited config, a config reset, or a half-failed uninstall used to be skipped entirely by
+reconcile, so it kept firing forever with nothing anywhere to correct it — for the `device` worker, an
+orphan schedule still committing and pushing from the computer.
+
+Carrying the on/off state into the install, and stopping a worker the OS runs while settings say off, happens in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `buildInstallOpts()` / `reconcileWorkerSchedules()`
 
 ### 3.1 The Mac launchd plist
 
@@ -275,6 +312,95 @@ A LaunchAgent, distinct from the pin job's plist (`com.largefilebridge.pin`,
 
 The Mac launchd LaunchAgent plist is rendered and installed/enabled/disabled via `launchctl` in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` — `launchdInstaller` → `install()` (renders via `renderPlist()`)
+
+### 3.2 The Windows scheduled task
+
+Windows is the **secondary** target and follows the same installed / on-off model behind the one
+installer interface. A worker is a Task Scheduler task named
+`\LargeFileBridge\com.largefilebridge.<worker>`, registered from generated XML, whose action launches
+a generated **launcher shim** kept beside the state root at
+`~/T/_large_files_bridge/workers/<label>.vbs`.
+
+Three differences from the plist, each forced by what Task Scheduler cannot do:
+
+* **Logging.** There is no `StandardOutPath`/`StandardErrorPath`, so the shim redirects the
+  trampoline's stdout to `log.log` and its stderr to `error.err` — the same two files the plist names,
+  preserving the `run-worker.mjs` log-format contract
+  ([storage_local.mdx §12](./storage_local.mdx#12-logging)).
+* **No console flash.** The shim is a `.vbs` run under `wscript`, not a `.cmd` run directly: a task
+  whose action is a console program pops a console window on the user's desktop on every fire —
+  144 times a day for the 10-minute device worker. `WScript.Shell.Run(cmd, 0, False)` runs it hidden.
+* **Cadence.** launchd's `StartInterval` becomes a `TimeTrigger` bounded at **now** with an indefinite
+  `<Repetition><Interval>` — deliberately not a `LogonTrigger`, whose repetition would not begin until
+  the user's next logon, so a worker turned on in the web app would do nothing for a day.
+  `StartWhenAvailable` is the counterpart of launchd firing a missed interval: a machine that was
+  asleep or off runs the cycle it missed rather than dropping it.
+
+* **Installed** = the launcher shim exists (the plist-file equivalent).
+* **On** = the task's `<Settings><Enabled>` is true; **off** = `schtasks /Change /DISABLE`. Read from
+  the task XML, never from `schtasks /Query /FO LIST`, whose status word is localized. Because the task
+  is live as soon as it is registered, `<Settings><Enabled>` is rendered from the desired state rather
+  than hard-coded true — §3.0.
+
+Two things this scheduler must never do quietly, both because `schtasks` is chatty and its failures are
+swallowed the way `launchctl`'s are:
+
+* **Register invalid XML.** `Task` takes a `<Principals>` element wrapping `<Principal>`; a bare
+  `<Principal>` is rejected outright. A rejection here used to leave the shim written, `isInstalled()`
+  (which reads the shim) answering yes, config recording "installed", and **no task in existence** —
+  the exact silent nothing this whole scheduler was built to end.
+* **Report a registration it did not get.** So `install()` **verifies** by querying the task back, and
+  on failure removes the shim (keeping `isInstalled()` honest) and raises, so the next reconcile retries.
+  **Every** failure path out of `install()` takes the shim with it — including one that never reaches
+  `schtasks` at all, such as a task definition that could not be written. The shim is the app's only
+  evidence that a worker is scheduled, so one left behind does not merely mislead the jobs page: it tells
+  reconcile "already handled" forever and that worker never runs on the computer again.
+
+The same drift detection the Mac path has (interval, trigger script, node binary, log paths) reads its
+"what is installed" answers back out of the shim's `' lfb-<key>: <value>` marker lines, so
+`reconcileWorkerSchedules()` self-heals a Windows computer exactly as it does a Mac one.
+
+The Windows scheduled task and its hidden launcher shim are rendered, registered, verified and read back via `schtasks` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/schtasks.ts` — `schtasksInstaller` → `install()` (renders via `renderShim()` + `renderTaskXml()`)
+
+### 3.3 The Linux systemd user timer
+
+Linux is a **secondary** target and follows the same installed / on-off model. A worker is a pair of
+**user** units — never system ones, because these workers run as the user and reach the user's git
+credentials — written to `~/.config/systemd/user/`:
+
+* `com.largefilebridge.<worker>.service` — `Type=oneshot`, running the same `run-worker.mjs`
+  trampoline, with `StandardOutput=append:` / `StandardError=append:` pointed at the same `log.log` /
+  `error.err` the macOS plist names (the run-worker.mjs log-format contract, verbatim).
+* `com.largefilebridge.<worker>.timer` — the cadence.
+
+* **Installed** = the `.timer` file exists. Like a plist and unlike a Windows task it is **inert**:
+  writing it schedules nothing.
+* **On** = the timer unit is `active` (`systemctl --user enable --now`); **off** =
+  `systemctl --user disable --now`. `is-active`, not `is-enabled` — a timer enabled for the next boot
+  but not started is not running now, and "running now" is what every caller means.
+
+Two choices worth naming:
+
+* **`OnActiveSec` + `OnUnitActiveSec`, never `OnBootSec`.** A boot-relative deadline is already in the
+  past for a timer started mid-session, so systemd fires it immediately — every reconcile repair would
+  kick a git cycle. Measured from activation, the first fire is one interval out and each one follows
+  the last: exactly launchd's `StartInterval` semantics.
+* **`daemon-reload` after every write**, or systemd keeps serving the previous content and a re-render
+  that fixed a drifted interval or a moved trigger script would change nothing at all.
+
+**Caveat.** A user timer only fires while the user's systemd manager is running — i.e. while the user is
+logged in, unless `loginctl enable-linger` is set for the account. This is the same practical bound the
+app itself has (the trampoline POSTs a running backend), so it costs nothing extra today.
+
+The Linux systemd user timer and its oneshot service are rendered, installed and read back via `systemctl --user` in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/systemd.ts` — `systemdInstaller` → `install()` (renders via `renderService()` + `renderTimer()`)
+
+Deciding whether systemd is actually drivable here (systemd-booted, `systemctl` present) happens in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/systemd.ts` — `supported()`
+
+Choosing the per-OS installer (launchd on Mac, Task Scheduler on Windows, a systemd user timer on Linux, the no-op + in-process watchdog elsewhere) happens in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `installer()`
 
 ---
 

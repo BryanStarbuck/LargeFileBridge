@@ -23,6 +23,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
+import { resolveHome } from "../../shared/home-path.js";
 
 /** The icon-control-column state for one file (shared/videos.ts row fields). */
 export interface IconState {
@@ -46,10 +47,6 @@ export interface KnownMediaFile {
   sizeBytes: number;
   kind: MediaKind; // "video" | "image" (audio is out of scope for v1 — videos.mdx §2)
   icon: IconState;
-}
-
-function expandHome(p: string): string {
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
 }
 
 function iconStateFromRow(row: FileRow): IconState {
@@ -107,7 +104,7 @@ export async function collectKnownMedia(
     try {
       const cfg = getRepoConfig(folder);
       if (!cfg.repo.path) continue;
-      const root = expandHome(cfg.repo.path);
+      const root = resolveHome(cfg.repo.path);
       roots.add(root);
       const rows = computeRepoDetail(folder, health).files;
       for (const row of rows) {
@@ -129,7 +126,7 @@ export async function collectKnownMedia(
       (r): r is NonNullable<typeof r> => r !== null && r.root !== "" && r.hasLfbridge,
     );
     for (const storage of sdlRows) {
-      const root = expandHome(storage.root);
+      const root = resolveHome(storage.root);
       roots.add(root);
       try {
         for (const f of readStorageIndex(root, storage.type)) {

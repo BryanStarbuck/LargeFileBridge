@@ -18,12 +18,7 @@ import fs from "node:fs";
 import { pullMissing } from "../pin/pin.service.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { enqueueTranscribe } from "../transcribe/transcribe.service.js";
-
-/** `~`-collapsed path for a human-readable batch scope/label. */
-function collapseHome(p: string): string {
-  const home = process.env.HOME ?? "";
-  return home && p.startsWith(home) ? "~" + p.slice(home.length) : p;
-}
+import { collapseHome } from "../../shared/home-path.js";
 
 /** Byte size for the batch manifest, or 0 when unreadable. */
 function statSizeOrZero(p: string): number {

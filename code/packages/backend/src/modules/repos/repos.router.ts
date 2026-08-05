@@ -44,6 +44,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
 import { currentUser } from "../auth/current-user.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 
 /**
  * Absolute working-tree root for a state-root folder key — the same derivation the decisions service uses
@@ -53,7 +54,7 @@ import { log } from "../../shared/logging.js";
 function repoRootFor(folder: string): string {
   const p = getRepoConfig(folder).repo.path;
   if (!p) throw new Error(`repo ${folder} has no path`);
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return path.resolve(expandHome(p));
 }
 
 /**
@@ -251,7 +252,7 @@ reposRouter.post("/:repoId/index", async (req, res) => {
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const root = getRepoConfig(folder).repo.path;
   if (!root) return res.status(400).json({ ok: false, error: "repo has no path" });
-  const abs = path.resolve(root.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  const abs = path.resolve(expandHome(root));
   try {
     const indexed = await indexStorageFiles(abs);
     res.json({ ok: true, data: { indexed, dropped: storageIndexDroppedFiles(abs) } });

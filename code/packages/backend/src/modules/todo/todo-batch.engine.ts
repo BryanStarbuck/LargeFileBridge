@@ -13,6 +13,7 @@ import { listStorageIds, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 import {
   batchFileName,
   slugify,
@@ -23,7 +24,7 @@ import {
 
 function resolveRoot(p: string | undefined | null): string | null {
   if (!p) return null;
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return path.resolve(expandHome(p));
 }
 
 /** Roll items up into totals + a pattern, and stamp the batch. Returns null when there is no work. */

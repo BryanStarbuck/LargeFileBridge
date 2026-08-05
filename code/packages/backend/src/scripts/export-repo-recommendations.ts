@@ -24,9 +24,10 @@ import { computerLabel } from "../modules/store-model/config.service.js";
 import { getAppConfig } from "../modules/store-model/config.service.js";
 import * as ipfs from "../modules/ipfs/ipfs.service.js";
 import type { FileRow, RepoDetail } from "@lfb/shared";
+import { expandHome } from "../shared/home-path.js";
 
 function expand(p: string): string {
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return path.resolve(expandHome(p));
 }
 
 /** Find the state-root folder key for a repo given its working-tree path or its name. */

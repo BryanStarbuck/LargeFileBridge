@@ -11,10 +11,11 @@ import { readStorageIndex } from "../storage/tracking.service.js";
 import { hasAudioStream } from "../../tools/transcribe/audio-prep.js";
 import { log } from "../../shared/logging.js";
 import { batchFileName, slugify, writeBatch, removeStaleTranscribeBatches, removeBatchFile } from "./todo-batches.store.js";
+import { expandHome } from "../../shared/home-path.js";
 
 function resolveRoot(p: string | undefined | null): string | null {
   if (!p) return null;
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return path.resolve(expandHome(p));
 }
 
 /** Transcribable-and-not-yet-transcribed items under one storage root (transcribe_calc_engine.mdx §2). A

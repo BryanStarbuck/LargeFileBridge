@@ -31,4 +31,12 @@ export interface InstallOpts {
   apiPort: number;
   logOut: string;
   logErr: string;
+  /** Whether config says this worker should be FIRING (`<process>_process.enabled`). Installing is not
+   *  turning on — the two are separate choices (charter, scan.mdx §7) — and on the schedulers whose unit is
+   *  an inert FILE (launchd's plist, a systemd .timer) that separation is free, so they ignore this field.
+   *  A Windows scheduled task is LIVE the moment `schtasks /Create` accepts it, so the installer has to be
+   *  told the desired state: rendering `<Enabled>true</Enabled>` unconditionally turned a worker the user
+   *  had switched off back on — on every boot, every watchdog repair, every drift re-render — and it then
+   *  quietly resumed committing and pushing from that computer. */
+  enabled: boolean;
 }

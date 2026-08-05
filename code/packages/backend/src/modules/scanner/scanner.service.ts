@@ -42,6 +42,7 @@ import { HARD_SKIP, isMacPackageDir, isMediaFile, isAnalysisCandidate, isTransie
 import { mapLimit, responsiveBudget } from "../../shared/concurrency.js";
 import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 
 interface Candidate {
   path: string; // relative to unit root
@@ -787,9 +788,6 @@ async function findGitRepos(root: string, followSymlinks: boolean): Promise<stri
   return found;
 }
 
-function expandHome(p: string): string {
-  return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
-}
 function safeIsDir(p: string): boolean {
   return isDirAt(p); // shared/fs-probe — non-throwing
 }

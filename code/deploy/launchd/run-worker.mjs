@@ -51,7 +51,9 @@ function stateDir() {
   try {
     return process.env.LFB_STATE_DIR || path.join(os.homedir(), "T", "_large_files_bridge");
   } catch {
-    return "/tmp/_large_files_bridge";
+    // `os.tmpdir()`, not a literal `/tmp`: on Windows that would be `<drive>:\tmp`, which does not exist,
+    // so a missed cycle could not be recorded and would vanish silently — the one thing this file is for.
+    return path.join(os.tmpdir(), "_large_files_bridge");
   }
 }
 

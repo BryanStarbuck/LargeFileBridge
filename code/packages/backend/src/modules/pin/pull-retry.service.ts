@@ -12,13 +12,13 @@
 // to pull (every decided file landed), it logs and does NOT reschedule — zero background work at zero
 // pending. It re-arms from its kick points: server boot, and every pull-down Apply that reports failures
 // (`POST /:repoId/pull` in repos.router.ts).
-import path from "node:path";
 import { listRepoFolders, getRepoConfig } from "../store-model/units.service.js";
 import { missingPinnedFromPeers, pullMissing } from "./pin.service.js";
 import { resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { readDevices } from "../storage/devices.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
+import { resolveHome } from "../../shared/home-path.js";
 
 /** 3 hours (per the product ask); `LFB_PULL_RETRY_MS` shrinks it for tests only. */
 const RETRY_MS = Number(process.env.LFB_PULL_RETRY_MS) || 3 * 60 * 60 * 1000;
@@ -28,8 +28,7 @@ let running = false;
 
 /** Same one-liner the routers use: the folder's configured working-tree root, `~`-expanded. */
 function repoRootFor(folder: string): string {
-  const p = getRepoConfig(folder).repo.path;
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return resolveHome(getRepoConfig(folder).repo.path);
 }
 
 /**

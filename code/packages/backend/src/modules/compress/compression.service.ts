@@ -52,6 +52,8 @@ import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { enqueue, createBatch } from "../jobqueue/jobqueue.service.js";
 import { writeManifest, trackBatch } from "../jobqueue/batch-manifest.service.js";
 import { log } from "../../shared/logging.js";
+import { collapseHome } from "../../shared/home-path.js";
+import { stableGitBin } from "../git/git-bin.js";
 
 // ── settings (compression.mdx §7) ─────────────────────────────────────────────
 export function getCompressionSettings(): CompressionSettings {
@@ -1369,11 +1371,16 @@ export function chromaCoarserPixFmt(before: string, after: string): boolean {
 async function findReferences(abs: string, oldBasename: string): Promise<string[]> {
   try {
     const dir = path.dirname(abs);
-    const top = await runAsync("git", ["-C", dir, "rev-parse", "--show-toplevel"], 10_000, { captureStdout: true });
+    // stableGitBin(), never a bare "git": a compress job runs on the queue worker, whose PATH need not
+    // contain git — and a non-zero code here is read as "no references", so a missing binary would quietly
+    // report a clean rename over files that still point at the old name.
+    const top = await runAsync(stableGitBin(), ["-C", dir, "rev-parse", "--show-toplevel"], 10_000, {
+      captureStdout: true,
+    });
     const repo = top.out.trim();
     if (top.code !== 0 || !repo) return [];
     const r = await runAsync(
-      "git",
+      stableGitBin(),
       ["-C", repo, "grep", "-l", "--fixed-strings", "-I", "--", oldBasename],
       30_000,
       { captureStdout: true },
@@ -1610,7 +1617,3 @@ function walkCompressible(
   return collectFilesRecursive(root, wanted, HARD_SKIP, { recursive: sel.recursive, skipDir: isMacPackageDir });
 }
 
-function collapseHome(abs: string): string {
-  const home = process.env.HOME ?? "";
-  return home && abs.startsWith(home) ? "~" + abs.slice(home.length) : abs;
-}

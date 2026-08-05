@@ -58,6 +58,7 @@ import { readLedger, foldLedger, type FoldedDecision } from "../storage/decision
 import { effectiveFlags, getAppConfig, computerLabel } from "./config.service.js";
 import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 
 export function repoIdFromPath(absPath: string): string {
   return crypto.createHash("sha1").update(path.resolve(absPath)).digest("hex").slice(0, 16);
@@ -111,7 +112,7 @@ function repoTopicsFor(folder: string): string[] {
   const topics = [repoTopic(folder), REPOS_TOPIC];
   try {
     const p = getRepoConfig(folder).repo.path;
-    if (p) topics.push(repoTopic(repoIdFromPath(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"))));
+    if (p) topics.push(repoTopic(repoIdFromPath(expandHome(p))));
   } catch {
     // Unreadable config — the folder topic above still fires. Never fail a write over a notification.
   }
@@ -185,7 +186,7 @@ export function repoArtifactPlacement(root: string, which: "transcription" | "ai
 
 /** Register a new repo unit (repos.mdx §6). Validates it is a git working tree. */
 export async function registerRepo(absPath: string): Promise<{ folder: string; repoId: string }> {
-  const resolved = path.resolve(absPath.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  const resolved = path.resolve(expandHome(absPath));
   if (!isGitWorkingTree(resolved)) {
     throw new Error("Not a git working tree");
   }
@@ -316,7 +317,7 @@ function mergeRepoManifests(folder: string, cfg: RepoUnitConfig): Manifest {
   const root = cfg.repo.path;
   if (!root) return unit;
   try {
-    const abs = path.resolve(root.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+    const abs = path.resolve(expandHome(root));
     const tracking = readYaml(path.join(repoStateDir(abs), "manifest.yaml"), ManifestSchema);
     return mergeManifests(unit, tracking);
   } catch (e) {
@@ -339,7 +340,7 @@ export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set
   // Cheap head-read of this repo's fingerprint index (never a parse) — see tracking.service
   // storageIndexDroppedFiles(). Non-throwing: a repo with no path or no index reads as complete.
   const indexDropped = cfg.repo.path
-    ? storageIndexDroppedFiles(path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~")))
+    ? storageIndexDroppedFiles(path.resolve(expandHome(cfg.repo.path)))
     : 0;
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
@@ -385,7 +386,7 @@ function composeFileRows(
   // breaks row composition — rows still render with decidedBy/decidedAt null (→ Undecided in the UI).
   const foldedByPath = foldLedgerForRepo(cfg);
   const repoRootAbs = cfg.repo.path
-    ? path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~"))
+    ? path.resolve(expandHome(cfg.repo.path))
     : null;
   // The git-ignore AXIS IS READ FROM GIT, NOT FROM THE LEDGER. The ledger only records files WE
   // git-ignored through our own toggle; a rule the user wrote by hand (or any pattern rule, e.g.
@@ -760,7 +761,7 @@ function foldLedgerForRepo(cfg: RepoUnitConfig): Map<string, FoldedDecision> {
   const p = cfg.repo.path;
   if (!p) return new Map();
   try {
-    const repoRoot = path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+    const repoRoot = path.resolve(expandHome(p));
     return foldLedger(readLedger(repoRoot));
   } catch (e) {
     log.warn("units", `decision provenance unavailable (using null): ${(e as Error).message}`);
@@ -833,7 +834,7 @@ function repoRowStats(
 ): { counts: RepoCounts; peerCount: number; transferring: boolean } {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
   const repoRootAbs = cfg.repo.path
-    ? path.resolve(cfg.repo.path.replace(/^~(?=\/|$)/, process.env.HOME || "~"))
+    ? path.resolve(expandHome(cfg.repo.path))
     : null;
   const selfLabel = computerLabel();
 

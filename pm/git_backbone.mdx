@@ -791,8 +791,31 @@ commit, **no push**. A remote that cannot be fast-forwarded is *surfaced as a pr
 write that would sit uncommitted in the repo. The switch is read **live** each cycle, so flipping it
 needs no restart; the skip is logged, never silent.
 
+**Read-only must still converge, and that takes one extra step.** With the switch off, the pre-merge
+checkpoint of §4 is skipped — it is a commit — while everything that *writes* the tree carries on: the
+device file, the manifest and the mirrored `repos/<repoUid>/` subtree are rewritten on every pass
+(writing your own text locally is not a Git write). The tree is therefore permanently dirty with LFB's
+own generated text, and a fast-forward that touches any of it aborts with *"Your local changes to the
+following files would be overwritten by merge"* — the exact abort the checkpoint was invented to kill,
+now on every cycle. So the read-only pull clears **its own** blockers the way a refused merge does
+elsewhere: each path is quarantined under the state root, then an untracked one is deleted and a tracked
+one restored from HEAD, and the fast-forward is retried. That authors nothing — index and working tree
+only — and the incoming copy simply wins over a cache the next pass regenerates. A blocker LFB does
+**not** own is never touched; it is named in the surfaced problem, and the fetch waits for the user.
+
+**A blocker that could not be cleared is reported as what it is.** A clear can fail — a file another
+process holds open, a directory the account may not write, both ordinary on Windows — and git then
+refuses the retry naming the same paths. That is *not* a diverged branch, so it must not be reported as
+one: telling the user their checkout diverged and needs a merge commit sends them to `git merge` for a
+problem no merge can fix, and hides the file that is actually stuck. The surfaced problem names the stuck
+files instead, and the next cycle retries. Divergence — this computer holding commits origin does not —
+is the only state that earns the "reconciling would require a merge commit" wording.
+
 Reading the switch and the read-only pull are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `gitAutoCommitEnabled()` / `GitBackbone.pullReadOnly()`, gating `GitBackbone.commitAndPush()`; artifact delivery honors it in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `convergeWorkingRepoFromOrigin()`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `gitAutoCommitEnabled()` / `GitBackbone.pullReadOnly()` (clearing its own blockers via `GitBackbone.clearBlockingOwnFiles()`, retrying with `GitBackbone.tryFastForward()`), gating `GitBackbone.commitAndPush()`; artifact delivery honors it in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `convergeWorkingRepoFromOrigin()`.
+
+A commit or push is only ever as good as the worker that triggers it, so the switch's honest counterpart
+is the OS scheduler honoring `<worker>_process.enabled` — see [scan.mdx §3.0](./scan.mdx).
 
 ---
 

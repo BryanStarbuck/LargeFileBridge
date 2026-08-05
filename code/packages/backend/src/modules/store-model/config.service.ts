@@ -8,6 +8,7 @@ import { collectHardware } from "../storage/hardware.service.js";
 import { bumpTopicThrottled, SETTINGS_TOPIC } from "../events/state-events.service.js";
 import { RETIRED_GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from "../describe/models.js";
 import { mtimeMsOrNull } from "../../shared/fs-probe.js";
+import { homeDir } from "../../shared/home-path.js";
 
 // ── config.yaml read cache (mtime-keyed) ─────────────────────────────────────────────────────────────
 // getAppConfig() was UNMEMOIZED, and effectiveFlags() calls it PER FILE — so GET /api/repos (repos ×
@@ -124,8 +125,11 @@ export async function updateAppConfig(mutate: (c: AppConfig) => AppConfig): Prom
 }
 
 function defaultRoots(): string[] {
-  const home = process.env.HOME || "~";
-  return [`${home}/BGit`, `${home}/Documents`];
+  // `homeDir()`, not `process.env.HOME`: on Windows HOME is unset, so this seeded the scanner with the
+  // literal roots `~/BGit` and `~/Documents` — two directories that cannot exist. A fresh Windows install
+  // therefore scanned nothing, found no repos, and had nothing to commit or sync.
+  const home = homeDir();
+  return [path.join(home, "BGit"), path.join(home, "Documents")];
 }
 
 // ── Sticky per-entity flags (menus.mdx §6.6, files.mdx, directories.mdx) ─────

@@ -594,9 +594,36 @@ export class GitBackbone {
     }
   }
 
-  /** The read-only pull (`git_backbone.auto_commit` off): fetch, then FAST-FORWARD ONLY. This machine may
-   *  not create a merge commit, so a diverged branch is SURFACED as a problem instead of merged, and the
-   *  working tree is never written (no heals, no checkpoint, no quarantine). */
+  /** One fast-forward attempt. Never throws — the shape `tryMerge` has, so the read-only path can tell
+   *  "the tree was in the way" from "the branches actually diverged". */
+  private async tryFastForward(branch: string): Promise<{ merged: boolean; error?: Error }> {
+    try {
+      const before = await this.git.revparse(["HEAD"]).catch(() => "");
+      await this.git.merge(["--ff-only", `origin/${branch}`]);
+      const after = await this.git.revparse(["HEAD"]).catch(() => "");
+      return { merged: before !== after };
+    } catch (e) {
+      return { merged: false, error: e as Error };
+    }
+  }
+
+  /**
+   * The read-only pull (`git_backbone.auto_commit` off): fetch, then FAST-FORWARD ONLY. This machine may not
+   * create a merge commit, so a genuinely diverged branch is SURFACED as a problem instead of merged.
+   *
+   * IT STILL HAS TO GET ITS OWN GENERATED FILES OUT OF THE WAY, and that is not a contradiction. With the
+   * switch off, `checkpointOwnWrites()` above is skipped — it is a commit — while everything that WRITES the
+   * tree carries on regardless: the device file, the manifest, the mirrored `repos/<repoUid>/` subtree are
+   * rewritten on every pass (pin.service.ts, by design — writing your own text locally is not a Git write).
+   * So the tree is permanently dirty with LFB's own text, and the very abort the checkpoint was invented to
+   * kill comes straight back: `Your local changes to the following files would be overwritten by merge`,
+   * every cycle, forever. Read-only would then mean "does not sync", which is not what the switch says.
+   *
+   * `clearBlockingOwnFiles` is the right tool because it AUTHORS NOTHING: each path is quarantined under the
+   * state root, then an untracked one is deleted and a tracked one restored from HEAD — index and working
+   * tree only, no commit, and never a file LFB does not own. The peer's copy lands; this computer's
+   * regenerable cache steps aside and is rebuilt on the next pass.
+   */
   private async pullReadOnly(result: GitCycleResult): Promise<void> {
     const branch = await this.branch();
     try {
@@ -608,17 +635,55 @@ export class GitBackbone {
       if (failure.kind === "offline") result.offline = true;
       return;
     }
-    try {
-      const before = await this.git.revparse(["HEAD"]).catch(() => "");
-      await this.git.merge(["--ff-only", `origin/${branch}`]);
-      const after = await this.git.revparse(["HEAD"]).catch(() => "");
-      result.merged = before !== after;
-    } catch (e) {
-      result.problem =
-        `Auto-commit is disabled on this computer, so the fetched origin/${branch} was not merged ` +
-        `(fast-forward not possible: ${(e as Error).message.split("\n")[0]}). ` +
-        `Merge with your Git tools or re-enable auto-commit in Settings.`;
+    let attempt = await this.tryFastForward(branch);
+    if (attempt.error) {
+      const blocked = parseBlockedPaths(attempt.error.message);
+      if (blocked.length > 0) {
+        const { cleared, foreign } = await this.clearBlockingOwnFiles(blocked);
+        if (foreign.length > 0) {
+          // NOT ours — never touched, switch or no switch (charter: we never destroy a user's own work).
+          result.problem =
+            `Auto-commit is disabled on this computer, and the fetched origin/${branch} could not be ` +
+            `fast-forwarded because ${foreign.length} uncommitted file(s) Large File Bridge does not own ` +
+            `are in the way (${foreign.join(", ")}). They were left exactly as they are — commit or stash ` +
+            `them and the next cycle will bring your other computers' changes in.`;
+          return;
+        }
+        if (cleared.length > 0) {
+          log.info(
+            "git",
+            `${this.dir}: auto-commit is off — cleared ${cleared.length} LFB-generated file(s) blocking the ` +
+              `fast-forward (${cleared.join(", ")}) and retried; nothing was committed`,
+          );
+          attempt = await this.tryFastForward(branch);
+        }
+      }
     }
+    if (!attempt.error) {
+      result.merged = attempt.merged;
+      return;
+    }
+    // STILL BLOCKED BY THE TREE, not diverged — a clear that could not land (a file another process holds
+    // open, a permission the user's account lacks) leaves git naming the very same paths. Saying "diverged,
+    // reconciling needs a merge commit" here is a FALSE diagnosis that sends the user to `git merge` for a
+    // problem no merge can fix, so name the files instead and let the next cycle retry.
+    const stillBlocked = parseBlockedPaths(attempt.error.message);
+    if (stillBlocked.length > 0) {
+      result.problem =
+        `Auto-commit is disabled on this computer, and the fetched origin/${branch} could not be ` +
+        `fast-forwarded because ${stillBlocked.length} uncommitted file(s) are still in the way ` +
+        `(${stillBlocked.join(", ")}) — Large File Bridge could not move its own copies aside and left ` +
+        `everything exactly as it is. Close anything holding those files and the next cycle will bring ` +
+        `your other computers' changes in.`;
+      return;
+    }
+    // Left over: this computer has commits of its own that origin does not. Reconciling them IS a merge
+    // commit, which is precisely what the switch forbids — so say so and leave it to the user.
+    result.problem =
+      `Auto-commit is disabled on this computer, so the fetched origin/${branch} was not merged: this ` +
+      `checkout has diverged from it and reconciling would require a merge commit ` +
+      `(${(attempt.error as Error).message.split("\n")[0]}). ` +
+      `Merge with your Git tools, or re-enable auto-commit in Settings and Large File Bridge will do it.`;
   }
 
   /** One merge attempt. Never throws — the error is RETURNED so the caller can decide between "the tree was

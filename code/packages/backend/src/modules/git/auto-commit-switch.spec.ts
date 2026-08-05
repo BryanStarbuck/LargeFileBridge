@@ -118,6 +118,92 @@ describe("git_backbone.auto_commit OFF — the backbone is read-only", () => {
     expect(git(local, "rev-parse", "HEAD")).toBe(before); // no merge commit, HEAD untouched
   });
 
+  it("still fast-forwards when this machine's OWN generated text is dirty in the way", async () => {
+    // THE STEADY STATE OF THE SWITCH, not an edge case. With auto-commit off `checkpointOwnWrites()` is
+    // skipped — it is a commit — but everything that WRITES the tree carries on every pass (the device file,
+    // the manifest, the mirrored repos/ subtree; pin.service.ts writes them regardless of Git). So the tree
+    // is permanently dirty with LFB's own text, and a `--ff-only` that touches any of it aborts with "Your
+    // local changes … would be overwritten by merge" — the exact abort the checkpoint was invented to kill,
+    // every cycle, forever. Read-only would then mean "does not sync at all".
+    setAutoCommit(false);
+    const { peer, local } = originWithTwoClones();
+    fs.writeFileSync(path.join(peer, "devices", "peer.yaml"), "schema_version: 1\nfrom: peer\n");
+    git(peer, "add", "-A");
+    git(peer, "commit", "-qm", "peer edit");
+    git(peer, "push", "-q", "origin", "main");
+    // …and this machine has the same LFB-owned file dirty, exactly as a pass would leave it.
+    fs.writeFileSync(path.join(local, "devices", "peer.yaml"), "schema_version: 1\nlocally: regenerated\n");
+
+    const backbone = await GitBackbone.resolve("test-storage", local);
+    const before = commitCount(local);
+    const result: GitCycleResult = { ran: true };
+    await backbone!.pull(result);
+
+    expect(result.problem).toBeUndefined();
+    expect(result.merged).toBe(true);
+    expect(git(local, "rev-parse", "HEAD")).toBe(git(peer, "rev-parse", "HEAD"));
+    expect(fs.readFileSync(path.join(local, "devices", "peer.yaml"), "utf8")).toContain("from: peer");
+    // Nothing was authored to achieve it — the whole point of the switch.
+    expect(commitCount(local)).toBe(before + 1); // the fast-forward itself, i.e. the peer's commit
+    expect(git(local, "log", "-1", "--format=%s").trim()).toBe("peer edit");
+  });
+
+  it("never touches a file of the user's own that blocks the fast-forward — it names it", async () => {
+    setAutoCommit(false);
+    const { peer, local } = originWithTwoClones();
+    fs.writeFileSync(path.join(peer, "notes.txt"), "peer's line\n");
+    git(peer, "add", "-A");
+    git(peer, "commit", "-qm", "peer note");
+    git(peer, "push", "-q", "origin", "main");
+    git(local, "fetch", "-q", "origin");
+    git(local, "merge", "-q", "--ff-only", "origin/main");
+    fs.writeFileSync(path.join(peer, "notes.txt"), "peer's second line\n");
+    git(peer, "add", "-A");
+    git(peer, "commit", "-qm", "peer note 2");
+    git(peer, "push", "-q", "origin", "main");
+    fs.writeFileSync(path.join(local, "notes.txt"), "MY UNSAVED WORK\n"); // not LFB's to clear
+
+    const backbone = await GitBackbone.resolve("test-storage", local);
+    const result: GitCycleResult = { ran: true };
+    await backbone!.pull(result);
+
+    expect(result.merged).toBeFalsy();
+    expect(result.problem).toMatch(/notes\.txt/);
+    expect(fs.readFileSync(path.join(local, "notes.txt"), "utf8")).toBe("MY UNSAVED WORK\n");
+  });
+
+  // Root ignores the permission bits this test relies on, so it could only ever pass vacuously there.
+  it.skipIf(process.getuid?.() === 0)("says the tree is still in the way, not that the branch diverged", async () => {
+    // A clear that CANNOT LAND — a file another process holds open, a directory the account may not write
+    // (the common shape on Windows, which is the platform this whole path was hardened for) — leaves git
+    // naming the very same paths. Reporting that as "diverged, reconciling would require a merge commit"
+    // sends the user to `git merge` for a problem no merge can fix, and hides the file that is actually
+    // stuck. The two states are distinguishable and must be reported apart.
+    setAutoCommit(false);
+    const { peer, local } = originWithTwoClones();
+    fs.writeFileSync(path.join(peer, "devices", "peer.yaml"), "schema_version: 1\nfrom: peer\n");
+    git(peer, "add", "-A");
+    git(peer, "commit", "-qm", "peer edit");
+    git(peer, "push", "-q", "origin", "main");
+    fs.writeFileSync(path.join(local, "devices", "peer.yaml"), "schema_version: 1\nlocally: regenerated\n");
+    const devices = path.join(local, "devices");
+    fs.chmodSync(devices, 0o555); // git can read it, and can restore nothing into it
+
+    const backbone = await GitBackbone.resolve("test-storage", local);
+    const before = git(local, "rev-parse", "HEAD");
+    const result: GitCycleResult = { ran: true };
+    try {
+      await backbone!.pull(result);
+    } finally {
+      fs.chmodSync(devices, 0o755);
+    }
+
+    expect(result.merged).toBeFalsy();
+    expect(result.problem).toMatch(/devices\/peer\.yaml/);
+    expect(result.problem).not.toMatch(/diverged/);
+    expect(git(local, "rev-parse", "HEAD")).toBe(before);
+  });
+
   it("commitAndPush commits nothing and pushes nothing, even with staged-worthy SDL changes", async () => {
     setAutoCommit(false);
     const { origin, local } = originWithTwoClones();

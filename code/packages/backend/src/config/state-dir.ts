@@ -7,7 +7,11 @@ export function resolveStateDir(): string {
   const dir =
     process.env.LFB_STATE_DIR ||
     safeJoin(os.homedir(), "T", "_large_files_bridge") ||
-    "/tmp/_large_files_bridge";
+    // Last-ditch fallback only. `os.tmpdir()` rather than a literal `/tmp`, which on Windows resolves to
+    // `<current drive>:\tmp` — a directory that does not exist, so every write into the state root would
+    // fail. Must stay in lockstep with deploy/launchd/run-worker.mjs `stateDir()`, which resolves the same
+    // root by hand (it is dependency-free and cannot import this).
+    path.join(os.tmpdir(), "_large_files_bridge");
   ensureDir(dir);
   return dir;
 }

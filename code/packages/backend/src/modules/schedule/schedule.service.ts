@@ -8,6 +8,8 @@ import type { WorkerKind, WorkerState, JobsPageData, AppConfig } from "@lfb/shar
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { peerRows } from "../store-model/peers.service.js";
 import { launchdInstaller } from "./os/launchd.js";
+import { schtasksInstaller } from "./os/schtasks.js";
+import { systemdInstaller, supported as systemdSupported } from "./os/systemd.js";
 import type { SchedulerInstaller } from "./os/installer.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
@@ -17,8 +19,10 @@ import { workerMiss, clearWorkerMiss } from "./worker-misses.service.js";
 import { backbonePushStates } from "../git/push-health.service.js";
 import { log } from "../../shared/logging.js";
 
-// Mac launchd is the shipped path; other platforms fall back to a no-op installer
-// that still flips the config flags so the UI works cross-platform.
+// Mac launchd is the primary path, with Windows Task Scheduler and Linux systemd user timers behind the same
+// interface (scan.mdx §3). The no-op installer below is the LAST resort — a platform with no scheduler we can
+// drive (a non-systemd Linux, anything else) — where the flags still flip so the UI works and the in-process
+// watchdog remains the only cadence.
 const noopInstaller: SchedulerInstaller = {
   async install() {},
   async uninstall() {},
@@ -40,7 +44,13 @@ function stateRootNow(): string {
 }
 
 function installer(): SchedulerInstaller {
-  return process.platform === "darwin" ? launchdInstaller : noopInstaller;
+  if (process.platform === "darwin") return launchdInstaller;
+  if (process.platform === "win32") return schtasksInstaller;
+  // Only when systemd is actually there to drive. A non-systemd Linux gets the no-op rather than a pile of
+  // unit files nothing will ever read — and, more to the point, rather than a reconcile pass that would
+  // WARN "the OS still won't run the job" on every tick forever.
+  if (systemdSupported()) return systemdInstaller;
+  return noopInstaller;
 }
 
 // The launchd/cron worker trampoline: code/deploy/launchd/run-worker.mjs. Every scheduled worker (scan,
@@ -171,6 +181,12 @@ export async function jobsPageData(): Promise<JobsPageData> {
  * With no such alias (nvm, a bare tarball, an unusual layout) we fall back to `process.execPath` unchanged.
  */
 export function stableNodeBin(execPath: string = process.execPath): string {
+  // WINDOWS TAKES THE PATH AS GIVEN, and resolving it would be actively harmful. Both mainstream layouts
+  // are already version-independent — the MSI installs to `C:\Program Files\nodejs\node.exe`, and
+  // nvm-windows makes that same path a symlink it re-points on `nvm use`. Following that link (what the
+  // POSIX branch below does deliberately) would bake in `…\nvm\v26.5.0\node.exe`, i.e. manufacture the
+  // version-pinned interpreter this whole function exists to avoid.
+  if (process.platform === "win32") return execPath;
   let realExec: string;
   try {
     realExec = fs.realpathSync(execPath);
@@ -207,6 +223,11 @@ function buildInstallOpts(kind: WorkerKind) {
     apiPort: getAppConfig().server.backend_port,
     logOut: path.join(stateRoot, "log.log"),
     logErr: path.join(stateRoot, "error.err"),
+    // The user's on/off choice travels WITH the install. A Task Scheduler task and a systemd timer are live
+    // the moment they are registered, so an installer that isn't told this turns a worker the user switched
+    // off back on — on every boot, every watchdog repair, every drift re-render — and it silently resumes
+    // committing and pushing. launchd ignores it (a plist does nothing until `bootstrap`).
+    enabled: processBlock(getAppConfig(), kind).enabled,
   };
 }
 
@@ -274,6 +295,45 @@ export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResul
     const block = processBlock(getAppConfig(), kind);
     try {
       if (!inst.isInstalled(label)) {
+        // CONFIG SAYS INSTALLED, THE OS DISAGREES — restore it. Two ways a machine lands here, and the
+        // second one is why this branch exists at all:
+        //   • the user (or an installer/migration) deleted the plist / scheduled task by hand, while
+        //     `control("uninstall")` — the only sanctioned way off — was never called, so `installed` is
+        //     still true and nothing would ever put the OS job back;
+        //   • THE PLATFORM GAINED AN INSTALLER IT DIDN'T HAVE BEFORE. Every Windows machine that ever ran
+        //     LFB has `device_process.installed = true` and `auto_provisioned = true` written by a build
+        //     whose installer for that platform was the no-op — so `ensureDeviceWorkerDefaultOn()` is
+        //     latched shut and will never provision the real scheduled task. Without this, upgrading a
+        //     Windows computer to the build that HAS a Task Scheduler installer would leave it exactly as
+        //     broken as before, forever.
+        // A platform with no real installer at all no-ops here and reports as before — the in-process
+        // watchdog remains its cadence.
+        if (!block.installed) {
+          results.push({ kind, wantsOn: false, osEnabledAfter: null });
+          continue;
+        }
+        await inst.install(buildInstallOpts(kind));
+        if (block.enabled) await inst.enable(label);
+        const restored = inst.isInstalled(label);
+        if (restored) {
+          log.info("schedule", `${kind}: the OS schedule was missing while config had it installed — reinstalled it`);
+        }
+        results.push({
+          kind,
+          wantsOn: restored && block.enabled,
+          osEnabledAfter: restored && block.enabled ? await inst.isEnabled(label) : null,
+        });
+        continue;
+      }
+      // THE OS HAS IT, CONFIG SAYS IT SHOULD NOT EXIST — remove it. The mirror of the branch above, and
+      // without it `installed: false` was only half-true: reconcile skipped the worker entirely, so a unit
+      // left behind by a hand-edited config, a config reset, or an uninstall that half-failed kept firing
+      // forever with nothing anywhere to correct it. For the `device` worker that is an orphan schedule
+      // still committing and pushing from this computer. Config is the decision; the OS is made to match it
+      // in BOTH directions, the same way `enabled` now is below.
+      if (!block.installed) {
+        await inst.uninstall(label);
+        log.info("schedule", `${kind}: the OS still had this worker scheduled while config says it is not installed — removed it`);
         results.push({ kind, wantsOn: false, osEnabledAfter: null });
         continue;
       }
@@ -319,6 +379,14 @@ export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResul
       const shouldBeEnabled = block.enabled;
       const osEnabledNow = await inst.isEnabled(label);
       const notActuallyLoaded = shouldBeEnabled && !osEnabledNow;
+      // THE OTHER DIRECTION, and it is the one that costs the user something: config says this worker is
+      // OFF and the OS is firing it anyway. The switch is not decoration — a `device` worker running while
+      // the user believes it is off keeps committing and pushing from this computer every 10 minutes. It
+      // happens whenever the OS registration outlives the config decision: a task left enabled in the Task
+      // Scheduler UI, a systemd timer still started, or an install that predates this reconcile. Left
+      // unhandled, the fast path below would call it "already correct" forever, because it only ever asked
+      // whether an ON worker was running, never whether an OFF one had stopped.
+      const runningWhileOff = !shouldBeEnabled && osEnabledNow;
       if (
         have === want &&
         !scriptDrift &&
@@ -327,7 +395,8 @@ export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResul
         !nodeMissing &&
         !logDrift &&
         !logDirMissing &&
-        !notActuallyLoaded
+        !notActuallyLoaded &&
+        !runningWhileOff
       ) {
         // already correct — nothing to do
         results.push({ kind, wantsOn: shouldBeEnabled, osEnabledAfter: shouldBeEnabled ? osEnabledNow : null });
@@ -339,19 +408,27 @@ export async function reconcileWorkerSchedules(): Promise<ScheduleReconcileResul
         // exactly what re-attempts a bootstrap that never took in the first place (notActuallyLoaded).
         await inst.disable(label);
         await inst.enable(label);
+      } else {
+        // Config says OFF, so make the OS agree. On launchd the re-render above cannot do this on its own
+        // (a plist says nothing about whether it is loaded); on Windows/systemd it is the belt to that
+        // brace. Unconditional rather than gated on `runningWhileOff`, because the install we just did is
+        // itself capable of reviving a registration.
+        await inst.disable(label);
       }
       const osEnabledAfter = shouldBeEnabled ? await inst.isEnabled(label) : null;
-      const why = scriptDrift || scriptMissing
-        ? `trigger script ${haveScript ?? "?"} → ${wantScript}`
-        : nodeDrift || nodeMissing
-          ? `node binary ${haveNode ?? "?"}${nodeMissing ? " (GONE — the job could not start at all)" : ""} → ${wantNode}`
-          : logDrift || logDirMissing
-            ? `log paths ${haveLogs?.out ?? "?"}${logDirMissing ? " (directory GONE — launchd could not open it)" : ""} → ${wantLogs.out}`
-            : notActuallyLoaded
-              ? `launchd didn't actually have the job loaded — re-bootstrapped`
-              : `interval ${have ?? "?"}s → ${want}s`;
+      const why = runningWhileOff
+        ? `the OS was still running this worker while settings had it switched off — stopped it`
+        : scriptDrift || scriptMissing
+          ? `trigger script ${haveScript ?? "?"} → ${wantScript}`
+          : nodeDrift || nodeMissing
+            ? `node binary ${haveNode ?? "?"}${nodeMissing ? " (GONE — the job could not start at all)" : ""} → ${wantNode}`
+            : logDrift || logDirMissing
+              ? `log paths ${haveLogs?.out ?? "?"}${logDirMissing ? " (directory GONE — launchd could not open it)" : ""} → ${wantLogs.out}`
+              : notActuallyLoaded
+                ? `the OS didn't actually have the job loaded — re-registered it`
+                : `interval ${have ?? "?"}s → ${want}s`;
       if (shouldBeEnabled && !osEnabledAfter) {
-        log.warn("schedule", `${kind}: schedule repair did not take — launchd still won't load the job (${why})`);
+        log.warn("schedule", `${kind}: schedule repair did not take — the OS still won't run the job (${why})`);
       } else {
         log.info("schedule", `${kind}: reconciled schedule (${why})`);
       }

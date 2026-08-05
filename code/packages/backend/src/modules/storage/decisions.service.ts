@@ -40,6 +40,7 @@ import { getRepoConfig, updateRepoConfig, repoBumpTopics } from "../store-model/
 import { bumpTopics, bumpTopicsThrottled } from "../events/state-events.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 
 /** The two axes the user decides on, per file (decisions.mdx §1). Either may be undefined = "leave as-is". */
 export interface DecisionAxes {
@@ -225,7 +226,7 @@ function appendEvents(repoRoot: string, events: DecisionEvent[]): void {
 function repoRootFor(folder: string): string {
   const p = getRepoConfig(folder).repo.path;
   if (!p) throw new Error(`repo ${folder} has no path`);
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return path.resolve(expandHome(p));
 }
 
 /**

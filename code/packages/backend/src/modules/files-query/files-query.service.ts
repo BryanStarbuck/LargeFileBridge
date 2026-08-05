@@ -13,6 +13,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { log } from "../../shared/logging.js";
+import { resolveHome } from "../../shared/home-path.js";
 
 export const FILES_LIST_CATEGORY_KEYS: FilesListCategoryKey[] = [
   "compress",
@@ -59,10 +60,6 @@ const MATCH: Record<FilesListCategoryKey, (r: FileRow) => boolean> = {
   ocr: (r) => r.ocr === "could",
 };
 
-function expandHome(p: string): string {
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
-}
-
 /** True when `child` is `parent` or lives underneath it. Pure string containment on resolved paths. */
 function isUnder(child: string, parent: string): boolean {
   return child === parent || child.startsWith(parent + path.sep);
@@ -84,7 +81,7 @@ export async function listFilesByCategory(
   rawScope: string,
   keys: FilesListCategoryKey[],
 ): Promise<FilesListResult> {
-  const scope = rawScope === "all" ? ("all" as const) : expandHome(rawScope);
+  const scope = rawScope === "all" ? ("all" as const) : resolveHome(rawScope);
   const wanted = keys.length ? keys : FILES_LIST_CATEGORY_KEYS;
   const buckets = new Map<FilesListCategoryKey, Set<string>>(wanted.map((k) => [k, new Set()]));
   let unitsSearched = 0;
@@ -104,7 +101,7 @@ export async function listFilesByCategory(
   for (const folder of listRepoFolders()) {
     const cfg = getRepoConfig(folder);
     if (!cfg.repo.path) continue;
-    const root = expandHome(cfg.repo.path);
+    const root = resolveHome(cfg.repo.path);
     if (!unitInScope(root, scope)) continue;
     unitsSearched++;
     let rows: FileRow[];
@@ -129,7 +126,7 @@ export async function listFilesByCategory(
     (r): r is NonNullable<typeof r> => r !== null && r.root !== "" && r.hasLfbridge,
   );
   for (const storage of sdlRows) {
-    const root = expandHome(storage.root);
+    const root = resolveHome(storage.root);
     if (!unitInScope(root, scope)) continue;
     unitsSearched++;
     for (const f of readStorageIndex(root, storage.type)) {
@@ -171,16 +168,16 @@ export const EVERYTHING_PATH_CAP = 200_000;
  * keeps breathing on huge trees. Implements cli.mdx §4.0 — `listEverything()`.
  */
 export async function listEverything(rawScope: string): Promise<FilesListResult> {
-  const scope = rawScope === "all" ? ("all" as const) : expandHome(rawScope);
+  const scope = rawScope === "all" ? ("all" as const) : resolveHome(rawScope);
   const roots: string[] = [];
   if (scope === "all") {
     for (const folder of listRepoFolders()) {
       const cfg = getRepoConfig(folder);
-      if (cfg.repo.path) roots.push(expandHome(cfg.repo.path));
+      if (cfg.repo.path) roots.push(resolveHome(cfg.repo.path));
     }
     const page = listStoragesPage();
     for (const r of [page.personal, ...page.companies]) {
-      if (r && r.root) roots.push(expandHome(r.root));
+      if (r && r.root) roots.push(resolveHome(r.root));
     }
   } else {
     roots.push(scope);

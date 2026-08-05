@@ -40,6 +40,7 @@ import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
 import { getStoragePinned, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
+import { stableGitBin } from "../git/git-bin.js";
 import { withStorageGitLock } from "../git/git-lock.js";
 // The sync-repo mirror: send (mirrorToSyncRepo, via writeRepoTrackingManifest), receive (reconcile), and the
 // per-entry merge that keeps a peer's pin claim alive (storage_company.mdx §8.4.2/§8.4.3/§8.6).
@@ -59,6 +60,7 @@ import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.servic
 import { log } from "../../shared/logging.js";
 import { whenOnline, hostFromRemote } from "../../shared/net-transient.js";
 import { statOrNull } from "../../shared/fs-probe.js";
+import { expandHome } from "../../shared/home-path.js";
 
 // One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
 // (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
@@ -786,7 +788,7 @@ function warnOnDuplicateBackbones(ids: string[]): void {
 function readGitRemoteUrl(dir: string): string | null {
   try {
     return (
-      execFileSync("git", ["-C", dir, "config", "--get", "remote.origin.url"], {
+      execFileSync(stableGitBin(), ["-C", dir, "config", "--get", "remote.origin.url"], {
         encoding: "utf8",
         timeout: 5000,
         stdio: ["ignore", "pipe", "ignore"],
@@ -1094,6 +1096,3 @@ export async function pullMissing(
   return { pulled, failed, errors };
 }
 
-function expandHome(p: string): string {
-  return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
-}

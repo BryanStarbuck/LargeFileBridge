@@ -39,6 +39,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { openRepo } from "../git/git.service.js";
 import { queueDepth, workerUtilization } from "../jobqueue/jobqueue.service.js";
 import { getHardware } from "../storage/hardware.service.js";
+import { expandHome } from "../../shared/home-path.js";
 
 // ── the metric catalog (pm/debug.mdx §5.2 — LOCKED) ──────────────────────────────────────────────────
 // Every key here is emitted, ALWAYS, even when empty (§5.3): `[]` means "computed, genuinely zero";
@@ -709,7 +710,7 @@ function compressVisibility(files: FileRow[]): Record<string, number> {
 function repoRootFor(folder: string): string {
   const p = getRepoConfig(folder).repo.path;
   if (!p) throw new Error(`repo ${folder} has no path`);
-  return path.resolve(p.replace(/^~(?=\/|$)/, process.env.HOME || "~"));
+  return path.resolve(expandHome(p));
 }
 
 /**

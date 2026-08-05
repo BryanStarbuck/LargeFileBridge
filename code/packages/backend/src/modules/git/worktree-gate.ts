@@ -30,11 +30,25 @@ interface DeferredJob {
 }
 const deferred = new Map<string, DeferredJob>();
 
+// WINDOWS PATHS ARE CASE-INSENSITIVE, and this gate is pure string comparison. `path.resolve` normalizes
+// separators but never case, so `C:\Users\bryan\BGit\repo` (config) and `c:\users\bryan\bgit\repo` (an
+// mtime-driven scan hit) resolve to two strings that are the SAME directory and do not match. The gate
+// would then answer "nothing is mid-cycle over this path", the mirror would write into a tree between its
+// fetch and its merge, and git would refuse the merge with "Your local changes … would be overwritten" —
+// exactly the failure this whole module was written to prevent, reintroduced by the platform.
+//
+// Scoped to Windows on purpose. A default APFS/HFS+ volume is case-insensitive too, so the same hole is
+// open on macOS — but changing comparison semantics on the primary platform is its own decision, not a
+// side effect of a Windows fix.
+const CASE_INSENSITIVE_FS = process.platform === "win32";
+
 function norm(p: string): string {
-  return path.resolve(p);
+  const abs = path.resolve(p);
+  return CASE_INSENSITIVE_FS ? abs.toLowerCase() : abs;
 }
 
-/** True when `abs` sits inside `root` (or IS `root`). Path-segment aware, so `/a/bc` is not inside `/a/b`. */
+/** True when `abs` sits inside `root` (or IS `root`). Path-segment aware, so `/a/bc` is not inside `/a/b`.
+ *  Both sides come from `norm`, so the case folding above is already applied. */
 function contains(root: string, abs: string): boolean {
   if (abs === root) return true;
   return abs.startsWith(root.endsWith(path.sep) ? root : root + path.sep);

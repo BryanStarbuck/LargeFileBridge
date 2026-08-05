@@ -22,6 +22,7 @@ import path from "node:path";
 import fs from "node:fs";
 import { execFile } from "node:child_process";
 import { log } from "../../shared/logging.js";
+import { stableGitBin } from "../git/git-bin.js";
 import { LFBRIDGE_DIR } from "./tracking.service.js";
 
 /** The additive re-include block appended to a repo's .gitignore when it blocks `.lfbridge/` artifacts.
@@ -41,7 +42,10 @@ const VERIFY_TTL_MS = 5 * 60_000;
 
 function run(cwd: string, args: string[]): Promise<{ code: number; stdout: string }> {
   return new Promise((resolve) => {
-    execFile("git", args, { cwd, timeout: 15_000 }, (err, stdout) => {
+    // stableGitBin(), never a bare "git": this runs inside the background workers, whose PATH need not
+    // contain git at all (git-bin.ts). A spawn failure here reads as a NON-ZERO EXIT — i.e. "this repo
+    // cannot commit its artifacts" — so a missing git would quietly quarantine every artifact on the box.
+    execFile(stableGitBin(), args, { cwd, timeout: 15_000 }, (err, stdout) => {
       // execFile's err.code is the child's numeric exit code (or a string like "ENOENT" for spawn errors).
       const raw = err ? (err as NodeJS.ErrnoException).code ?? 1 : 0;
       resolve({ code: typeof raw === "number" ? raw : 1, stdout: stdout ?? "" });

@@ -14,6 +14,7 @@ import { nearestGitAtOrAbove, checkIgnoreAsync } from "../git/git.service.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { mtimeMsOrNull, sizeOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 
 // IPFS list artifacts (directory.mdx §3.4, ipfs_share_files.mdx §3). Case-insensitive match.
 const IPFS_ARTIFACT_NAMES = new Set(["ipfs.sh", "ipfs.txt", "get_videos.sh"]);
@@ -440,9 +441,9 @@ function cacheInterest(dirAbs: string, mtimeMs: number, interest: FolderInterest
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
-export function expandHome(p: string): string {
-  return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
-}
+// expandHome is canonical in shared/home-path.ts (it must answer correctly on Windows, where `HOME` is
+// unset); re-exported here so existing importers (git.service, fsindex, …) keep resolving it from badges.
+export { expandHome } from "../../shared/home-path.js";
 
 // nearestGitAtOrAbove is now canonical in git.service.ts (directories.mdx §3.4a); re-export it here so
 // existing importers (fsindex, …) keep resolving it from this module.

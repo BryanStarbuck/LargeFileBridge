@@ -7,6 +7,7 @@ import fs from "node:fs";
 import { execFileSync } from "node:child_process";
 import type { DeviceHardwareDoc } from "@lfb/shared";
 import { lookupModel, kindFromIdentifier } from "./hardware-models.js";
+import { stableGitBin } from "../git/git-bin.js";
 import { log } from "../../shared/logging.js";
 
 let cached: DeviceHardwareDoc | null = null;
@@ -91,7 +92,7 @@ function gitConfig(key: string): string {
   const home = os.homedir() || "/";
   for (const args of [["config", "--global", "--get", key], ["config", "--get", key]]) {
     try {
-      const out = execFileSync("git", args, {
+      const out = execFileSync(stableGitBin(), args, {
         cwd: home,
         encoding: "utf8",
         timeout: 2500,

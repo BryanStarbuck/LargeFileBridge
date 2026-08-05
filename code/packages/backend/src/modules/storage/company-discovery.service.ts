@@ -41,6 +41,11 @@ import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders, getRepoConfig } from "../store-model/units.service.js";
 import { parseRemoteOwner } from "./repo-identity.js";
 import { isPersonalAccount } from "../git/git.service.js";
+// Never a bare `"git"`: this runs behind the scan/device workers, whose PATH need not contain git at all
+// (git-bin.ts) — and on Windows the binary is `git.exe`, which a bare name only finds via that same PATH.
+// Every failure here is swallowed as "no evidence of membership", so a missing git would silently discover
+// zero companies rather than report a fault.
+import { stableGitBin } from "../git/git-bin.js";
 import { ensureCompanyForOwner, ensureStorage, listStoragesPage, getStorageRow } from "./storage.service.js";
 import { clearPlacementCache } from "./artifact-placement.service.js";
 import { expandHome } from "../fs/badges.js";
@@ -130,7 +135,7 @@ async function globalIdentities(): Promise<string[]> {
     ["config", "--system", "user.email"],
   ]) {
     try {
-      const { stdout } = await run("git", args, { timeout: GIT_TIMEOUT_MS });
+      const { stdout } = await run(stableGitBin(), args, { timeout: GIT_TIMEOUT_MS });
       const v = stdout.trim();
       if (v) out.add(v.toLowerCase());
     } catch {
@@ -155,7 +160,7 @@ function escapeForRegex(s: string): string {
 async function authoredHere(repoPath: string, globals: readonly string[]): Promise<boolean> {
   const emails = new Set(globals);
   try {
-    const { stdout } = await run("git", ["config", "user.email"], { cwd: repoPath, timeout: GIT_TIMEOUT_MS });
+    const { stdout } = await run(stableGitBin(), ["config", "user.email"], { cwd: repoPath, timeout: GIT_TIMEOUT_MS });
     const v = stdout.trim();
     if (v) emails.add(v.toLowerCase());
   } catch {
@@ -170,7 +175,7 @@ async function authoredHere(repoPath: string, globals: readonly string[]): Promi
     // configured identity reads back lowercased and every commit carries a capital B. A membership test
     // that silently answers "no" for your own repos loses the entire feature (§10.2).
     const { stdout } = await run(
-      "git",
+      stableGitBin(),
       ["log", "--all", "-i", "-E", `--author=${pattern}`, "-n", "1", "--format=%H"],
       { cwd: repoPath, timeout: GIT_TIMEOUT_MS },
     );
@@ -406,7 +411,7 @@ export async function createCompanyStorage(org: string): Promise<CompanyCreateRe
   fs.mkdirSync(root, { recursive: true });
   if (!safeIsDir(path.join(root, ".git"))) {
     try {
-      await run("git", ["init"], { cwd: root, timeout: GIT_TIMEOUT_MS });
+      await run(stableGitBin(), ["init"], { cwd: root, timeout: GIT_TIMEOUT_MS });
       log.info("storage", `git init company storage at ${root}`);
     } catch (e) {
       // Every silent null becomes loud (§11.2): a storage that never became a repo can never sync, and the
@@ -447,7 +452,7 @@ function findCompanyRowByRoot(root: string): StorageRow | null {
 /** Does this storage's git repo have a remote yet? `false` is §11.2's standing fault, not a detail. */
 async function hasGitRemote(root: string): Promise<boolean> {
   try {
-    const { stdout } = await run("git", ["remote"], { cwd: root, timeout: GIT_TIMEOUT_MS });
+    const { stdout } = await run(stableGitBin(), ["remote"], { cwd: root, timeout: GIT_TIMEOUT_MS });
     return stdout.trim().length > 0;
   } catch {
     return false;

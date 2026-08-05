@@ -20,6 +20,7 @@ import { getAppConfig, updateAppConfig } from "../store-model/config.service.js"
 import { HARD_SKIP, isDatabaseWorkingFile, isMediaFile, isTransientDownloadFile } from "../../shared/scan-filters.js";
 import { startScan } from "../scanner/scan-job.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 
 interface WatchRoot {
   root: string;
@@ -176,9 +177,6 @@ function isQualifying(abs: string, threshold: number): boolean {
   }
 }
 
-function expandHome(p: string): string {
-  return p.replace(/^~(?=\/|$)/, process.env.HOME || "~");
-}
 function safeIsDir(p: string): boolean {
   try {
     return fs.statSync(p).isDirectory();
