@@ -38,15 +38,20 @@ _check-tools:
 _check-auth-lib:
     @node "{{dev}}" check-auth-lib
 
-# Install deps + seed backend .env.
+# The install goes through `dev.mjs install`, not bare `pnpm install`, because "Already up to date" is a
+# claim about the LOCKFILE and not about node_modules: on Windows pnpm's package links are junctions that
+# hold ABSOLUTE paths, so a repo that was moved keeps a tree pnpm calls complete and nothing can resolve.
+# It verifies and repairs (scripts/dev/deps.mjs `ensureInstalled`).
+#
+# Install deps (verified) + seed backend .env.
 setup: _check-tools _check-auth-lib
-    pnpm -C "{{code}}" install
+    @node "{{dev}}" install
     @node "{{dev}}" seed-env
     @echo Setup complete.
 
 # Build the CLI (cli/ — pm/cli.mdx §1.3): root build/run always bring it fully up to date too.
 build-cli:
-    pnpm -C "{{cli}}/code" install
+    @node "{{dev}}" install --cli
     pnpm -C "{{cli}}/code" build
 
 # Typecheck / build every package (and the CLI — cli.mdx §1.3).

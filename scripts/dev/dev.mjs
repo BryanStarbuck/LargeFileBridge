@@ -11,8 +11,8 @@
 // scripts/dev/proc.mjs and scripts/dev/boot.mjs.
 //
 // Usage: node scripts/dev/dev.mjs <command>
-//   check-tools | check-auth-lib | seed-env | run | boot-run | stop | status | logs [--all|--txn]
-//   clean | boot <on|off|status> | paths
+//   check-tools | check-auth-lib | install [--cli] | seed-env | run | boot-run | stop | status
+//   logs [--all|--txn] | clean | boot <on|off|status> | paths
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -25,6 +25,7 @@ import {
   bePort,
   bootErrLog,
   bootOutLog,
+  cliDir,
   codeDir,
   devDir,
   ensureDir,
@@ -38,6 +39,7 @@ import {
   txnLog,
   workerLabels,
 } from "./paths.mjs";
+import { describeProblems, ensureInstalled, moduleDirs, treeProblems } from "./deps.mjs";
 import {
   freePort,
   haveTool,
@@ -46,7 +48,6 @@ import {
   isWindows,
   pidsMatchingAll,
   pidsOnPort,
-  runTool,
   sleep,
   terminate,
   waitUntil,
@@ -87,6 +88,8 @@ async function main() {
       return checkTools();
     case "check-auth-lib":
       return checkAuthLib();
+    case "install":
+      return cmdInstall(rest);
     case "seed-env":
       return seedEnv();
     case "run":
@@ -107,7 +110,9 @@ async function main() {
       return cmdPaths();
     default:
       err(`dev.mjs: unknown command "${cmd ?? ""}"`);
-      err("Usage: node scripts/dev/dev.mjs <check-tools|check-auth-lib|seed-env|run|stop|status|logs|clean|boot|paths>");
+      err(
+        "Usage: node scripts/dev/dev.mjs <check-tools|check-auth-lib|install|seed-env|run|stop|status|logs|clean|boot|paths>",
+      );
       process.exitCode = 2;
   }
 }
@@ -153,6 +158,27 @@ function checkAuthLib() {
   process.exitCode = 1;
 }
 
+/**
+ * Install dependencies AND prove the tree they produced actually resolves (deps.mjs `ensureInstalled`).
+ *
+ * `pnpm install` answering "Already up to date" is a statement about the lockfile, not about node_modules:
+ * on 2026-08-05 it said exactly that on Windows over a tree whose every package link dangled, and the only
+ * thing that noticed was `pnpm dev`, half a minute later, inside a detached launcher. So the install is no
+ * longer the last word here — the verification is.
+ *
+ * The reinstall step removes node_modules, so the app is stopped first: on Windows a file held by the
+ * running dev tree cannot be replaced, and a half-removed tree is worse than the one we started with.
+ */
+async function cmdInstall(args) {
+  const cli = args.includes("--cli");
+  const root = cli ? path.join(cliDir, "code") : codeDir;
+  const code = await ensureInstalled(root, {
+    label: cli ? "CLI (cli/code)" : "web app (code)",
+    beforeReinstall: cli ? undefined : () => cmdStop({ quiet: true }),
+  });
+  if (code !== 0) process.exitCode = code;
+}
+
 /** Seed the backend .env from .env.example on first setup. (`test -f … || cp …`, portably.) */
 function seedEnv() {
   const env = path.join(backendDir, ".env");
@@ -187,6 +213,19 @@ async function cmdRun() {
     stdio: "ignore",
     windowsHide: true,
   });
+
+  // The launcher lives as long as `pnpm dev` does, so its EXIT is the dev tree's death certificate. Watch
+  // for it: without this, a tree that died in the first second still cost the caller the full 30s timeout
+  // and then reported "Timed out waiting for ports" — a waiting-for-a-slow-boot message for a process
+  // that was already gone, which sends you looking at ports when the answer is in the log.
+  let launcherExit = null;
+  child.on("exit", (code) => {
+    launcherExit = typeof code === "number" ? code : 1;
+  });
+  child.on("error", (e) => {
+    err(`could not start the launcher: ${e?.message || e}`);
+    launcherExit = 127;
+  });
   child.unref();
 
   out(`Starting… (logs: ${launcherLog()}, rotating via scripts/log_rotate_pipe.mjs)`);
@@ -199,10 +238,38 @@ async function cmdRun() {
       out(`Up: http://localhost:${web}  (API :${api})`);
       return;
     }
+    if (launcherExit !== null) return reportDeadTree(launcherExit);
     await sleep(500);
   }
   err(`Timed out waiting for ports — see ${launcherLog()}`);
   err(tailFile(launcherLog(), 30));
+  process.exitCode = 1;
+}
+
+/**
+ * The dev tree exited before the app came up. Print what it said, and — because a broken node_modules is
+ * by far the most common reason for an instant exit, and its stack trace names one missing file rather
+ * than the state that produced it — check the dependency tree and name what does not resolve.
+ */
+async function reportDeadTree(code) {
+  // The launcher writes its last line and then gives the sink 200ms to flush before it exits. Let that
+  // land, or the tail we print here stops one line short of the reason.
+  await sleep(400);
+  err("");
+  err(`✗ The dev tree exited (code=${code}) before the app came up — it is NOT running.`);
+  err(`  ${launcherLog()}:`);
+  err(tailFile(launcherLog(), 30));
+
+  const problems = treeProblems(codeDir);
+  if (problems.length) {
+    err("");
+    err("  The installed dependency tree is broken — that is very likely why:");
+    for (const line of describeProblems(problems, codeDir).slice(0, 12)) err(line);
+    if (problems.length > 12) err(`    …and ${problems.length - 12} more`);
+    err("");
+    err("  Fix it with:  just clean     then     just run");
+  }
+  err("");
   process.exitCode = 1;
 }
 
@@ -217,8 +284,11 @@ async function cmdRun() {
  */
 async function cmdBootRun() {
   for (const file of [bootOutLog(), bootErrLog()]) rotateIfOversized(file);
-  const code = await runTool("pnpm", ["-C", codeDir, "install"], { stdio: "inherit" });
-  if (code !== 0) err(`boot-run: pnpm install exited ${code} — starting anyway with whatever is installed.`);
+  // The same verified install `just setup` does — a login job is the LEAST watched place for a tree that
+  // says it is installed and is not (deps.mjs). It still starts either way: a repair that could not run
+  // unattended must not be the reason the app is missing at the desk in the morning.
+  const code = await ensureInstalled(codeDir, { label: "web app (code)" });
+  if (code !== 0) err(`boot-run: install exited ${code} — starting anyway with whatever is installed.`);
   await cmdRun();
 }
 
@@ -473,16 +543,10 @@ async function cmdClean() {
       /* already gone */
     }
   }
-  const modules = [path.join(codeDir, "node_modules")];
-  const packages = path.join(codeDir, "packages");
-  try {
-    for (const entry of fs.readdirSync(packages)) modules.push(path.join(packages, entry, "node_modules"));
-  } catch {
-    /* no packages dir — nothing more to remove */
-  }
-  for (const dir of modules) {
+  for (const dir of moduleDirs(codeDir)) {
     try {
-      fs.rmSync(dir, { recursive: true, force: true });
+      // maxRetries for Windows, where a file the dev tree only just released answers EBUSY once.
+      fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
     } catch (e) {
       err(`could not remove ${dir}: ${e?.message || e}`);
     }

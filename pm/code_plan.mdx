@@ -89,6 +89,18 @@ no comment lines inside a recipe body (`just` hands those to the shell, and `#` 
 OS), `launch.mjs` (the detached launcher that pipes the dev tree through the rotating log sink) and
 `boot.mjs` (login autostart: launchd / Task Scheduler / systemd user unit).
 
+**`just setup` verifies the install; it does not take pnpm's word for it.** "Already up to date" is a
+claim about the lockfile, not about `node_modules`: on Windows pnpm's package links are junctions holding
+**absolute** paths, so a repo that was moved (this one travels between computers by design) keeps a tree
+pnpm calls complete in which nothing resolves — the app then dies one second into `pnpm dev` with a
+module-not-found. So every install proves the tree instead: each project's direct dependencies must
+resolve to a real package directory and each tool its scripts name must have a runnable `.bin` shim, and a
+tree that fails is repaired (`--force`, then a from-scratch reinstall) or reported by name.
+Verified and repaired in code: `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/deps.mjs` —
+`treeProblems()` (the check) and `ensureInstalled()` (the repair ladder), called by `dev.mjs` `cmdInstall`
+for both `code/` and `cli/code/`. A dev tree that dies before the ports come up is reported as such, with
+that same finding, by `dev.mjs` `reportDeadTree()` — never as a port timeout.
+
 Ports (from [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
 the **web app** — the browser-facing page server — **always defaults to :2222** (Vite). The backend
 REST API is **8787** (`/api`); Vite proxies `/api` → `http://localhost:8787`. The IPFS *gateway*
