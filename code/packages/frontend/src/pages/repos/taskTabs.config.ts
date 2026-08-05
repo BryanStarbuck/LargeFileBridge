@@ -48,7 +48,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     // The two decision tiles lead and sit ADJACENT (one_repo.mdx §3.2.2) — they are the two axes of the
     // same question, so they read as a pair. "Undecided" is gone; "Big, not git-ignored" folded into
     // "Git Ignore".
-    metrics: ["addToIpfs", "gitIgnore", "pullDown", "notBackedUp", "compressibleVideos", "compressibleImages", "transcribable", "describable"],
+    metrics: ["addToIpfs", "gitIgnore", "pullDown", "deletedHere", "notBackedUp", "compressibleVideos", "compressibleImages", "transcribable", "describable"],
     defaultHint: "All large files in this repo. Hover a file for details, or pick a task tab to focus.",
     // Large files only default (tables.mdx §2.9) — OCR seeds OFF so small screenshots/JPGs show.
     largeOnlyDefault: true,
@@ -66,7 +66,7 @@ export const TASK_TABS: Record<TaskTabId, TaskTabDef> = {
     ],
     rowFilter: (f) => mediaKindForName(basename(f.path)) !== null || f.sizeBytes >= BIG,
     // No Git Ignore tile here — this tab is about the IPFS axis only (one_repo.mdx §3.2.2).
-    metrics: ["addToIpfs", "pullDown", "notBackedUp", "pending"],
+    metrics: ["addToIpfs", "pullDown", "deletedHere", "notBackedUp", "pending"],
     defaultHint: "IPFS: which large files are pinned across your computers. Fewest-peers files are on top.",
     // Large files only default (tables.mdx §2.9) — OCR seeds OFF so small screenshots/JPGs show.
     largeOnlyDefault: true,

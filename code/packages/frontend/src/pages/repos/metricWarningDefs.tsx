@@ -11,6 +11,7 @@ import type { RepoDetail, FileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { relativeTime, timeUntil } from "../../lib/format.js";
 import { DESCRIBE_KIND_FILTERS } from "../../lib/describe.js";
 import { OCR_KIND_FILTERS, withOcrReady } from "../../lib/ocr.js";
 import { withModelReady } from "../../lib/transcribe.js";
@@ -273,6 +274,79 @@ export function buildPullDownWarning(detail: RepoDetail, repoId: string): Warnin
       },
       apply: async (sel, checkedPaths) => {
         await api.pull(repoId, checkedPaths, { compress: !!sel.checks.compress });
+      },
+    },
+  };
+}
+
+/**
+ * Files you DELETED on this computer that Large File Bridge is still set to sync (decisions.mdx §12).
+ *
+ * These have no row in the table — the scan cannot see a file that isn't there, and without a peer claim
+ * they aren't remote-only either — so this popup is the only place they can be seen or acted on. Large File
+ * Bridge already stopped re-fetching them the moment it noticed; the grace period exists so an unplugged
+ * drive or a mid-checkout repo is not mistaken for a deletion. The two choices are the two real intents:
+ * confirm the delete now, or put the file back.
+ */
+export function buildDeletedHereWarning(detail: RepoDetail, repoId: string): WarningDef | null {
+  const gone = detail.deletedHere ?? [];
+  if (gone.length === 0) return null;
+  const n = gone.length;
+  const it = n === 1 ? "it" : "them";
+  const restorable = gone.filter((f) => f.pinnedElsewhere || f.cid).length;
+  // The soonest deadline is the one to quote — it is the first thing that will actually happen.
+  const soonest = gone.reduce((a, b) => (Date.parse(a.staleAt) <= Date.parse(b.staleAt) ? a : b));
+  return {
+    id: "repo-files-deleted-here-still-decided",
+    state: "warn",
+    scope: "file",
+    headline: `${n} synced file${n === 1 ? "" : "s"} ${n === 1 ? "was" : "were"} deleted on this computer`,
+    sub: `Large File Bridge has stopped syncing ${it} and will return ${it} to Undecided ${timeUntil(soonest.staleAt)} unless you put ${it} back.`,
+    popup: {
+      whatThisIs: `${n} file${n === 1 ? "" : "s"} you had set to sync over IPFS ${n === 1 ? "is" : "are"} no longer on this computer. Large File Bridge noticed and immediately stopped pulling ${it} back down — otherwise every pin pass would silently restore a file you deleted on purpose.`,
+      whyItMatters: `Nothing has been thrown away yet. After the grace period (the first one lapses ${timeUntil(soonest.staleAt)}) the decision is returned to Undecided and this computer's pin is dropped, reclaiming the space. ${restorable > 0 ? `${restorable === n ? "Each of these" : `${restorable} of these`} can still be put back — the bytes are pinned here or on another of your computers.` : "None of these can be put back from IPFS any more — this computer's pin is the only copy left, and it goes when the grace period lapses."} Uncheck any file you want to leave alone.`,
+      options: [
+        {
+          kind: "radio",
+          group: "action",
+          value: "forget",
+          label: "Stop syncing them",
+          helper: "confirm the delete now — decision returns to Undecided, this computer's pin is dropped",
+          defaultSelected: true,
+        },
+        {
+          kind: "radio",
+          group: "action",
+          value: "restore",
+          label: "Put them back",
+          helper: "fetch the bytes down again and keep syncing",
+        },
+      ],
+      actionLabel: "",
+      canApply: () => true,
+      targets: gone.map((f) => {
+        const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/")) : "";
+        return {
+          id: f.path,
+          label: f.name,
+          name: f.name,
+          sizeText: formatBytes(f.sizeBytes),
+          pathText: `${dir || "(repo root)"} · gone since ${relativeTime(f.firstSeenAt)}${f.pinnedElsewhere ? "" : " · only this computer had it"}`,
+        };
+      }),
+      targetNoun: "file",
+      progress: {
+        kind: "pin",
+        target: detail.name,
+        doneLabel: (sel, count) =>
+          sel.radios.action === "restore"
+            ? `${count} file${count === 1 ? "" : "s"} pulled back`
+            : `${count} file${count === 1 ? "" : "s"} no longer syncing`,
+        invalidate: [["repo", repoId]],
+      },
+      apply: async (sel, checkedPaths) => {
+        if (sel.radios.action === "restore") await api.pull(repoId, checkedPaths, { compress: false });
+        else await api.setDecision(repoId, checkedPaths, "undecided");
       },
     },
   };
@@ -685,6 +759,8 @@ export function buildMetricWarning(id: MetricId, detail: RepoDetail, repoId: str
       return buildGitIgnoreWarning(detail, repoId);
     case "pullDown":
       return buildPullDownWarning(detail, repoId);
+    case "deletedHere":
+      return buildDeletedHereWarning(detail, repoId);
     case "transcribable":
       return buildTranscribeWarning(detail, repoId);
     case "describable":
@@ -724,6 +800,11 @@ export function topRecommendation(
   if (syncBlocked) return { warning: syncBlocked };
   const pull = buildPullDownWarning(detail, repoId);
   if (pull) return { metricId: "pullDown", warning: pull };
+  // Ranked immediately after pull-down: both are "a decided file's bytes are not here", and this one is on a
+  // CLOCK — the grace period lapses whether or not the user ever looks, so it must not sit below the
+  // content-work tiles where it could go unseen until the decision is already gone.
+  const deleted = buildDeletedHereWarning(detail, repoId);
+  if (deleted) return { metricId: "deletedHere", warning: deleted };
   const addToIpfs = buildAddToIpfsWarning(detail, repoId);
   if (addToIpfs) return { metricId: "addToIpfs", warning: addToIpfs };
   // Then the content-work recommendations (task_tabs.mdx §2.7, ocr.mdx §12.3). The LOCKED worst-first order:

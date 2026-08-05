@@ -195,6 +195,23 @@ export interface MissingPinnedFile {
   addedByDevice: string | null; // the peer device that pinned it ("added by {device}")
 }
 
+// A decided file whose bytes VANISHED from this computer after this computer had pinned them — i.e. the
+// user deleted it (decisions.mdx §12 "Delete"). It is the exact opposite of MissingPinnedFile, which is a
+// file that was never here, and telling the two apart is what lets Large File Bridge stop re-fetching a
+// deletion. Such a file has no row in the files table (the scan can't see it and it has no peer claim to
+// make it remote-only), so this list is the ONLY place the user can find it.
+export interface DeletedHereFile {
+  path: string; // repo-relative path
+  name: string;
+  sizeBytes: number; // last known, from the manifest
+  cid: string | null; // the CID this computer pinned, if the manifest still records one
+  firstSeenAt: string; // ISO — when the absence was first noticed (the grace period's start)
+  staleAt: string; // ISO — when the decision is returned to Undecided and the local pin dropped
+  // True when another of your computers still claims this file, so "put it back" can actually fetch it.
+  // False means the bytes exist nowhere but this node's own pinset until it is staled.
+  pinnedElsewhere: boolean;
+}
+
 // Per-tab "what could be done" metric counts (task_tabs.mdx §2.5). Rolled up from the file rows; the
 // MetricsStrip renders one panel per count for the active tab (a light-green big-0 when a count is 0).
 // `pullDown` is NOT here — it comes from RepoDetail.missingPinned.length (computed in the router).
@@ -259,6 +276,9 @@ export interface RepoDetail {
   // Files a peer computer of yours pinned that this computer lacks — drives the "pull them down" warning
   // (warnings.mdx §10.8.12). Empty/absent when there is nothing to pull.
   missingPinned?: MissingPinnedFile[];
+  // Decided files this computer pinned and then lost from disk — deletions, inside their grace period
+  // (decisions.mdx §12). Drives the "Deleted here" metric + popup. Empty/absent when nothing is orphaned.
+  deletedHere?: DeletedHereFile[];
   // Set when this repo can no longer fast-forward from its remote, so your other computers' finished work
   // can never arrive here until you resolve it. Absent = converging normally.
   syncBlocked?: RepoSyncBlock;
@@ -280,6 +300,15 @@ export interface PinCounts {
   fetched: number; // missing files materialized from a peer this run
   skipped: number; // eligible files already up-to-date (unchanged + still pinned)
   failed: number; // files whose add/pin/fetch errored
+  // Eligible files with NO bytes on this computer right now. Previously these vanished from the tally
+  // entirely, so a run over 12 deleted files reported eligible:12 / everything-else:0 and the UI said
+  // "nothing to pin" — the fixed-string dishonesty §6 forbids. Split by cause:
+  //   missing  — never here (a second computer that hasn't pulled yet). Healthy; the pull-down offer.
+  //   orphaned — gone from a computer that HELD them, i.e. the user deleted them (decisions.mdx §12).
+  missing?: number;
+  orphaned?: number;
+  // Orphans whose grace period lapsed this run: decision tombstoned + this computer's pin dropped.
+  staled?: number;
 }
 
 // ── TO DO Batches (to_do_batches.mdx / to_do.mdx) ────────────────────────────────

@@ -182,6 +182,26 @@ Writing the single-axis decision event from a toggle click reuses the one decisi
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision(axis, …)`
 (exposed by `PATCH /api/repos/:repoId/files`, [decisions.mdx §19](./decisions.mdx#19-the-write-api--one-endpoint-two-accepted-bodies-locked)).
 
+### 2.0a The click must SAY what it did — turning the IPFS axis on starts real byte work (LOCKED)
+
+Flipping ⊙ **on** does not merely record a preference: the write path fires a **targeted pin of exactly
+that file** ([decisions.mdx §1](./decisions.mdx)), which streams bytes into IPFS and can run for as long as
+the file is large. That work used to be **completely silent** — no toast, no dock card the click asked for,
+nothing but an icon changing colour — which is indistinguishable from a click that did nothing at all.
+
+* **Every toggle click answers in words**, naming the axis and the direction: *"Adding 1 file to IPFS —
+  pinning has started, watch its progress in the dock"* / *"1 file will no longer sync over IPFS"* for the
+  pin axis, and the git-ignore equivalents for ⊘.
+* **A click that starts byte work WAKES THE DOCK.** The dock's poll is idle-off by design
+  ([performance.mdx](./performance.mdx)), so the IPFS-on branch asks for the progress list itself rather
+  than waiting on the live-stream bump — the card must appear while the click still feels connected to it.
+
+Answering the click and waking the dock are handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `setAxes`
+mutation's `onSuccess` (keyed by the `axis` the user clicked), against the server-side pin registered by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+`PATCH /:repoId/files` (`track("pin", …, report)`).
+
 ### 2.1 Bulk clicks and directories still open the pop-over (LOCKED)
 
 A toggle writes **one file, one axis**. Two cases route to a confirm dialog instead of an instant write:

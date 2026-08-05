@@ -252,6 +252,18 @@ row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
   ([pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)).
   Handled in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
   `POST /api/repos/:repoId/pin` (calls `pinRepoFolder(folder, only, { manual: true })` then `pinAll({ priorityDone: folder })`).
+  * **It is SELECTION-AWARE, like every other link on that row** ([page_actions.mdx §1.1](./page_actions.mdx)):
+    checked rows pin exactly those files, nothing checked pins the whole repo — and the label carries the
+    count (`Pin now (3)`) so the scope is legible **before** the click. It once always sent `undefined`, so
+    checking a few rows and choosing Pin now pinned the entire repo with nothing on screen to reveal it
+    ([pin_process.mdx §3](./pin_process.mdx)).
+  * **The click acknowledges itself immediately.** The response is held until the priority unit's byte work
+    finishes — minutes on a repo with real video — so the click raises a persistent "Pinning…" toast that is
+    then **replaced in place** by the honest counts, and the progress dock shows a live per-file card named
+    with the scope. Silence for minutes is indistinguishable from a menu item that never fired.
+    Handled in code:
+    `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `pinNow`
+    mutation's `onMutate` (one stable `PIN_TOAST_ID`) and `pinSummary()`.
 
 * **Page action-links row** (directly under the page title — a visible horizontal row of blue text
   hyperlinks, each with a leading icon, [page_actions.mdx §0](./page_actions.mdx)) — the **page-action**
@@ -394,6 +406,34 @@ Implemented in code:
 `buildAddToIpfsWarning()`, `buildGitIgnoreWarning()`, `buildMetricWarning()`, `topRecommendation()`; the
 per-tab tile lists in
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`.
+
+#### 3.2.3 The `Deleted here` tile — the only surface a deleted-but-still-synced file has (LOCKED)
+
+A file you **deleted from this computer** while it was still set to sync has **no row in the table**: the
+scan cannot see a file that is not there, and with no peer claim it is not a remote-only row either
+([§4.10](#410-remote-only-rows)). Before this tile it therefore existed **nowhere in the UI at all** — the
+decision lived on, the pin pass kept fetching the bytes back from our own pin, and the user's delete
+appeared to do nothing, with no screen able to explain why.
+
+| Tile | `MetricId` | Counts | Opens |
+| --- | --- | --- | --- |
+| **Deleted here** | `deletedHere` | Decided files this computer **pinned and then lost from disk**, still inside their grace period ([decisions.mdx §12](./decisions.mdx)). Not "files missing here" — a file that was **never** here is `Pull down`, not this. | `buildDeletedHereWarning` — a two-pane popup offering the two real intents as a radio pair: **Stop syncing them** (confirm the delete now) or **Put them back** (fetch the bytes down again). |
+
+* **The tile is on a CLOCK, and that is why it ranks high.** Its grace period lapses whether or not the user
+  ever opens the page, so it sits **immediately after `Pull down`** in the worst-first header-recommendation
+  chain — both are "a decided file's bytes are not here", and this one expires. The chain now reads
+  `ipfs-down → pull-down → deleted-here → add-to-IPFS → transcribe → describe → compress → ocr`.
+* **The popup states the deadline in plain words** ("returns to Undecided in 14h") and says, per row, whether
+  the bytes can still be recovered — a file only this computer ever held cannot be put back once its pin is
+  dropped, and the copy must not imply otherwise.
+* **It appears on the All and IPFS tabs**, alongside the other pin-axis tiles.
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`buildDeletedHereWarning()`, fed by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+`deletedHereFor()` (`RepoDetail.deletedHere`), whose records the pin pass maintains in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/orphans.service.ts` — `classifyAbsent()`.
 
 ### 3.3 Status / settings strip
 
@@ -660,13 +700,23 @@ path for triaging many files:
 
 * **Set to Add to IPFS (pin)** · **Set to Ignore** · **Set to Undecided** — bulk-writes the decision
   (the `sync`/`ignore`/`undecided` value).
-* **Pin now (selected)** — queues transfers for the selected `sync`-decision files.
+* **Pin now (N selected)** — queues transfers for the selected `sync`-decision files. The count is in the
+  label, so this item and the action row's `Pin now (N)` state the same scope the same way.
 
 Selecting the header checkbox selects the whole current page; a "Select all N matching" affordance
 appears when a filter is active, to act on the entire filtered set, not just the page.
 
-Bulk-writing one decision across the selected rows is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` bulk menu (mutated via `setDecision`)
+**INVARIANT (LOCKED): the checked set is keyed by `fileId`, so every bulk action MUST map it to paths.**
+`getRowId` is `f.fileId` (`<repoId>:<relPath>`) — never a path. Both bulk items once shipped those raw
+fileIds to routes that match on repo-relative paths, so the server matched nothing and the run reported
+"nothing to pin" while the user watched a menu item apparently do its job. The mapping lives in one module
+so no call site can re-derive it wrongly.
+
+Mapping the checked set to each route's path form is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()`
+(pin + decisions) / `selectedAbsPaths()` (compress + the producing trio), used by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+bulk menu (mutated via `setDecision` / `pinNow`).
 
 ### 4.5.1 The two decision-toggle columns — Pin + Ignore (LOCKED)
 

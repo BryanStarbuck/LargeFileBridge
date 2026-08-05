@@ -886,6 +886,14 @@ export const UnitStatusSchema = z.object({
   repo_state: z.enum(["present", "missing"]).default("present"),
   last_error: z.string().nullable().default(null),
   folder_name: z.string().optional(),
+  // Decided files whose bytes VANISHED from a computer that held them (decisions.mdx §12 "Delete"). Keyed by
+  // unit-relative path. `first_seen_at` starts the grace period a transient unmount must survive; while it
+  // runs the pin pass neither re-adds nor re-fetches the path (that re-fetch is what made deleting a file
+  // look like it did nothing — the next pass simply pulled it back). Once it lapses the record is staled:
+  // decision tombstoned, this computer's pin dropped. Cleared the moment the bytes come back.
+  orphans: z
+    .record(z.string(), z.object({ first_seen_at: iso, cid: z.string().nullable().default(null) }))
+    .default({}),
   // The full discovered big-file candidate list — feeds the files table (one_repo.mdx §4).
   // Metadata only (scan.mdx §1): path relative to unit root, size, mtime.
   candidates: z

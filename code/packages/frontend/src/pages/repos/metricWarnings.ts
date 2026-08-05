@@ -13,6 +13,9 @@ export type MetricId =
   | "addToIpfs"
   | "gitIgnore"
   | "pullDown"
+  // Files you DELETED here that are still set to sync (decisions.mdx §12). Its own tile because it has no
+  // row in the table to hover — the file is gone, so the tile IS the only surface it has.
+  | "deletedHere"
   | "notBackedUp"
   | "pending"
   | "compressibleVideos"
@@ -47,6 +50,11 @@ export const METRIC_CATALOG: Record<MetricId, MetricDef> = {
     label: "Pull down",
     hint: "Files another of your computers pinned that aren't on this computer yet. Pull them down so this machine is a real second copy.",
     positive: "bad",
+  },
+  deletedHere: {
+    label: "Deleted here",
+    hint: "Files set to sync that you deleted from this computer. Large File Bridge stopped pulling them back and will return them to Undecided shortly — put them back if the delete was a mistake.",
+    positive: "warn",
   },
   notBackedUp: {
     label: "Not backed up",
@@ -128,6 +136,7 @@ export function gitIgnoreCandidates(detail: RepoDetail) {
 /** Resolve a metric's count from the RepoDetail the screen already holds. */
 export function metricCount(id: MetricId, detail: RepoDetail): number {
   if (id === "pullDown") return detail.missingPinned?.length ?? 0;
+  if (id === "deletedHere") return detail.deletedHere?.length ?? 0;
   if (id === "gitIgnore") return gitIgnoreCandidates(detail).length;
   const m = detail.taskMetrics;
   if (!m) return 0;

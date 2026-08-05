@@ -566,12 +566,39 @@ losing the user's intent or leaving zombie records:
   the decision — mirrors the scanner's "retain config for a vanished repo",
   [storage_local.mdx §7](./storage_local.mdx)). The record is marked **stale** after a grace period and
   compacted away only once the file is gone from the manifest across all peers.
+  * **Absence has TWO meanings and they must never be conflated.** On a second computer, a decided file
+    with no bytes here was **never here** — that is the healthy pull-down offer, and fetch-missing SHOULD
+    bring it down. On the computer that **pinned** it, absence means the **user deleted it**. The
+    distinguishing fact is already recorded: this computer's own label in the manifest's `pinned_by`, or
+    the CID still sitting in this node's pinset.
+  * **A deletion stops the re-fetch IMMEDIATELY**, before any grace period reasoning. Without this the pin
+    pass restores the file from our own pin on the very next cycle, so deleting a synced file accomplishes
+    nothing at all — the "no surprise re-pinning" rule below, broken in the most literal way.
+  * **What staling does** once the grace period lapses: the decision is returned to Undecided (a
+    `decided_by: "deleted"` tombstone) and **this computer's pin is dropped**, reclaiming the blockstore
+    space. The manifest entry itself survives whenever a **peer** still claims the file — absence is never
+    a delete for someone else's copy ([storage_company.mdx §8.4.3](./storage_company.mdx)) — so it simply
+    becomes a remote-only row again.
+  * **A held deletion must be VISIBLE while it is held.** Such a file has no row in the files table (the
+    scan cannot see a file that is not there, and with no peer claim it is not remote-only either), so the
+    One-repo **"Deleted here"** metric and its popup are its only surface — offering the two real intents,
+    *stop syncing them* or *put them back* ([one_repo.mdx §3.2](./one_repo.mdx)).
 * **Reappear.** If a tombstoned/undecided file comes back (a revert, a re-fetch), it is Undecided again
   unless a still-live decision record matches it by path or fingerprint — in which case the prior team
   decision applies. No surprise re-pinning, no surprise re-asking.
 
-Carrying a decision across a rename (fingerprint match), re-stamping it across a compress/convert, and staling/compacting an orphaned record are to be implemented in code:
+Carrying a decision across a rename (fingerprint match) and re-stamping it across a compress/convert are implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `carryOnRename()` / `restampOnTransform()` / `staleOrphans()`, called from `scanner.service.ts` and the compress/convert flows ([compression.mdx §12](./compression.mdx), [codecs.mdx](./codecs.mdx)).
+
+Telling "never here" from "deleted here", holding the grace period across passes, and dropping a held record the moment the bytes return are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/orphans.service.ts` — `classifyAbsent()`, whose held records persist on the unit's `status.yaml → orphans` map.
+
+Acting on that classification during a pin pass — skipping the re-fetch of a held deletion, and on lapse unpinning the CID, dropping this computer's `pinned_by` claim and tombstoning the decision — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()` (grace window `ORPHAN_GRACE_MS`), with the repo unit's tombstone hook supplied by `pinRepoFolder()`.
+
+Surfacing the held deletions to the user is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `deletedHereFor()` (the `RepoDetail.deletedHere` payload), rendered by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDeletedHereWarning()`.
 
 ---
 

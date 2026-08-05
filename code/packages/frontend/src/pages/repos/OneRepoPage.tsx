@@ -35,6 +35,7 @@ import { TASK_TABS, type TaskTabId } from "./taskTabs.config.js";
 import { MetricsStrip, type MetricView } from "./MetricsStrip.js";
 import { METRIC_CATALOG, metricCount, type MetricId } from "./metricWarnings.js";
 import { buildMetricWarning, topRecommendation, scanIsStale } from "./metricWarningDefs.js";
+import { selectedRelPaths, selectedAbsPaths } from "./selection.js";
 import { setHoverInfo } from "./HoverInfoRegion.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { WarningPopup } from "../../components/ui/WarningPopup.js";
@@ -93,7 +94,26 @@ function pinSummary(c: PinCounts): string {
   if (c.fetched) parts.push(`${c.fetched} fetched`);
   if (c.skipped) parts.push(`${c.skipped} already up-to-date`);
   if (c.failed) parts.push(`${c.failed} failed`);
-  return parts.length ? `Pin done — ${parts.join(", ")}` : "Nothing to pin — no files marked Pin";
+  // Files with no bytes here are a RESULT, not a silence. Omitting them is how a run over 12 deleted files
+  // reported "nothing to pin" while 12 files were plainly marked Pin (pin_process.mdx §6).
+  if (c.missing) parts.push(`${c.missing} not on this computer yet`);
+  if (c.orphaned) parts.push(`${c.orphaned} deleted here`);
+  if (c.staled) parts.push(`${c.staled} returned to Undecided`);
+  return parts.length
+    ? `Pin done — ${parts.join(", ")}`
+    : `Nothing to pin — ${c.eligible} file${c.eligible === 1 ? " is" : "s are"} marked Pin but none needed work`;
+}
+
+// One stable id for the whole pin round-trip, so the "Pinning…" toast BECOMES the result toast rather than
+// stacking a second one next to it.
+const PIN_TOAST_ID = "repo-pin-now";
+
+/** What the inline decision toggles send. `axis` is the toggle the user clicked — it selects the answer. */
+interface SetAxesVars {
+  paths: string[];
+  ipfs: boolean;
+  gitignore: boolean;
+  axis: "ipfs" | "gitignore";
 }
 
 // The shared presentation for a leading icon control column (tables.mdx icon-columns): narrow, tight
@@ -139,6 +159,11 @@ export function OneRepoPage() {
   // Done counts, and those settle without any repo-topic write until the artifact commits.
   useLiveRefresh([repoTopic(repoId), "jobs"], [["repo", repoId]]);
 
+  // The checked set holds fileIds, not paths (selection.ts) — evaluated at click time so every action sees
+  // the CURRENT selection.
+  const relPaths = (): string[] => selectedRelPaths(detail?.files ?? [], selected);
+  const absPaths = (): string[] => selectedAbsPaths(detail?.files ?? [], selected, detail?.path);
+
   const setDecision = useMutation({
     mutationFn: ({ paths, decision }: { paths: string[]; decision: Decision }) =>
       api.setDecision(repoId, paths, decision),
@@ -151,10 +176,31 @@ export function OneRepoPage() {
 
   // Two-axis write for the inline decision toggles (decision_toggles.mdx §2). Flipping ONE axis sends
   // BOTH values so the other axis is preserved (a bare single-axis write would clobber it).
+  //
+  // `axis` names the toggle the user actually clicked, so the answer can SAY WHAT HAPPENED. Turning the IPFS
+  // axis on starts real byte work on the server (repos.router fires a targeted pin), and until now the click
+  // produced no toast, no card and no visible change beyond an icon colour — indistinguishable from a click
+  // that did nothing.
   const setAxes = useMutation({
-    mutationFn: ({ paths, ipfs, gitignore }: { paths: string[]; ipfs: boolean; gitignore: boolean }) =>
+    mutationFn: ({ paths, ipfs, gitignore }: SetAxesVars) =>
       api.setFileDecisions(repoId, paths, { ipfs, gitignore }),
-    onSuccess: (d: RepoDetail) => qc.setQueryData(["repo", repoId], d),
+    onSuccess: (d: RepoDetail, v: SetAxesVars) => {
+      qc.setQueryData(["repo", repoId], d);
+      const n = v.paths.length;
+      const files = `${n} file${n === 1 ? "" : "s"}`;
+      if (v.axis === "ipfs") {
+        // The pin the server just kicked off registers a dock card; ask for it now rather than waiting on
+        // the live-stream bump, so the card appears while the click still feels connected to it.
+        void qc.invalidateQueries({ queryKey: ["progress"] });
+        toast.success(
+          v.ipfs
+            ? `Adding ${files} to IPFS — pinning has started, watch its progress in the dock.`
+            : `${files} will no longer sync over IPFS.`,
+        );
+      } else {
+        toast.success(v.gitignore ? `Git-ignoring ${files}.` : `${files} no longer git-ignored.`);
+      }
+    },
     onError: (e: Error) => {
       clientLog.error("OneRepoPage.setAxes", e);
       toast.error(e.message);
@@ -176,19 +222,32 @@ export function OneRepoPage() {
     },
   });
 
+  // A pin run holds its response until the priority unit's byte work is done — minutes, on a repo with real
+  // video in it. So the click ACKNOWLEDGES itself immediately with a persistent loading toast (kept under one
+  // stable id, then replaced in place by the honest counts) and wakes the dock, instead of leaving the user
+  // to wonder whether the menu item fired at all.
   const pinNow = useMutation({
     mutationFn: (paths?: string[]) => api.pinNow(repoId, paths),
+    onMutate: (paths?: string[]) => {
+      toast.loading(
+        paths?.length
+          ? `Pinning ${paths.length} selected file${paths.length === 1 ? "" : "s"}…`
+          : "Pinning this repo…",
+        { id: PIN_TOAST_ID },
+      );
+      void qc.invalidateQueries({ queryKey: ["progress"] });
+    },
     onSuccess: (r: PinNowResult) => {
       qc.setQueryData(["repo", repoId], r.detail);
       // Report what the run ACTUALLY did, never a blanket "complete" (pin_process.mdx §6): an honest
       // "nothing to pin" for a no-op, real counts otherwise, and an error toast when only failures occurred.
       const summary = pinSummary(r.counts);
-      if (r.counts.failed > 0 && r.counts.added === 0 && r.counts.fetched === 0) toast.error(summary);
-      else toast.success(summary);
+      if (r.counts.failed > 0 && r.counts.added === 0 && r.counts.fetched === 0) toast.error(summary, { id: PIN_TOAST_ID });
+      else toast.success(summary, { id: PIN_TOAST_ID });
     },
     onError: (e: Error) => {
       clientLog.error("OneRepoPage.pinNow", e);
-      toast.error(e.message);
+      toast.error(e.message, { id: PIN_TOAST_ID });
     },
   });
 
@@ -207,7 +266,7 @@ export function OneRepoPage() {
   });
   const compressSelected = async () => {
     if (!detail?.path) return;
-    const paths = detail.files.filter((f) => selected.has(f.fileId)).map((f) => `${detail.path}/${f.path}`);
+    const paths = absPaths();
     if (!paths.length) return;
     if (!(await confirmModal({ title: `Compress ${paths.length} file${paths.length === 1 ? "" : "s"}?`, body: "Medium quality, same resolution — originals move to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     compressBatch.mutate(paths);
@@ -301,9 +360,7 @@ export function OneRepoPage() {
   // checked → the repo root, walked recursively on the server. Evaluated at click time via producingActions.
   const pageScope = (): ActionScope => {
     if (!detail?.path) return {};
-    if (selected.size > 0) {
-      return { paths: detail.files.filter((f) => selected.has(f.fileId)).map((f) => `${detail.path}/${f.path}`) };
-    }
+    if (selected.size > 0) return { paths: absPaths() };
     return { root: detail.path };
   };
 
@@ -328,7 +385,17 @@ export function OneRepoPage() {
     compressAllVideos(detail?.path),
     compressAllImages(detail?.path),
     gitIgnoreBig(pageScope()),
-    { id: "pin-now", label: "Pin now", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: () => pinNow.mutate(undefined) },
+    // Selection-aware like every other action on this row (page_actions.mdx §1.1): checked rows pin exactly
+    // those files, nothing checked pins the whole repo. It used to always send `undefined` — so checking a
+    // few rows and picking Pin now pinned the ENTIRE repo, with no count on the label to reveal it.
+    {
+      id: "pin-now",
+      label: "Pin now",
+      icon: <RefreshCw className="h-3.5 w-3.5" />,
+      group: "Work",
+      countWhenSelected: true,
+      onSelect: () => pinNow.mutate(selected.size > 0 ? relPaths() : undefined),
+    },
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
 
@@ -415,7 +482,7 @@ export function OneRepoPage() {
             onActivate={() =>
               remoteOnly
                 ? pullOne.mutate(f.path)
-                : setAxes.mutate({ paths: [f.path], ipfs: !decided, gitignore: !!f.gitignore })
+                : setAxes.mutate({ paths: [f.path], ipfs: !decided, gitignore: !!f.gitignore, axis: "ipfs" })
             }
           />
         );
@@ -452,7 +519,9 @@ export function OneRepoPage() {
             disabled={locked || remoteOnly}
             title={title}
             extraHover={fileSummary(f)}
-            onActivate={() => setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !on })}
+            onActivate={() =>
+              setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !on, axis: "gitignore" })
+            }
           />
         );
       },
@@ -775,13 +844,13 @@ export function OneRepoPage() {
                 <div className="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-[var(--lfb-border)] bg-white shadow-lg py-1">
                   {DECISIONS.map((d) => (
                     <button key={d} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
-                      onClick={() => { setDecision.mutate({ paths: [...selected], decision: d }); setBulkOpen(false); }}>
+                      onClick={() => { setDecision.mutate({ paths: relPaths(), decision: d }); setBulkOpen(false); }}>
                       {d === "sync" ? "Add to IPFS (pin)" : `Set to ${decisionLabel(d)}`}
                     </button>
                   ))}
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 text-[var(--lfb-primary)]"
-                    onClick={() => { pinNow.mutate([...selected]); setBulkOpen(false); }}>
-                    Pin now (selected)
+                    onClick={() => { pinNow.mutate(relPaths()); setBulkOpen(false); }}>
+                    Pin now ({selected.size} selected)
                   </button>
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
                     disabled={compressBatch.isPending}

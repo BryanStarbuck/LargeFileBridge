@@ -50,11 +50,14 @@ import {
   reconcileMirroredRepos,
   mergeManifests,
 } from "../storage/tracking-sync.service.js";
+import { recordDecision } from "../storage/decisions.service.js";
 import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js";
 import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
+import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
+import { classifyAbsent } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
@@ -90,8 +93,18 @@ let passInFlight = false;
 
 /** A fresh, all-zero pin tally — the honest baseline for a no-op run (pin_process.mdx §6). */
 function zeroCounts(): PinCounts {
-  return { eligible: 0, added: 0, pinned: 0, fetched: 0, skipped: 0, failed: 0 };
+  return { eligible: 0, added: 0, pinned: 0, fetched: 0, skipped: 0, failed: 0, missing: 0, orphaned: 0, staled: 0 };
 }
+
+/** How a tracked pin run reports what it is doing, so the dock shows real counts, not a bare spinner. */
+export type PinReport = (p: { done?: number; total?: number; unit?: string }) => void;
+
+/**
+ * How long a decided file's bytes may be absent from a computer that HELD them before the record is staled
+ * (decisions.mdx §12: "marked stale after a grace period"). An unmounted external drive, a repo mid-checkout
+ * or a file being rewritten in place must all survive; a genuine delete lands after one day.
+ */
+export const ORPHAN_GRACE_MS = 24 * 60 * 60 * 1000;
 
 /** Run `fn` over `items` with at most `limit` in flight at once. Each item's failure is contained. */
 async function runPool<T>(items: T[], limit: number, fn: (item: T) => Promise<void>): Promise<void> {
@@ -127,9 +140,13 @@ interface UnitTarget {
   writeStatus: (s: UnitStatus) => void;
   publish?: (m: Manifest) => void;
   preflightError?: () => string | null;
+  // Return a decided file to Undecided once its grace period lapses (decisions.mdx §12). Only a repo unit
+  // has a ledger to tombstone into; the computer/storage units leave this undefined and simply stop
+  // re-fetching the orphan. Best-effort: a throw is logged and the rest of the pass continues.
+  tombstone?: (rels: string[]) => Promise<void>;
 }
 
-async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCounts> {
+async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinReport): Promise<PinCounts> {
   // Tally what this run actually does so the caller can report the truth, never a fixed "complete"
   // string (pin_process.mdx §6). Incremented inside the parallel closures below — safe because JS runs
   // each synchronous span between awaits atomically, so counter bumps never interleave.
@@ -174,6 +191,19 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
     ([rel, decision]) => decision === "sync" && (!onlyPaths || onlyPaths.has(rel)),
   );
   counts.eligible = toAdd.length;
+
+  // Determinate progress for the dock (webapp.mdx §12): one tick per settled file. `total` grows when the
+  // fetch phase's real target list is known below — a bare spinner with no counts is what made a long pin
+  // pass indistinguishable from a hung one.
+  let done = 0;
+  let total = toAdd.length;
+  const tick = (): void => report?.({ done: ++done, total, unit: "files" });
+  report?.({ done: 0, total, unit: "files" });
+
+  // Decided files with NO bytes here, gathered during the add phase and classified after it (below): either
+  // never-here (a second computer's pull-down offer) or gone-from-a-computer-that-held-them (a delete).
+  const absentHere: string[] = [];
+
   await Promise.all(
     toAdd.map(([rel]) =>
       ipfsLimiter.run(async () => {
@@ -182,7 +212,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
         // Non-throwing (shared/fs-probe): runs per pinned file, and decided-but-absent is a NORMAL
         // second-computer state, not an exceptional one.
         const st = statOrNull(abs);
-        if (!st) return; // decided-but-absent — leave for a later fetch
+        if (!st) {
+          absentHere.push(rel); // no bytes here — classified after this phase, never silently dropped
+          return;
+        }
         const existing = byPath.get(rel);
         // "Unchanged" means same bytes AND still really pinned. A size match alone is NOT enough — if
         // the pin was lost (GC, or an `ipfs pin rm` outside the app) we must re-pin so reality matches
@@ -242,7 +275,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
           counts.failed++;
           log.error("pin", `add failed for ${rel}: ${(e as Error).message}`);
         }
-      }),
+      }).finally(tick), // every exit path counts, so the bar reaches its total even on an all-no-op pass
     ),
   );
 
@@ -263,6 +296,64 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
     byPath.delete(rel);
   }
 
+  // ── REALITY vs. RECORD for the decided files with no bytes here (decisions.mdx §12) ──────────────────
+  // Never-here (a pull-down offer) vs. gone-from-here (a deletion), plus the grace period — the whole rule
+  // lives in orphans.service.ts so it is testable without a daemon. What is done ABOUT each answer is here.
+  const { missing: neverHere, orphans, stale } = classifyAbsent({
+    absent: absentHere,
+    entryFor: (rel) => byPath.get(rel),
+    heldHere: (cid) => pinsetHasContent(pinset, cid),
+    label: t.label,
+    prior: t.status.orphans ?? {},
+    nowMs: Date.now(),
+    graceMs: ORPHAN_GRACE_MS,
+  });
+  counts.missing = neverHere.length;
+  counts.orphaned = Object.keys(orphans).length;
+  const orphanedNow = new Set(Object.keys(orphans));
+  for (const rel of orphanedNow) {
+    if (!t.status.orphans?.[rel]) {
+      log.info(
+        "pin",
+        `${t.name}: ${rel} is decided and was pinned here but its bytes are gone — no longer fetching it back; the decision stales if it stays gone.`,
+      );
+    }
+  }
+
+  // Grace lapsed → STALE it: return the file to Undecided and drop this computer's pin so the blockstore
+  // stops holding bytes for a file the user deleted. The manifest entry itself survives when a PEER still
+  // claims it (§8.4.3 absence is never a delete) — it simply becomes a remote-only row again.
+  for (const rel of stale) {
+    const entry = byPath.get(rel);
+    const cid = orphans[rel]?.cid ?? entry?.cid ?? null;
+    if (cid) {
+      try {
+        await ipfs.pinRm(cid);
+      } catch (e) {
+        // A pin we no longer hold is the desired end state, so a failure here is informational only.
+        log.info("pin", `${t.name}: unpin of staled ${rel} did not apply: ${(e as Error).message}`);
+      }
+    }
+    if (entry) {
+      setPinClaim(entry, t.label, false);
+      if (!entry.pinned_by.some((d) => d && d !== t.label)) byPath.delete(rel); // nobody holds it anywhere
+    }
+    delete orphans[rel];
+    orphanedNow.delete(rel);
+    delete t.decisions[rel]; // this pass must stop treating it as eligible
+  }
+  counts.staled = stale.length;
+  if (stale.length > 0) {
+    if (t.tombstone) {
+      try {
+        await t.tombstone(stale);
+      } catch (e) {
+        log.warn("pin", `${t.name}: tombstoning ${stale.length} deleted file(s) failed: ${(e as Error).message}`);
+      }
+    }
+    log.info("pin", `${t.name}: staled ${stale.length} deleted file(s) — decision returned to Undecided, local pin dropped.`);
+  }
+
   // Fetch missing: rehydrate any manifest file we don't have ON DISK here yet — pin its CID AND
   // materialize the bytes to the resolved local path (storage.mdx §9). Byte placement goes through the
   // unit's `resolveAbs`, so a repo file lands in its working tree, a computer file at its absolute path,
@@ -270,18 +361,31 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
   // the global limiter. A file already on disk needs nothing; a mapped dir not grafted here (abs === null)
   // is known-but-absent and skipped.
   if (t.fetchMissing) {
+    // Resolve the real target list FIRST, so the dock's total is the number of files that will actually be
+    // fetched rather than every entry in the manifest.
+    const fetchTargets = [...byPath.values()].filter((entry) => {
+      if (!entry.cid) return false;
+      // A peer-known file this computer has NOT decided to sync is an OFFER, not an obligation
+      // (storage_company.mdx §8.5). Fetching it here would silently download every big file the user's
+      // other machines hold — the opposite of "we surface and offer, we never act on files on our own"
+      // (the charter). It stays a red remote-only row until the user pulls it.
+      if (knownFromPeers.has(entry.path)) return false;
+      // An orphan inside its grace period is a file the user DELETED here. Re-fetching it is the "surprise
+      // re-pinning" decisions.mdx §12 forbids, and it is precisely why deleting a synced file used to do
+      // nothing at all — the next pass silently put it back.
+      if (orphanedNow.has(entry.path)) return false;
+      const abs = t.resolveAbs(entry.path);
+      if (abs === null) return false; // ungrafted mapped dir — known-but-absent on this computer
+      return !fs.existsSync(abs); // already on disk here — nothing to fetch
+    });
+    total += fetchTargets.length;
+    report?.({ done, total, unit: "files" });
     await Promise.all(
-      [...byPath.values()].map((entry) =>
+      fetchTargets.map((entry) =>
         ipfsLimiter.run(async () => {
           if (!entry.cid) return;
-          // A peer-known file this computer has NOT decided to sync is an OFFER, not an obligation
-          // (storage_company.mdx §8.5). Fetching it here would silently download every big file the user's
-          // other machines hold — the opposite of "we surface and offer, we never act on files on our own"
-          // (the charter). It stays a red remote-only row until the user pulls it.
-          if (knownFromPeers.has(entry.path)) return;
           const abs = t.resolveAbs(entry.path);
-          if (abs === null) return; // ungrafted mapped dir — known-but-absent on this computer
-          if (fs.existsSync(abs)) return; // already on disk here — nothing to fetch
+          if (abs === null) return;
           try {
             // SELF-HEAL a wrapper-directory CID before we pin OR cat it. A manifest written before the
             // basename fix in `ipfs.addFile` can hold the CID of the WRAPPER DIRECTORY Kubo builds for a
@@ -313,7 +417,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
             counts.failed++;
             log.warn("pin", `fetch failed for ${entry.path}: ${(e as Error).message}`);
           }
-        }),
+        }).finally(tick),
       ),
     );
   }
@@ -343,10 +447,11 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
     }
   }
 
-  t.writeStatus({ ...t.status, last_pin_at: new Date().toISOString(), last_error: null });
+  t.writeStatus({ ...t.status, last_pin_at: new Date().toISOString(), last_error: null, orphans });
   log.info(
     "pin",
-    `Pinned ${t.name}: ${next.files.length} file(s) — added ${counts.added}, fetched ${counts.fetched}, pinned ${counts.pinned}, skipped ${counts.skipped}, failed ${counts.failed}.`,
+    `Pinned ${t.name}: ${next.files.length} file(s) — added ${counts.added}, fetched ${counts.fetched}, pinned ${counts.pinned}, ` +
+      `skipped ${counts.skipped}, failed ${counts.failed}, not here ${counts.missing}, deleted here ${counts.orphaned} (${counts.staled} staled).`,
   );
   return counts;
 }
@@ -364,7 +469,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>): Promise<PinCo
 export async function pinRepoFolder(
   folder: string,
   onlyPaths?: Set<string>,
-  opts: { manual?: boolean } = {},
+  opts: { manual?: boolean; report?: PinReport } = {},
 ): Promise<PinCounts> {
   const cfg = getRepoConfig(folder);
   if (!cfg.pinned) {
@@ -410,8 +515,12 @@ export async function pinRepoFolder(
       // travels via the company/Personal sync repo when configured (artifact_placement_policy.mdx §1.2).
       publish: cfg.pin.publish_manifest ? (m) => writeRepoTrackingManifest(repoPath, m) : undefined,
       preflightError: () => (isGitWorkingTree(repoPath) ? null : "repo missing"),
+      // A repo has the shared ledger, so a staled orphan is returned to Undecided there — attributed to the
+      // deletion itself, never to a person who did not make that choice (decisions.mdx §12).
+      tombstone: (rels) => recordDecision(folder, rels, {}, "deleted", { asked: false }),
     },
     onlyPaths,
+    opts.report,
   );
 }
 
@@ -840,20 +949,30 @@ export async function pinAll(opts: { priorityDone?: string } = {}): Promise<void
   passInFlight = true;
   try {
     const repos = listRepoFolders().filter((f) => f !== opts.priorityDone);
-    await runPool(repos, PIN_CONCURRENCY, pinRepoSafe);
-    // The computer unit is part of the full pass too (storage.mdx §8).
-    await pinComputerUnit().catch((e) =>
-      log.error("pin", `pin computer unit failed: ${(e as Error).message}`),
-    );
-    // Directory-based storages (personal/company/community) are units too: pin each through this
-    // computer's device graft (devices.mdx §4) so its mapped-dir files resolve to the right local paths.
-    // Bounded by the same limiter; per-storage failure is contained.
     const storageIds = safeStorageIds();
-    await runPool(storageIds, PIN_CONCURRENCY, pinStorageSafe);
-    // Materialize each storage's ENABLED backing locations (storage_settings.mdx §6) — create-if-missing
-    // + ensure .lfbridge/. Bounded by the same limiter as units; per-storage failure is contained so it
-    // never throws the pass.
-    await runPool(storageIds, PIN_CONCURRENCY, ensureBackingSafe);
+    // REGISTER THE PASS (webapp.mdx §12 source B). This is the longest-running IPFS work the app does — the
+    // 15-minute scheduled pass, the session catch-up, and the remainder after a manual Pin now all land here
+    // — and it was the one piece of work that showed NOTHING in the dock. Bytes moved for minutes while the
+    // app looked idle, which is indistinguishable from a sync that has stopped. One card, ticking per unit.
+    await track("pin", "all units", async (report) => {
+      let done = 0;
+      const total = repos.length + 1 + storageIds.length; // repos + the computer unit + directory storages
+      const tick = (): void => report({ done: ++done, total, unit: "units" });
+      report({ done, total, unit: "units" });
+      await runPool(repos, PIN_CONCURRENCY, (f) => pinRepoSafe(f).finally(tick));
+      // The computer unit is part of the full pass too (storage.mdx §8).
+      await pinComputerUnit()
+        .catch((e) => log.error("pin", `pin computer unit failed: ${(e as Error).message}`))
+        .finally(tick);
+      // Directory-based storages (personal/company/community) are units too: pin each through this
+      // computer's device graft (devices.mdx §4) so its mapped-dir files resolve to the right local paths.
+      // Bounded by the same limiter; per-storage failure is contained.
+      await runPool(storageIds, PIN_CONCURRENCY, (id) => pinStorageSafe(id).finally(tick));
+      // Materialize each storage's ENABLED backing locations (storage_settings.mdx §6) — create-if-missing
+      // + ensure .lfbridge/. Bounded by the same limiter as units; per-storage failure is contained so it
+      // never throws the pass. Not a unit, so it does not tick.
+      await runPool(storageIds, PIN_CONCURRENCY, ensureBackingSafe);
+    });
   } finally {
     passInFlight = false;
   }

@@ -2,7 +2,7 @@
 import path from "node:path";
 import { Router } from "express";
 import { z } from "zod";
-import type { RepoRow, RepoSettings, Decision, RepoDetail, MissingPinnedFile } from "@lfb/shared";
+import type { RepoRow, RepoSettings, Decision, RepoDetail, MissingPinnedFile, DeletedHereFile } from "@lfb/shared";
 import {
   listRepoFolders,
   computeRepoRow,
@@ -14,9 +14,11 @@ import {
   updateRepoConfig,
   ownerForRepoConfig,
   setRepoOwnerOverride,
+  getRepoStatus,
+  getRepoManifest,
 } from "../store-model/units.service.js";
 import { startScan, getScanJob, maybeTriggerStaleScan } from "../scanner/scan-job.js";
-import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing } from "../pin/pin.service.js";
+import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing, ORPHAN_GRACE_MS } from "../pin/pin.service.js";
 import { schedulePullRetry } from "../pin/pull-retry.service.js";
 import {
   recordDecision,
@@ -26,7 +28,7 @@ import {
   readLedger,
   foldLedger,
 } from "../storage/decisions.service.js";
-import { effectiveFlags } from "../store-model/config.service.js";
+import { effectiveFlags, computerLabel } from "../store-model/config.service.js";
 import { ensureSyncRepoMarker } from "../storage/tracking-sync.service.js";
 import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
@@ -69,6 +71,33 @@ async function missingPinnedSafe(repoRoot: string): Promise<MissingPinnedFile[]>
     log.warn("repos", `missingPinned lookup failed for ${repoRoot}: ${(e as Error).message}`);
     return [];
   }
+}
+
+/**
+ * The deletions the pin pass noticed (decisions.mdx §12): decided files this computer PINNED and then lost
+ * from disk, still inside their grace period. The scan cannot see them (no file) and they are not
+ * remote-only (no peer claim is required), so without this list they exist only in the pin log — the user
+ * deletes a synced file and the app says nothing at all.
+ *
+ * Read straight off the unit status the pin pass writes; no IPFS call, so it cannot slow the page.
+ */
+function deletedHereFor(folder: string): DeletedHereFile[] {
+  const orphans = getRepoStatus(folder).orphans ?? {};
+  if (Object.keys(orphans).length === 0) return [];
+  const selfLabel = computerLabel();
+  const byPath = new Map(getRepoManifest(folder).files.map((f) => [f.path, f]));
+  return Object.entries(orphans).map(([rel, o]) => {
+    const m = byPath.get(rel);
+    return {
+      path: rel,
+      name: rel.slice(rel.lastIndexOf("/") + 1),
+      sizeBytes: m?.size ?? 0,
+      cid: o.cid ?? m?.cid ?? null,
+      firstSeenAt: o.first_seen_at,
+      staleAt: new Date(Date.parse(o.first_seen_at) + ORPHAN_GRACE_MS).toISOString(),
+      pinnedElsewhere: (m?.pinned_by ?? []).some((d) => d && d !== selfLabel),
+    };
+  });
 }
 
 /**
@@ -379,6 +408,9 @@ reposRouter.get("/:repoId", async (req, res) => {
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
+    // Deletions the pin pass noticed on THIS computer — the other half of "a decided file has no bytes here"
+    // (decisions.mdx §12). Sync + local, so it costs the page nothing.
+    detail.deletedHere = deletedHereFor(folder);
     // Why this repo can no longer fast-forward from its remote, when that is the case (bug #15B). Refusing
     // to touch the user's repo is right; leaving them unaware that it has stopped converging is not.
     detail.syncBlocked = getRepoSyncBlock(repoRootFor(folder)) ?? undefined;
@@ -480,9 +512,10 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
     // explicit opt-in (it also enables the 15-min background pass for this repo, keeping the pin fresh).
     if (settingIpfsOn) {
       const repoName = getRepoConfig(folder).repo.name || folder;
-      void track("pin", repoName, () => pinRepoFolder(folder, new Set(paths), { manual: true })).catch((e) =>
-        log.error("repos", `${folder}: decision-triggered pin failed: ${(e as Error).message}`),
-      );
+      const target = `${repoName} (${paths.length} file${paths.length === 1 ? "" : "s"})`;
+      void track("pin", target, (report) =>
+        pinRepoFolder(folder, new Set(paths), { manual: true, report }),
+      ).catch((e) => log.error("repos", `${folder}: decision-triggered pin failed: ${(e as Error).message}`));
     }
     const detail: RepoDetail = await repoDetailWithPins(folder);
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
@@ -588,8 +621,12 @@ reposRouter.post("/:repoId/pin", async (req, res) => {
     // Register the manual pin in the progress registry so the dock shows a live card — including for
     // a poll from another tab (webapp.mdx §12 source B). track() always ends the job, success or error.
     const repoName = getRepoConfig(folder).repo.name || folder;
-    // Report what the run ACTUALLY did (counts), never a fixed "complete" string (pin_process.mdx §6).
-    const counts = await track("pin", repoName, () => pinRepoFolder(folder, only, { manual: true }));
+    // Name the SCOPE in the dock card: a selective pin of 3 files and a whole-repo pin are different pieces
+    // of work, and a card that calls both "Pinning <repo>" cannot tell the user which one is running.
+    const target = only ? `${repoName} (${only.size} selected)` : repoName;
+    // Report what the run ACTUALLY did (counts), never a fixed "complete" string (pin_process.mdx §6), and
+    // stream per-file progress into the card so a long pass is visibly moving rather than a bare spinner.
+    const counts = await track("pin", target, (report) => pinRepoFolder(folder, only, { manual: true, report }));
     const detail = await repoDetailWithPins(folder);
     res.json({ ok: true, data: { detail, counts } });
     void pinAll({ priorityDone: folder }).catch((e) =>

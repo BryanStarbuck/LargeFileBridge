@@ -108,6 +108,17 @@ When a pass is triggered from a specific repo, that repo's unit is the **priorit
 A paths-scoped manual pin (bulk **Pin now (selected)**, [one_repo.mdx §4.4](./one_repo.mdx#44-bulk-actions))
 prioritizes this repo restricted to the selected files, then the full pass follows for the rest.
 
+**Every "Pin now" affordance is selection-aware, and they all speak REPO-RELATIVE paths.** Checked rows pin
+exactly those files; nothing checked pins the whole repo. Both halves of this were once broken and neither
+failed loudly: the action row's **Pin now** always sent `undefined` (so checking three rows and picking it
+pinned the ENTIRE repo), while the bulk menu sent the table's `fileId` keys (`<repoId>:<relPath>`) to a route
+that matches on repo-relative paths, so `onlyPaths` matched nothing and the run reported "nothing to pin".
+The selection Set is keyed by `fileId`, never by path — mapping it is mandatory, and a selection-aware action
+must also **show its count on the label** so its scope is legible before the click.
+
+Mapping the checked set to the path form each route speaks is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()` (pin + decisions) / `selectedAbsPaths()` (compress + the producing trio).
+
 **Overlap guard.** Passes are idempotent, but overlapping passes waste work, so a single in-flight
 guard collapses a second pass that starts while one is running (rapid Pin-now clicks, or a
 scheduleTask that fires mid-pass). The **priority unit is always pinned by its own trigger** and is
@@ -227,14 +238,34 @@ The rules this locks in:
 * **A user-initiated pin must do real work.** The manual path is the repo's *primary* action; it may
   never be short-circuited by the background-only `pinned` gate (§5).
 * **Report what actually happened, not a fixed string.** A pin result carries **counts** — added,
-  pinned, fetched, skipped, failed — and the UI reflects them. If a run was genuinely a no-op (nothing
-  eligible), say so explicitly ("Nothing to pin — no files marked Add-to-IPFS (pin)"), never a blanket
-  "complete."
+  pinned, fetched, skipped, failed, **missing, orphaned, staled** — and the UI reflects them. If a run was
+  genuinely a no-op (nothing eligible), say so explicitly ("Nothing to pin — no files marked Add-to-IPFS
+  (pin)"), never a blanket "complete."
+* **Every eligible file lands in exactly one bucket.** A file that is marked Pin but has no bytes on this
+  computer used to fall out of the tally entirely, so a run over 12 deleted files reported `eligible: 12`
+  with every other count at 0 — which the UI read as *"nothing to pin — no files marked Pin"*, a plain
+  contradiction of the number beside it. Absence is a RESULT and is now split by cause: `missing` (never
+  here — the pull-down offer) vs `orphaned` (deleted from a computer that held it,
+  [decisions.mdx §12](./decisions.mdx)) and `staled` (whose grace period lapsed this run).
+  `eligible === added + fetched + skipped + failed + missing + orphaned` is the shape to hold.
 * **Success ≠ "the call returned."** A green toast requires the work to have occurred (or an honest
   "nothing to do"), and a failure must surface, not be swallowed.
+* **Long work must be VISIBLE while it runs, not only summarized after.** Every pin — the manual one, the
+  decision-triggered one, and the every-15-minute full pass — registers in the progress registry and
+  reports **per-file** (`n / N files`) or **per-unit** (`n / N units`) counts, so the dock shows a moving
+  bar rather than a bare spinner. A pass moving bytes for minutes while the app looks idle is
+  indistinguishable, from the user's chair, from a sync that has stopped. A repo-scoped card also names its
+  SCOPE ("`<repo>` (3 selected)"), because a selective pin and a whole-repo pin are different work.
 
 This is a **design smell to hunt for everywhere**: any action whose success UI is decoupled from
 whether it did anything. Flag and fix such silent no-ops on sight.
+
+Reporting the honest per-cause tally is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()` returning `PinCounts`, rendered by
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `pinSummary()`.
+
+Streaming live progress into the dock is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — the `PinReport` callback threaded through `pinRepoFolder()` → `runUnitPin()`, and `pinAll()`'s own per-unit `track("pin", "all units", …)` registration.
 
 ---
 

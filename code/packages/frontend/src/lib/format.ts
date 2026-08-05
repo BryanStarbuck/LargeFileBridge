@@ -15,6 +15,22 @@ export function relativeTime(iso: string | null): string {
   return `${d}d ago`;
 }
 
+/** The forward-looking twin of relativeTime — "in 3h", for a deadline. Already-passed reads "any moment now"
+ *  rather than a negative "ago", which is how a lapsed grace period should read while its pass is pending. */
+export function timeUntil(iso: string | null): string {
+  if (!iso) return "—";
+  const then = new Date(iso).getTime();
+  if (Number.isNaN(then)) return "—";
+  const s = Math.round((then - Date.now()) / 1000);
+  if (s <= 0) return "any moment now";
+  if (s < 60) return `in ${s}s`;
+  const m = Math.round(s / 60);
+  if (m < 60) return `in ${m}m`;
+  const h = Math.round(m / 60);
+  if (h < 24) return `in ${h}h`;
+  return `in ${Math.round(h / 24)}d`;
+}
+
 export function absoluteTime(iso: string | null): string {
   if (!iso) return "never";
   const d = new Date(iso);
