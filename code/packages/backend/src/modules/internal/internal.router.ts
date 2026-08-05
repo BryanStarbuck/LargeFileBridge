@@ -2,6 +2,7 @@
 import { Router, type Request, type Response, type NextFunction } from "express";
 import { startScan } from "../scanner/scan-job.js";
 import { startRun } from "../schedule/run-job.js";
+import { requestShutdown } from "./shutdown-hook.js";
 import { log } from "../../shared/logging.js";
 
 export const internalRouter = Router();
@@ -44,4 +45,32 @@ internalRouter.post("/run/:worker", (req, res) => {
     log.error("internal", `${worker} run could not be accepted: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
+});
+
+// STOP CLEANLY — what `just stop` asks for before it signals anything (scripts/dev/dev.mjs `cmdStop`).
+//
+// The point is the ledger's SHUTDOWN marker, which only main.ts's handler may write and whose ABSENCE
+// before the next BOOT is what defines a crash. On Windows there is no SIGTERM to ask with, so without
+// this route every stop on that platform would read as a crash at the next boot — see shutdown-hook.ts.
+// Loopback-only, like everything on this router: the trust boundary is the same one `/run/:worker` sits
+// behind, and a process already running on this machine can stop the app in a dozen other ways.
+internalRouter.post("/shutdown", (_req, res) => {
+  log.info("internal", "Clean shutdown requested over the loopback route.");
+  // ANSWER FIRST. `shutdown()` destroys live sockets (`closeAllConnections`) so the exit is not held open
+  // by an SSE stream, and this response is one of those sockets — start the teardown only once it has
+  // actually left, or the caller sees a socket error and concludes the app was never asked.
+  res.json({ ok: true, data: { stopping: true } });
+  let started = false;
+  const begin = (): void => {
+    if (started) return;
+    started = true;
+    if (!requestShutdown("api-shutdown")) {
+      // Still booting: the handler is registered immediately after the BOOT marker, so this is a narrow
+      // window. Exiting here is still a DELIBERATE stop and main.ts's `exit` listener records it as one.
+      log.warn("internal", "No shutdown handler registered yet — exiting directly.");
+      process.exit(0);
+    }
+  };
+  res.on("finish", begin);
+  setTimeout(begin, 1000).unref(); // the response never finished (a client that hung up) — stop anyway
 });

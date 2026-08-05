@@ -1,0 +1,653 @@
+#!/usr/bin/env node
+// The task runner's hands. Everything `just` used to do in bash lives here, so the justfile is the same
+// file on macOS, Linux and Windows and each recipe is one portable line.
+//
+// WHY. The justfile's recipes were bash scripts built out of `lsof`, `pgrep`, `launchctl`, `plutil`,
+// `nohup`, process substitution and `tail -f`. Not one of those runs on Windows, and `lsof`/`launchctl`
+// are absent from a stock Linux too — so `just run`, `just stop`, `just status`, `just logs` and
+// `just boot` were macOS-only recipes that FAILED QUIETLY elsewhere (a stop that reaps nothing looks
+// exactly like a stop that had nothing to reap). Node is already a hard dependency of this app and
+// behaves the same on all three, so the logic moved here and the platform differences are confined to
+// scripts/dev/proc.mjs and scripts/dev/boot.mjs.
+//
+// Usage: node scripts/dev/dev.mjs <command>
+//   check-tools | check-auth-lib | seed-env | run | boot-run | stop | status | logs [--all|--txn]
+//   clean | boot <on|off|status> | paths
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { spawn } from "node:child_process";
+import {
+  appLog,
+  authLib,
+  authRepo,
+  backendDir,
+  bePort,
+  bootErrLog,
+  bootOutLog,
+  codeDir,
+  devDir,
+  ensureDir,
+  errorLog,
+  launcherLog,
+  pidFile,
+  portFile,
+  recordedWebPort,
+  repoRoot,
+  stateDir,
+  txnLog,
+  workerLabels,
+} from "./paths.mjs";
+import {
+  freePort,
+  haveTool,
+  isAlive,
+  isListening,
+  isWindows,
+  pidsMatchingAll,
+  pidsOnPort,
+  runTool,
+  sleep,
+  terminate,
+  waitUntil,
+} from "./proc.mjs";
+import { bootOff, bootOn, bootState, bootStatusLine, bootWhere } from "./boot.mjs";
+
+// Piping into `head` (`just status | head -4`, `just logs | grep …`) closes stdout early — that is a
+// normal way to consume this output, not a fault. Exit clean on EPIPE instead of crashing with a stack
+// trace, exactly as the CLI does (cli/code/src/main.ts).
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on("error", (e) => {
+    if (e?.code === "EPIPE") process.exit(0);
+    throw e;
+  });
+}
+
+const out = (s) => process.stdout.write(`${s}\n`);
+const err = (s) => process.stderr.write(`${s}\n`);
+
+// The matchers that identify OUR dev tree, and nothing else on the machine — the pnpm orchestrator, the
+// Vite dev server, the backend `tsx watch` parent and its heap-ceiling wrapper. Each is a set of
+// substrings that must ALL appear in one command line (proc.mjs `pidsMatchingAll`).
+// `src/main.ts` — never `src/cli.ts` — is what keeps the background pin/scan/device worker out of it.
+const DEV_TREE = [
+  ["@lfb/", "--parallel dev"],
+  [codeDir, "packages/frontend"],
+  [codeDir, "src/main.ts"],
+  // The heap-ceiling wrapper the backend's `dev`/`start` scripts go through. Its own argv is relative
+  // (`node ../../../scripts/node-heap-run.mjs tsx watch src/main.ts`), so the code-path matcher above
+  // cannot see it; our script's name plus `src/main.ts` is what identifies it.
+  ["node-heap-run.mjs", "src/main.ts"],
+];
+
+async function main() {
+  const [cmd, ...rest] = process.argv.slice(2);
+  switch (cmd) {
+    case "check-tools":
+      return checkTools();
+    case "check-auth-lib":
+      return checkAuthLib();
+    case "seed-env":
+      return seedEnv();
+    case "run":
+      return cmdRun();
+    case "boot-run":
+      return cmdBootRun();
+    case "stop":
+      return cmdStop();
+    case "status":
+      return cmdStatus();
+    case "logs":
+      return cmdLogs(rest);
+    case "clean":
+      return cmdClean();
+    case "boot":
+      return cmdBoot(rest[0] || "status");
+    case "paths":
+      return cmdPaths();
+    default:
+      err(`dev.mjs: unknown command "${cmd ?? ""}"`);
+      err("Usage: node scripts/dev/dev.mjs <check-tools|check-auth-lib|seed-env|run|stop|status|logs|clean|boot|paths>");
+      process.exitCode = 2;
+  }
+}
+
+// ── preflight ───────────────────────────────────────────────────────────────────────────────────────
+
+/** Fail fast (with a per-platform fix hint) if a required tool is missing. */
+function checkTools() {
+  const hint = (tool) => {
+    if (process.platform === "darwin") return `brew install ${tool}`;
+    if (isWindows) return `winget install ${tool === "pnpm" ? "pnpm.pnpm" : "OpenJS.NodeJS"}`;
+    return `your package manager, e.g. sudo pacman -S ${tool} / sudo apt install ${tool}`;
+  };
+  let ok = true;
+  for (const tool of ["node", "pnpm"]) {
+    if (!haveTool(tool)) {
+      err(`✗ missing '${tool}' — install with: ${hint(tool)}`);
+      ok = false;
+    }
+  }
+  if (!ok) {
+    err("Fix the above and re-run.");
+    process.exitCode = 1;
+  }
+}
+
+/** Both packages consume OpenAuthFederated via `link:` deps; `pnpm install` dies outright if it is absent. */
+function checkAuthLib() {
+  const has = (p) => fs.existsSync(path.join(authLib, "code", "packages", p));
+  if (has("auth-backend") && has("auth-react")) return;
+  err("");
+  err("✗ OpenAuthFederated is not available locally.");
+  err("");
+  err("  This app's authentication depends on it via link: deps:");
+  err("      @auth/backend → code/packages/auth-backend");
+  err("      @auth/react   → code/packages/auth-react");
+  err(`  Expected location: ${authLib}`);
+  err("");
+  err("  Clone it so the link: paths resolve, then re-run:");
+  err("");
+  err(`      git clone ${authRepo} "${authLib}"`);
+  err("");
+  process.exitCode = 1;
+}
+
+/** Seed the backend .env from .env.example on first setup. (`test -f … || cp …`, portably.) */
+function seedEnv() {
+  const env = path.join(backendDir, ".env");
+  const example = path.join(backendDir, ".env.example");
+  if (fs.existsSync(env) || !fs.existsSync(example)) return;
+  fs.copyFileSync(example, env);
+  out(`Seeded ${env} from .env.example`);
+}
+
+// ── run ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Start the backend + web app in the background.
+ *
+ * Stops OUR previous instance first — that is what makes `just run` a true restart — and then hands off
+ * to the detached launcher (launch.mjs), which owns the pipe into the rotating log sink. Vite resolves
+ * the web port on boot and publishes it to the port file, so we do NOT blanket-kill the web port here:
+ * a FOREIGN process on :2222 is stepped around, never killed (code_plan.mdx §2).
+ */
+async function cmdRun() {
+  await cmdStop({ quiet: true });
+  ensureDir(stateDir());
+  try {
+    fs.rmSync(portFile(), { force: true });
+  } catch {
+    /* nothing recorded yet */
+  }
+
+  const child = spawn(process.execPath, [path.join(devDir, "launch.mjs")], {
+    cwd: repoRoot,
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+
+  out(`Starting… (logs: ${launcherLog()}, rotating via scripts/log_rotate_pipe.mjs)`);
+
+  const api = bePort();
+  const deadline = Date.now() + 30_000;
+  while (Date.now() < deadline) {
+    const web = readPortFile();
+    if (web && (await isListening(web)) && (await isListening(api))) {
+      out(`Up: http://localhost:${web}  (API :${api})`);
+      return;
+    }
+    await sleep(500);
+  }
+  err(`Timed out waiting for ports — see ${launcherLog()}`);
+  err(tailFile(launcherLog(), 30));
+  process.exitCode = 1;
+}
+
+/**
+ * What the login-startup job runs (`just boot on`). Same start, plus the two things a login has to do for
+ * itself: refresh dependencies, and roll the boot logs.
+ *
+ * The rotation is HERE, at the moment the file is about to be reopened, because launchd's
+ * `StandardOutPath`, systemd's `append:` and the .vbs `>>` all write to a descriptor we do not own — the
+ * rotating sink cannot reach them. Same boundary, same 5 MiB × 5 policy, as the IPFS daemon logs
+ * (logging.ts `rotateIfOversized`).
+ */
+async function cmdBootRun() {
+  for (const file of [bootOutLog(), bootErrLog()]) rotateIfOversized(file);
+  const code = await runTool("pnpm", ["-C", codeDir, "install"], { stdio: "inherit" });
+  if (code !== 0) err(`boot-run: pnpm install exited ${code} — starting anyway with whatever is installed.`);
+  await cmdRun();
+}
+
+// ── stop ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Stop OUR app only — BOTH the web app (Vite) and the backend dev tree — and do not return until the
+ * ports are actually free.
+ *
+ * PHASE 0 is the load-bearing one, and it is why this is not simply "kill the tree". The backend writes
+ * the ledger's SHUTDOWN marker from its own signal handler, and a BOOT with no SHUTDOWN above it is what
+ * the ledger DEFINES as a crash (crash_recovery.mdx §5.1). Reap the backend by a route that runs none of
+ * its JavaScript and every ordinary restart is reported to the user as a crash — which is precisely the
+ * "8× ended ABNORMALLY in two days" report. So the backend is stopped FIRST, ALONE, and waited for:
+ *
+ *   1. ASK IT TO STOP — POST the loopback-only /api/internal/shutdown route. This is the only graceful
+ *      stop that exists on Windows: Windows has no SIGTERM, `taskkill` without /F posts WM_CLOSE, and a
+ *      console process such as node never sees it. Asking over the API works identically everywhere.
+ *   2. On POSIX, if the route did not answer (an older build, a wedged event loop), fall back to the
+ *      SIGTERM-by-port-and-name that was here before.
+ * Nothing is escalated in phase 0 — every hard kill still happens below, so a wedged process is no slower
+ * to reap than before; it just gets a real chance to say goodbye first.
+ */
+async function cmdStop({ quiet = false } = {}) {
+  const api = bePort();
+  const web = recordedWebPort();
+
+  if (await isListening(api)) {
+    const asked = await requestShutdown(api);
+    const freed = await waitUntil(async () => !(await isListening(api)), { timeoutMs: 6000, everyMs: 150 });
+    if (!freed && !isWindows) {
+      terminate([...pidsOnPort(api), ...pidsMatchingAll([[codeDir, "src/main.ts"]])], { hard: false });
+      await waitUntil(async () => !(await isListening(api)), { timeoutMs: 6000, everyMs: 150 });
+    }
+    if (!asked && !quiet) {
+      // Worth saying: it means the marker probably was not written, so the next boot may read as a crash.
+      err("Note: the backend did not answer /api/internal/shutdown — it may be recorded as an unclean stop.");
+    }
+  }
+
+  // PHASE 1 — the rest of the tree, by name. `pnpm --parallel dev` kills its sibling script as soon as one
+  // exits, and `tsx watch` respawns its child on any source edit (this repo is continuously auto-committed,
+  // so that race is real), which is why this is TERM, TERM, KILL rather than one shot.
+  for (const step of [{ hard: false }, { hard: false }, { hard: true }]) {
+    const pids = pidsMatchingAll(DEV_TREE);
+    if (!pids.length) break;
+    terminate(pids, step);
+    await sleep(600);
+  }
+
+  // PHASE 2 — belt and suspenders: free the ports, catching a child that reparented mid-restart.
+  //
+  // The API port is ours by convention (nothing else on the machine is asked to run on it). The WEB port
+  // is not: `recordedWebPort()` falls back to the :2222 DEFAULT when nothing has been recorded, and :2222
+  // may well belong to a stranger — the very case the collision policy exists to respect (code_plan.mdx
+  // §2). So the web port is only freed once it has identified itself as ours by the same stable marker
+  // web-port.mjs uses. Anything already killed in phase 1 makes this a no-op.
+  await freePort(api);
+  if (await isListening(web)) {
+    if (await isOurWebApp(web)) await freePort(web);
+    else if (!quiet) err(`Left :${web} alone — that is not our web app (no x-app marker at "/").`);
+  }
+
+  // PHASE 3 — whatever the launcher recorded, in case it outlived its child.
+  const recorded = readPidFile();
+  if (recorded.length) {
+    terminate(recorded, { hard: false });
+    await sleep(300);
+    terminate(recorded.filter(isAlive), { hard: true });
+  }
+  try {
+    fs.rmSync(pidFile(), { force: true });
+  } catch {
+    /* nothing to remove */
+  }
+  if (!quiet) out("Stopped.");
+}
+
+/**
+ * Is the web app on this port OURS? The same question, answered the same way, as
+ * packages/frontend/scripts/web-port.mjs `isOurApp()`: the stable
+ * `<meta name="x-app" content="large-file-bridge">` marker that index.html serves at "/". It is what
+ * keeps `stop` from killing a stranger that happens to hold :2222.
+ */
+async function isOurWebApp(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/`, { signal: AbortSignal.timeout(1500) });
+    if (!res.ok) return false;
+    return (await res.text()).includes('content="large-file-bridge"');
+  } catch {
+    return false; // unreachable or wedged — treat as not ours and leave it alone
+  }
+}
+
+/** Ask the app to shut itself down, so it writes its own SHUTDOWN marker. False if it did not answer. */
+async function requestShutdown(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/internal/shutdown`, {
+      method: "POST",
+      signal: AbortSignal.timeout(3000),
+    });
+    return res.ok;
+  } catch {
+    return false; // not listening, no such route (an older build), or it died mid-answer — all the same here
+  }
+}
+
+// ── status ──────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Report the web app, the backend (health-checked, not merely listening) and the background agents.
+ *
+ * The BACKEND is what this exists to assert. On 2026-07-15 it OOMed and stayed dead ~6 hours while Vite
+ * served :2222 at HTTP 200 the whole time — `tsx watch` restarts on file change, never on crash. FRONTEND
+ * UP ≠ APP UP, so a dead backend is a loud, unmissable failure here and exits non-zero for scripts too.
+ */
+async function cmdStatus() {
+  const api = bePort();
+  const web = recordedWebPort();
+
+  out((await isListening(web)) ? `web app  :${web} UP` : `web app  :${web} down`);
+
+  let backendUp = false;
+  if (await isListening(api)) {
+    if (await healthy(api)) {
+      out(`backend  :${api} UP (health OK)`);
+      backendUp = true;
+    } else {
+      out(`backend  :${api} LISTENING but /api/health did not answer — the process may be wedged.`);
+    }
+  }
+
+  out(`agent scan  (4h)  ${workerStatus(workerLabels.scan)}`);
+  out(`agent pin   (15m) ${workerStatus(workerLabels.pin)}`);
+  out(`agent device(10m) ${workerStatus(workerLabels.device)}`);
+  out(bootStatusLine());
+
+  if (!backendUp) {
+    // Plain rules, not a boxed frame: ports vary in width and a frame padded around them drifts out of
+    // alignment. The message has to survive being read at 4am.
+    out("");
+    out("  ============================================================================");
+    out(`   ***  BACKEND :${api} IS DOWN — THE APP IS NOT RUNNING.  ***`);
+    out(`   A live web app on :${web} does NOT mean the app works. Vite serves pages fine`);
+    out("   with a dead backend — it did exactly that for 6h on 2026-07-15 after an OOM,");
+    out("   because `tsx watch` restarts on file change and NEVER on crash.");
+    out("  ============================================================================");
+    out("");
+    // Name the cause if it is the known one. A V8 OOM abort appears ONLY in the launcher log — it runs no
+    // JS, so log.log / error.err are structurally silent about it (memory.mdx P-32).
+    const oom = grepTail(launcherLog(), /FATAL ERROR|JavaScript heap out of memory/, 3);
+    if (oom.length) {
+      out(`  Cause found in ${launcherLog()} — the backend ran OUT OF HEAP:`);
+      for (const line of oom) out(`    ${line}`);
+      const pressure = [
+        ...grepTail(errorLog(), /HEAP PRESSURE|heap_pressure|\[HEARTBEAT\]/, 3),
+        ...grepTail(txnLog(), /HEAP PRESSURE|heap_pressure|\[HEARTBEAT\]/, 3),
+      ].slice(-3);
+      if (pressure.length) {
+        out("");
+        out("  Heap pressure before the abort (transactions.log / error.err):");
+        for (const line of pressure) out(`    ${line}`);
+      }
+      out("");
+    }
+    out("  Next:  just run          (start it)");
+    out("         just txlog        (the work ledger — what it was doing when it stopped)");
+    out("         just logs         (the launcher catch-all — whether the PROCESS died)");
+    out("");
+    process.exitCode = 1;
+  }
+}
+
+async function healthy(port) {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether the OS has this background worker, asked WITHOUT the backend — the artifact each installer
+ * treats as "installed" (modules/schedule/os/): a plist, a .vbs launcher, a .timer unit.
+ */
+function workerStatus(label) {
+  // `os.homedir()`, never `process.env.HOME`: HOME is a POSIX variable that Windows does not set, and
+  // reading it there yields paths rooted at "" (shared/home-path.ts exists for exactly this class of bug).
+  const artifact = isWindows
+    ? path.join(stateDir(), "workers", `${label}.vbs`)
+    : process.platform === "darwin"
+      ? path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`)
+      : path.join(
+          process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config"),
+          "systemd",
+          "user",
+          `${label}.timer`,
+        );
+  return fs.existsSync(artifact) ? "INSTALLED" : "not installed";
+}
+
+// ── logs ────────────────────────────────────────────────────────────────────────────────────────────
+
+/**
+ * `tail -f`, portably — Windows has no tail, and PowerShell's `Get-Content -Wait` cannot follow several
+ * files at once. Prints the last 30 lines of each file and then follows appends, reopening a file from
+ * the top when it SHRINKS, which is what a 5 MiB rotation looks like from out here.
+ */
+async function cmdLogs(args) {
+  const files = args.includes("--all")
+    ? [launcherLog(), appLog(), errorLog(), txnLog()]
+    : args.includes("--txn")
+      ? [txnLog()]
+      : [launcherLog()];
+
+  const multi = files.length > 1;
+  const offsets = new Map();
+  for (const file of files) {
+    if (multi) out(`==> ${file} <==`);
+    out(tailFile(file, 30));
+    offsets.set(file, sizeOf(file));
+  }
+  err("(following — Ctrl-C to stop)");
+
+  for (;;) {
+    for (const file of files) {
+      const size = sizeOf(file);
+      const from = offsets.get(file) ?? 0;
+      if (size < from) {
+        offsets.set(file, 0); // rotated out from under us — follow the new file from its start
+        continue;
+      }
+      if (size === from) continue;
+      const chunk = readRange(file, from, size);
+      offsets.set(file, size);
+      if (chunk) process.stdout.write(multi ? `==> ${file} <==\n${chunk}` : chunk);
+    }
+    await sleep(400);
+  }
+}
+
+// ── clean ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** Remove installed deps and background run state. Leaves the app's own log.log / error.err intact. */
+async function cmdClean() {
+  await cmdStop({ quiet: true });
+  for (const file of [launcherLog(), pidFile(), portFile()]) {
+    try {
+      fs.rmSync(file, { force: true });
+    } catch {
+      /* already gone */
+    }
+  }
+  const modules = [path.join(codeDir, "node_modules")];
+  const packages = path.join(codeDir, "packages");
+  try {
+    for (const entry of fs.readdirSync(packages)) modules.push(path.join(packages, entry, "node_modules"));
+  } catch {
+    /* no packages dir — nothing more to remove */
+  }
+  for (const dir of modules) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true });
+    } catch (e) {
+      err(`could not remove ${dir}: ${e?.message || e}`);
+    }
+  }
+  out("Cleaned. Run 'just setup' to reinstall.");
+}
+
+// ── boot ────────────────────────────────────────────────────────────────────────────────────────────
+
+function cmdBoot(mode) {
+  switch (mode) {
+    case "on": {
+      let where;
+      try {
+        where = bootOn();
+      } catch (e) {
+        // A scheduler that refused the registration is a FAILURE, and it must read as one — the whole
+        // point of this recipe is that the app starts by itself, and "✓ enabled" over a scheduler that
+        // never accepted the job is the silent nothing the app's own installers are hardened against.
+        err("");
+        err(`✗ Start-at-reboot could NOT be enabled: ${e?.message || e}`);
+        err("");
+        process.exitCode = 1;
+        return;
+      }
+      out("");
+      out("✓ Start-at-reboot ENABLED for the Large File Bridge web app.");
+      out("");
+      out(`  Registered → ${where}`);
+      out(`  Starts     → node scripts/dev/dev.mjs boot-run   (pnpm install, then the web app + API :${bePort()})`);
+      out(`  Logs       → ${bootOutLog()}`);
+      out(`               ${bootErrLog()}`);
+      out("");
+      out("  Turn it back off with: just boot off");
+      out("");
+      return;
+    }
+    case "off":
+      bootOff();
+      out("");
+      out("✓ Start-at-reboot DISABLED. The web app will NOT start at reboot.");
+      out("  (Anything already running is untouched — stop it with: just stop)");
+      out("");
+      return;
+    case "status":
+      out(`  ${bootStatusLine()}`);
+      if (bootState() !== "off") out(`  registered at: ${bootWhere()}`);
+      return;
+    default:
+      err("Usage: just boot [on|off|status]");
+      process.exitCode = 1;
+  }
+}
+
+// ── paths ───────────────────────────────────────────────────────────────────────────────────────────
+
+/** Where everything actually resolved on THIS machine — the first thing to check when a path is wrong. */
+function cmdPaths() {
+  const rows = [
+    ["platform", `${process.platform} (node ${process.version})`],
+    ["repo", repoRoot],
+    ["state root", stateDir()],
+    ["launcher log", launcherLog()],
+    ["app log", appLog()],
+    ["fault trail", errorLog()],
+    ["work ledger", txnLog()],
+    ["port file", portFile()],
+    ["pid file", pidFile()],
+    ["api port", String(bePort())],
+    ["web port", `${recordedWebPort()} (last recorded)`],
+    ["auth library", authLib],
+  ];
+  for (const [k, v] of rows) out(`${k.padEnd(14)} ${v}`);
+}
+
+// ── small file helpers ──────────────────────────────────────────────────────────────────────────────
+
+function sizeOf(file) {
+  try {
+    return fs.statSync(file).size;
+  } catch {
+    return 0;
+  }
+}
+
+function readRange(file, from, to) {
+  let fd;
+  try {
+    fd = fs.openSync(file, "r");
+    const buf = Buffer.alloc(to - from);
+    const read = fs.readSync(fd, buf, 0, buf.length, from);
+    return buf.subarray(0, read).toString("utf8");
+  } catch {
+    return "";
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        /* ignore */
+      }
+    }
+  }
+}
+
+/** The last N lines of a file, without reading a 5 MiB log into memory to get them. */
+function tailFile(file, lines) {
+  const size = sizeOf(file);
+  if (!size) return `(${file} is empty or absent)`;
+  const from = Math.max(0, size - 64 * 1024);
+  const text = readRange(file, from, size);
+  return text.split(/\r?\n/).slice(-lines).join("\n");
+}
+
+function grepTail(file, pattern, limit) {
+  return tailFile(file, 4000)
+    .split("\n")
+    .filter((line) => pattern.test(line))
+    .slice(-limit);
+}
+
+/** Roll a log written by a descriptor we don't own, at the moment before it is reopened. */
+function rotateIfOversized(file) {
+  const max = Number(process.env.LFB_LOG_MAX_BYTES) || 5 * 1024 * 1024;
+  const generations = Number(process.env.LFB_LOG_GENERATIONS) || 5;
+  if (sizeOf(file) < max) return;
+  try {
+    fs.rmSync(`${file}.${generations}`, { force: true });
+    for (let i = generations - 1; i >= 1; i--) {
+      try {
+        fs.renameSync(`${file}.${i}`, `${file}.${i + 1}`);
+      } catch {
+        /* generation absent */
+      }
+    }
+    fs.renameSync(file, `${file}.1`);
+  } catch {
+    // best-effort: a log we could not roll is still a log we must not fail the boot over
+  }
+}
+
+function readPortFile() {
+  try {
+    const p = Number(fs.readFileSync(portFile(), "utf8").trim());
+    return Number.isFinite(p) && p > 0 ? p : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The launcher + app pids. Accepts the bare number the old bash launcher wrote, as well as our JSON. */
+function readPidFile() {
+  let raw;
+  try {
+    raw = fs.readFileSync(pidFile(), "utf8").trim();
+  } catch {
+    return [];
+  }
+  if (/^\d+$/.test(raw)) return [Number(raw)];
+  try {
+    const { launcher, app } = JSON.parse(raw);
+    return [launcher, app].filter((n) => Number.isInteger(n) && n > 0);
+  } catch {
+    return [];
+  }
+}
+
+await main();

@@ -32,6 +32,7 @@ import { healthRouter } from "./modules/health/health.router.js";
 import { progressRouter } from "./modules/progress/progress.router.js";
 import { securityRouter } from "./modules/security/security.router.js";
 import { internalRouter } from "./modules/internal/internal.router.js";
+import { setShutdownHook } from "./modules/internal/shutdown-hook.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import { tableViewsRouter } from "./modules/store-model/table-views.router.js";
 import { debugRouter } from "./modules/debug/debug.router.js";
@@ -260,6 +261,11 @@ async function main(): Promise<void> {
   };
   process.on("SIGINT", () => shutdown("SIGINT"));
   process.on("SIGTERM", () => shutdown("SIGTERM"));
+  // The same clean stop, reachable over the loopback API (POST /api/internal/shutdown). It is how the task
+  // runner stops us on WINDOWS, which has no SIGTERM at all — without it every `just stop` there would
+  // reap this process by a route that runs none of this JavaScript, so no SHUTDOWN marker would ever be
+  // written and every restart would read as a crash at the next boot (shutdown-hook.ts).
+  setShutdownHook(shutdown);
   // SIGHUP — the controlling terminal went away (window closed, ssh dropped, macOS logout/restart tearing
   // down the login session). It is a DELIBERATE stop from the OS's point of view and it was the one signal
   // we did not answer, so those exits all read as crashes at the next boot. `just run` starts the dev tree

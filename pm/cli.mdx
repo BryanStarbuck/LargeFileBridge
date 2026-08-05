@@ -397,14 +397,16 @@ around the list call in `main.ts` — `cmdFiles()`.
 
 The `cli/` directory goes on the user's `PATH` so `lfb` works from any directory:
 
-* The callable is the shim at `~/BGit/Bryan_git/LargeFileBridge/cli/lfb` — a small self-building
-  wrapper that compiles `cli/code/` when `dist/` is missing or stale, then execs Node. Because the
-  shim self-builds, a freshly cloned repo works with zero setup steps.
+* The callable is the shim at `~/BGit/Bryan_git/LargeFileBridge/cli/lfb.mjs` — a small self-building
+  wrapper that compiles `cli/code/` when `dist/` is missing or stale, then runs it. Because the
+  shim self-builds, a freshly cloned repo works with zero setup steps. Two one-line entry points sit
+  beside it so the CLI is callable from any shell on any platform: `cli/lfb` (POSIX, `./lfb …`) and
+  `cli/lfb.cmd` (Windows, `lfb …` from cmd.exe or PowerShell).
 * The user's `~/.zshrc` exports
   `PATH="$HOME/BGit/Bryan_git/LargeFileBridge/cli:$PATH"` (installed once; the shim is the only
   executable in that directory, so the PATH entry stays clean).
 
-Shim implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/lfb` — staleness check `needs_build()`.
+Shim implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/lfb.mjs` — staleness check `needsBuild()`.
 
 ---
 

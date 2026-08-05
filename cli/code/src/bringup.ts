@@ -20,8 +20,26 @@ function stateDir(): string {
   return process.env.LFB_STATE_DIR || path.join(os.homedir(), "T", "_large_files_bridge");
 }
 
+/**
+ * Spawn a developer tool (`just`, `pnpm`) portably.
+ *
+ * On Windows `pnpm` is a `.cmd` shim, and a `.cmd` cannot be handed to CreateProcess — Node has REFUSED to
+ * run one without a shell since 20.12 (CVE-2024-27980), so every call below failed with EINVAL there and
+ * the CLI could not bring the app up on the one platform where it is most likely to be asked to. Going
+ * through `cmd.exe` with `/s` (strip exactly the outer quote pair, run the rest verbatim) is the quoting
+ * form that survives paths containing spaces. Kept in lockstep BY HAND with
+ * `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/proc.mjs` — `spawnTool()`, the authority; this package
+ * compiles standalone and cannot import it.
+ */
+function toolCommand(name: string, args: string[]): { bin: string; argv: string[]; verbatim: boolean } {
+  if (process.platform !== "win32") return { bin: name, argv: args, verbatim: false };
+  const quoted = [name, ...args].map((a) => (/[\s&|<>^()"]/.test(a) ? `"${a}"` : a)).join(" ");
+  return { bin: process.env.ComSpec || "cmd.exe", argv: ["/d", "/s", "/c", `"${quoted}"`], verbatim: true };
+}
+
 function haveJust(): boolean {
-  return spawnSync("just", ["--version"], { stdio: "ignore" }).status === 0;
+  const { bin, argv, verbatim } = toolCommand("just", ["--version"]);
+  return spawnSync(bin, argv, { stdio: "ignore", windowsVerbatimArguments: verbatim, windowsHide: true }).status === 0;
 }
 
 async function waitHealthy(totalMs: number): Promise<boolean> {
@@ -53,7 +71,13 @@ export async function ensureServerUp(): Promise<boolean> {
   if (haveJust()) {
     // The reference path: the root justfile's `run` does setup, our-instance-only stop, the rotating
     // log sink, and its own port wait. Inherit stdio so its progress lands on the user's stderr.
-    const r = spawnSync("just", ["run"], { cwd: root, stdio: ["ignore", 2, 2] });
+    const just = toolCommand("just", ["run"]);
+    const r = spawnSync(just.bin, just.argv, {
+      cwd: root,
+      stdio: ["ignore", 2, 2],
+      windowsVerbatimArguments: just.verbatim,
+      windowsHide: true,
+    });
     if (r.status !== 0) {
       process.stderr.write("`just run` failed — see output above.\n");
       return failWithLogTail();
@@ -62,7 +86,13 @@ export async function ensureServerUp(): Promise<boolean> {
     // No `just` on this machine: replicate the essentials. pnpm install (setup), then background
     // `pnpm dev` with output appended to the launcher log in the state root (never /tmp).
     const code = path.join(root, "code");
-    const install = spawnSync("pnpm", ["install"], { cwd: code, stdio: ["ignore", 2, 2] });
+    const pnpmInstall = toolCommand("pnpm", ["install"]);
+    const install = spawnSync(pnpmInstall.bin, pnpmInstall.argv, {
+      cwd: code,
+      stdio: ["ignore", 2, 2],
+      windowsVerbatimArguments: pnpmInstall.verbatim,
+      windowsHide: true,
+    });
     if (install.status !== 0) {
       process.stderr.write("pnpm install failed — cannot bring the app up.\n");
       return false;
@@ -70,7 +100,14 @@ export async function ensureServerUp(): Promise<boolean> {
     fs.mkdirSync(stateDir(), { recursive: true });
     const logPath = path.join(stateDir(), "launcher.log");
     const out = fs.openSync(logPath, "a");
-    const child = spawn("pnpm", ["dev"], { cwd: code, detached: true, stdio: ["ignore", out, out] });
+    const pnpmDev = toolCommand("pnpm", ["dev"]);
+    const child = spawn(pnpmDev.bin, pnpmDev.argv, {
+      cwd: code,
+      detached: true,
+      stdio: ["ignore", out, out],
+      windowsVerbatimArguments: pnpmDev.verbatim,
+      windowsHide: true,
+    });
     child.unref();
     process.stderr.write(`Started \`pnpm dev\` in the background (logs: ${logPath}).\n`);
   }

@@ -96,7 +96,11 @@ its next start. Reboots and app restarts roll it long before then in practice.
 
 **The `/tmp` scratch note.** `/tmp/lfb.webapp.pid` and `/tmp/lfb.web.port` **are not logs** and are in
 `/tmp` **on purpose** — they are ephemeral pid/port files that must be cleared on reboot so stale state
-never lingers. Never look for evidence there; never move them into the state root.
+never lingers. Never look for evidence there; never move them into the state root. On **Windows** they
+live in `%TEMP%` instead, for the same reason and with the same status: Windows has no `/tmp`, and a
+literal one resolves to a `<drive>:\tmp` that does not exist. `just paths` prints where they landed on
+the machine in front of you. Resolved in:
+`~/BGit/Bryan_git/LargeFileBridge/scripts/dev/paths.mjs` — `runtimeDir()`, `portFile()`, `pidFile()`.
 
 ---
 
@@ -620,8 +624,8 @@ Every field in a `transactions.log` line. Format and emission rules are owned by
 8. **`BOOT` and `SHUTDOWN` markers exist**, so "did it restart under me?" is answerable without guessing.
 9. **Every error site uses `logError()`'s structured shape**, not a hand-formatted string, so error lines
    are greppable and untrusted filenames cannot forge lines.
-10. **All logs live in the state root, never `/tmp`**, at 5 MiB × 5 generations; `/tmp/lfb.webapp.pid` and
-    `/tmp/lfb.web.port` remain the only `/tmp` residents and are **not** logs.
+10. **All logs live in the state root, never `/tmp`**, at 5 MiB × 5 generations; the pid/port scratch files
+    (`/tmp` on macOS and Linux, `%TEMP%` on Windows) remain the only residents there and are **not** logs.
 11. **The rotation deadline is documented** (§2): 5 generations is hours under load, so an operator is
     told to **copy the state root before investigating**.
 12. **A 401 to bare `curl` is documented as healthy** (§4.3) — connection-refused, not 401, is the
@@ -637,7 +641,8 @@ Every field in a `transactions.log` line. Format and emission rules are owned by
   authoritative for "did this file get processed") / launcher.log (ONLY place a V8 OOM abort appears;
   trap: buried in the proxy-error flood — grep, never scroll) / ipfs-*.log (EXTERNAL process, rotated
   only at reopen boundaries via rotateIfOversized()). All 5 MiB × 5 = a FORENSIC DEADLINE (hours under
-  load) → copy the state root before investigating. /tmp/lfb.webapp.pid + lfb.web.port = scratch, NOT logs.
+  load) → copy the state root before investigating. lfb.webapp.pid + lfb.web.port (/tmp, or %TEMP% on
+  Windows) = scratch, NOT logs; `just paths` prints where they are.
   CANONICAL INCIDENT (§4.1, verified against launcher.log.3): 2026-07-15, 1,440 AI descriptions, 22:13 PDT
   V8 4.1GB → "FATAL ERROR: Ineffective mark-compacts near heap limit". In-memory pending[] vaporized
   silently. tsx watch restarts on FILE CHANGE, NOT on crash → dead ~6h. Vite :2222 kept serving 200s
@@ -666,7 +671,8 @@ Every field in a `transactions.log` line. Format and emission rules are owned by
   (isTransient 101, timeoutForBytes 131, postJsonOnce 137, withProviderRetry 186); transcribe.service.ts
   (transcribeOne 86); tools/transcribe/engine.ts (pickEngine 46, transcribeWithEngine 72); shared/logging.ts
   (rotateIfOversized 56, RollingFileWriter 67, writeSync 119, log.* 184, logError 204, flushLogs);
-  config/state-dir.ts (resolveStateDir 6, resolveLogDir 15); justfile (run 90, stop 125, logs 162, status 166).
+  config/state-dir.ts (resolveStateDir 6, resolveLogDir 15); scripts/dev/dev.mjs (cmdRun, cmdStop, cmdLogs,
+  cmdStatus) + scripts/dev/paths.mjs (runtimeDir) — the justfile recipes are one-liners over those.
   Keep in sync with transactions_log.mdx (format/emission), memory.mdx (the OOM fix), crash_recovery.mdx,
   performance.mdx (T3/P-27), processing.mdx, job_queue.mdx (§5 no-persistence posture), authentication.mdx.
 -->

@@ -1,20 +1,28 @@
 # Large File Bridge CLI — task runner (pm/cli.mdx §1.3). `just build` / `just run …` work here,
 # and the ROOT justfile's build/run also build this CLI so it is never stale.
-set shell := ["bash", "-uc"]
+#
+# Portable on macOS, Linux and Windows — same three rules as the root justfile: no shell built-ins or
+# Unix tools in a recipe, no comment lines inside a recipe body, no shebang recipes.
 
-code := justfile_directory() + "/code"
+set shell := ["bash", "-uc"]
+set windows-shell := ["cmd.exe", "/d", "/c"]
+
+code := justfile_directory() / "code"
+shim := justfile_directory() / "lfb.mjs"
 
 default:
     @just --list
 
 # Install deps + compile the CLI to code/dist/.
 build:
-    cd {{code}} && pnpm install && pnpm build
+    pnpm -C "{{code}}" install
+    pnpm -C "{{code}}" build
 
 # Typecheck only (no emit).
 typecheck:
-    cd {{code}} && pnpm install && pnpm typecheck
+    pnpm -C "{{code}}" install
+    pnpm -C "{{code}}" typecheck
 
 # Build, then run the CLI with the given arguments (e.g. `just run files --all --compress`).
 run *args: build
-    {{justfile_directory()}}/lfb {{args}}
+    @node "{{shim}}" {{args}}

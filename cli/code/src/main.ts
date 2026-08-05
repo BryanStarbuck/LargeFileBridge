@@ -140,15 +140,26 @@ async function cmdFiles(args: string[], opts: { defaultEverything?: boolean } = 
   (tree ? renderTree : renderFlat)(result.categories, bare || everything);
 }
 
+/**
+ * Where the web app publishes the port it resolved on boot. `/tmp` verbatim on macOS and Linux; on
+ * Windows there is no /tmp (Node reads it as `<drive>:\tmp`, which does not exist), so the platform's own
+ * temp dir. Kept in lockstep BY HAND with scripts/dev/paths.mjs `runtimeDir()` — the authority — and with
+ * the writer, packages/frontend/scripts/web-port.mjs `PORT_FILE`; this package compiles standalone and
+ * cannot import either.
+ */
+function webPortFile(): string {
+  const runtime = process.env.LFB_RUNTIME_DIR || (process.platform === "win32" ? os.tmpdir() : "/tmp");
+  return path.join(runtime, "lfb.web.port");
+}
+
 async function cmdStatus(): Promise<void> {
   const healthy = await backendHealthy();
   process.stdout.write(`backend  :${backendPort()} ${healthy ? "UP (health OK)" : "DOWN"}\n`);
   try {
-    const fs = await import("node:fs");
-    const port = fs.readFileSync("/tmp/lfb.web.port", "utf8").trim();
+    const port = fs.readFileSync(webPortFile(), "utf8").trim();
     process.stdout.write(`web app  :${port} (last recorded port)\n`);
   } catch {
-    process.stdout.write("web app  port not recorded (/tmp/lfb.web.port absent)\n");
+    process.stdout.write(`web app  port not recorded (${webPortFile()} absent)\n`);
   }
   if (!healthy) process.exit(1);
 }

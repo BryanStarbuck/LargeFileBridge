@@ -2,8 +2,11 @@
 /**
  * Rotating stdout sink — a dependency-free `tee` with size-based rotation.
  *
- * The web app is launched with `nohup pnpm dev > >(node log_rotate_pipe.mjs
- * <file>) 2>&1 &`. Everything the process prints on stdout+stderr is streamed
+ * The web app is launched by scripts/dev/launch.mjs, which spawns `pnpm dev`
+ * and pipes its stdout+stderr into `node log_rotate_pipe.mjs <file>`. (That
+ * used to be a bash one-liner using process substitution — `> >(…)` — which is
+ * why the launcher is now a program: bash is not a given on Windows.)
+ * Everything the process prints on stdout+stderr is streamed
  * here and appended to <file>. When <file> would exceed the size cap it is
  * rotated (file → file.1 → file.2 …, oldest dropped) and reopened empty — so
  * the catch-all boot/console log is bounded exactly like the app's own
@@ -25,7 +28,7 @@
  * written we drop the line rather than throw.
  */
 
-import { createWriteStream, renameSync, rmSync, statSync } from 'node:fs'
+import { closeSync, openSync, renameSync, rmSync, statSync, writeSync } from 'node:fs'
 
 const file = process.argv[2]
 if (!file) {
@@ -56,29 +59,38 @@ function rotate(f) {
   try { renameSync(f, `${f}.1`); return true } catch { return fileSize(f) === 0 }
 }
 
-let stream = createWriteStream(file, { flags: 'a' })
-stream.on('error', () => {})
+// A DESCRIPTOR, not a write stream, and closed before every rotation: WINDOWS CANNOT RENAME AN OPEN FILE.
+// With a stream held open across `rotate()`, every rename failed there with EPERM/EBUSY, `rotate()`
+// answered false forever, and the launcher log grew without limit — the exact unbounded growth this file
+// exists to prevent, on the one platform nobody was watching. Synchronous writes also mean nothing sits in
+// a userland buffer when the app is killed, so the last lines before a crash are on disk.
+let fd = openFd()
 let bytes = fileSize(file)
 
-function openFresh() {
-  try { stream.end() } catch { /* ignore */ }
-  stream = createWriteStream(file, { flags: 'a' })
-  stream.on('error', () => {})
-  bytes = 0
+function openFd() {
+  try { return openSync(file, 'a') } catch { return -1 }
+}
+
+function reopen() {
+  if (fd >= 0) { try { closeSync(fd) } catch { /* ignore */ } }
+  fd = openFd()
+  bytes = fileSize(file)
 }
 
 function write(chunk) {
   const len = chunk.length
   if (bytes > 0 && bytes + len > MAX_BYTES) {
-    if (rotate(file)) openFresh()
-    else bytes = 0 // rename failed; reset so we retry after another cap's worth
+    if (fd >= 0) { try { closeSync(fd) } catch { /* ignore */ } fd = -1 }
+    rotate(file)
+    reopen() // whether or not the rename worked — a failed rotation must not cost us the sink
   }
-  try { stream.write(chunk) } catch { /* never crash the pipe */ }
+  if (fd < 0) return // the log is unopenable; drop the line rather than throw
+  try { writeSync(fd, chunk) } catch { /* never crash the pipe */ }
   bytes += len
 }
 
 process.stdin.on('data', (chunk) => {
   try { write(chunk) } catch { /* swallow — logging must never crash */ }
 })
-process.stdin.on('end', () => { try { stream.end() } catch { /* ignore */ } })
+process.stdin.on('end', () => { if (fd >= 0) { try { closeSync(fd) } catch { /* ignore */ } } })
 process.stdin.on('error', () => {})

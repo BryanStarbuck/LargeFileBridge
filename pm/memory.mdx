@@ -494,7 +494,10 @@ Read live at admission and served/edited over the settings surface, in code:
 3. **Every heavy child process caps its captured output**, and captures **only when a caller reads
    it**. The default is `stdio: ignore`.
 4. **The heap ceiling is explicit, never V8's default.** `--max-old-space-size` is set at launch in
-   every path that starts the backend (`dev`, `start`, the `justfile`, launchd).
+   every path that starts the backend (`dev`, `start`, the task runner, launchd) — from ONE place,
+   `~/BGit/Bryan_git/LargeFileBridge/scripts/node-heap-run.mjs`, which the `dev`/`start` scripts run
+   through. It is a script rather than inline `NODE_OPTIONS=… cmd` because that form is POSIX-sh syntax
+   and cmd.exe reads it as a program name, so on Windows the backend never started at all.
 5. **Every reservation is released in a `finally`.** Success, throw, timeout, abort — no exceptions,
    no early returns that skip it.
 6. **The budget shapes concurrency; it never blocks progress.** A job larger than the entire budget
@@ -598,8 +601,8 @@ the job level, and the decode is bounded to ~1 MB of pixels either way.
 9. **Capture is opt-in.** `grep` shows `captureStdout` set at exactly **one** call site
    (`probeVideo`), and the 32 MB literal is gone from `fit-media.ts`.
 10. **The ceiling is explicit everywhere.** `NODE_OPTIONS` with `--max-old-space-size` and
-    `--heapsnapshot-near-heap-limit=1` is present in `dev`, `start`, and the `justfile` launch path;
-    a grep for `max-old-space-size` no longer returns zero.
+    `--heapsnapshot-near-heap-limit=1` reaches `dev`, `start` and the task runner's launch path through
+    `scripts/node-heap-run.mjs`; a grep for `max-old-space-size` no longer returns zero.
 11. **The knob works live.** Changing `performance.max_memory_fraction` in Settings changes the
     admitted concurrency on the **next** job with **no restart**, and the resolved GB / files-in-flight
     figures update in the UI.

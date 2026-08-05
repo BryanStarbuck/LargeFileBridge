@@ -7,23 +7,30 @@
 //      ELSE                    free-or-ours port, and report the chosen port to the user.
 //
 // "Our app" is identified by the stable <meta name="x-app" content="large-file-bridge"> marker
-// (index.html) served at "/". No dependency beyond Node's stdlib + `lsof`.
+// (index.html) served at "/". The one thing it cannot do with Node's stdlib alone — ask the OS which
+// process holds a port — comes from scripts/dev/proc.mjs, which answers it on all three platforms.
 
 import net from "node:net";
 import http from "node:http";
-import { execSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import YAML from "yaml";
+import { pidsOnPort, terminate } from "../../../../scripts/dev/proc.mjs";
 
 export const DEFAULT_WEB_PORT = 2222;
 const HOST = "127.0.0.1";
 const APP_MARKER = "large-file-bridge";
-// Where we publish the resolved port so external tooling (justfile, health checks) can find it.
-// Hardcoded /tmp (not os.tmpdir(), which is /var/folders/… on macOS) to match the justfile's
-// log/pidfile convention so `just run`/`status` read the same file we write.
-export const PORT_FILE = "/tmp/lfb.web.port";
+// Where we publish the resolved port so external tooling (the task runner, the CLI's `status`, health
+// checks) can find it. `/tmp` is kept verbatim on macOS and Linux — deliberately not os.tmpdir(), which is
+// /var/folders/… on macOS — so nothing about those machines changes. Windows has no /tmp: Node resolves it
+// to `<drive>:\tmp`, a directory that does not exist, so the port would be published where no reader looks
+// and `just run` would wait out its whole timeout on a live app. Kept in lockstep BY HAND with
+// scripts/dev/paths.mjs `runtimeDir()`, which is the authority — this file is loaded by vite.config.ts and
+// stays free of repo-relative behaviour it cannot see.
+const RUNTIME_DIR = process.env.LFB_RUNTIME_DIR || (process.platform === "win32" ? os.tmpdir() : "/tmp");
+export const PORT_FILE = path.join(RUNTIME_DIR, "lfb.web.port");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -58,40 +65,23 @@ export function isOurApp(port) {
   });
 }
 
-/** PIDs (may be several) holding the TCP port, via lsof. Empty array if none / lsof unavailable. */
-export function pidsOnPort(port) {
-  try {
-    return execSync(`lsof -ti tcp:${port} -sTCP:LISTEN`, { stdio: ["ignore", "pipe", "ignore"] })
-      .toString()
-      .split("\n")
-      .map((s) => s.trim())
-      .filter(Boolean);
-  } catch {
-    return [];
-  }
-}
+export { pidsOnPort };
 
-/** Kill the PIDs holding a port (SIGTERM, then SIGKILL) and wait for the port to free. */
+/**
+ * Kill the PIDs holding a port and wait for it to free. Only ever called on a port we have already
+ * PROVEN is ours (the app marker at "/"), never on a foreign process.
+ *
+ * `terminate` is the portable escalation: SIGTERM→SIGKILL on POSIX, `taskkill /T [/F]` on Windows, where
+ * there is no SIGTERM to send and the tree matters (pnpm → tsx → node).
+ */
 async function freePort(port) {
-  for (const pid of pidsOnPort(port)) {
-    try {
-      process.kill(Number(pid), "SIGTERM");
-    } catch {
-      /* already gone */
-    }
-  }
+  terminate(pidsOnPort(port), { hard: false });
   for (let i = 0; i < 20; i++) {
     if (!(await isPortInUse(port))) return true;
     await sleep(150);
   }
   // Still up — escalate.
-  for (const pid of pidsOnPort(port)) {
-    try {
-      process.kill(Number(pid), "SIGKILL");
-    } catch {
-      /* ignore */
-    }
-  }
+  terminate(pidsOnPort(port), { hard: true });
   for (let i = 0; i < 10; i++) {
     if (!(await isPortInUse(port))) return true;
     await sleep(150);
@@ -157,7 +147,9 @@ export async function stopOurWebPort(port = desiredWebPort()) {
 // CLI:
 //   node web-port.mjs            → resolve + print the chosen port (used by the justfile `run`)
 //   node web-port.mjs stop [p]   → stop our web app on port p (default resolved/desired), foreign-safe
-if (import.meta.url === `file://${process.argv[1]}`) {
+// `pathToFileURL`, not a `file://` template: a Windows argv[1] is `C:\…`, whose URL is `file:///C:/…`,
+// so the naive comparison is false on every Windows run and the CLI block never executes.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const cmd = process.argv[2];
   if (cmd === "stop") {
     const p = Number(process.argv[3]) || readPortFile() || desiredWebPort();

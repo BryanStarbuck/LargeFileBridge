@@ -1,422 +1,151 @@
 # LargeFileBridge — task runner (sister-app convention). Run `just` to list.
+#
+# THIS FILE RUNS ON macOS, LINUX AND WINDOWS. That is a deliberate constraint, and it is what shapes
+# everything below. Every recipe is one portable command line — `node`, `pnpm`, `just` and nothing else —
+# because the interesting work lives in scripts/dev/*.mjs, where the platform differences are handled once
+# (see the header of scripts/dev/dev.mjs for what moved and why). Before, these recipes were bash scripts
+# built out of `lsof`, `pgrep`, `launchctl`, `plutil`, `nohup`, process substitution and `tail -f`: none of
+# those exists on Windows, and `lsof`/`launchctl` are absent from a stock Linux too, so `run`, `stop`,
+# `status`, `logs` and `boot` were macOS-only recipes that failed quietly everywhere else.
+#
+# THE RULES for editing this file, all three of which are load-bearing on Windows:
+#   1. NO shell built-ins or Unix tools in a recipe — no `cd`, `test`, `cp`, `rm`, `mkdir`, `tail`, `kill`.
+#      Reach for `pnpm -C <dir>` (never `cd <dir> && pnpm`) or add a command to scripts/dev/dev.mjs.
+#   2. NO comment lines INSIDE a recipe body. `just` passes them to the shell; `#` is a comment to bash and
+#      an unknown command to cmd.exe. Comments go above the recipe, at column 0, like these.
+#   3. NO shebang recipes (`#!/usr/bin/env bash`) — that is a bash script by another name.
+#
+# Ports are read from the environment by scripts/dev/paths.mjs, so BE_PORT / FE_PORT still make the task
+# runner agree with the app. The web port is RESOLVED on boot by Vite (collision policy, code_plan.mdx §2)
+# and published to the port file; `just status` and `just stop` read it from there.
+
 set shell := ["bash", "-uc"]
+set windows-shell := ["cmd.exe", "/d", "/c"]
 
-code := justfile_directory() + "/code"
-
-# Ports are overridable from the environment so the justfile agrees with the app
-# when BE_PORT / FE_PORT are set (Vite resolves the web port on boot — see `run`).
-be_port := env_var_or_default("BE_PORT", "8787")
-fe_port := env_var_or_default("FE_PORT", "2222")   # web app default; may be collision-resolved higher (code_plan.mdx §2)
-
-# OpenAuthFederated — the auth library both packages depend on via `link:` deps
-# (@auth/backend and @auth/react, four levels up at ../../../../OpenAuthFederated).
-# `pnpm install` fails outright if the repo has not been cloned, so we check first.
-auth_lib  := justfile_directory() + "/../OpenAuthFederated"
-auth_repo := "https://github.com/BryanStarbuck/OpenAuthFederated.git"
-
-# The app's local storage / state root — MUST match backend config/state-dir.ts (resolveStateDir):
-# $LFB_STATE_DIR, else ~/T/_large_files_bridge. The app's own rotating logs (log.log / error.err) live
-# here, and so does the launcher catch-all below — NO log files in /tmp (CLAUDE.md logging policy).
-state_dir := env_var_or_default("LFB_STATE_DIR", home_directory() + "/T/_large_files_bridge")
-
-webport  := code + "/packages/frontend/scripts/web-port.mjs"
-logpipe  := justfile_directory() + "/scripts/log_rotate_pipe.mjs"   # dependency-free rotating sink (5 MiB × 5)
-# Runtime scratch (pid/port) stays in /tmp — cleared on reboot so stale pidfiles never linger; these are
-# NOT logs. The launcher log itself lives in the state dir and rotates (5 MiB × 5).
-portfile := "/tmp/lfb.web.port"
-pidfile  := "/tmp/lfb.webapp.pid"
-log      := state_dir + "/launcher.log"
-# The work ledger (transactions_log.mdx) — written by the backend into the same state root, same
-# 5 MiB × 5 rotation. It is the primary debugging surface: what the app DID, not what it said.
-txn_log  := state_dir + "/transactions.log"
-
-# launchd agent labels (schedule.service.ts: scan = 4h discovery, pin = 15m).
-scan_label := "com.largefilebridge.scan"
-pin_label := "com.largefilebridge.pin"
-
-# launchd LaunchAgent used by `just boot on|off` to auto-start the WEB APP at login (i.e. after every
-# reboot). Separate from the scan/pin worker agents above — those run the CLI, this runs `just run`.
-# One label, one plist, both derived from here. Its launcher stdout/stderr go through the same rotating
-# sink as launcher.log, into the state root — NO log files in /tmp (CLAUDE.md logging policy).
-boot_label   := "com.largefilebridge.webapp"
-boot_plist   := home_directory() + "/Library/LaunchAgents/" + boot_label + ".plist"
-boot_out_log := state_dir + "/boot.out.log"
-boot_err_log := state_dir + "/boot.err.log"
-# launchd starts with a bare PATH and no shell profile, so every binary is named absolutely.
-# These are Homebrew's STABLE symlinks (…/bin/just → ../Cellar/just/<ver>/bin/just), never a Cellar
-# path — a versioned path bakes in a version that the next `brew upgrade` deletes.
-brew_just := "/opt/homebrew/bin/just"
-brew_node := "/opt/homebrew/bin/node"
+code := justfile_directory() / "code"
+cli := justfile_directory() / "cli"
+dev := justfile_directory() / "scripts/dev/dev.mjs"
 
 default:
     @just --list
 
-# Fail fast (with a fix hint) if a required Homebrew tool is missing.
+# Fail fast (with a per-platform install hint) if node or pnpm is missing.
 _check-tools:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    ok=1
-    for tool in node pnpm; do
-      command -v "$tool" >/dev/null 2>&1 || { echo "✗ missing '$tool' — install with: brew install $tool" >&2; ok=0; }
-    done
-    [ "$ok" = 1 ] || { echo "Fix the above and re-run." >&2; exit 1; }
+    @node "{{dev}}" check-tools
 
-# Verify OpenAuthFederated is checked out locally. Both packages consume it via
-# `link:` deps (@auth/backend, @auth/react); `pnpm install` dies if it is absent.
+# Verify OpenAuthFederated is checked out next to this repo. Both packages consume it via `link:` deps
+# (@auth/backend, @auth/react); `pnpm install` dies outright if it is absent.
 _check-auth-lib:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    if [ -d "{{auth_lib}}/code/packages/auth-backend" ] && [ -d "{{auth_lib}}/code/packages/auth-react" ]; then
-      exit 0
-    fi
-    root="{{auth_lib}}"
-    parent="$(cd "$(dirname "$root")" 2>/dev/null && pwd || true)"
-    [ -n "$parent" ] && root="$parent/$(basename "$root")"
-    {
-      printf '\n✗ OpenAuthFederated is not available locally.\n\n'
-      printf "  This app's authentication depends on it via link: deps:\n"
-      printf '      @auth/backend → code/packages/auth-backend\n'
-      printf '      @auth/react   → code/packages/auth-react\n'
-      printf '  Expected location: %s\n\n' "$root"
-      printf '  Clone it so the link: paths resolve, then re-run:\n\n'
-      printf '      git clone %s "%s"\n\n' "{{auth_repo}}" "$root"
-    } >&2
-    exit 1
+    @node "{{dev}}" check-auth-lib
 
 # Install deps + seed backend .env.
 setup: _check-tools _check-auth-lib
-    cd {{code}} && pnpm install
-    cd {{code}}/packages/backend && test -f .env || cp .env.example .env
-    @echo "Setup complete."
+    pnpm -C "{{code}}" install
+    @node "{{dev}}" seed-env
+    @echo Setup complete.
 
 # Build the CLI (cli/ — pm/cli.mdx §1.3): root build/run always bring it fully up to date too.
 build-cli:
-    cd {{justfile_directory()}}/cli/code && pnpm install && pnpm build
+    pnpm -C "{{cli}}/code" install
+    pnpm -C "{{cli}}/code" build
 
 # Typecheck / build every package (and the CLI — cli.mdx §1.3).
 build: setup build-cli
-    cd {{code}} && pnpm -r build
+    pnpm -C "{{code}}" -r build
 
 # Typecheck every package (no build output).
 typecheck:
-    cd {{code}} && pnpm -r typecheck
+    pnpm -C "{{code}}" -r typecheck
 
 # Run the test scripts in every package.
 test:
-    cd {{code}} && pnpm -r test
+    pnpm -C "{{code}}" -r test
 
-# Vite resolves the web port on boot (takes over our own stale instance; steps past a foreign one),
-# so we do NOT blanket-kill :2222 here — we only stop OUR previous instance first.
+# `run` STOPS OUR PREVIOUS INSTANCE FIRST — that is inside `dev.mjs run`, not a recipe dependency, so the
+# restart is a single ordered operation — and then hands off to the detached launcher, which streams the
+# dev tree's stdout+stderr through the rotating sink into the launcher log. Vite resolves the web port on
+# boot, so a FOREIGN process on :2222 is stepped around rather than killed.
+#
 # Start backend (:8787) + web app (:2222, collision-resolved) in the background.
-run: setup build-cli stop
-    -@rm -f {{portfile}}
-    @mkdir -p "{{state_dir}}"   # ensure the local storage / log dir exists before the sink opens the log
-    # Stream stdout+stderr THROUGH the rotating sink so {{log}} is size-bounded (5 MiB × 5) instead of
-    # growing unbounded. Process substitution keeps `$!` = the app pid (nohup pnpm dev), not the sink,
-    # so `stop`/pidfile still target the app. `exec node` avoids leaving an extra shell around the sink.
-    cd {{code}} && nohup pnpm dev > >(exec node "{{logpipe}}" "{{log}}") 2>&1 & echo $! > {{pidfile}}
-    @echo "Starting… (logs: {{log}}, rotating via scripts/log_rotate_pipe.mjs)"
-    @for i in $(seq 1 60); do \
-      if [ -f {{portfile}} ] && lsof -ti tcp:$(cat {{portfile}}) >/dev/null 2>&1 && lsof -ti tcp:{{be_port}} >/dev/null 2>&1; then \
-        p=$(cat {{portfile}}); echo "Up: http://localhost:$p  (API :{{be_port}})"; exit 0; fi; \
-      sleep 0.5; done; \
-      echo "Timed out waiting for ports — see {{log}}"; tail -30 {{log}}; exit 1
+run: setup build-cli
+    @node "{{dev}}" run
 
 # Foreground dev (both packages, watch mode).
 dev: setup
-    cd {{code}} && pnpm dev
+    pnpm -C "{{code}}" dev
 
-# Stop OUR app only — BOTH the frontend (Vite) and the backend dev tree — then confirm the ports are
-# actually free before returning. This is what makes `just run` (which depends on `stop`) a true
-# restart: front-end AND back-end are torn down first, every time.
+# The backend is asked to stop over its own loopback route FIRST, so it writes the ledger's SHUTDOWN
+# marker itself; a BOOT with no SHUTDOWN above it is what the ledger defines as a CRASH, and reaping the
+# process by any route that runs none of its JavaScript turns every ordinary restart into a reported
+# crash. Only then does the tree get signalled and the ports forcibly freed (scripts/dev/dev.mjs cmdStop).
 #
-# Why the tree-kill AND the port loop are both needed:
-#   * macOS `pgrep -f` only sees a TRUNCATED command line. The backend `tsx watch` PARENT is matched
-#     (short argv, ends in "src/main.ts"), but its node CHILD that actually binds :8787 has a ~1 KB
-#     argv whose trailing "src/main.ts" is past the truncation cut — so a name match alone can never
-#     reap the child. We kill the parent by name (stops the respawn source) and the child by PORT.
-#   * `tsx watch` respawns its child on any source edit. On this repo the tree is continuously
-#     auto-committed, so a naive one-shot kill races the respawn and leaves an orphan holding
-#     backend.lock — every later `just run` backend then exit(0)s on boot and the API never comes up
-#     (the "orphan swarm"). The port loop below kills-and-rechecks until :be_port and the web port are
-#     genuinely free, defeating that race.
-# All matchers are repo-scoped (our @lfb/ pnpm scope, our {{code}} path, or "src/main.ts") so sister
-# apps and the launchd pin/scan worker (which runs src/cli.ts under deploy/, never src/main.ts or
-# --parallel dev) are never touched.
+# Stop OUR app only — the web app (Vite) AND the backend dev tree — and wait for the ports to be free.
 stop:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    self=$$
-    fe_port=$(test -f {{portfile}} && cat {{portfile}} 2>/dev/null || echo {{fe_port}})
-    # Collect this repo's dev-tree pids from three narrow matchers (run separately so we stay in the
-    # BRE subset `.*`, avoiding any pgrep ERE-alternation portability question):
-    #   @lfb/…--parallel dev   → the pnpm dev orchestrator (NOT `pnpm cli pin`)
-    #   {{code}}/packages/frontend → the Vite dev server
-    #   {{code}}…src/main.ts   → the backend `tsx watch` parent (NOT src/cli.ts pin runs)
-    kill_tree() { # $1 = signal
-      local pids
-      pids=$( { pgrep -f "@lfb/.*--parallel dev"; \
-                pgrep -f "{{code}}/packages/frontend"; \
-                pgrep -f "{{code}}.*src/main.ts"; } 2>/dev/null | sort -u | grep -vx "$self" || true )
-      [ -n "$pids" ] && kill -"$1" $pids 2>/dev/null || true
-    }
-    # PHASE 0 — the BACKEND is stopped FIRST, ALONE, and we WAIT for it (crash_recovery.mdx §8.1).
-    #
-    # This phase is the fix for the "8× ended ABNORMALLY in two days" report. Before it, the backend node
-    # CHILD — the process that owns the SHUTDOWN marker — was the LAST thing to be signalled, and by then
-    # it was already being torn down out from under itself:
-    #   * `pnpm --parallel dev` kills its sibling script as soon as one of them exits
-    #     (ERR_PNPM_RECURSIVE_RUN_FIRST_FAIL). Killing Vite / the orchestrator first therefore reaped the
-    #     backend by a route that runs none of its JavaScript, so no marker was ever written.
-    #   * even when it survived that, its first SIGTERM arrived in round 1 of the port loop below, whose
-    #     fuse to SIGKILL is 0.4s — not a grace period, a coin flip.
-    # Both produced a BOOT with no preceding SHUTDOWN, which the ledger DEFINES as a crash — so ordinary
-    # `just run` restarts were being reported to the user as crashes and were hiding the real ones.
-    #
-    # So: TERM the backend by port AND by name, then poll until :be_port is actually free, up to ~6s. The
-    # app's own handler needs milliseconds (it emits SHUTDOWN synchronously, first thing); the budget is
-    # generous because a busy event loop is exactly the case that used to lose the marker. Nothing is
-    # escalated here — every hard kill still happens below, so a wedged process is no slower to reap than
-    # before, it just gets a real chance to say goodbye first.
-    be_pids=$( { lsof -ti tcp:{{be_port}} -sTCP:LISTEN; \
-                 pgrep -f "{{code}}.*src/main.ts"; } 2>/dev/null | sort -u | grep -vx "$self" || true )
-    if [ -n "$be_pids" ]; then
-      kill -TERM $be_pids 2>/dev/null || true
-      for i in $(seq 1 40); do
-        lsof -ti tcp:{{be_port}} -sTCP:LISTEN >/dev/null 2>&1 || break
-        sleep 0.15
-      done
-    fi
-    kill_tree TERM; sleep 0.6; kill_tree TERM; sleep 0.6; kill_tree KILL
-    # Belt-and-suspenders: free the backend port and the web port, catching a child that reparented
-    # mid-restart. Loop until both are free (or we give up after a few rounds).
-    for round in 1 2 3 4 5 6; do
-      held=""
-      for port in {{be_port}} "$fe_port"; do
-        p=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
-        if [ -n "$p" ]; then held="yes"; kill -TERM $p 2>/dev/null || true; fi
-      done
-      [ -z "$held" ] && break
-      sleep 0.4
-      for port in {{be_port}} "$fe_port"; do
-        p=$(lsof -ti tcp:"$port" -sTCP:LISTEN 2>/dev/null || true)
-        [ -n "$p" ] && kill -KILL $p 2>/dev/null || true
-      done
-    done
-    test -f {{pidfile}} && kill "$(cat {{pidfile}})" 2>/dev/null || true
-    rm -f {{pidfile}}
-    echo "Stopped."
+    @node "{{dev}}" stop
 
+# Follow the launcher catch-all log.
 logs:
-    tail -f {{log}}
+    @node "{{dev}}" logs
 
-# log.log is what the app SAID; transactions.log is what it DID: a BEGIN/END pair per unit of work,
-# plus BOOT/SHUTDOWN/HEARTBEAT. A BOOT with no SHUTDOWN above it means the process CRASHED.
+# log.log is what the app SAID; transactions.log is what it DID: a BEGIN/END pair per unit of work, plus
+# BOOT/SHUTDOWN/HEARTBEAT. A BOOT with no SHUTDOWN above it means the process CRASHED.
+#
 # Follow the work ledger — what the app DID (the primary debugging surface).
 txlog:
-    tail -f {{txn_log}}
+    @node "{{dev}}" logs --txn
 
-# All four logs at once. Each answers a different question and no single file answers them all: log.log =
-# what the app said, error.err = what broke, transactions.log = what it DID, launcher.log = whether the
-# PROCESS died (the ONLY place a V8 OOM abort appears — abort(3) runs no JS, so our writers never fire).
+# Each of the four answers a different question and no single file answers them all: log.log = what the
+# app said, error.err = what broke, transactions.log = what it DID, launcher.log = whether the PROCESS
+# died (the ONLY place a V8 OOM abort appears — abort(3) runs no JS, so our writers never fire).
+#
 # Follow all four logs at once (launcher + log.log + error.err + the ledger).
 logs-all:
-    tail -f {{log}} {{state_dir}}/log.log {{state_dir}}/error.err {{txn_log}}
+    @node "{{dev}}" logs --all
 
-# Report the web app + backend ports and whether the two launchd agents are loaded.
+# The BACKEND is what this exists to assert. On 2026-07-15 it OOMed and stayed dead ~6 hours while Vite
+# served :2222 at HTTP 200 the whole time — `tsx watch` restarts on file change, never on crash. FRONTEND
+# UP != APP UP, so a dead backend is reported loudly here and exits non-zero.
 #
-# The BACKEND is what this recipe exists to assert. On 2026-07-15 the backend OOMed and stayed dead ~6
-# hours while Vite happily served :2222 at HTTP 200 the entire time — `tsx watch` restarts on file change,
-# never on crash. FRONTEND UP ≠ APP UP. So a dead backend is reported as a loud, unmissable failure with
-# the next step attached, and `status` EXITS NON-ZERO on it so a script can tell too.
-# Report the backend (:8787, health-checked), the web app, and the launchd agents.
+# Report the backend (:8787, health-checked), the web app, the background agents and start-at-reboot.
 status:
-    #!/usr/bin/env bash
-    set -uo pipefail
-    p=$(test -f {{portfile}} && cat {{portfile}} 2>/dev/null || echo {{fe_port}})
-    if lsof -ti tcp:"$p" -sTCP:LISTEN >/dev/null 2>&1; then echo "web app  :$p UP"; else echo "web app  :$p down"; fi
-    # A listening port is necessary but not sufficient — ask the API to prove it is actually serving.
-    be_up=0
-    if lsof -ti tcp:{{be_port}} -sTCP:LISTEN >/dev/null 2>&1; then
-      if curl -fsS -m 3 -o /dev/null "http://127.0.0.1:{{be_port}}/api/health" 2>/dev/null; then
-        echo "backend  :{{be_port}} UP (health OK)"; be_up=1
-      else
-        echo "backend  :{{be_port}} LISTENING but /api/health did not answer — the process may be wedged."
-      fi
-    fi
-    launchctl list | grep -q {{scan_label}} && echo "agent scan  (4h)  LOADED" || echo "agent scan  (4h)  not loaded"
-    launchctl list | grep -q {{pin_label}} && echo "agent pin   (15m) LOADED" || echo "agent pin   (15m) not loaded"
-    # Start-at-reboot for the WEB APP itself (`just boot on|off`) — a different agent from scan/pin.
-    if launchctl print "gui/$(id -u)/{{boot_label}}" >/dev/null 2>&1; then
-      echo "boot at reboot    ON  (just boot off to disable)"
-    elif [ -f "{{boot_plist}}" ]; then
-      echo "boot at reboot    plist present but NOT loaded — re-run: just boot on"
-    else
-      echo "boot at reboot    OFF (just boot on to enable)"
-    fi
-    if [ "$be_up" = 0 ]; then
-      printf '\n'
-      # Plain rules, not a boxed frame: ports vary in width and a frame that has to be padded around
-      # them drifts out of alignment. The message has to survive being read at 4am.
-      printf '  ============================================================================\n'
-      printf '   ***  BACKEND :%s IS DOWN — THE APP IS NOT RUNNING.  ***\n' "{{be_port}}"
-      printf '   A live web app on :%s does NOT mean the app works. Vite serves pages fine\n' "$p"
-      printf '   with a dead backend — it did exactly that for 6h on 2026-07-15 after an OOM,\n'
-      printf '   because `tsx watch` restarts on file change and NEVER on crash.\n'
-      printf '  ============================================================================\n\n'
-      # Name the cause if it is the known one. A V8 OOM abort appears ONLY here — it runs no JS, so
-      # log.log / error.err are structurally silent about it (memory.mdx P-32).
-      if [ -f "{{log}}" ] && grep -qE 'FATAL ERROR|JavaScript heap out of memory' "{{log}}" 2>/dev/null; then
-        printf '  Cause found in {{log}} — the backend ran OUT OF HEAP:\n'
-        grep -hE 'FATAL ERROR|JavaScript heap out of memory' "{{log}}" | tail -3 | sed 's/^/    /'
-        printf '\n  Heap pressure before the abort (transactions.log / error.err):\n'
-        grep -hE 'HEAP PRESSURE|heap_pressure|\[HEARTBEAT\]' "{{state_dir}}/error.err" "{{txn_log}}" 2>/dev/null | tail -3 | sed 's/^/    /'
-        printf '\n'
-      fi
-      printf '  Next:  just run          (start it)\n'
-      printf '         just txlog        (the work ledger — what it was doing when it stopped)\n'
-      printf '         just logs         (the launcher catch-all — whether the PROCESS died)\n\n'
-      exit 1
-    fi
+    @node "{{dev}}" status
 
-# Auto-start at reboot: `just boot on` | `just boot off` | `just boot status`
-#
-# `on` writes a launchd LaunchAgent to ~/Library/LaunchAgents/{{boot_label}}.plist and bootstraps it
-# into your GUI session, so every time you log in after a reboot launchd runs `just run` here and the
-# web app comes up on :{{fe_port}} (API :{{be_port}}) by itself. It also starts it immediately
-# (RunAtLoad), so you do not have to reboot to see whether it works.
-#
-# `off` boots the agent out of launchd and deletes the plist — nothing starts at reboot any more. It
-# does NOT stop a web app that is already running; use `just stop` for that.
-#
-# Notes:
-#  * This is a LaunchAgent (per-user), so it starts at LOGIN, not at the login window. That is what we
-#    want: it runs as you, with your files, your ~/T state root, and your IPFS repo.
-#  * `just run` backgrounds `pnpm dev` and returns, so the agent is one-shot: KeepAlive is off and
-#    AbandonProcessGroup is on, so launchd leaves the dev servers alive after the launcher exits. If the
-#    backend dies later launchd will NOT restart it — `just status` is what tells you (backend_down).
-#  * `just run` depends on `setup` (pnpm install) and `stop`, so a boot start is also a clean restart.
-#  * Launcher stdout/stderr go through scripts/log_rotate_pipe.mjs into {{boot_out_log}} /
-#    {{boot_err_log}} (5 MiB × 5, same policy as every other log) — read those if a reboot start fails.
-#  * This is INDEPENDENT of `just install-agents` (the 4h scan / 15m pin workers). Turning boot on does
-#    not install those, and uninstalling those does not turn boot off.
+# Where every path resolved on THIS machine (state root, logs, port/pid files, ports).
+paths:
+    @node "{{dev}}" paths
 
-# Auto-start the web app at every reboot: `just boot on` | `just boot off` | `just boot status`.
+# `on` registers a login job with whatever this OS uses — a launchd LaunchAgent, a Task Scheduler task
+# with a logon trigger, or a systemd user unit — and starts it immediately, so you do not have to reboot
+# to find out whether it works. It runs `node scripts/dev/dev.mjs boot-run`: `pnpm install`, then the same
+# background start as `just run`. `off` removes the registration; it does NOT stop a running app (that is
+# `just stop`).
+#
+# This is INDEPENDENT of `just install-agents` (the scan/pin/device workers). Turning boot on does not
+# install those, and uninstalling those does not turn boot off.
+#
+# Auto-start the web app at every login: `just boot on` | `just boot off` | `just boot status`.
 boot mode="status":
-    #!/usr/bin/env bash
-    set -euo pipefail
-
-    label="{{boot_label}}"
-    plist="{{boot_plist}}"
-    domain="gui/$(id -u)"
-
-    case "{{mode}}" in
-    on)
-        mkdir -p "$(dirname "$plist")" "{{state_dir}}"
-
-        # Remove any previous copy first so `on` is idempotent (re-run it after changing ports or
-        # moving the repo and it simply re-registers against the new paths).
-        launchctl bootout "$domain/$label" 2>/dev/null || true
-
-        cat >"$plist" <<PLIST
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-      "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <!--
-      Large File Bridge — auto-start the web app at login/reboot.
-      GENERATED by \`just boot on\` in {{justfile_directory()}} — do not hand-edit.
-      Remove with: just boot off
-    -->
-    <plist version="1.0">
-    <dict>
-        <key>Label</key>
-        <string>$label</string>
-
-        <!-- Run the same \`just run\` a human would. Wrapped in bash -c so stdout/stderr can be piped
-             through the rotating log sink (process substitution, so \`exec\` preserves just's exit
-             code for launchctl). -->
-        <key>ProgramArguments</key>
-        <array>
-            <string>/bin/bash</string>
-            <string>-c</string>
-            <string>cd "{{justfile_directory()}}" &amp;&amp; exec {{brew_just}} run &gt; &gt;(exec {{brew_node}} "{{logpipe}}" "{{boot_out_log}}") 2&gt; &gt;(exec {{brew_node}} "{{logpipe}}" "{{boot_err_log}}")</string>
-        </array>
-
-        <key>WorkingDirectory</key>
-        <string>{{justfile_directory()}}</string>
-
-        <!-- launchd starts with a bare PATH; give it Homebrew (just, node, pnpm, ipfs, ffmpeg). -->
-        <key>EnvironmentVariables</key>
-        <dict>
-            <key>PATH</key>
-            <string>/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
-        </dict>
-
-        <!-- The whole point: start at login, i.e. after every reboot. -->
-        <key>RunAtLoad</key>
-        <true/>
-
-        <!-- \`just run\` backgrounds the dev servers and returns; do not treat that as a crash, and do
-             not kill the surviving children when the launcher exits. -->
-        <key>KeepAlive</key>
-        <false/>
-        <key>AbandonProcessGroup</key>
-        <true/>
-    </dict>
-    </plist>
-    PLIST
-
-        plutil -lint "$plist" >/dev/null
-
-        launchctl bootstrap "$domain" "$plist"
-        printf '\n✓ Start-at-reboot ENABLED for the Large File Bridge web app.\n\n'
-        printf '  Agent  → %s\n' "$label"
-        printf '  Plist  → %s\n' "$plist"
-        printf '  Starts → just run   (web app :{{fe_port}}, API :{{be_port}})\n'
-        printf '  Logs   → %s\n' "{{boot_out_log}}"
-        printf '           %s\n' "{{boot_err_log}}"
-        printf '\n  It is starting now too — check with: just status\n'
-        printf '  Turn it back off with: just boot off\n\n'
-        ;;
-    off)
-        launchctl bootout "$domain/$label" 2>/dev/null || true
-        rm -f "$plist"
-        printf '\n✓ Start-at-reboot DISABLED. The web app will NOT start at reboot.\n'
-        printf '  (Anything already running is untouched — stop it with: just stop)\n\n'
-        ;;
-    status)
-        if launchctl print "$domain/$label" >/dev/null 2>&1; then
-            echo "  boot-at-reboot — ON  (agent $label loaded, plist $plist)"
-        elif [ -f "$plist" ]; then
-            echo "  boot-at-reboot — plist present but NOT loaded; re-run: just boot on"
-        else
-            echo "  boot-at-reboot — OFF"
-        fi
-        ;;
-    *)
-        echo "Usage: just boot [on|off|status]" >&2
-        exit 1
-        ;;
-    esac
+    @node "{{dev}}" boot {{mode}}
 
 # One-shot discovery scan (no waiting for the 4h agent) — same code path the agent runs.
 scan: setup
-    cd {{code}}/packages/backend && pnpm cli scan
+    pnpm -C "{{code}}/packages/backend" cli scan
 
 # One-shot IPFS pin/add (no waiting for the 15m agent) — same code path the agent runs.
 pin: setup
-    cd {{code}}/packages/backend && pnpm cli pin
+    pnpm -C "{{code}}/packages/backend" cli pin
 
-# Install + enable both launchd agents (scan 4h, pin 15m).
+# Install + enable both background agents (scan 4h, pin 15m) with this OS's scheduler.
 install-agents: setup
-    cd {{code}}/packages/backend && pnpm cli install-agent scan && pnpm cli install-agent pin
+    pnpm -C "{{code}}/packages/backend" cli install-agent scan
+    pnpm -C "{{code}}/packages/backend" cli install-agent pin
 
 uninstall-agents:
-    cd {{code}}/packages/backend && pnpm cli uninstall-agent scan && pnpm cli uninstall-agent pin
+    pnpm -C "{{code}}/packages/backend" cli uninstall-agent scan
+    pnpm -C "{{code}}/packages/backend" cli uninstall-agent pin
 
-# Remove installed deps and background run state (node_modules + pid/port scratch + launcher log).
 # Re-run `just setup` after. Leaves the app's own log.log / error.err in the state dir intact.
-clean: stop
-    -@rm -f {{log}} {{pidfile}} {{portfile}}
-    rm -rf {{code}}/node_modules {{code}}/packages/*/node_modules
-    @echo "Cleaned. Run 'just setup' to reinstall."
+#
+# Remove installed deps and background run state (node_modules + pid/port scratch + launcher log).
+clean:
+    @node "{{dev}}" clean

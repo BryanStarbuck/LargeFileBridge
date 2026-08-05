@@ -365,8 +365,9 @@ This is the same failure class as a dead launchd trigger — **F1** in
 it is perfectly silent."* The doctrine there is already the right one; it simply was never applied to the
 API server itself.
 
-The dev launcher that starts `pnpm dev` under `nohup` with no restart-on-exit is in:
-`~/BGit/Bryan_git/LargeFileBridge/justfile` — the `run` recipe (~line 96, `nohup pnpm dev > >(exec node "{{logpipe}}" "{{log}}") 2>&1 &`)
+The dev launcher that starts `pnpm dev` detached with no restart-on-exit is in:
+`~/BGit/Bryan_git/LargeFileBridge/scripts/dev/launch.mjs` — the supervisor that spawns `pnpm dev` and
+pipes it into the rotating sink (`app.on("exit")` just records the exit and stops)
 
 ### 6.2 The fix, in both modes
 
@@ -378,8 +379,9 @@ The dev launcher that starts `pnpm dev` under `nohup` with no restart-on-exit is
   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/installer.ts` — the plist render + `bootout` / `bootstrap` reload
 * **Dev mode → a supervisor loop in the launcher.** `just run` wraps `pnpm dev` in a **restart-on-exit**
   loop: when the child exits for **any** reason other than a `just stop`-initiated signal, log the exit code
-  and relaunch. The loop lives in the `justfile` `run` recipe alongside the existing rotating-log sink, so
-  the pid/port discipline `stop` depends on is preserved.
+  and relaunch. The loop belongs in the launcher process, which already owns the child and the rotating-log
+  sink, so the pid/port discipline `stop` depends on is preserved:
+  `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/launch.mjs` — the `app.on("exit")` handler.
 * **Backoff (LOCKED).** Restarts back off — **1s, 2s, 4s, 8s, 16s, capped at 60s** — resetting the delay
   after the child has stayed up for **≥ 60s**. A process that dies instantly on boot must **not** spin: a
   crash loop that pegs a core and floods `launcher.log` is a second incident on top of the first. After
@@ -412,7 +414,7 @@ The rules:
 * **`just status` must not lead with the web port.** Today it prints the web app's port first and the
   backend second, which invites reading the first line and stopping. The backend line is the **authority**;
   the recipe reports an overall verdict driven by :8787.
-  `~/BGit/Bryan_git/LargeFileBridge/justfile` — the `status` recipe (~line 166; `lsof -ti tcp:{{be_port}}` is the load-bearing check)
+  `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/dev.mjs` — `cmdStatus()` (the backend health probe is the load-bearing check; the port lookup behind it is `proc.mjs` `isListening` / `pidsOnPort`, which answer on all three platforms)
 * **Listening is not healthy.** The probe is an **HTTP request to the health endpoint**, not a port check. A
   process wedged behind a blocked event loop still holds its port open — exactly the failure
   [processing.mdx §4.4](./processing.mdx#44-performance-at-scale--thousands-of-items-without-a-slow-page-locked)

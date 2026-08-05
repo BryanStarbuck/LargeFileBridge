@@ -41,7 +41,7 @@ prefix:
 | **Rolling logger** | singleton `AppLogger` → `log.log` + `error.err`, 5 MiB × 5 backups, mirrors WARN+ into both | same |
 | **Zod-validated `config.yaml`** | PM-editable content validated fail-fast at boot | same |
 | **`left_bar.yaml` imported raw** | frontend `import …/pm/left_bar.yaml?raw`, Zod-validated, no code copy | same (Vite `server.fs.allow` grants repo-root read) |
-| **`justfile` runner** | `setup / build / run / stop / logs / status`, nohup + pidfile, waits on ports | same, plus `install-agents` for the two launchd plists |
+| **`justfile` runner** | `setup / build / run / stop / logs / status`, nohup + pidfile, waits on ports | same, plus `install-agents` for the two launchd plists — but the recipes are **portable** (macOS/Linux/Windows): the work lives in `scripts/dev/*.mjs`, not in bash |
 | **Secrets out-of-repo** | `~/.credentials/<app>.json`, env wins | `~/.credentials/large_files_bridge.json`, `LFB_CREDENTIALS_FILE`, env wins |
 
 **Where we deliberately differ from the sisters:** (1) LFB has **two computer-wide pin units** and a
@@ -77,8 +77,17 @@ code/
 │   │   └── src/ …               # (§3)
 │   └── frontend/                # @lfb/frontend — React/Vite SPA
 │       └── src/ …               # (§9)
-└── justfile is at repo root (../justfile), sister-style
+└── justfile is at repo root (../justfile), sister-style — with scripts/dev/*.mjs beside it, where the
+    runner's platform-specific work (ports, process trees, login autostart) actually lives
 ```
+
+**The task runner runs on macOS, Linux AND Windows.** Every recipe is one portable command line
+(`node`, `pnpm`, `just`) and nothing else: no `cd`, no `lsof`/`pgrep`/`launchctl`, no shebang recipes, and
+no comment lines inside a recipe body (`just` hands those to the shell, and `#` is an unknown command to
+`cmd.exe`). What each recipe calls is in code: `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/dev.mjs` —
+`cmdRun` / `cmdStop` / `cmdStatus` / `cmdLogs` / `cmdClean`, over `proc.mjs` (ports and process trees per
+OS), `launch.mjs` (the detached launcher that pipes the dev tree through the rotating log sink) and
+`boot.mjs` (login autostart: launchd / Task Scheduler / systemd user unit).
 
 Ports (from [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
 the **web app** — the browser-facing page server — **always defaults to :2222** (Vite). The backend
@@ -96,7 +105,12 @@ binds (`packages/frontend/scripts/web-port.mjs`, called from `vite.config.ts`):
 3. **:2222 is held by a FOREIGN process** → do **not** disturb it; **increment by one** (2223,
    2224, …) until we find a free-or-ours port, and **report the chosen port to the user**.
 
-The resolved port is written to `/tmp/lfb.web.port` for tooling (`justfile`), and `strictPort` is set
+The resolved port is written to the runtime scratch dir for tooling (the task runner, `lfb status`) —
+`/tmp/lfb.web.port` on macOS and Linux, `%TEMP%\lfb.web.port` on Windows, which has no `/tmp` (Node reads
+a literal `/tmp` there as `<drive>:\tmp`, a directory that does not exist, so the handoff would be written
+where no reader looks). Resolved in `scripts/dev/paths.mjs` — `runtimeDir()`, mirrored by hand in the
+writer (`packages/frontend/scripts/web-port.mjs` — `PORT_FILE`) and in `cli/code/src/main.ts` —
+`webPortFile()`. `strictPort` is set
 because the port is already decided. Backend CORS accepts any localhost origin in `mode: local` so a
 collision-moved web port still reaches the API; `mode: server` fails closed to `server.cors_origins`.
 
