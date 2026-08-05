@@ -200,6 +200,83 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
   });
 });
 
+describe("the quiet gate — a repo's scan heartbeat never becomes a commit (§6.6)", () => {
+  // The mirrored per-repo tracking payload every company/Personal SDL carries (storage_company.mdx §8.4.1).
+  const MIRROR = "repos/eb94a756b52e/repo_storage.yaml";
+  const REPO_STORAGE = {
+    repo_storage: {
+      schema_version: 1,
+      name: "",
+      counts: { videos: 3, images: 0, large: 3 },
+      policy: { recommend_compress: true, recommend_ipfs_pin: true, recommend_transcribe: false },
+      last_scan: { at: "2026-08-04T02:32:31.463Z", headless: true, on_device: "bryanstarbuck-macbook-pro" },
+    },
+  };
+
+  /** An SDL that already carries a committed mirror of one repo's tracking state. */
+  function repoWithMirror(): string {
+    const dir = repoWithDevice(DEVICE);
+    fs.mkdirSync(path.join(dir, path.dirname(MIRROR)), { recursive: true });
+    fs.writeFileSync(path.join(dir, MIRROR), YAML.stringify(REPO_STORAGE));
+    git(dir, "add", "-A");
+    git(dir, "commit", "-qm", "seed mirror");
+    return dir;
+  }
+
+  /** Rewrite the mirror the way a scan pass does, then run the real commit path. */
+  async function rescan(dir: string, mutate: (doc: any) => void): Promise<void> {
+    const file = path.join(dir, MIRROR);
+    const doc = YAML.parse(fs.readFileSync(file, "utf8"));
+    mutate(doc);
+    fs.writeFileSync(file, YAML.stringify(doc));
+    const backbone = await GitBackbone.resolve("test-storage", dir);
+    await backbone!.commitAndPush({} as never);
+  }
+
+  it("makes NO commit when only the scan stamp moved", async () => {
+    const dir = repoWithMirror();
+    await settleSetup(dir);
+    const before = commitCount(dir);
+    await rescan(dir, (d) => (d.repo_storage.last_scan.at = "2026-08-04T08:40:32.287Z"));
+    expect(commitCount(dir)).toBe(before);
+    expect(git(dir, "status", "--porcelain").trim()).toBe("");
+  });
+
+  it("makes NO commit when another computer took the pass", async () => {
+    // The live shape: `at`, `headless` and `on_device` all move together as a different machine (or the
+    // background worker) runs the scan. Suppressing the timestamp alone would have left this untouched.
+    const dir = repoWithMirror();
+    await settleSetup(dir);
+    const before = commitCount(dir);
+    await rescan(dir, (d) => {
+      d.repo_storage.last_scan = { at: "2026-08-04T12:46:41.229Z", headless: false, on_device: "bryan-mac-pro" };
+    });
+    expect(commitCount(dir)).toBe(before);
+  });
+
+  it("makes NO commit when a peer's scrub blanks the block back to its default", async () => {
+    // `mirrorToSyncRepo` holds `last_scan` at the schema default; a machine on an older build re-stamps the
+    // real value. Without the gate the two ping-pong a commit per cycle until the whole fleet upgrades.
+    const dir = repoWithMirror();
+    await settleSetup(dir);
+    const before = commitCount(dir);
+    await rescan(dir, (d) => (d.repo_storage.last_scan = { on_device: "", headless: false }));
+    expect(commitCount(dir)).toBe(before);
+  });
+
+  it("DOES commit when the repo's real tracking state changes", async () => {
+    const dir = repoWithMirror();
+    await settleSetup(dir);
+    const before = commitCount(dir);
+    await rescan(dir, (d) => {
+      d.repo_storage.counts.videos = 4;
+      d.repo_storage.last_scan.at = "2026-08-04T09:00:00.000Z"; // rides along, as it should
+    });
+    expect(commitCount(dir)).toBe(before + 1);
+    expect(git(dir, "show", "HEAD")).toMatch(/2026-08-04T09:00:00\.000Z/);
+  });
+});
+
 describe("volatileYamlPathsFor — what is allowed to move on its own", () => {
   it("knows a device file republishes its network addresses", () => {
     expect(volatileYamlPathsFor("devices/bryan-mac-pro.yaml")).toEqual([
@@ -207,6 +284,11 @@ describe("volatileYamlPathsFor — what is allowed to move on its own", () => {
       "device.hardware.ip_addresses",
     ]);
     expect(volatileYamlPathsFor(".lfbridge/devices/bryan-mac-pro.yaml")).toHaveLength(2);
+  });
+
+  it("knows a repo's tracking state re-stamps its scan heartbeat", () => {
+    expect(volatileYamlPathsFor("repos/eb94a756b52e/repo_storage.yaml")).toEqual(["repo_storage.last_scan"]);
+    expect(volatileYamlPathsFor(".lfbridge/repo_storage.yaml")).toEqual(["repo_storage.last_scan"]);
   });
 
   it("gives every other LFB-owned YAML the timestamp-only surface", () => {

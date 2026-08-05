@@ -1178,6 +1178,15 @@ export function volatileYamlPathsFor(relPath: string): string[] | null {
   if (p.startsWith("devices/") || p.includes("/devices/")) {
     return ["device.hardware.primary_ip", "device.hardware.ip_addresses"];
   }
+  // `repo_storage.yaml`'s `last_scan` block is a SCAN HEARTBEAT — `at` re-stamps on every pass, and
+  // `on_device`/`headless` move with it whenever a different computer (or the background worker) took that
+  // pass. Nothing the user did produces any of it. `mirrorToSyncRepo` scrubs the block at the writer
+  // (tracking-sync.service.ts), but a writer-side fix only holds for a machine on THIS build: a peer on an
+  // older one re-stamps the real value, the scrub blanks it again, and the two ping-pong one commit per
+  // cycle forever. Measured on the live company repo: whole "LFB: tracking" commits whose entire diff is
+  // this block across a handful of repos. The whole subtree is listed, not just `at` — suppressing the
+  // timestamp while `on_device` still voted would leave the churn exactly as it was.
+  if (isRepoStorageYamlPath(p)) return ["repo_storage.last_scan"];
   // Every other LFB-owned YAML: `updated_at` alone is the whole volatile surface.
   if (isLfbOwnedSdlPath(p)) return [];
   return null;

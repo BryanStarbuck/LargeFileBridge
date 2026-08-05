@@ -671,6 +671,21 @@ Declaring the device file's volatile network fields is done in code:
 Refusing a commit whose whole diff is volatile is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` immediately after `git add -A`, with the per-document volatile registry in `volatileYamlPathsFor()`.
 
+**The "last checked" marker of §6.6.1 is `repo_storage.last_scan`**, and it is the volatile field with the
+widest blast radius: every company/Personal SDL mirrors one `repos/<repoUid>/repo_storage.yaml` per tracked
+repo, so a fleet of a hundred repos re-stamps a hundred files whenever a pass runs. The whole `last_scan`
+block is volatile, not only its `at` — `on_device` and `headless` move with it every time a different
+computer, or the background worker, takes the pass, so suppressing the timestamp alone would leave the churn
+untouched. Both layers cover it, and layer 2 is the one that must hold: the writer-side scrub only runs on a
+machine carrying that build, so a peer on an older one re-stamps the real value, the scrub blanks it again,
+and the two ping-pong one commit per cycle until the whole fleet upgrades (§6.6.4).
+
+Scrubbing the scan heartbeat out of the mirrored copy is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `scrubVolatileRepoStorage()`, called from `mirrorToSyncRepo()`; the receive side restores this machine's own stamp in `reconcileFromSyncRepo()` so a pull never blanks it and re-triggers a stale-scan re-scan.
+
+Refusing a commit whose whole diff is the scan heartbeat is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `volatileYamlPathsFor()`, returning `["repo_storage.last_scan"]` for any `repo_storage.yaml` path (`isRepoStorageYamlPath()`, which matches the current `repos/<repoUid>/` mirror and the legacy `.lfbridge/` shape alike).
+
 #### 6.6.3 Policing it — quiet is a health property, so measure it
 
 Quiet is **easy to lose and silent when lost**: nothing breaks, no error is raised, and the only symptom is
