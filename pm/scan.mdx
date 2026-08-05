@@ -138,13 +138,46 @@ tracking and the File System tree without waiting up to four hours for the next 
 > 4-hour scheduled discovery pass (§2) exists to backfill.
 
 **Which OS API.** One cross-platform Node/TS watcher, the same everywhere; only the kernel notification
-source underneath differs per OS (Node's `fs.watch({ recursive: true })` binds to each natively):
+source underneath differs per OS — and, crucially, so does **what a "recursive" watch costs**:
 
-| OS | Native change-notification source |
-| --- | --- |
-| **macOS** (primary) | **FSEvents** |
-| **Linux** | **inotify** |
-| **Windows** | **ReadDirectoryChangesW** |
+| OS | Native change-notification source | Cost of watching a tree | How we bind |
+| --- | --- | --- | --- |
+| **macOS** (primary) | **FSEvents** | **one** stream per subtree | `fs.watch({ recursive: true })` per root |
+| **Windows** | **ReadDirectoryChangesW** | **one** handle per subtree | `fs.watch({ recursive: true })` per root |
+| **Linux** | **inotify** | **one watch per DIRECTORY** — inotify has no recursive mode, so Node emulates it by binding every directory it walks | our own **pruned** per-directory watch set |
+
+**We watch only what we would scan (LOCKED).** On macOS and Windows the kernel covers a whole subtree
+with a single object, so one handle per root is right. On **Linux** it is not: `recursive: true` binds an
+inotify watch to **every** directory under the root — `node_modules`, `.git/objects/**`, `dist/`,
+`.venv/` included — and inotify watches are capped **per user** (`fs.inotify.max_user_watches`) and
+shared with every other program on the machine. Over one 188-repo scanner root that is **104,188**
+directories; the watcher hit `ENOSPC: System limit for number of file watchers reached` and from that
+point on **silently stopped seeing** the adds and deletes it exists to catch (observed 2026-08-04).
+
+Filtering an event **after** it arrives saves the rescan but never the watch. So on Linux we walk the
+tree ourselves and bind one **non-recursive** watch per **surviving** directory, pruning **before** we
+bind: every **`HARD_SKIP`** directory (§4.3), every macOS bundle, and everything matching
+`scanner.ignore_globs` — the scan's own prune set. A skipped subtree then costs **zero** kernel watches.
+The same 188-repo root drops to **~30,000** — a **71%** cut — and the directories we dropped are exactly
+the ones whose events we were throwing away anyway. New directories are picked up as they appear (a
+freshly installed `node_modules` is refused there too), and a deleted directory hands its watches back.
+
+**No silent caps.** `watcher.max_watched_dirs` (§5, default **50,000**) bounds a pathological tree so it
+cannot exhaust the machine's watches for everything else. Reaching it — or the OS refusing another watch
+— is **logged once with the fix** and shown on the Scans page as a warning; the 4-hour discovery pass
+still covers the folders past the limit. It is never quietly partial. The cap is a **ceiling, not a
+latch**: watches handed back by a deleted tree are usable again, so the next folder to appear is watched
+without waiting for a restart. The OS refusing a watch (`ENOSPC`) **is** sticky — until the user raises
+the limit, every further request fails identically and re-asking only reprints the same failure.
+
+**A folder MOVED IN reports what it brought.** Renaming a directory into a scanner root
+(`mv ~/Downloads/shoot ~/Media/`) is **one** kernel event, for the directory alone — the files inside it
+are never reported, because they never individually appeared. So when the watcher extends into a
+newly-appeared directory it **announces the files it finds** on the way, exactly as if each had been
+added. Without that, a folder of videos dropped into a root sits unnoticed until the 4-hour pass, which
+is precisely the wait this watcher exists to remove. (It also closes the gap between a `mkdir` and the
+watch being bound to it, during which a file written inside produces no event of its own.) The initial
+boot walk deliberately announces **nothing** — those files are not news.
 
 **We react to ADD and DELETE — never to "modified" (LOCKED).** The user's contract is explicit: *"when
 files are added or deleted … we don't care about modified."* So the watcher acts **only** on a file
@@ -169,7 +202,13 @@ A change is **qualifying** when the path is a **media file (video/image/audio)**
 or over the big threshold**. Non-media, non-big noise (a `.ts` source file, a `.log`) is dropped so the
 watcher stays quiet on ordinary editing. Paths under any **`HARD_SKIP`** directory (§4.3) or matching
 `scanner.ignore_globs` are ignored before either test — we never wake on `node_modules`/`build`/`.git`
-churn.
+churn (on Linux they were never watched at all — see "We watch only what we would scan" above).
+
+Three more classes of path are **never** a reason to wake, because each is machinery churning its own
+scratch files every few seconds and none of it is ever payload: in-flight **downloader temps**
+(§4.3.1), live **embedded-database working files** (Badger/LevelDB/SQLite), and **our own IPFS fetch
+temp** `<name>.lfb-fetch-<pid>-<ms>.tmp` — the full-size file `fetchToPath()` writes before renaming it
+into place, which otherwise made every file the pin process pulled down queue a whole-tree rescan.
 
 **Debounce + coalesce.** Editors and tools emit **bursts** (a save writes a temp file, renames it,
 deletes the temp). The watcher collects raw events into a pending set and **debounces** (default
@@ -195,8 +234,14 @@ tree will update."*
 **no** IPFS. It is fully inside the [only-our-content](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
 posture.
 
-Registering the recursive OS watcher over the scanner roots, filtering to qualifying add/delete events, debouncing bursts, and kicking the coalesced discovery worker happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `onFsEvent()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`, then `startScan("manual")`)
+Registering the OS watcher over the scanner roots, filtering to qualifying add/delete events, debouncing bursts, and kicking the coalesced discovery worker happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `bindNative()` / `bindPruned()` → `onChange()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`, then `startScan("manual")`)
+
+Deciding which directories may hold a kernel watch, and binding the pruned per-directory watch set on the platforms where recursion costs one watch per directory, happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — `makeWatchFilter()` (the `HARD_SKIP` + macOS-bundle + `scanner.ignore_globs` prune predicate) and `watchTreePruned()` → class `PrunedTreeWatch` (`bindTree()` / `bind()` / `onRaw()` / `releaseSubtree()`)
+
+Extending into a directory that appears later and announcing the files it brought with it, and treating the watch cap as a re-openable ceiling while `ENOSPC` stays sticky, happen in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — class `PrunedTreeWatch` — `onRaw()` → `bindTree(from, announceFiles)` and `bind()`
 
 Starting the watcher when the backend boots and stopping it on shutdown is wired in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `main()` (calls `startWatcher()` after `app.listen`; `stopWatcher()` on `SIGINT`/`SIGTERM`)
@@ -690,6 +735,7 @@ scan_process:
 watcher:
   enabled: true               # subscribe to OS file-change events over scanner.roots while the app runs
   debounce_ms: 1500           # quiet-period before a settled burst kicks a coalesced discovery rescan
+  max_watched_dirs: 50000     # ceiling on kernel watches per root where recursion costs one per directory
 ```
 
 The existing `scanner:` block (roots / ignore_globs / follow_symlinks) stays where it is in

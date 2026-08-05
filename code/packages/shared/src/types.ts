@@ -837,6 +837,13 @@ export interface WatcherState {
   watching: boolean;
   roots: string[];
   pending: number;
+  // How the OS watch is bound. "native" = one recursive handle per root (macOS FSEvents / Windows
+  // ReadDirectoryChangesW cover a whole subtree in the kernel). "pruned" = one watch per directory with
+  // node_modules/.git/build and the scan ignore list skipped BEFORE binding — the only affordable shape
+  // on Linux, where "recursive" means one inotify watch per directory (scan.mdx §2.2).
+  mode: "native" | "pruned";
+  watchedDirs: number; // directories individually bound; 0 in "native" mode
+  truncated: boolean; // binding stopped early — watch cap reached, or the OS refused another watch
 }
 
 // A storage backbone whose git push keeps being REJECTED — i.e. this computer's tracking state is sitting

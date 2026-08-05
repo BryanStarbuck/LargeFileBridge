@@ -351,6 +351,12 @@ export const AppConfigSchema = z.object({
     .object({
       enabled: z.boolean().default(true), // subscribe to file-change events while the app runs
       debounce_ms: z.number().default(1500), // quiet-period before a settled burst triggers a rescan
+      // Ceiling on kernel watches per root where a recursive watch costs one per DIRECTORY (Linux
+      // inotify). Pruning node_modules/.git/build takes a 188-repo root from ~104k directories to ~30k,
+      // so this sits well above real trees and exists only to keep a pathological one from exhausting
+      // `fs.inotify.max_user_watches` for every other program on the machine. Hitting it is logged and
+      // surfaced on the Scans page — never silent — and the 4-hour discovery pass still covers the rest.
+      max_watched_dirs: z.number().default(50_000),
     })
     .prefault({}),
   // Security allow-list (security.mdx §2). Set once by the first-run Security Setup page, then read

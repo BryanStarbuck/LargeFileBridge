@@ -226,6 +226,7 @@ export function ScansPage() {
 function watcherHealth(s: WatcherState): Health {
   if (!s.enabled) return "warn";
   if (!s.watching) return "warn"; // enabled but nothing bound (no roots / all unwatchable)
+  if (s.truncated) return "warn"; // bound, but part of the tree is past the watch limit — say so
   return "ok";
 }
 
@@ -278,6 +279,23 @@ function WatcherCard({ state }: { state: WatcherState }) {
     >
       <div className="space-y-1">
         <div>{status}</div>
+        {state.watching && state.mode === "pruned" && (
+          <div className="text-xs text-black/45">
+            Listening to {state.watchedDirs.toLocaleString()}{" "}
+            {state.watchedDirs === 1 ? "folder" : "folders"} directly. Build and dependency folders (
+            <code>node_modules</code>, <code>.git</code>, <code>dist</code>, …) and anything your scan
+            ignore list covers are skipped, so they cost nothing.
+            {state.truncated && (
+              <>
+                {" "}
+                <strong>
+                  Some folders are past the live-watch limit — the Discovery pass above covers those
+                  instead.
+                </strong>
+              </>
+            )}
+          </div>
+        )}
         <div className="text-xs text-black/45">
           Not a scheduled job — it runs only while the web app is open, using your operating system's
           native file-change notifications. It reacts to files being <strong>added or deleted</strong>,

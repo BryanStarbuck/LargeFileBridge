@@ -112,19 +112,28 @@ export function isMediaFile(name: string): boolean {
 //   * yt-dlp per-format intermediates before the merge step: `<name>.f<format_id>.<ext>` where format_id
 //     is numeric (`.f137.mp4`) or protocol-tagged (`.fhls-662.mp4`, `.fdash-audio….m4a`, `.fhttp-720.mp4`).
 //   * ffmpeg fixup temps `<name>.temp.<ext>` and HLS fragment scratch `<name>.part-Frag12`.
+//   * OUR OWN IPFS fetch temp `<name>.lfb-fetch-<pid>-<ms>.tmp` (ipfs.service.ts `fetchToPath`), which
+//     is written full-size and then renamed into place. It is big by definition, so every file the pin
+//     process pulled down woke the watcher and queued a whole-tree rescan — LFB reacting to LFB.
 const TRANSIENT_DOWNLOAD_EXT = new Set([
   ".part", ".ytdl", ".crdownload", ".partial", ".opdownload", ".aria2",
 ]);
 const YTDLP_FORMAT_RE = /\.f(?:\d+|(?:hls|dash|http)[\w.-]*)\.[a-z0-9]+$/i;
 const TEMP_SUFFIX_RE = /\.temp\.[a-z0-9]+$/i;
 const PART_FRAG_RE = /\.part-frag\d+/i;
+const LFB_FETCH_TEMP_RE = /\.lfb-fetch-\d+-\d+\.tmp$/i;
 
 /** True when `name` is a transient in-flight download artifact (yt-dlp fragment, browser .part, ffmpeg
  *  fixup temp) — a file that exists only for the seconds a download is running. Skipped by the scan walk
  *  and by the watcher's qualifying test so a mid-download rescan can never index it as a row. */
 export function isTransientDownloadFile(name: string): boolean {
   if (TRANSIENT_DOWNLOAD_EXT.has(path.extname(name).toLowerCase())) return true;
-  return YTDLP_FORMAT_RE.test(name) || TEMP_SUFFIX_RE.test(name) || PART_FRAG_RE.test(name);
+  return (
+    YTDLP_FORMAT_RE.test(name) ||
+    TEMP_SUFFIX_RE.test(name) ||
+    PART_FRAG_RE.test(name) ||
+    LFB_FETCH_TEMP_RE.test(name)
+  );
 }
 
 // Live database working files — the on-disk internals of an embedded database engine that a RUNNING

@@ -398,7 +398,12 @@ async function main(): Promise<void> {
   // scanner roots and, on a qualifying add/delete of a big or video/image/audio file, kick a coalesced
   // discovery rescan so tracking + the File System tree refresh in seconds. It lives WITH this process
   // — no scheduler — so release it cleanly on shutdown.
-  startWatcher();
+  // Binds in the BACKGROUND — a big tree's initial walk must not delay boot. Not awaiting it means its
+  // rejection has nobody to hand it to, and our unhandledRejection handler is registered at the END of
+  // this function: a bind that failed here would either take the process down or, later, be filed as a
+  // process fatal. It is neither. The watcher is best-effort by contract — the 4-hour discovery pass
+  // covers everything it misses — so a failure to start is a warning and the app comes up regardless.
+  startWatcher().catch((e) => log.warn("watcher", `could not start the watcher: ${(e as Error).message}`));
 
   // RESTORE THE BACKLOG the previous session left behind (crash_recovery.mdx §4). This is the line that
   // makes "I queued 1,440 files and walked away" a promise we can keep: the journal is folded, tasks that

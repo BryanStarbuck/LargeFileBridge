@@ -31,6 +31,15 @@ describe("isTransientDownloadFile", () => {
     expect(isTransientDownloadFile("movie.mp4.part-Frag12")).toBe(true);
   });
 
+  it("matches our OWN IPFS fetch temp — LFB must not wake the watcher on LFB", () => {
+    // ipfs.service.ts writes `${dest}.lfb-fetch-${pid}-${Date.now()}.tmp` then renames it into place.
+    // It is full-size, so every pinned file we pulled down passed the big-threshold test and queued a
+    // whole-tree rescan (observed in the 2026-08-04 log alongside the ENOSPC storm).
+    expect(isTransientDownloadFile("Exporting Your Final Video.mp4.lfb-fetch-736625-1785836655156.tmp")).toBe(true);
+    expect(isTransientDownloadFile("27k_data.csv.lfb-fetch-1-2.tmp")).toBe(true);
+    expect(isTransientDownloadFile("notes.lfb-fetch-abc.tmp")).toBe(false); // not our shape
+  });
+
   it("never matches real media files", () => {
     // The final merged file the download produced — must stay a candidate.
     expect(isTransientDownloadFile("2079684519762993659.mp4")).toBe(false);
