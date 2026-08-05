@@ -139,23 +139,83 @@ function checkTools() {
   }
 }
 
+/** Where the auth lib's own pnpm workspace lives — the root its `link:` targets are packages of. */
+const authLibCode = path.join(authLib, "code");
+
+/**
+ * Is OpenAuthFederated a REAL checkout — as in, are its two packages actually packages?
+ *
+ * The test is the MANIFEST, not the directory. `fs.existsSync(<dir>)` was the whole of this check until
+ * 2026-08-05, and an EMPTY `auth-backend/` passes it: the directory a `link:` points at survives its
+ * contents being removed, so a wiped checkout reads as present and `just setup` says "Setup complete."
+ * over a link that resolves to nothing. Reading `package.json` tells those two states apart.
+ */
+function authLibPackages() {
+  return ["auth-backend", "auth-react"].map((name) => ({
+    name,
+    dir: path.join(authLibCode, "packages", name),
+    manifest: fs.existsSync(path.join(authLibCode, "packages", name, "package.json")),
+  }));
+}
+
 /** Both packages consume OpenAuthFederated via `link:` deps; `pnpm install` dies outright if it is absent. */
 function checkAuthLib() {
-  const has = (p) => fs.existsSync(path.join(authLib, "code", "packages", p));
-  if (has("auth-backend") && has("auth-react")) return;
+  const packages = authLibPackages();
+  if (packages.every((p) => p.manifest)) return;
+  const cloned = fs.existsSync(authLibCode);
   err("");
-  err("✗ OpenAuthFederated is not available locally.");
+  err(`✗ OpenAuthFederated is ${cloned ? "checked out but INCOMPLETE" : "not available locally"}.`);
   err("");
   err("  This app's authentication depends on it via link: deps:");
   err("      @auth/backend → code/packages/auth-backend");
   err("      @auth/react   → code/packages/auth-react");
   err(`  Expected location: ${authLib}`);
   err("");
-  err("  Clone it so the link: paths resolve, then re-run:");
-  err("");
-  err(`      git clone ${authRepo} "${authLib}"`);
+  if (cloned) {
+    err("  No package.json in:");
+    for (const p of packages.filter((x) => !x.manifest)) err(`      ${p.dir}`);
+    err("");
+    err("  Its working tree is missing files. Restore them there, then re-run:");
+    err("");
+    err(`      git -C "${authLib}" status`);
+    err(`      git -C "${authLib}" checkout -- code/packages`);
+  } else {
+    err("  Clone it so the link: paths resolve, then re-run:");
+    err("");
+    err(`      git clone ${authRepo} "${authLib}"`);
+  }
   err("");
   process.exitCode = 1;
+}
+
+/**
+ * Install and verify the auth lib's OWN dependency tree — the one `pnpm install` here never touches.
+ *
+ * A `link:` dependency is a link to a directory, not a copy of a package: nothing about installing THIS
+ * workspace installs THAT one. Node resolves `jose` from
+ * `OpenAuthFederated/code/packages/auth-backend/node_modules/`, so when the auth lib's own tree is missing
+ * the backend throws `Cannot find module 'jose'` at its first import — inside the detached launcher, before
+ * the logger exists, which is why log.log is empty in that state and only the launcher log has it.
+ *
+ * NOT fatal, deliberately, and the code says so as loudly as this comment: a sibling repo is not ours to
+ * guarantee, `just run` still has to start for anyone working on the frontend, and the app's own failure is
+ * now reported precisely when it happens (`reportDeadTree`). A MISSING auth lib is still a hard stop —
+ * that is `_check-auth-lib`, above, which runs before this.
+ */
+async function ensureAuthLib() {
+  if (!authLibPackages().every((p) => p.manifest)) {
+    checkAuthLib();
+    return 1;
+  }
+  const code = await ensureInstalled(authLibCode, { label: "auth lib (OpenAuthFederated/code)" });
+  if (code !== 0) {
+    err("");
+    err("  The web app's @auth/backend / @auth/react link: deps resolve THEIR imports from that tree, so");
+    err("  the backend will fail at its first import (Cannot find module 'jose') and never listen.");
+    err("  Starting anyway — the frontend works without it.");
+    err("");
+  }
+  return code;
 }
 
 /**
@@ -172,6 +232,9 @@ function checkAuthLib() {
 async function cmdInstall(args) {
   const cli = args.includes("--cli");
   const root = cli ? path.join(cliDir, "code") : codeDir;
+  // The auth lib first, and only for the web app: our `link:` deps point INTO it, so a tree that does not
+  // resolve there is a backend that does not boot here. Loud, never fatal — see ensureAuthLib.
+  if (!cli) await ensureAuthLib();
   const code = await ensureInstalled(root, {
     label: cli ? "CLI (cli/code)" : "web app (code)",
     beforeReinstall: cli ? undefined : () => cmdStop({ quiet: true }),
@@ -287,6 +350,7 @@ async function cmdBootRun() {
   // The same verified install `just setup` does — a login job is the LEAST watched place for a tree that
   // says it is installed and is not (deps.mjs). It still starts either way: a repair that could not run
   // unattended must not be the reason the app is missing at the desk in the morning.
+  await ensureAuthLib();
   const code = await ensureInstalled(codeDir, { label: "web app (code)" });
   if (code !== 0) err(`boot-run: install exited ${code} — starting anyway with whatever is installed.`);
   await cmdRun();

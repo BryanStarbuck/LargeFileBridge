@@ -28,6 +28,7 @@
 // background launcher with a module-not-found stack trace nobody is watching.
 import fs from "node:fs";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 import { isWindows, runTool } from "./proc.mjs";
 
 const out = (s) => process.stdout.write(`${s}\n`);
@@ -127,6 +128,9 @@ export function describeProblems(problems, root) {
  * same tree discovered later costs a 30-second timeout against an app that was never going to start.
  */
 export async function ensureInstalled(root, { label: what = root, beforeReinstall } = {}) {
+  // First, because it is the one problem no install here can fix: if git is carrying node_modules, the
+  // tree breaks again at the next checkout no matter how well this goes.
+  warnIfTracked(root, what);
   let forced = false;
   let code = await pnpmInstall(root, false);
   if (code !== 0) {
@@ -191,6 +195,7 @@ function unresolvedReason(dir) {
   } catch {
     return "not installed";
   }
+  if (link.isFile()) return committedSymlinkReason(dir, link);
   if (!link.isSymbolicLink()) return "no package.json in it";
   let target = "";
   try {
@@ -199,6 +204,71 @@ function unresolvedReason(dir) {
     /* unreadable reparse point — the arrow is a nicety, not the finding */
   }
   return `link points nowhere${target ? ` (→ ${target})` : ""}`;
+}
+
+/**
+ * A FILE where a package DIRECTORY belongs is the signature of a pnpm symlink that was COMMITTED to git.
+ *
+ * Git stores a symlink as a blob holding its target path, and a Windows checkout without symlink support
+ * (the default: creating one needs Developer Mode or elevation, so git sets `core.symlinks=false`) writes
+ * exactly that blob as an ordinary file — a 90-byte text file named `vite` whose entire contents are
+ * `../../../node_modules/.pnpm/vite@8.1.4_…/node_modules/vite`. Nothing about it is a package, and no
+ * install survives it: the next checkout puts it straight back. It gets its own diagnosis because the
+ * cure is in git, not in pnpm (`trackedModules`).
+ */
+function committedSymlinkReason(dir, stat) {
+  if (stat.size > 512) return "a FILE, not a package directory";
+  let text = "";
+  try {
+    text = fs.readFileSync(dir, "utf8").trim();
+  } catch {
+    /* unreadable — "a FILE" is still the finding */
+  }
+  if (!text || /[\r\n]/.test(text) || !/[\\/]/.test(text)) return "a FILE, not a package directory";
+  return `a COMMITTED SYMLINK, checked out as text (→ ${text})`;
+}
+
+/**
+ * Anything under a `node_modules/` that git is TRACKING — the state that makes a broken tree permanent.
+ *
+ * `.gitignore` does not untrack what is already in the index, so one `git add -f` (or one commit made
+ * before the ignore rule existed) is enough to put pnpm's symlinks into history forever. On macOS and
+ * Linux they check out as symlinks and nothing looks wrong; on Windows they check out as TEXT FILES and
+ * every repair is undone by the next `git checkout`, `git pull` or auto-sync. This repo auto-commits
+ * continuously, so the loop is closed: one machine keeps re-committing what breaks all the others.
+ */
+export function trackedModules(root) {
+  try {
+    const out = execFileSync("git", ["-C", root, "ls-files", "--", "*node_modules/*"], {
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"],
+      timeout: 20_000,
+    });
+    return out.split(/\r?\n/).filter(Boolean);
+  } catch {
+    return []; // no git, not a repo, or nothing tracked — none of which is our business to fail over
+  }
+}
+
+/** Say it loudly, once per install: the tree can be repaired, but git will undo the repair. */
+export function warnIfTracked(root, what) {
+  const tracked = trackedModules(root);
+  if (!tracked.length) return tracked;
+  err("");
+  err(`  ⚠ ${what}: git is TRACKING ${tracked.length} file(s) under node_modules.`);
+  for (const file of tracked.slice(0, 6)) err(`      ${file}`);
+  if (tracked.length > 6) err(`      …and ${tracked.length - 6} more`);
+  err("");
+  err("    Those are pnpm's own symlinks. On Windows git checks a symlink out as a TEXT FILE holding");
+  err("    the target path, so the package is not there — and every reinstall is undone by the next");
+  err("    checkout or auto-sync. Untrack them (this keeps the files on disk, it only stops git");
+  err("    carrying them between computers):");
+  err("");
+  err(`        git -C "${root}" rm -r --cached -- "*node_modules/*"`);
+  err(`        git -C "${root}" commit -m "chore: untrack node_modules"`);
+  err("");
+  return tracked;
 }
 
 /** Is there a runnable shim for this bin? Windows gets three of them per bin; POSIX gets one symlink. */
@@ -233,6 +303,10 @@ function reportUnfixable(what, problems, root, why) {
   }
   err("");
   err("  Known causes, most common first:");
+  if (trackedModules(root).length) {
+    err("    · git is TRACKING files under node_modules (see the warning above) — on Windows those check");
+    err("      out as text files, and git restores them after every repair. Untrack them first;");
+  }
   if (isWindows) {
     err("    · the repo was MOVED or copied after installing — on Windows pnpm's package links are");
     err("      junctions holding ABSOLUTE paths, so every one of them dangles at the new location;");

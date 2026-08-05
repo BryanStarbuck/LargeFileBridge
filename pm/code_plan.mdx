@@ -98,8 +98,20 @@ resolve to a real package directory and each tool its scripts name must have a r
 tree that fails is repaired (`--force`, then a from-scratch reinstall) or reported by name.
 Verified and repaired in code: `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/deps.mjs` —
 `treeProblems()` (the check) and `ensureInstalled()` (the repair ladder), called by `dev.mjs` `cmdInstall`
-for both `code/` and `cli/code/`. A dev tree that dies before the ports come up is reported as such, with
-that same finding, by `dev.mjs` `reportDeadTree()` — never as a port timeout.
+for `code/`, `cli/code/` and the auth lib. A dev tree that dies before the ports come up is reported as
+such, with that same finding, by `dev.mjs` `reportDeadTree()` — never as a port timeout.
+
+**`node_modules` must never be tracked by git, and that is enforced rather than assumed.** `.gitignore`
+does not untrack what is already in the index, and pnpm's package entries are *symlinks*: git stores them
+as mode-120000 blobs holding a target path, and a Windows checkout (no symlink support by default) writes
+each one as a **text file** — so `node_modules/vite` is a 123-byte file, nothing resolves, and every
+reinstall is undone by the next pull. Detected and reported in code:
+`~/BGit/Bryan_git/LargeFileBridge/scripts/dev/deps.mjs` — `trackedModules()` / `warnIfTracked()` (asks git,
+prints the untracking commands) and `committedSymlinkReason()` (names a checked-out symlink for what it
+is). **The auth lib's own tree is installed too** — a `link:` dep links a directory, it does not install
+one, so `@auth/backend`'s `jose` resolves from OpenAuthFederated's `node_modules` and nowhere else:
+`dev.mjs` `ensureAuthLib()` (loud, never fatal; `checkAuthLib()` hard-stops only when the checkout itself
+is missing or has no manifests).
 
 Ports (from [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical)):
 the **web app** — the browser-facing page server — **always defaults to :2222** (Vite). The backend

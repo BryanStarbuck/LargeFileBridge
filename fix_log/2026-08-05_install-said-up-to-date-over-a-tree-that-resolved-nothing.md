@@ -1,5 +1,11 @@
 # 2026-08-05 — `pnpm install` said "Already up to date" over a tree where nothing resolved
 
+> **Postscript, same day.** The verification and repair below are right and stay. The *cause* named in
+> "Root cause 2" — junctions dangling after a repo move — was the wrong hypothesis: the tree was broken
+> because **pnpm's symlinks were committed to git**, and Windows checks a symlink out as a text file. That
+> is [the next entry](./2026-08-05_pnpms-symlinks-were-in-git-and-windows-checks-them-out-as-text.md), and
+> it is why a repaired tree kept breaking again on the next pull.
+
 `just run` on Windows installed nothing, verified nothing, started nothing, and then reported a
 **port timeout** for an app that had already been dead for 29 of those 30 seconds.
 
