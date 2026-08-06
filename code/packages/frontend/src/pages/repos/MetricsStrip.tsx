@@ -3,9 +3,10 @@
 // §2.6) — clicking a panel opens that metric's educate-and-fix popup (§2.4) when it has one, else it
 // re-tunes the view to the acting tab.
 //
-// PANEL LOOK (§2.1). Each panel is deliberately NARROW — as wide as its widest word — a small label
-// (rendered with the catalog's exact casing, wrapping inside the box onto as many lines as it needs)
-// stacked over a big centered number:
+// PANEL LOOK (§2.1, revised). Every panel is the SAME width — they divide the strip evenly — with a small
+// label (rendered with the catalog's exact casing, wrapping inside the box onto as many lines as it needs)
+// stacked over a big centered number. They used to be sized to their own widest word, which made a
+// nine-tile strip nine different widths:
 //   • count 0  → a light-green rounded rectangle with a big 0 (the all-clear state).
 //   • count >0 → health-tinted (red = at risk / owed, amber = action needed).
 // Hovering a panel publishes its hint to the LEFT-BAR hover-info panel (one_repo.mdx §3.2).
@@ -72,10 +73,13 @@ function MetricPanel({
       onBlur={() => setHoverInfo(null)}
       title={pending ? why : undefined}
       style={style}
-      // w-min → the box is only as wide as its widest word; a multi-word label ("Add to IPFS", "AI
-      // Describable") wraps INSIDE the tile onto as many lines as it needs. The tile itself never wraps
-      // the STRIP — that is the rule the ≥25% hover reservation used to break (one_repo.mdx §3.2).
-      className="flex w-min min-w-[2.75rem] shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border px-2.5 py-1.5 text-center"
+      // EQUAL WIDTHS (revises task_tabs.mdx §2.1, which sized each tile to its own widest word — nine
+      // tiles then meant nine different widths and a visibly ragged strip). `flex-1 basis-0` gives every
+      // tile the same share of the row, so the strip reads as one set of cards; a multi-word label
+      // ("Add to IPFS", "AI Describable") still wraps INSIDE its tile. min-w keeps them legible on a
+      // narrow window, where the strip's own overflow-x-auto is the escape hatch rather than a
+      // second line (one_repo.mdx §3.2).
+      className="flex min-w-[4.5rem] flex-1 basis-0 flex-col items-center justify-center gap-0.5 rounded-lg border px-2.5 py-1.5 text-center"
       aria-label={pending ? `${m.label}: ${m.count} so far, still counting. Open.` : `${m.label}: ${m.count}. Open.`}
     >
       {/* Small label over a big number. NOT `capitalize` — that would lower-case nothing but would also
@@ -83,7 +87,7 @@ function MetricPanel({
           catalog stores the exact string to render. */}
       <span className="text-[11px] font-medium leading-tight">{m.label}</span>
       {/* THE PER-TILE CUE IS ON THE NUMBER, AND IT COSTS NO LAYOUT. A spinner in the label row read as
-          noise at nine tiles at once, and — because the tile is `w-min`, sized to its widest word — the
+          noise at nine tiles at once, and — back when the tile was sized to its own widest word — the
           icon competed with the label for that width and pushed "Add to IPFS" onto a third line. The
           number is the thing that is provisional, so the number is what softens: a slow pulse, no glyph,
           no width. WHAT is still running is answered once, in the line under the strip. */}
@@ -132,8 +136,9 @@ export function MetricsStrip({
 
   return (
     <div className="mb-2 w-full">
-      {/* ONE full-width row of tiles — `flex-nowrap` + `shrink-0` tiles, so the strip can never break onto
-          a second line; `overflow-x-auto` is the (rare) escape hatch on a very narrow window. */}
+      {/* ONE full-width row of equal tiles — `flex-nowrap` + `flex-1 basis-0`, so the strip divides evenly
+          and can never break onto a second line; `overflow-x-auto` is the (rare) escape hatch on a very
+          narrow window, once every tile has hit its min width. */}
       <div className="flex w-full flex-nowrap items-stretch gap-2 overflow-x-auto">
         {metrics.map((m) => (
           <MetricPanel key={m.id} m={m} onClick={() => handle(m)} pending={provisional} why={why} />

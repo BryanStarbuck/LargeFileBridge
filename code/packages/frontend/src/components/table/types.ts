@@ -32,6 +32,11 @@ export interface LfbColumn<T> {
   // the identity/verdict columns). Hiding is presentation-only: a hidden column still appears in the
   // Sort/Filter dropdowns.
   priority?: number;
+  // The content has a KNOWN maximum size — a middle-truncated CID, a short code, a fixed-format id — so
+  // width beyond `minWidth` would be pure padding. A bounded text column therefore keeps its minimum and
+  // the table's leftover space goes to the columns whose content is genuinely unbounded (paths, names).
+  // Only meaningful on `kind: "text"`; the other kinds never take slack anyway.
+  bounded?: boolean;
   // Minimum on-screen width (px) this column needs to render on one line. Drives the responsive budget:
   // while the sum of visible columns' minWidths (+ leading select + trailing kebab) exceeds the
   // container, the lowest-priority column is dropped. Sensible defaults by kind when omitted.

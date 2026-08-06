@@ -226,6 +226,9 @@ export function IpfsPage() {
       id: "cid",
       header: "CID",
       kind: "text",
+      // middleTruncate(cid, 10) — a known maximum, so the column takes none of the table's slack.
+      bounded: true,
+      minWidth: 96,
       accessor: (p) => p.cid,
       cell: (p) => <CidCell cid={p.cid} />,
     },

@@ -161,7 +161,7 @@ const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) 
 // drifts from this — a taller control, a bigger font, a browser zoom — used to make the scroll height move
 // as the window slid, which is what made a long list jitter at the bottom. useWindowedRows measures the
 // rendered row and uses that instead (performance.mdx P-38).
-const ROW_H = 34;
+const ROW_H = 33;
 
 export function DataTable<T>({
   data,
@@ -465,6 +465,14 @@ export function DataTable<T>({
   // table into a horizontal scrollbar. Every OTHER column is pinned to one line (below) — they are short
   // by construction (a byte count, a peer count, a truncated CID, a relative time) and were only
   // wrapping because the identity column had crowded them down to a few characters.
+  // Explicit per-column pixel widths, so the table can run a FIXED layout and every row is exactly one
+  // line tall (the uniformity `useWindowedRows` depends on). Null until the container is measured, and
+  // null whenever a column brought its own `width` — that case already emits its own colgroup below.
+  const allocatedWidths = useMemo(
+    () => allocateColumnWidths(visibleColumns, containerW, !!selection),
+    [visibleColumns, containerW, selection],
+  );
+
   // Column model — selection is NOT part of it (P-03), so this only rebuilds when the caller's
   // logical columns change, never when a checkbox toggles.
   const tanColumns = useMemo<ColumnDef<T>[]>(
@@ -484,7 +492,7 @@ export function DataTable<T>({
           return String(v ?? "").toLowerCase().includes(String(value).toLowerCase());
         },
         cell: ({ row }) => (c.cell ? c.cell(row.original) : String(c.accessor(row.original) ?? "")),
-        meta: { align: c.align, tight: c.tight, kind: c.kind },
+        meta: { align: c.align, tight: c.tight },
       })),
     [visibleColumns],
   );
@@ -569,6 +577,7 @@ export function DataTable<T>({
   // a fixed table layout and emit a <colgroup> so wide-enough columns keep their width instead of being
   // squeezed. Columns with no width share what's left. The leading select + trailing kebab get their own.
   const hasWidths = visibleColumns.some((c) => c.width);
+  const fixedLayout = hasWidths || allocatedWidths !== null;
 
   // The control block — search + ⇅ + ⛛ + ⚏, the facet rail, and the three dropdowns. Kept as ONE node so
   // it can be painted either above the body (the default) or, on a split-layout page, portaled into a
@@ -959,12 +968,21 @@ export function DataTable<T>({
           onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
           className={`overflow-auto overscroll-contain ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
         >
-          <table className={`w-full text-sm border-collapse ${hasWidths ? "table-fixed" : ""}`}>
-            {hasWidths && (
+          <table className={`w-full border-collapse text-sm ${fixedLayout ? "table-fixed" : ""}`}>
+            {fixedLayout && (
               <colgroup>
                 {selection && <col style={{ width: "2rem" }} />}
-                {visibleColumns.map((c) => (
-                  <col key={c.id} style={c.width ? { width: c.width } : undefined} />
+                {visibleColumns.map((c, i) => (
+                  <col
+                    key={c.id}
+                    style={
+                      c.width
+                        ? { width: c.width }
+                        : allocatedWidths
+                          ? { width: allocatedWidths[i] }
+                          : undefined
+                    }
+                  />
                 ))}
                 <col style={{ width: "3rem" }} />
               </colgroup>
@@ -1001,6 +1019,8 @@ export function DataTable<T>({
                         // headings — small, uppercase, tracked. It separates the header band from the
                         // data without needing a heavier rule or a darker fill.
                         className={`py-1.5 ${padX} text-[11px] font-semibold uppercase tracking-wide text-black/45 ${
+                          fixedLayout ? "truncate" : ""
+                        } ${
                           align === "right" ? "text-right" : ""
                         } ${canSort ? "cursor-pointer select-none transition-colors duration-150 hover:text-black" : ""} ${
                           scrolled ? "lfb-th-scrolled" : ""
@@ -1089,22 +1109,15 @@ export function DataTable<T>({
                       </td>
                     )}
                     {row.getVisibleCells().map((cell) => {
-                      const cmeta = cell.column.columnDef.meta as { align?: string; tight?: boolean; kind?: string } | undefined;
+                      const cmeta = cell.column.columnDef.meta as { align?: string; tight?: boolean } | undefined;
                       const align = cmeta?.align;
                       const cellPadX = cmeta?.tight ? "px-0.5" : "px-2"; // very-narrow icon columns (tables.mdx)
                       return (
                         <td
                           key={cell.id}
-                          // Single-line ONLY for the columns that are short by type — a byte count, a
-                          // count, a relative time, an enum/pill, an icon. Those were wrapping merely
-                          // because a wide text column had crowded them down to a few characters, and
-                          // pinning them costs the layout almost nothing.
-                          // TEXT columns (path, name, CID) stay shrinkable on purpose: `nowrap` there
-                          // makes the column demand its FULL content width, and the auto table-layout
-                          // algorithm then overflows the container — that is the horizontal scrollbar.
-                          className={`py-1.5 ${cellPadX} ${
-                            cmeta?.kind === "text" && !cmeta?.tight ? "" : "whitespace-nowrap"
-                          } ${align === "right" ? "text-right tabular-nums" : ""}`}
+                          className={`py-1.5 ${cellPadX} ${fixedLayout ? "truncate" : ""} ${
+                            align === "right" ? "text-right tabular-nums" : ""
+                          }`}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
@@ -1206,6 +1219,92 @@ function colMinWidth<T>(c: LfbColumn<T>): number {
 // Fixed overhead the data columns share the row with: leading select cell + trailing chevron/kebab cell.
 const OVERHEAD_BASE = 56; // trailing chevron/kebab cell + cell-padding slack
 const SELECT_W = 32; // leading selection checkbox cell
+// The body scrolls vertically, so a scrollbar eats into the row's usable width. Budget for it, or the
+// allocation lands a few pixels over and the table grows a horizontal scrollbar to show them.
+const SCROLLBAR_GUTTER = 14;
+// The hard floor a text column may be squeezed to when the window is too narrow for every column's
+// comfortable minimum — roughly eight characters plus an ellipsis. Below this the column says nothing.
+const MIN_FLEX_W = 64;
+
+/**
+ * Explicit pixel widths for every data column, so the table can run `table-layout: fixed` and every cell
+ * can be a single truncating line (tables.mdx).
+ *
+ * Why compute them instead of letting the browser decide: the auto table-layout algorithm sizes columns
+ * from their CONTENT, so a single unbreakable 64-character filename either widens the table past its
+ * container (a horizontal scrollbar) or, if the cell is told it may shrink, collapses to nothing while
+ * the surplus is handed to the columns that did not ask to shrink. Neither is recoverable from CSS
+ * alone. More importantly, ROW HEIGHT MUST BE UNIFORM: `useWindowedRows` measures one row and derives
+ * every spacer from it, so a table where some rows wrap and others don't makes the scroll height move as
+ * the window slides — the feedback loop that file's header documents, which React surfaces as
+ * "Maximum update depth exceeded".
+ *
+ * Each column starts at `colMinWidth()` — the px it needs to render on one line, kind-defaulted. Whatever
+ * the container has left over goes to the TEXT columns (the ones holding unbounded content: paths, names),
+ * split in proportion to their base so a wide identity column stays wide. A text column marked `bounded`
+ * opts out — its content has a known maximum, so extra width would only be padding. Returns null before the
+ * container has been measured, and when any column declares its own `width` — that path already emits a
+ * colgroup of its own.
+ */
+export function allocateColumnWidths<T>(
+  columns: LfbColumn<T>[],
+  containerW: number,
+  hasSelection: boolean,
+): number[] | null {
+  if (!isFinite(containerW) || containerW <= 0) return null;
+  if (columns.length === 0 || columns.some((c) => c.width)) return null;
+
+  const base = columns.map(colMinWidth);
+  const overhead = OVERHEAD_BASE + SCROLLBAR_GUTTER + (hasSelection ? SELECT_W : 0);
+  const slack = containerW - overhead - base.reduce((a, b) => a + b, 0);
+  const flexible = columns.map((c) => c.kind === "text" && !c.tight && !c.bounded);
+  const flexBase = columns.reduce((sum, _c, i) => sum + (flexible[i] ? base[i] : 0), 0);
+
+  // NOT ENOUGH ROOM even for the minimums. Squeeze the text columns rather than overflow: under the
+  // fixed layout a narrow column CLIPS its content, it does not wrap, so row height stays uniform
+  // however tight it gets — `colMinWidth` is a legibility floor, not a layout constraint. Only when
+  // the text columns have nothing left to give does the body finally scroll sideways.
+  if (slack < 0) {
+    const out = [...base];
+    let deficit = -slack;
+    const givable = columns.reduce(
+      (sum, _c, i) => sum + (flexible[i] ? Math.max(0, base[i] - MIN_FLEX_W) : 0),
+      0,
+    );
+    if (givable > 0) {
+      const taken = Math.min(deficit, givable);
+      for (let i = 0; i < out.length; i++) {
+        if (!flexible[i]) continue;
+        const canGive = Math.max(0, base[i] - MIN_FLEX_W);
+        out[i] -= Math.floor((taken * canGive) / givable);
+      }
+      deficit -= taken;
+      // Rounding can leave a pixel or two; take them from the widest flexible column.
+      const over = out.reduce((a, b) => a + b, 0) + overhead - containerW;
+      const widest = out.reduce((best, w, i) => (flexible[i] && (best < 0 || w > out[best]) ? i : best), -1);
+      if (over > 0 && widest >= 0) out[widest] = Math.max(MIN_FLEX_W, out[widest] - over);
+    }
+    return out;
+  }
+  if (slack === 0) return base;
+  // No text column to absorb it (an all-numeric table): widen the last column so the row still fills.
+  if (flexBase === 0) {
+    const out = [...base];
+    out[out.length - 1] += slack;
+    return out;
+  }
+
+  const out = base.map((w, i) => (flexible[i] ? w + Math.floor((slack * w) / flexBase) : w));
+  // Floor() leaves a few pixels unassigned; give them to the widest flexible column so the row's widths
+  // sum EXACTLY to the space available and no phantom remainder shows up as a scrollbar.
+  const assigned = out.reduce((a, b) => a + b, 0);
+  const widest = out.reduce(
+    (best, w, i) => (flexible[i] && (best < 0 || w > out[best]) ? i : best),
+    -1,
+  );
+  if (widest >= 0) out[widest] += containerW - overhead - assigned;
+  return out;
+}
 
 // Hide the lowest-priority columns until the min-width budget fits the container — so a cell never wraps
 // to a second line (repos.mdx §3.2.1). Columns with UNDEFINED `priority` are PINNED (never dropped); the
