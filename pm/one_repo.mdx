@@ -1042,12 +1042,30 @@ This table opts in via the DataTable `hoverPreview` prop, wired in code:
   * the header primary ("View recommendation ›") is a **ranking across every metric**, so it appears only
     once the counts are final;
   * IPFS health arrives with the pin data near the end, so until then the details disclosure reads
-    "IPFS checking…" and Pin now is **not** disabled on a node whose state is simply not known yet.
+    "IPFS checking…" and Pin now is **not** disabled on a node whose state is simply not known yet;
+  * the **⊘ Git-ignore axis is THREE-VALUED**, and a row that has not got its verdict yet shows the inert
+    "not determined" icon — see §4.x below.
   On a REFETCH (a live-refresh bump) none of this applies: the finished table stays on screen until the new
   answer lands, exactly as §7 of [repos.mdx](./repos.mdx) requires of its own list.
 
 The detail stream and the reducer that folds it back into the page's existing query cache are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/:repoId/detail/stream` handler; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoDetail()`
+
+* **The ⊘ Git-ignore axis is THREE-VALUED — ignored / not ignored / NOT DETERMINED (LOCKED).**
+  `git check-ignore` is the source of truth for this column, and there are two real situations where it has
+  not given a verdict: it is still running (the axis is patched in when it answers — performance.mdx P-37),
+  or it could not answer for that path at all (a stale worktree, a repo that moved). Both must render as the
+  inert **not-determined** icon and must REFUSE the click. Rendering "not determined" as "not ignored" — the
+  bug this rule exists to forbid — shows an enabled toggle on a file git already ignores, and clicking it
+  writes a redundant `.gitignore` line for it. The same rule governs the §2.11 `git_ignore` filter field: an
+  undetermined row answers `na`, never `not_yet`, so "show me what isn't git-ignored" never sweeps in files
+  whose verdict merely hasn't arrived.
+
+The three-valued ⊘ cell (and the shared inert icon state it uses) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `gitignore` column's `cell`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (`state: "na"` ⇒ faint glyph, inert)
+
+The verdict itself, and the `unknown` set that means "git could not answer", are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerboseAsyncDetailed()`; applied to rows by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`
 
 * **IPFS node unreachable:** a banner at the top of the content; Pin now and per-row transfers are
   disabled, but decisions can still be edited (they queue for when the node returns).

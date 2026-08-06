@@ -1321,9 +1321,31 @@ export type RepoRowsStreamEvent =
  * `extras` carries the peer/IPFS-dependent warnings. A row carries `pinnedHere: undefined` until `pins`
  * lands, which is the already-defined "we don't know yet" state — never a false red.
  */
+/**
+ * Fields that arrive AFTER the row they belong to, keyed by repo-relative path (`{ t: "enrich" }`).
+ *
+ * Two of a FileRow's fields are far more expensive than the rest, and neither is needed to DRAW the row:
+ * the git-ignore axis costs a `git check-ignore` over every candidate (measured: 2.3 s for 1,875 paths on
+ * a real repo — git's own evaluation, not process startup), and the decision provenance costs a read and
+ * fold of the shared ledger (1.3 s for 19,000 entries). Gating every row on them is what kept a large
+ * repo's table blank for seconds. They are computed alongside the walk and patched in when they land.
+ *
+ * A path ABSENT from the patch keeps whatever it already had — for `gitignore` that means UNDETERMINED,
+ * which is a real state the UI must render as such (never as "not ignored", which would invite a click
+ * that writes a redundant `.gitignore` line for a file git already ignores).
+ */
+export interface FileRowPatch {
+  gitignore?: boolean;
+  gitignoreLocked?: boolean;
+  gitignoreRule?: FileRow["gitignoreRule"];
+  decidedBy?: string | null;
+  decidedAt?: string | null;
+}
+
 export type RepoDetailStreamEvent =
   | { t: "head"; detail: RepoDetail }
   | { t: "files"; files: FileRow[] }
+  | { t: "enrich"; rows: Record<string, FileRowPatch> }
   | { t: "totals"; counts: RepoCounts; taskMetrics?: TaskMetrics; peerCount: number; status: RepoStatus }
   | { t: "pins"; ipfs: IpfsHealth; pinnedHere: Record<string, boolean> }
   | {

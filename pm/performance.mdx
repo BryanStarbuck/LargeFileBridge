@@ -652,12 +652,32 @@ The drift guard that keeps the two counting paths honest is in code:
      (`checkIgnoreVerboseAsyncDetailed`). Every caller of the shared composer got this for free.
   2. **Streamed, not blobbed.** Two NDJSON routes on the transport P-22 already established. The detail
      sends `head` (identity + scan times, before the manifest fold) → `files` batches of 250 → running
-     `totals` → `pins` → `extras` → `done`; the list sends `meta` → `batch` → `done`. **Measured:
-     time-to-first-row 22 ms of a 37 ms total** on a 600-row fixture.
-  3. **The pinset stops gating the page.** Its enumeration now runs *concurrently* with the walk and is
-     folded in afterwards as a `pins` patch. Rows stream with `pinnedHere` **undefined** — the
-     already-defined "not known yet" state — so the icon shows intent only and never a false red.
-  4. **One walk, many readers.** The list's single-flight promise became a multicast feed: a reader that
+     `totals` → `enrich` → `pins` → `extras` → `done`; the list sends `meta` → `batch` → `done`.
+  3. **NOTHING EXPENSIVE GATES A ROW.** This is the part that actually moved the number, and it took a
+     second measuring pass to find, because the first one only made the walk *yield* — it left three
+     serial steps sitting in front of the first row. Measured on a real 1,875-candidate repo:
+     | step | cost | now |
+     |---|---|---|
+     | the three freshness triggers (`maybeTriggerStaleScan` / `maybeSyncBackbone` / `maybeConvergeWorkingRepo`) | **1,177 ms** | fire *behind* the `head`, which they never contributed a byte to |
+     | `readLedger` + fold (19,039 entries) — decision provenance | **1,284 ms** | after the rows; patched in via `enrich` |
+     | `git check-ignore -v` over 1,875 paths — the ⊘ axis | **2,280 ms** | started before the walk, awaited after; patched in via `enrich` |
+     | `ipfs pin ls` enumeration — the pin icon | seconds on a large pinset | concurrent with the walk; patched in via `pins` |
+     | everything else (status parse, artifact probes ×1875, foreign-pin ×1875) | ~150 ms | on the row path, where it belongs |
+     The check-ignore cost is **git's own evaluation**, not ours: process startup measured 29 ms, and one
+     spawn over all 1,875 paths (2,280 ms) cost the same as the eight batched spawns that ship (2,384 ms) —
+     so batching was never the lever, and not *waiting* was the only one.
+     **Result on that repo: `head` 1,177 ms → 1 ms, first row 3,331 ms → 9 ms, total 3,406 ms → 2,862 ms**
+     (the total improved too, because the synchronous ledger fold now overlaps the git call instead of
+     preceding it).
+  4. **A deferred field must be UNDETERMINED, never a default.** `pinnedHere` already had this contract;
+     the ⊘ axis now shares it, and that exposed a live frontend bug worth its own line. The backend has
+     always been able to return `gitignore: undefined` (git's `unknown` set — a stale worktree, a vanished
+     repo), and `OneRepoPage` rendered it with `!!f.gitignore` — i.e. **identically to "not ignored"**, on
+     an *enabled* toggle whose click writes a `.gitignore` line for a file git already ignores. Deferral
+     would have made that rare bug common, so the column is now three-valued: undetermined renders in the
+     shared inert `na` state and refuses the click until git has actually spoken. The §2.11 `git_ignore`
+     filter field is three-valued for the same reason.
+  5. **One walk, many readers.** The list's single-flight promise became a multicast feed: a reader that
      attaches mid-walk gets the rows already composed plus every later batch, so N tabs still cost one pass.
 - **The honesty rules this pass is built on** — a progressive page must never state as settled what it has
   only partly counted:
@@ -682,8 +702,11 @@ The non-blocking `git check-ignore -v` twin the request path now uses is in code
 The two NDJSON routes, the multicast row feed, and the concurrent pinset fold are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/stream` / `GET /api/repos/:repoId/detail/stream` / `startRepoRowsFeed()` / `pinReality()` / `ndjson()`
 
-The wire contract (`RepoRowsStreamEvent`, `RepoDetailStreamEvent`, `RepoDetail.partial`) is in code:
+The wire contract (`RepoRowsStreamEvent`, `RepoDetailStreamEvent`, `FileRowPatch`, `RepoDetail.partial`) is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts`
+
+The three-valued ⊘ column that refuses to guess while the axis is undetermined is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `gitignore` column's `cell` (state `na` when `f.gitignore === undefined`), over the shared inert state in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx`
 
 The client-side reducers that fold the events into the SAME react-query keys the pages already own are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()` / `streamRepoDetail()` / `framePublisher()`
@@ -695,6 +718,14 @@ The three guards that keep streaming from drifting away from buffering are in co
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — streamed rows === buffered rows;
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos-stream.spec.ts` — the wire, folded back, === the buffered route;
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.spec.ts` — the client reducer, the publish policy, and the fallback
+
+- **The progress dock, while we were in here.** Two cards were reported as looking like duplicates. They
+  were not — the registry adds one card per job and removes it in a `finally` — but the whole-computer pin
+  pass was labelled **"all units"** on a machine with a repo named **"all"**, so "Pinning all units" beside
+  "Pinning all" read as one job listed twice. The pass now names itself in words no repo can collide with.
+  Still open: `passInFlight` stops two *passes* overlapping, but a manual **Pin now** on repo X and a
+  scheduled pass can run concurrently and both pin X. Safe (the store's per-file mutexes), wasteful, and it
+  is the remaining way the dock can honestly show two cards for what a user reads as one job.
 
 - **Known follow-up, deliberately not taken here.** `discoverRoots()` in
   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` is still a
@@ -1076,7 +1107,7 @@ ScansPage's former constant 10s `["jobs"]` poll is **deleted** — its lifecycle
 | P-34 | **BEGIN/END for every job and every API call** — the work ledger | `backend/shared/transactions.ts`, `backend/modules/describe/describe.service.ts`, `adapters.ts`, `fit-media.ts`, `backend/modules/transcribe/transcribe.service.ts`, `backend/tools/transcribe/engine.ts`, `backend/modules/jobqueue/jobqueue.service.ts` |
 | P-36 | **Sitewide shell-first + live pages (Aspect 6b)** — six pages that hard-blocked first paint (Settings, Repo Settings, Storage Settings, Tools, IPFS dashboard/off) now render their shell + `PageSkeleton` immediately; seven new topics (`jobs`/`scans`/`progress`/`todo`/`devices`/`settings`/`ipfs`) bumped at their write choke points with a trailing-edge coalesced bump; `useLiveRefresh` wired on every data page (was: One Repo only), `storages` finally emitted; idle polls deleted (ScansPage 10s, ProgressContext 3s idle, ScanProgressBar 15s idle) — running-state fast polls kept for determinate progress | `backend/modules/events/state-events.service.ts` (`bumpTopicThrottled`), `jobqueue.service.ts`, `batch settle in runTask`, `scan-job.ts`, `progress.registry.ts`, `decisions.service.ts`, `storage.service.ts`, `storage-settings.service.ts`, `todo-batches.store.ts`, `pin.service.ts`, `config.service.ts`, `ipfs.service.ts`, `ipfs-node.service.ts`; `frontend/components/ui/PageSkeleton.tsx`, `ScanProgressBar.tsx`, `progress/ProgressContext.tsx`, and every page under `frontend/src/pages/` |
 | P-35 | **Progressive, non-blocking consumption** (completes P-22; formerly numbered P-23, which the pin-pass entry owns) — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
-| P-37 | **The two repo screens go async + progressive** — row composition is async, yields every 200 rows and uses the non-blocking `check-ignore`, so the whole app stops freezing while a repo is composed (and every background consumer of the same composer inherits it); two NDJSON routes stream `head`/`files`/`totals`/`pins`/`extras` and `meta`/`batch`; the `ipfs pin ls` enumeration runs concurrently instead of gating the first row; the list's single-flight promise became a multicast feed; sticky flags snapshotted once per repo. Partial states are marked `partial` and the UI withholds every claim it has not finished counting | `backend/store-model/units.service.ts`, `backend/repos/repos.router.ts`, `backend/git/git.service.ts`, `backend/store-model/config.service.ts`, `shared/src/types.ts`, `frontend/src/api/streamQueries.ts`, `frontend/src/pages/repos/{ReposPage,OneRepoPage,MetricsStrip}.tsx`; guards: `backend/store-model/repo-row-stats.spec.ts`, `backend/repos/repos-stream.spec.ts`, `frontend/src/api/streamQueries.spec.ts` |
+| P-37 | **The two repo screens go async + progressive** — row composition is async, yields every 200 rows and uses the non-blocking `check-ignore`, so the whole app stops freezing while a repo is composed (and every background consumer of the same composer inherits it); two NDJSON routes stream `head`/`files`/`totals`/`enrich`/`pins`/`extras` and `meta`/`batch`. **Nothing expensive gates a row**: the freshness triggers fire behind the `head`, and the ledger fold, the `git check-ignore` axis and the `ipfs pin ls` enumeration are all patched in afterwards — `head` 1,177 ms → 1 ms, first row 3,331 ms → 9 ms on a 1,875-candidate repo. The list's single-flight promise became a multicast feed; sticky flags snapshotted once per repo. Partial states are marked `partial`, deferred fields stay UNDETERMINED rather than defaulting (which fixed a live ⊘ bug — see the entry), and the UI withholds every claim it has not finished counting | `backend/store-model/units.service.ts`, `backend/repos/repos.router.ts`, `backend/git/git.service.ts`, `backend/store-model/config.service.ts`, `shared/src/types.ts`, `frontend/src/api/streamQueries.ts`, `frontend/src/pages/repos/{ReposPage,OneRepoPage,MetricsStrip}.tsx`; guards: `backend/store-model/repo-row-stats.spec.ts`, `backend/repos/repos-stream.spec.ts`, `frontend/src/api/streamQueries.spec.ts` |
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop

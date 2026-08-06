@@ -72,6 +72,7 @@ describe("streamRepoDetail — folding the events back into one RepoDetail", () 
       head(),
       { t: "files", files: [row("a.mp4"), row("b.mp4")] },
       { t: "files", files: [row("c.mp4")] },
+      { t: "enrich", rows: { "a.mp4": { gitignore: true, decidedBy: "me@x" }, "b.mp4": { gitignore: false } } },
       { t: "totals", counts: { pinned: 1 }, peerCount: 2, status: "behind", taskMetrics: { undecided: 3 } },
       { t: "pins", ipfs: "ok", pinnedHere: { "a.mp4": true, "c.mp4": false } },
       { t: "extras", missingPinned: [{ path: "z" }], deletedHere: [], syncBlocked: null },
@@ -89,6 +90,13 @@ describe("streamRepoDetail — folding the events back into one RepoDetail", () 
     expect(d.files[0].pinnedHere).toBe(true);
     expect(d.files[1].pinnedHere).toBeUndefined();
     expect(d.files[2].pinnedHere).toBe(false);
+    // The deferred per-row fields land on the rows they name, and a row the patch does NOT name keeps its
+    // git-ignore axis UNDETERMINED — never "false", which would invite a click that writes a redundant
+    // .gitignore line for a file git already ignores.
+    expect(d.files[0].gitignore).toBe(true);
+    expect(d.files[0].decidedBy).toBe("me@x");
+    expect(d.files[1].gitignore).toBe(false);
+    expect(d.files[2].gitignore).toBeUndefined();
     expect(d.missingPinned).toEqual([{ path: "z" }]);
     expect(d.syncBlocked).toBeUndefined(); // null on the wire means "not blocked", not a block of null
     // `done` is the ONLY thing that promises completeness.

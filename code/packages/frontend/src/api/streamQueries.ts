@@ -171,6 +171,12 @@ export async function streamRepoDetail(
         }
         if (ev.t === "files") {
           for (const f of ev.files) files.push(f);
+        } else if (ev.t === "enrich") {
+          // The late-arriving per-row fields (git-ignore axis, decision provenance). A path ABSENT from
+          // the patch keeps what it has — for `gitignore` that is UNDETERMINED, which the ⊘ column renders
+          // as an inert "not determined" icon rather than claiming the file is not ignored.
+          const rows = ev.rows;
+          files = files.map((f) => (rows[f.path] ? { ...f, ...rows[f.path] } : f));
         } else if (ev.t === "totals") {
           head = {
             ...head,

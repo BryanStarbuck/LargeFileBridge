@@ -584,7 +584,6 @@ reposRouter.get("/:repoId/detail/stream", async (req, res) => {
   res.on("close", () => ac.abort());
 
   try {
-    touchRepoFreshness(folder);
     // Started but NOT awaited — it runs while the rows compose. `.catch` here (not later) so a rejection can
     // never be an unhandled one in the window before we await it.
     const pins = pinReality(folder).catch((e): { health: IpfsHealth; pinset: Set<string> | undefined } => {
@@ -596,11 +595,17 @@ reposRouter.get("/:repoId/detail/stream", async (req, res) => {
     const detail = await computeRepoDetail(folder, "unreachable", undefined, {
       signal: ac.signal,
       onFileBatch: (files: FileRow[]) => write({ t: "files", files }),
+      // The git-ignore axis + decision provenance, patched onto rows that are already on screen.
+      onEnrich: (rows) => write({ t: "enrich", rows }),
       onSnapshot: (d: RepoDetail) => {
         if (!headSent) {
           headSent = true;
           // The header, with no rows on it — everything the page needs to paint its chrome.
           write({ t: "head", detail: { ...d, files: [] } });
+          // The freshness triggers fire only NOW, behind the header. They are non-blocking by contract, but
+          // "non-blocking" is not "free" — each does some synchronous work before it hands off, and none of
+          // it changes a single byte of the header it would have been delaying.
+          touchRepoFreshness(folder);
           return;
         }
         write({ t: "totals", counts: d.counts, taskMetrics: d.taskMetrics, peerCount: d.peerCount, status: d.status });

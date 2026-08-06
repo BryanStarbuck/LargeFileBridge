@@ -1019,7 +1019,11 @@ export async function pinAll(opts: { priorityDone?: string } = {}): Promise<void
     // 15-minute scheduled pass, the session catch-up, and the remainder after a manual Pin now all land here
     // — and it was the one piece of work that showed NOTHING in the dock. Bytes moved for minutes while the
     // app looked idle, which is indistinguishable from a sync that has stopped. One card, ticking per unit.
-    await track("pin", "all units", async (report) => {
+    // NOT "all units". The dock renders "Pinning <target>", and a user whose repo is literally NAMED `all`
+    // then reads "Pinning all units" next to "Pinning all" and cannot tell the whole-computer pass from the
+    // one repo — it reads as the same job listed twice. The label has to be a phrase no repo name can
+    // collide with (webapp.mdx §12).
+    await track("pin", "every repo and storage on this computer", async (report) => {
       let done = 0;
       const total = repos.length + 1 + storageIds.length; // repos + the computer unit + directory storages
       const tick = (): void => report({ done: ++done, total, unit: "units" });

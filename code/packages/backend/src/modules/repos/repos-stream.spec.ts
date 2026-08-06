@@ -190,6 +190,25 @@ describe("GET /api/repos/:repoId/detail/stream — the One-repo detail, progress
     expect(events.some((e) => e.t === "extras")).toBe(true);
   });
 
+  it("ships rows with the git-ignore axis UNDETERMINED, then patches it in", async () => {
+    // The point of the deferral, asserted on the WIRE rather than on the shared row objects: a row leaves
+    // before `git check-ignore` has answered, so it must carry no verdict at all — and the verdict must
+    // then actually arrive. An `enrich` that never came would leave every ⊘ toggle inert forever; a row
+    // that shipped `gitignore: false` early would invite a click that writes a redundant .gitignore line.
+    const events = await getNdjson<RepoDetailStreamEvent>(`/repos/${repoId}/detail/stream`);
+    const shipped = events.flatMap((e) => (e.t === "files" ? e.files : []));
+    const local = shipped.filter((f) => f.presence !== "remote-only");
+    expect(local.length).toBe(ROWS);
+    expect(local.every((f) => f.gitignore === undefined)).toBe(true);
+
+    const enrich = events.find((e) => e.t === "enrich");
+    expect(enrich).toBeDefined();
+    const patch = (enrich as { rows: Record<string, { gitignore?: boolean }> }).rows;
+    // The fixture's `.gitignore` is `*.mp4` and every candidate is one, so git ignores them all.
+    expect(Object.keys(patch).length).toBe(ROWS);
+    expect(Object.values(patch).every((p) => p.gitignore === true)).toBe(true);
+  });
+
   it("folds back into exactly the buffered detail", async () => {
     const buffered = await getJson<RepoDetail>(`/repos/${repoId}`);
     const events = await getNdjson<RepoDetailStreamEvent>(`/repos/${repoId}/detail/stream`);
@@ -202,6 +221,9 @@ describe("GET /api/repos/:repoId/detail/stream — the One-repo detail, progress
     for (const ev of events.slice(1)) {
       if (ev.t === "files") {
         files = [...files, ...ev.files];
+      } else if (ev.t === "enrich") {
+        const rows = ev.rows;
+        files = files.map((f) => (rows[f.path] ? { ...f, ...rows[f.path] } : f));
       } else if (ev.t === "totals") {
         detail = {
           ...detail,

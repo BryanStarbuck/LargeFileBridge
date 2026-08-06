@@ -632,7 +632,14 @@ export function OneRepoPage() {
       filterable: false,
       accessor: () => "",
       cell: (f) => {
-        const on = !!f.gitignore;
+        // THREE-VALUED, not boolean. `gitignore` is UNDETERMINED (undefined) in two real situations: the
+        // verdict is still on its way (it is patched in when `git check-ignore` answers — performance.mdx
+        // P-37), or git could not answer for this path at all (a stale worktree, a vanished repo — the
+        // `unknown` set in git.service). Both used to render as a plain OFF toggle, so a file git already
+        // ignores looked un-ignored and one click wrote a redundant `.gitignore` line for it. Undetermined
+        // now renders in the shared inert "na" state and refuses the click until git has actually spoken.
+        const known = f.gitignore !== undefined;
+        const on = f.gitignore === true;
         // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so OFF is
         // not ours to perform — show it ON but locked and name the rule (git_ignore.mdx §5.5).
         const locked = !!f.gitignoreLocked;
@@ -642,18 +649,22 @@ export function OneRepoPage() {
         const remoteOnly = f.presence === "remote-only";
         const title = remoteOnly
           ? "Not on this computer yet — pull it down first, then you can git-ignore it."
-          : locked && f.gitignoreRule
-            ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}. ` +
-              `That rule covers more than this file, so Large File Bridge will not rewrite it.`
-            : on
-              ? "Git-ignored — click to stop ignoring this file"
-              : "Add to git ignore";
+          : !known
+            ? streaming
+              ? "Checking with git whether this file is ignored…"
+              : "Git could not answer whether this file is ignored, so Large File Bridge will not guess. Re-scan, or check the repo is healthy."
+            : locked && f.gitignoreRule
+              ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}. ` +
+                `That rule covers more than this file, so Large File Bridge will not rewrite it.`
+              : on
+                ? "Git-ignored — click to stop ignoring this file"
+                : "Add to git ignore";
         return (
           <TaskIconCell
             kind="ignore"
-            state={on ? "done" : "could"}
+            state={!known ? "na" : on ? "done" : "could"}
             busy={busyPaths.has(f.path)}
-            disabled={locked || remoteOnly}
+            disabled={!known || locked || remoteOnly}
             title={title}
             extraHover={fileSummary(f)}
             // GIT-IGNORE ONLY. Sending `ipfs: f.decision === "sync"` alongside meant every click on an
@@ -927,7 +938,9 @@ export function OneRepoPage() {
             { id: "ocr", valueOf: (f) => taskRowValue(f.ocr) },
             { id: "pull_down", valueOf: (f) => (f.presence === "remote-only" ? "not_yet" : "done") },
             { id: "add_to_ipfs", valueOf: (f) => (f.decision === "sync" ? "done" : "not_yet") },
-            { id: "git_ignore", valueOf: (f) => (f.gitignore ? "done" : "not_yet") },
+            // Three-valued like the column above: an UNDETERMINED axis is "na", never "not_yet" — filtering
+            // for "not git-ignored" must not sweep in files whose verdict simply has not arrived.
+            { id: "git_ignore", valueOf: (f) => (f.gitignore === undefined ? "na" : f.gitignore ? "done" : "not_yet") },
             {
               id: "compressible_videos",
               valueOf: (f) => (f.compress === "could" && rowFileType(f) === "video" ? "yes" : "no"),

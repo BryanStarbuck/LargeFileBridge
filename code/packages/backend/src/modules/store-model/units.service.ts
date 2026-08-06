@@ -20,6 +20,7 @@ import {
   type IpfsHealth,
   type TaskStatus,
   type TaskMetrics,
+  type FileRowPatch,
   mediaKindForName,
   isPdfName,
 } from "@lfb/shared";
@@ -320,6 +321,12 @@ export interface RowStreamOpts {
    * produces the final detail, so a running subtotal can never be computed differently from the total.
    */
   onSnapshot?: (detail: RepoDetail) => void;
+  /**
+   * Called ONCE with the fields that could not be ready when their rows were (the git-ignore axis and the
+   * decision provenance), keyed by repo-relative path. A streaming reader forwards it as an `enrich` event;
+   * a buffered caller can ignore it, because the same values were already written onto the rows it gets.
+   */
+  onEnrich?: (patch: Record<string, FileRowPatch>) => void;
   /** Abort (client disconnected / page navigated away) — the walk stops at the next batch boundary. */
   signal?: AbortSignal;
 }
@@ -455,6 +462,7 @@ export async function computeRepoDetail(
         const seen: FileRow[] = [];
         return {
           signal: opts.signal,
+          onEnrich: opts.onEnrich,
           onFileBatch: (batch: FileRow[]) => {
             for (const r of batch) seen.push(r);
             opts.onFileBatch?.(batch);
@@ -481,10 +489,6 @@ async function composeFileRows(
   opts?: RowStreamOpts,
 ): Promise<FileRow[]> {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
-  // Fold the shared decision ledger ONCE per repo for provenance (decisions.mdx §10; one_repo.mdx §4.8):
-  // who decided each file and when. Cheap read+fold, wrapped so a bad/locked/conflicted ledger never
-  // breaks row composition — rows still render with decidedBy/decidedAt null (→ Undecided in the UI).
-  const foldedByPath = foldLedgerForRepo(cfg);
   const repoRootAbs = cfg.repo.path
     ? path.resolve(expandHome(cfg.repo.path))
     : null;
@@ -497,16 +501,18 @@ async function composeFileRows(
   // (git_ignore.mdx §5.5). Never let it break row composition. A path git could NOT answer for comes back
   // in `unknown` and the row's git-ignore axis is left UNDECIDED (`gitignore` undefined) — reporting it as
   // "not ignored" would mis-file the file into the big-files-to-ignore nudge on nothing but a spawn failure.
-  // AWAITED, never `execFileSync`: this is a request path, and the spawn is the single longest synchronous
-  // step in the whole composition (performance.mdx P-37).
-  const ignoreLookup = repoRootAbs
-    ? await checkIgnoreVerboseAsyncDetailed(
+  //
+  // STARTED HERE, AWAITED AFTER THE ROWS (performance.mdx P-37). It is BY FAR the most expensive input a
+  // row has — measured at 2.3 s for 1,875 paths on a real repo, and that is git's own evaluation, not
+  // process startup (29 ms) or batching (one spawn and eight cost the same). It is also needed by exactly
+  // ONE column. Awaiting it up front is what kept a large repo's table blank for seconds while every fact
+  // needed to draw the rows was already in hand; the axis is patched onto the rows the moment git answers.
+  const ignoreP: Promise<{ rules: Map<string, IgnoreRule>; unknown: Set<string> }> = repoRootAbs
+    ? checkIgnoreVerboseAsyncDetailed(
         repoRootAbs,
         status.candidates.map((c) => joinRel(repoRootAbs, c.path)),
       )
-    : { rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() };
-  const ignoreRules = ignoreLookup.rules;
-  const ignoreUnknown = ignoreLookup.unknown;
+    : Promise.resolve({ rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() });
   // Resolve the storage KIND ONCE per repo (it's memoized, but this also lets us hand the known type to
   // analysisOutputs so it never re-resolves per file). The analysis-artifact probe below is the same
   // value for all three task axes, so it is computed once per row and shared (see the task-status helpers).
@@ -524,7 +530,6 @@ async function composeFileRows(
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
     const peers = m?.pinned_by ?? [];
-    const prov = foldedByPath.get(cand.path);
     // Sticky Never-IPFS flag (decisions.mdx §17) — surfaced so the UI can disable the Add-to-IPFS axis.
     // Cheap per-row lookup against the snapshot above; never let a flag lookup break row composition.
     let neverIpfs = false;
@@ -555,13 +560,12 @@ async function composeFileRows(
           ? !!foreignPinByAbsPath(joinRel(repoRootAbs, cand.path))
           : undefined,
       changedAt: cand.modified_at ?? status.last_scan_at ?? new Date(0).toISOString(),
-      decidedBy: prov?.decidedBy ?? null,
-      decidedAt: prov?.decidedAt ?? null,
+      // Provenance and the git-ignore axis are BOTH patched in below, once their expensive sources land.
+      // Until then `decidedBy`/`decidedAt` are null (the UI's "no recorded decision" state) and `gitignore`
+      // is ABSENT — undetermined, which the UI must render as such and never as "not ignored".
+      decidedBy: null,
+      decidedAt: null,
       neverIpfs,
-      // The git-ignore axis as GIT ACTUALLY SEES IT (decisions.mdx §1) — drives the inline
-      // Add-to-git-ignore (⊘) toggle independently of the IPFS-axis `decision`. Reality, not intent:
-      // `prov.gitignore` is the recorded DECISION and is kept for provenance only.
-      ...gitIgnoreAxis(repoRootAbs, cand.path, ignoreRules, ignoreUnknown),
       // The Compress / Transcribe / Describe / OCR task-tab status (task_tabs.mdx §4.4/§5/§6). All four key
       // off the SAME analysis-artifact probe, so it is done at most ONCE per row (only when the file could
       // carry an artifact) and shared, instead of each helper re-running ~a dozen statSyncs (the
@@ -603,6 +607,42 @@ async function composeFileRows(
   for (let i = 0; i < remote.length; i += ROW_BATCH) {
     opts?.onFileBatch?.(remote.slice(i, i + ROW_BATCH));
   }
+
+  // ── The two expensive per-row inputs, applied now that the rows are out ──────────────────────────────
+  //
+  // Order matters for wall-clock: the ledger fold is SYNCHRONOUS, so doing it while git is still running
+  // overlaps the two — the whole composition ends no later than it did when both gated the rows, and the
+  // first row left ~2 seconds earlier. Both are best-effort by contract; neither may break composition.
+  //
+  // Only LOCAL rows are enriched. A remote-only row has no bytes here, so git has nothing to answer about
+  // it and it already carries its own `gitignore: false` (storage_company.mdx §8.5).
+  const patch: Record<string, FileRowPatch> = {};
+
+  // Fold the shared decision ledger for provenance (decisions.mdx §10; one_repo.mdx §4.8): who decided each
+  // file and when. Wrapped so a bad/locked/conflicted ledger never breaks row composition — rows simply
+  // keep the null provenance they were built with.
+  const foldedByPath = foldLedgerForRepo(cfg);
+  if (foldedByPath.size > 0) {
+    for (const r of local) {
+      const prov = foldedByPath.get(r.path);
+      if (!prov) continue;
+      r.decidedBy = prov.decidedBy ?? null;
+      r.decidedAt = prov.decidedAt ?? null;
+      patch[r.path] = { ...patch[r.path], decidedBy: r.decidedBy, decidedAt: r.decidedAt };
+    }
+  }
+
+  const { rules: ignoreRules, unknown: ignoreUnknown } = await ignoreP;
+  for (const r of local) {
+    // The SAME derivation the rows used to be built with — one function, so the patched row and a
+    // buffered row cannot disagree about what git said.
+    const axis = gitIgnoreAxis(repoRootAbs, r.path, ignoreRules, ignoreUnknown);
+    if (Object.keys(axis).length === 0) continue; // git could not answer → leave it undetermined
+    Object.assign(r, axis);
+    patch[r.path] = { ...patch[r.path], ...axis };
+  }
+
+  if (Object.keys(patch).length > 0) opts?.onEnrich?.(patch);
   return [...local, ...remote];
 }
 

@@ -12,6 +12,7 @@
 // together — every assertion below compares the row's aggregates against the SAME aggregates recomputed
 // from `computeRepoDetail`'s fully-composed rows.
 import fs from "node:fs";
+import { execFileSync } from "node:child_process";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeAll } from "vitest";
@@ -34,7 +35,13 @@ const PEER = "the-tower";
 
 // A repo root that EXISTS but holds none of the manifest's files — so the peer-claimed entries below
 // become remote-only rows, which both counting paths have to agree about.
+//
+// It is a REAL git working tree with a real `.gitignore`, because the git-ignore axis is one of the two
+// fields composition defers and patches back in: against a non-repo, `git check-ignore` answers "unknown"
+// for everything and the deferral would be exercised only in its empty case.
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "lfb-row-stats-"));
+execFileSync("git", ["init", "-q"], { cwd: root });
+fs.writeFileSync(path.join(root, ".gitignore"), "*.mp4\n");
 
 const candidate = (p: string, analysisOnly = false) => ({
   path: p,
@@ -176,6 +183,7 @@ describe("computeRepoDetail — streaming composes exactly what buffering compos
     const streamed = await computeRepoDetail(FOLDER, "unreachable", undefined, {
       onFileBatch: (b) => batched.push(...b),
       onSnapshot: () => {},
+      onEnrich: () => {},
     });
     expect(batched).toEqual(buffered.files);
     expect(streamed.files).toEqual(buffered.files);
@@ -201,6 +209,27 @@ describe("computeRepoDetail — streaming composes exactly what buffering compos
     expect(last.taskMetrics).toEqual(final.taskMetrics);
     expect(last.peerCount).toEqual(final.peerCount);
     expect(last.status).toEqual(final.status);
+  });
+
+  it("defers the expensive per-row fields and reports them through onEnrich", async () => {
+    // The git-ignore axis and the decision provenance cost seconds on a real repo and neither is needed to
+    // DRAW a row, so they are patched in afterwards. What must hold is that they still LAND: a caller that
+    // ignores `onEnrich` (every buffered caller does) still gets them, because the same values are written
+    // onto the rows — this is what keeps the two paths from disagreeing.
+    let patch: Record<string, unknown> | null = null;
+    const d = await computeRepoDetail(FOLDER, "unreachable", undefined, {
+      onFileBatch: () => {},
+      onEnrich: (p) => (patch = p),
+    });
+    expect(patch).not.toBeNull();
+    // Every candidate is a `.mp4` and the fixture's `.gitignore` is `*.mp4`, so git ignores them all —
+    // and the deferral has to deliver that verdict, not merely promise it.
+    const local = d.files.filter((f) => f.presence !== "remote-only" && f.path.endsWith(".mp4"));
+    expect(local.length).toBeGreaterThan(0);
+    expect(local.every((f) => f.gitignore === true)).toBe(true);
+    // ...and a caller that ignored `onEnrich` entirely still gets exactly the same rows.
+    const buffered = await computeRepoDetail(FOLDER, "unreachable");
+    expect(d.files).toEqual(buffered.files);
   });
 
   it("an aborted signal stops the walk instead of throwing", async () => {
