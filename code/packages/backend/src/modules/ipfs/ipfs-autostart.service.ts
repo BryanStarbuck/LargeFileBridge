@@ -19,6 +19,7 @@ import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { IpfsAutostartConflict, IpfsAutostartStatus } from "@lfb/shared";
 import { updateAppConfig } from "../store-model/config.service.js";
+import { stableIpfsBin, ipfsBinResolved } from "./ipfs-bin.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { log, rotateIfOversized } from "../../shared/logging.js";
 
@@ -43,8 +44,13 @@ function domainTarget(): string {
   return `gui/${uid()}/${IPFS_AUTOSTART_LABEL}`;
 }
 
-/** Resolve the absolute path to the `ipfs` binary — launchd has no login PATH, so we must be explicit. */
+/**
+ * Resolve the absolute path to the `ipfs` binary — launchd has no login PATH, so we must be explicit.
+ * The shared resolver (ipfs-bin.ts) answers first and needs no subprocess; the `command -v` probe stays as
+ * a fallback for an install in a directory the resolver's list doesn't know about but the user's shell does.
+ */
 async function resolveIpfsBin(): Promise<string | null> {
+  if (ipfsBinResolved()) return stableIpfsBin();
   try {
     const { stdout } = await run("command", ["-v", "ipfs"], { shell: "/bin/bash" });
     const p = stdout.trim().split("\n")[0]?.trim();

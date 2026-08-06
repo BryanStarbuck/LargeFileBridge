@@ -115,6 +115,15 @@ function stallGuard(stallMs: number, discoveryMs: number = stallMs): StallGuard 
   };
 }
 
+/** A guard that watches nothing — for a stream whose real deadline is a fixed wall clock elsewhere. Shared
+ *  and stateless on purpose: it holds no controller, so it can never abort an unrelated request. */
+const INERT_GUARD: StallGuard = {
+  signal: new AbortController().signal,
+  touch() {},
+  clear() {},
+  stalled: false,
+};
+
 /**
  * Did this failure come from an abort or a stall (ours or the runtime's)? Retryable; a protocol error is not.
  *
@@ -284,14 +293,21 @@ export async function resolveFileCid(cid: string, basename?: string): Promise<st
  */
 const CAT_STALL_MS = 10 * 60_000; // 10 min with no bytes arriving ⇒ the transfer is dead, not slow
 
-export async function catToFile(cid: string, destPath: string): Promise<string> {
+export async function catToFile(
+  cid: string,
+  destPath: string,
+  /** `resolved: true` = the caller ALREADY ran `resolveFileCid` on this CID (the pin pass and the
+   *  pull-down both do, to heal the manifest before pinning). Re-resolving costs a `files/stat` per file
+   *  — and a second one per wrapper level — purely to re-derive a CID we were just handed. */
+  opts: { resolved?: boolean } = {},
+): Promise<string> {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}.tmp`;
   let guard: StallGuard | undefined;
   try {
     // Unwrap a legacy wrapper-directory CID to the file inside it (see resolveFileCid). Inside the try so a
     // resolution failure still lands in the fault trail like any other fetch failure.
-    const fileCid = await resolveFileCid(cid, path.basename(destPath));
+    const fileCid = opts.resolved ? cid : await resolveFileCid(cid, path.basename(destPath));
     if (fileCid !== cid) log.info("ipfs", `cid ${cid} is a wrapper directory — fetching file ${fileCid} for ${destPath}`);
     const url = `${apiBase()}/cat?arg=${encodeURIComponent(fileCid)}`;
     // Stall watchdog, NOT a wall clock (see stallGuard): a 4 GB video may stream for an hour and must not
@@ -458,20 +474,17 @@ export async function hasProvider(cid: string, timeoutMs = 30_000): Promise<bool
     const url = `${apiBase()}/routing/findprovs?arg=${encodeURIComponent(cid)}&num-providers=1`;
     const res = await fetch(url, { method: "POST", signal: ctrl.signal });
     if (!res.ok) return null;
-    // Reuse the NDJSON line reader with an inert guard (the real deadline is the wall clock above).
-    const inert = stallGuard(timeoutMs * 10);
-    try {
-      for await (const line of ndjsonLines(res, inert)) {
-        let rec: { Type?: number };
-        try {
-          rec = JSON.parse(line) as typeof rec;
-        } catch {
-          continue;
-        }
-        if (rec.Type === 4) return true; // Type 4 = a Provider record was found
+    // Reuse the NDJSON line reader with a TRULY inert guard: the real deadline is the wall clock above,
+    // and `stallGuard(...)` here armed a second, disconnected AbortController on every chunk whose abort
+    // nothing was listening to — a timer per chunk that could never do anything.
+    for await (const line of ndjsonLines(res, INERT_GUARD)) {
+      let rec: { Type?: number };
+      try {
+        rec = JSON.parse(line) as typeof rec;
+      } catch {
+        continue;
       }
-    } finally {
-      inert.clear();
+      if (rec.Type === 4) return true; // Type 4 = a Provider record was found
     }
     return false; // stream ended with no provider record
   } catch (e) {
@@ -584,10 +597,27 @@ export async function canonicalPinnedSet(): Promise<Set<string>> {
 }
 
 export async function isPinned(cid: string): Promise<boolean> {
+  // FAST PATH FIRST. A single-CID `pin/ls` is one cheap control call; enumerating the WHOLE pinset to
+  // answer "is this one CID pinned?" costs the same as a full reconcile and is what the pin toggle used to
+  // pay on every click (minutes, on the large pinsets this product produces). A positive answer here is
+  // definitive — Kubo only reports a pin it actually holds.
   try {
-    // pin/ls is base-SENSITIVE, so a single-CID query can miss a same-block pin recorded in another base.
-    // Compare CANONICALLY against the roots listing instead (knowledge/ipfs.mdx §5.1). Roots-only listing
-    // is the cheap control-call the reconcile already relies on.
+    const res = await rpc("pin/ls", { args: [cid], query: { type: "all" } });
+    const json = (await res.json()) as { Keys?: Record<string, { Type?: string }> };
+    // ROOT PINS ONLY, matching `listPins`. `type=all` also answers for a block merely held INDIRECTLY
+    // under some recursive root ("indirect through Qm…"); counting that as pinned would make the pin
+    // toggle report `pinned: true` immediately after the user removed the pin, whenever the same block
+    // happens to sit inside another pinned DAG.
+    const roots = Object.values(json.Keys ?? {}).filter((v) => !/^indirect/i.test(v?.Type ?? ""));
+    if (roots.length > 0) return true;
+  } catch (e) {
+    // "is not pinned" is the ordinary negative answer, not a fault — fall through to the canonical scan.
+    log.debug("ipfs", `isPinned direct probe inconclusive for ${cid}: ${(e as Error).message}`);
+  }
+  try {
+    // A NEGATIVE from the direct query is NOT definitive: pin/ls is base-SENSITIVE, so a block pinned as
+    // `Qm…` answers "not pinned" when asked for its `bafy…` form (knowledge/ipfs.mdx §5.1). Only a
+    // CANONICAL compare against the roots listing can rule a pin out.
     const target = canonicalCid(cid);
     return (await listPins()).some((p) => canonicalCid(p.cid) === target);
   } catch (e) {
@@ -666,8 +696,12 @@ export async function contentPinnedCidDetailed(
  * profile set and the cost warning. This thin wrapper keeps the existing string|null callers (pin.service
  * foreign-profile adoption) unchanged.
  */
-export async function contentPinnedCid(absPath: string): Promise<string | null> {
-  return (await contentPinnedCidDetailed(absPath))?.cid ?? null;
+export async function contentPinnedCid(absPath: string, pinned?: Set<string>): Promise<string | null> {
+  // PASS THE PINSET YOU ALREADY HAVE. Omitting it makes this build a fresh kept-set — i.e. a FULL
+  // `pin/ls` enumeration plus an MFS listing — PER FILE. The pin pass calls this once for every
+  // previously-tracked file that looks unpinned, so a repo with 200 such files ran 200 full pinset
+  // enumerations in one pass, each one scaling with the total pin count.
+  return (await contentPinnedCidDetailed(absPath, pinned))?.cid ?? null;
 }
 
 /**
@@ -703,15 +737,23 @@ export async function keptCidSet(): Promise<Set<string>> {
  * just above the file size — letting us hash a handful of size-matched files instead of the whole repo.
  * Metadata-only (`files/stat` per CID, bounded concurrency); best-effort — unresolvable CIDs are skipped.
  */
-export async function keptSizeIndex(): Promise<Map<number, string[]>> {
-  const cids = [...(await keptCidSet())];
+export async function keptSizeIndex(kept?: Set<string>): Promise<Map<number, string[]>> {
+  // `kept` lets a caller that ALREADY built the kept-set reuse it. `buildDiscoveryCtx` asked for both in
+  // one `Promise.all`, so every scan paid TWO full `pin/ls` enumerations + two MFS listings for one answer.
+  const cids = [...(kept ?? (await keptCidSet()))];
   const idx = new Map<number, string[]>();
   let next = 0;
   const workers = Array.from({ length: Math.min(8, cids.length) }, async () => {
     while (next < cids.length) {
       const cid = cids[next++]!;
       const size = await objectSize(cid);
-      if (size != null) idx.set(size, [...(idx.get(size) ?? []), cid]);
+      if (size == null) continue;
+      // Push into the existing bucket. Rebuilding the array (`[...(idx.get(size) ?? []), cid]`) made this
+      // quadratic in the number of same-sized pins — and identical sizes are the NORMAL case here, since
+      // this index exists precisely to group CIDs by size.
+      const bucket = idx.get(size);
+      if (bucket) bucket.push(cid);
+      else idx.set(size, [cid]);
     }
   });
   await Promise.all(workers);
@@ -1110,8 +1152,45 @@ export async function isCompliant(): Promise<boolean> {
  * own content on a public gateway is a choice a user can make; carrying OTHER people's traffic is the thing
  * the charter bans outright, and the two were never the same decision.
  */
-export async function enforceCompliance(): Promise<void> {
+export interface ComplianceEnforcement {
+  /** Config keys this call actually WROTE. Empty = the node was already compliant (or unreachable). */
+  changed: string[];
+  /**
+   * TRUE when we wrote something the RUNNING daemon has not adopted.
+   *
+   * ALL FOUR charter vectors are startup-only in Kubo: `Provide.Strategy` (what the node announces),
+   * `Addresses.Gateway` (what it serves), `Swarm.RelayService.Enabled` (whose traffic it carries) and
+   * `Routing.Type` (whose DHT queries it answers) are read when the daemon initializes and never re-read.
+   * So a successful `enforceCompliance()` changes the FILE, not the process — and because `nodePosture()`
+   * reads the config, the card flips to "compliant ✓" for a daemon that is still, right now, a
+   * circuit-relay v2 server and a DHT server for strangers. Callers must surface this, not swallow it.
+   */
+  restartRequired: boolean;
+  /** False = the throttle skipped this call (nothing was read or written). */
+  ran: boolean;
+}
+
+/** Nothing changed, nothing attempted — the shape a skipped/failed enforcement returns. */
+const NO_ENFORCEMENT = (ran: boolean): ComplianceEnforcement => ({ changed: [], restartRequired: false, ran });
+
+// Enforcement is a config RECONCILIATION, not a work item: running it twice is never more correct than
+// running it once, and it costs 5–7 RPC round trips. `runUnitPin` calls it once PER UNIT, so a machine
+// with 30 repos + 3 storages paid ~200 RPCs every 15-minute pass to re-assert four settings that change
+// only when a human or another tool edits them. Throttled to one real pass per window; the explicit
+// user-facing Fix (`/api/ipfs/enforce`) and the post-install/start/upgrade calls pass `force`.
+const ENFORCE_MIN_INTERVAL_MS = 10 * 60_000;
+let lastEnforceAt = 0;
+
+/** TEST-ONLY: forget the throttle window so a spec can exercise enforcement back-to-back. */
+export function resetComplianceThrottle(): void {
+  lastEnforceAt = 0;
+}
+
+export async function enforceCompliance(opts: { force?: boolean } = {}): Promise<ComplianceEnforcement> {
+  if (!opts.force && Date.now() - lastEnforceAt < ENFORCE_MIN_INTERVAL_MS) return NO_ENFORCEMENT(false);
+  lastEnforceAt = Date.now();
   const cfg = getAppConfig();
+  const changed: string[] = [];
   try {
     const strat = await readReprovideStrategy();
     if (strat !== "pinned" && strat !== "roots") {
@@ -1122,12 +1201,14 @@ export async function enforceCompliance(): Promise<void> {
       // `Provide` entirely.
       try {
         await setConfigKey("Provide.Strategy", cfg.ipfs.reprovide_strategy);
+        changed.push("Provide.Strategy");
         log.info("ipfs", `Set Provide.Strategy = ${cfg.ipfs.reprovide_strategy} (only-our-content).`);
       } catch (e) {
         if (/not found/i.test((e as Error).message)) {
           // Old Kubo without `Provide` — fall back to the legacy key (safe there; it isn't removed yet).
           try {
             await setConfigKey("Reprovider.Strategy", cfg.ipfs.reprovide_strategy);
+            changed.push("Reprovider.Strategy");
             log.info("ipfs", `Set legacy Reprovider.Strategy = ${cfg.ipfs.reprovide_strategy} (older Kubo).`);
           } catch (e2) {
             if (/not found/i.test((e2 as Error).message)) {
@@ -1156,6 +1237,7 @@ export async function enforceCompliance(): Promise<void> {
       } else if (exposesPublic) {
         // Kubo's Addresses.Gateway is a single multiaddr string; rebind it to our loopback default.
         await setConfigKey("Addresses.Gateway", cfg.ipfs.gateway_addr);
+        changed.push("Addresses.Gateway");
         log.info("ipfs", `Rebound Addresses.Gateway = ${cfg.ipfs.gateway_addr} (loopback-only, no public gateway).`);
       }
     } catch (e) {
@@ -1173,18 +1255,35 @@ export async function enforceCompliance(): Promise<void> {
     if (!(await readRelayServiceOff())) {
       // `Swarm.RelayService.Enabled` defaults to true for any publicly dialable node (Kubo ≥0.11):
       // we become a circuit-relay v2 server for strangers without ever opting in.
-      await setBoolConfigKey("Swarm.RelayService.Enabled", false, "relay service");
+      if (await setBoolConfigKey("Swarm.RelayService.Enabled", false, "relay service")) {
+        changed.push("Swarm.RelayService.Enabled");
+      }
     }
     if (!(await readDhtClientOnly())) {
       // `Routing.Type` defaults to `auto` → DHT SERVER when publicly dialable, answering other peers'
       // routing queries. `autoclient` still finds peers and still publishes OUR provider records, so
       // our own pinned files stay findable from our other computers — we just stop serving strangers.
       await setConfigKey("Routing.Type", "autoclient");
+      changed.push("Routing.Type");
       log.info("ipfs", "Set Routing.Type = autoclient (we don't serve other peers' DHT queries).");
     }
   } catch (e) {
     log.warn("ipfs", `Could not enforce compliance: ${(e as Error).message}`);
   }
+  // A WRITTEN SETTING IS NOT A LIVE SETTING (see the `restartRequired` note above). Every key we touch here
+  // is read by Kubo at daemon INIT, so until the daemon restarts this machine is still relaying strangers'
+  // traffic / announcing everything — while `nodePosture()` (which reads the CONFIG) now reports a fully
+  // green card. That gap is the same silence-is-safety failure §3.2 exists to prevent, one axis over, so it
+  // is said out loud in the fault trail rather than left for the user to discover.
+  if (changed.length > 0) {
+    log.warn(
+      "ipfs",
+      `Only-our-content settings were rewritten (${changed.join(", ")}), but Kubo reads these at startup — ` +
+        `this computer keeps its previous IPFS posture until the daemon is restarted. ` +
+        `Restart IPFS from the IPFS page to make the change take effect.`,
+    );
+  }
+  return { changed, restartRequired: changed.length > 0, ran: true };
 }
 
 /**
@@ -1194,14 +1293,15 @@ export async function enforceCompliance(): Promise<void> {
  * enforceCompliance's catch and logged as a warning — leaving the relay ON while nothing obvious
  * broke. `?json=true` is what makes it a real boolean (verified against a live Kubo 0.42 daemon).
  */
-async function setBoolConfigKey(key: string, value: boolean, label: string): Promise<void> {
+async function setBoolConfigKey(key: string, value: boolean, label: string): Promise<boolean> {
   try {
     await rpc("config", { args: [key, String(value)], query: { json: "true" } });
     log.info("ipfs", `Set ${key} = ${value} (${label} — only-our-content).`);
+    return true;
   } catch (e) {
     if (/not found/i.test((e as Error).message)) {
       log.info("ipfs", `${key} not settable on this Kubo build — skipping ${label} enforcement.`);
-      return;
+      return false;
     }
     throw e;
   }

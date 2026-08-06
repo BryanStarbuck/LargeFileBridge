@@ -491,6 +491,27 @@ The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hidi
 The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET /install/status`, `POST /autostart`) is defined in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter`
 
+### 11.1 The `ipfs` binary is resolved to an ABSOLUTE path, never spawned by bare name (LOCKED)
+
+Every question on this page ultimately runs the `ipfs` binary — *is it installed?*, `ipfs init`,
+`ipfs daemon --enable-gc`, `ipfs version --number`, and the plist's `ProgramArguments`. A **bare** name
+resolves through the **caller's PATH**, and the contexts this product is designed to live in are precisely
+the ones with a thin PATH: a launchd worker with no `EnvironmentVariables` block, a Windows scheduled task,
+a systemd user unit. There the daemon start dies with `spawn ipfs ENOENT` and the install probe answers
+*"IPFS isn't installed on this computer"* about a machine that has it — so the node never comes up and the
+UI blames the user for something the environment did. On Windows it was worse than a PATH problem: the file
+is **`ipfs.exe`**, and the probe ran `command -v ipfs` through **`/bin/bash`**, which does not exist there,
+so it threw on every call and IPFS read as permanently un-installed.
+
+This is the same hardening `git` already had ([git_backbone.mdx](./git_backbone.mdx) — `git-bin.ts`), and
+the "is it installed?" probe is answered by the **resolver**, with no subprocess and no shell, so it gives
+the same answer on all three platforms. The cache is dropped after an install or upgrade — the binary that
+did not exist a moment ago exists now, and a memoized "not found" would report a successful install as a
+failure.
+
+Resolving the binary once to a stable absolute path is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-bin.ts` — `stableIpfsBin()`, `ipfsBinResolved()`, `resetIpfsBinCache()`; consumed by `ipfs-node.service.ts` (`ipfsInstalled()`, `ensureInit()`, `startDaemon()`), `ipfs-config-health.service.ts` (`cliVersion()`) and `ipfs-autostart.service.ts` (`resolveIpfsBin()`). Regression test: `code/packages/backend/src/modules/ipfs/ipfs-bin.spec.ts`.
+
 ---
 
 ## 12. The IPFS-off page — turn it on, and keep it on

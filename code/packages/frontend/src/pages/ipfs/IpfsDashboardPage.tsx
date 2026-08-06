@@ -128,7 +128,17 @@ export function IpfsDashboardPage() {
           onRepair={(ids) => repair.mutate(ids)}
           repairBusy={repair.isPending}
           onFix={async () => {
-            try { await api.ipfsEnforce(); qc.invalidateQueries({ queryKey: ["ipfsNode"] }); toast.success("Restored only-our-content defaults"); }
+            try {
+              const r = await api.ipfsEnforce();
+              qc.invalidateQueries({ queryKey: ["ipfsNode"] });
+              // Kubo reads these keys only at daemon START, so a written setting is not yet a live one —
+              // the card is about to go green for a node still running the old posture. Say so.
+              toast.success(
+                r.restartRequired
+                  ? "Only-your-content settings saved — restart IPFS to put them into effect"
+                  : "Already set to only your content — nothing needed changing",
+              );
+            }
             catch (e) { clientLog.error("IpfsDashboardPage.enforce", e); toast.error((e as Error).message); }
           }}
         />

@@ -217,6 +217,29 @@ default — then the banner is an amber *acknowledged* note, not a red error.
 Restoring the only-our-content defaults when the user clicks **Fix** is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` (exposed by the `POST /enforce` handler in `ipfs.router.ts`)
 
+#### 3.1.1 A WRITTEN SETTING IS NOT A LIVE SETTING (LOCKED, learned from a defect)
+
+**All four vectors are startup-only in Kubo.** `Provide.Strategy`, `Addresses.Gateway`,
+`Swarm.RelayService.Enabled` and `Routing.Type` are read when the daemon **initializes** and never re-read.
+So a successful **Fix** changes the config *file*, not the running *process* — and because the card's
+posture is read from the **config**, it flips to a full green "compliant ✓" for a daemon that is, at that
+moment, still a circuit-relay v2 server and still a DHT server for strangers.
+
+That is [§3.2](#32-content-is-only-half-the-charter--traffic-is-the-other-half-locked)'s
+*never-read-silence-as-safety* rule displaced by one axis: the reassuring ✓ is now about the **wrong
+subject** — the file rather than the node. So the enforcement **reports** what it wrote and whether the
+daemon has adopted it, the fault trail says so, and the Fix confirmation tells the user in plain English to
+restart IPFS. Nothing claims the machine is compliant on the strength of a write alone.
+
+Reporting which keys were written and that a restart is required is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` returning `ComplianceEnforcement { changed, restartRequired }`; surfaced to the user by `IpfsPage.tsx` / `IpfsDashboardPage.tsx` (`onFix`). Regression test: `code/packages/backend/src/modules/ipfs/compliance-enforcement.spec.ts`.
+
+**Enforcement is also THROTTLED**, for the same reason §6.6 of [git_backbone.mdx](./git_backbone.mdx)
+throttles commits: it is a *reconciliation of four settings*, not a work item, and running it twice is never
+more correct than running it once. The pin pass called it once **per unit**, so a machine with 30 repos and
+3 storages spent ~200 RPC round trips every 15-minute pass re-asserting settings nothing had changed. One
+real pass per window; an explicit user **Fix** always bypasses the throttle.
+
 ### 3.2 Content is only HALF the charter — traffic is the other half (LOCKED)
 
 The charter bans becoming *"a gateway that bounces or caches other people's content **or traffic**."*

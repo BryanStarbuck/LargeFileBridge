@@ -192,9 +192,20 @@ ipfsRouter.post("/pin", async (req, res) => {
 // POST /api/ipfs/enforce — restore only-our-content defaults on the live node (ipfs.mdx §3.1 Fix).
 ipfsRouter.post("/enforce", async (_req, res) => {
   try {
-    await ipfs.enforceCompliance();
-    log.info("ipfs", "enforced only-our-content defaults on the local node");
-    res.json({ ok: true, data: await computeIpfsPage() });
+    // The user pressed Fix — never let the background throttle turn that into a no-op.
+    const outcome = await ipfs.enforceCompliance({ force: true });
+    log.info("ipfs", `enforced only-our-content defaults on the local node (wrote: ${outcome.changed.join(", ") || "nothing"})`);
+    // `restartRequired` is the honest half of the answer: Kubo reads every one of these keys at daemon
+    // start, so the card is about to go green for a node that is still running the old posture. It rides
+    // INSIDE `data` (like /settings/security's `restartRecommended`) so the client's envelope unwrap keeps it.
+    res.json({
+      ok: true,
+      data: {
+        page: await computeIpfsPage(),
+        changed: outcome.changed,
+        restartRequired: outcome.restartRequired,
+      },
+    });
   } catch (e) {
     log.error("ipfs", `enforce compliance failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });

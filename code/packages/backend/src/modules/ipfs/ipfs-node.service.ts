@@ -29,6 +29,7 @@ import {
   type StartDiagnosis,
 } from "./ipfs-config-health.service.js";
 import * as ipfs from "./ipfs.service.js";
+import { stableIpfsBin, ipfsBinResolved, resetIpfsBinCache } from "./ipfs-bin.js";
 import { bumpTopicThrottled, IPFS_TOPIC } from "../events/state-events.service.js";
 import { log, rotateIfOversized } from "../../shared/logging.js";
 
@@ -40,7 +41,7 @@ function platform(): IpfsPlatform {
   return p === "darwin" || p === "win32" || p === "linux" ? p : "other";
 }
 
-/** Is a binary resolvable on PATH? Uses `command -v` (posix) / `where` (win) — never a shell alias. */
+/** Is a PACKAGE MANAGER (brew/winget) resolvable on PATH? Uses `command -v` (posix) / `where` (win). */
 async function hasBinary(name: string): Promise<boolean> {
   try {
     if (process.platform === "win32") await run("where", [name]);
@@ -49,6 +50,16 @@ async function hasBinary(name: string): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Is the `ipfs` binary present on this computer? Answered by the stable resolver (ipfs-bin.ts), NOT by a
+ * `command -v ipfs` through `/bin/bash`: that shell does not exist on Windows (so the probe threw and IPFS
+ * read as never-installed there), and it resolves through the caller's PATH — which in the launchd /
+ * scheduled-task contexts this app runs in is exactly the PATH that omits the binary.
+ */
+function ipfsInstalled(): boolean {
+  return ipfsBinResolved();
 }
 
 interface InstallPlan {
@@ -98,7 +109,7 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
 
   // "installed" = the CLI is on PATH OR the daemon answers RPC (a running node is, by definition,
   // installed even if the current PATH can't see the binary).
-  const cliInstalled = await hasBinary("ipfs");
+  const cliInstalled = ipfsInstalled();
   const installed = cliInstalled || running;
   const packageManagerPresent = plan.bin ? await hasBinary(plan.bin) : false;
 
@@ -226,7 +237,7 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
 export async function liveness(): Promise<IpfsLiveness> {
   const health = await ipfs.health();
   const running = health === "ok";
-  const installed = (await hasBinary("ipfs")) || running;
+  const installed = ipfsInstalled() || running;
   const autostart = await autostartStatus().catch(() => unknownAutostart());
   const cfg = await configHealth().catch(() => ({ hasBlocker: false }) as { hasBlocker: boolean });
   return {
@@ -361,7 +372,7 @@ async function waitForStopped(timeoutMs: number): Promise<boolean> {
 async function ensureInit(): Promise<boolean> {
   job.phase = "initializing";
   append("Initializing the IPFS repository (if new)…");
-  const code = await runStreaming("ipfs", ["init"]);
+  const code = await runStreaming(stableIpfsBin(), ["init"]);
   if (code === 0) return true;
   // A non-zero exit whose output says the repo already exists is fine.
   if (job.log.slice(-6).some((l) => /already/i.test(l))) {
@@ -455,7 +466,7 @@ async function startDaemon(opts?: { migrate?: boolean }): Promise<StartDiagnosis
   }
   const args = ["daemon", "--enable-gc", ...(opts?.migrate ? ["--migrate"] : [])];
   try {
-    const child = spawn("ipfs", args, { detached: true, stdio: ["ignore", out, out] });
+    const child = spawn(stableIpfsBin(), args, { detached: true, stdio: ["ignore", out, out] });
     child.unref();
   } catch (e) {
     append(`(could not launch daemon: ${(e as Error).message})`);
@@ -466,12 +477,23 @@ async function startDaemon(opts?: { migrate?: boolean }): Promise<StartDiagnosis
       manualCommand: "ipfs daemon --enable-gc",
       isConfigBlocker: false,
     };
+  } finally {
+    // The DETACHED child owns its own duplicate of this fd for its whole (long) life; OUR copy has no
+    // reader and no writer and must be closed. Leaving it open leaked one descriptor per start attempt —
+    // and a start is retried on every failed "Turn on IPFS", every install and every upgrade.
+    if (out !== 1) {
+      try {
+        fs.closeSync(out);
+      } catch {
+        /* already closed — nothing to reclaim */
+      }
+    }
   }
   append("Waiting for the daemon to come up…");
   if (await waitForHealthy(30_000)) return null; // success
 
   // It didn't answer — read what the daemon actually said and classify it (no more fake timeouts).
-  const tail = readDaemonLogTail(out === 1 ? outPath : outPath, startOffset);
+  const tail = readDaemonLogTail(outPath, startOffset);
   // Surface the daemon's own last lines in the progress log so the user/support can see them.
   for (const line of tail.slice(-12)) append(line);
   const diag = diagnoseStartFailure(tail);
@@ -508,7 +530,10 @@ export function startInstall(): IpfsInstallJob {
       if (code !== 0) {
         return fail(`${plan.method} exited with code ${code}.`, plan.command);
       }
-      if (!(await hasBinary("ipfs"))) {
+      // The binary that did not exist a moment ago exists now — a memoized "not found" would make the
+      // very next check report the install as failed.
+      resetIpfsBinCache();
+      if (!ipfsInstalled()) {
         return fail("Install finished but the `ipfs` command still isn't on PATH.", plan.command);
       }
       if (!(await ensureInit())) {
@@ -519,7 +544,7 @@ export function startInstall(): IpfsInstallJob {
         return fail(`Installed, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand);
       }
       // Bring the fresh node into only-our-content compliance (best effort).
-      await ipfs.enforceCompliance().catch((e) =>
+      await ipfs.enforceCompliance({ force: true }).catch((e) =>
         log.warn("ipfs", `enforce compliance after install failed: ${(e as Error).message}`),
       );
       job.status = "done";
@@ -573,7 +598,7 @@ export async function controlDaemon(
   // Start: run as a background job so the UI can watch it (spawning + health poll isn't instant).
   void (async () => {
     try {
-      if (!(await hasBinary("ipfs"))) {
+      if (!ipfsInstalled()) {
         return fail("IPFS isn't installed on this computer.", installPlan(platform()).command);
       }
       if (!(await ensureInit())) {
@@ -583,7 +608,7 @@ export async function controlDaemon(
       if (diag) {
         return fail(diag.message, diag.manualCommand);
       }
-      await ipfs.enforceCompliance().catch((e) =>
+      await ipfs.enforceCompliance({ force: true }).catch((e) =>
         log.warn("ipfs", `enforce compliance after start failed: ${(e as Error).message}`),
       );
       // Primary-button path: also set IPFS to come back on its own after a reboot (best-effort — a
@@ -652,12 +677,13 @@ export function startUpgrade(): IpfsInstallJob {
       if (code !== 0) {
         return fail(`${plan.bin} exited with code ${code} during upgrade.`, plan.command);
       }
+      resetIpfsBinCache(); // an upgrade can relocate the binary (a new brew cellar / winget package dir)
       // Restart the (now newer) daemon, diagnosing any start failure the upgrade surfaced.
       const diag = await startDaemon();
       if (diag) {
         return fail(`Upgraded, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand);
       }
-      await ipfs.enforceCompliance().catch((e) =>
+      await ipfs.enforceCompliance({ force: true }).catch((e) =>
         log.warn("ipfs", `enforce compliance after upgrade failed: ${(e as Error).message}`),
       );
       job.status = "done";

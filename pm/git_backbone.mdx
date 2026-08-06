@@ -640,6 +640,22 @@ substantive remains, **no commit is made and no push is attempted**.
 This layer is what makes the invariant structural. A future writer that stamps a heartbeat costs a
 redundant local write and **nothing more** — no commit, no push, no merge race.
 
+**THE CHOKE POINT HAS TWO DOORS, AND BOTH ARE GATED (LOCKED, learned from a defect).** `commitAndPush` is
+not the only path to a commit: the **pre-merge checkpoint** reaches one too. Before a merge, the cycle
+stages and commits every dirty LFB-generated path so the merge is always legal (§4, the "your local changes
+would be overwritten by merge" abort) — and that path originally had no semantic opinion about what it was
+committing. So any volatile-only write that happened to be dirty *at pull time* became a commit, and then a
+push, **before layer 2 ever looked at it**. That is not a narrow window: `repo_storage.last_scan` is
+rewritten into the sync repo by the **scan** path (`mirrorToSyncRepo`), at moments with no relationship to
+the git cycle, so the tree is routinely dirty with pure churn exactly when the checkpoint runs. A choke
+point with a second door in it is not a choke point. The checkpoint therefore runs the same gate, and
+commits only what survives it — while still leaving the tree clean, so the merge can always proceed.
+
+Applies the gate to the pre-merge checkpoint, and commits only the paths that survive it, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`, class
+`GitBackbone`, methods `checkpointOwnWrites()` → `dropVolatileOnlyChanges()` → `stagedOwnPaths()`.
+Regression test: `code/packages/backend/src/modules/git/checkpoint-quiet-gate.spec.ts`.
+
 **Two boundaries the gate must never cross:** it only reverts a change it has **proven** meaningless, and
 it only ever touches **LFB's own** files. A file LFB does not own, a **creation**, and a **deletion** always
 keep their commit — an unknown file is never provably meaningless, and a vanished file is always news.

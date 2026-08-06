@@ -79,7 +79,13 @@ class Limiter {
   private readonly waiters: Array<() => void> = [];
   constructor(private readonly max: number) {}
   async run<T>(fn: () => Promise<T>): Promise<T> {
-    if (this.active >= this.max) await new Promise<void>((resolve) => this.waiters.push(resolve));
+    // RE-CHECK AFTER WAKING, in a loop. A woken waiter used to take the slot unconditionally, but its
+    // `resolve()` only schedules a microtask — and any caller entering `run()` synchronously in the
+    // meantime sees `active < max` and takes the slot first. Both then incremented, so the ceiling this
+    // limiter exists to hold (`cores − 2`, shared by EVERY add/pin/fetch in a pass) was quietly exceeded
+    // whenever units overlapped — which is the normal shape of a full pass, and of a pull running
+    // alongside one.
+    while (this.active >= this.max) await new Promise<void>((resolve) => this.waiters.push(resolve));
     this.active++;
     try {
       return await fn();
@@ -250,7 +256,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
         // Bounded to already-tracked files that appear unpinned (never brand-new adds), so the extra read is
         // paid only where we were about to re-upload the file anyway.
         if (existing?.cid && existing.size === st.size) {
-          const already = await ipfs.contentPinnedCid(abs);
+          // Hand it the pinset THIS pass already read. Without it, each probe rebuilt the kept-set from
+          // scratch — a full `pin/ls` enumeration per candidate file, on top of the byte re-hash it is
+          // already paying for.
+          const already = await ipfs.contentPinnedCid(abs, pinset);
           if (already) {
             const canon = ipfs.canonicalCid(already);
             pinset.add(canon);
@@ -427,7 +436,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
               pinset.add(ipfs.canonicalCid(entry.cid));
               counts.pinned++;
             }
-            await ipfs.catToFile(entry.cid, abs); // …then write the bytes to the resolved local path
+            // `resolved: true` — `resolveFileCid` ran a few lines up; re-running it costs a `files/stat`
+            // per file (more per wrapper level) to re-derive the CID we are already holding.
+            await ipfs.catToFile(entry.cid, abs, { resolved: true }); // …then write the bytes locally
             counts.fetched++;
             log.info("pin", `Fetched ${entry.path} -> ${abs} (${entry.cid})`);
           } catch (e) {
@@ -1186,7 +1197,8 @@ export async function pullMissing(
             pinset.add(ipfs.canonicalCid(entry.cid));
           }
           if (!fs.existsSync(abs)) {
-            await ipfs.catToFile(entry.cid, abs); // write the pinned bytes to the working tree (a real copy)
+            // Already unwrapped above — don't pay `resolveFileCid` a second time per file.
+            await ipfs.catToFile(entry.cid, abs, { resolved: true }); // the pinned bytes → the working tree
           }
           pulled++;
           log.info("pin", `Pulled ${rel} <- ${entry.cid} (added by ${entry.pinned_by.find((d) => d !== computerLabel()) ?? "a peer"})`);

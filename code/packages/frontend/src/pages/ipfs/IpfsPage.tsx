@@ -77,8 +77,15 @@ export function IpfsPage() {
   const enforce = useMutation({
     mutationFn: api.ipfsEnforce,
     onSuccess: (d) => {
-      set(d);
-      toast.success("Restored only-our-content defaults");
+      set(d.page);
+      // Say what actually happened. The settings are written, but Kubo only reads them when the daemon
+      // starts — so until IPFS is restarted this computer keeps the posture it had, and a bare
+      // "Restored the defaults" would be telling the user something that isn't true yet.
+      if (d.restartRequired) {
+        toast.success("Only-your-content settings saved — restart IPFS to put them into effect");
+      } else {
+        toast.success("Already set to only your content — nothing needed changing");
+      }
     },
     onError: (e: Error) => { clientLog.error("IpfsPage.enforce", e); toast.error(e.message); },
   });

@@ -262,10 +262,18 @@ export interface GitCycleResult {
   conflicts?: string[];
 }
 
-/** Classify a configured remote: a URL (http/https/ssh/git@) vs. a local filesystem path (git_backbone.mdx §3). */
+/**
+ * Classify a configured remote: a URL (http/https/ssh/git/file) vs. a local filesystem path
+ * (git_backbone.mdx §3).
+ *
+ * `file://` counts as a URL, not a path. It is a URL git must CLONE (into the machine-local cache), never a
+ * directory we can open in place — `expandHome("file:///srv/repo.git")` is not a checkout, so classifying it
+ * as local made every cycle log "local remote … is not a checkout yet — skipping git cycle" and that
+ * storage's backbone never ran at all.
+ */
 export function classifyRemote(remote: string): RemoteKind {
   const r = remote.trim();
-  if (/^(https?|ssh|git):\/\//i.test(r) || /^[\w.-]+@[\w.-]+:/.test(r)) return "url";
+  if (/^(https?|ssh|git|file):\/\//i.test(r) || /^[\w.-]+@[\w.-]+:/.test(r)) return "url";
   return "local";
 }
 
@@ -410,6 +418,20 @@ export async function resolveWorkingCopy(storageId: string, remote: string): Pro
   // URL: a machine-local cache clone LFB manages (git_backbone.mdx §3.2).
   const cache = path.join(storageUnitDir(storageId), "git");
   if (fs.existsSync(path.join(cache, ".git"))) return cache;
+  // A HALF-FINISHED CLONE WEDGES THIS FOREVER. `cache` exists but has no `.git` when a previous clone died
+  // partway (network drop, disk full, the process killed) — and `git clone` refuses a non-empty target, so
+  // every later cycle failed on the same directory and the storage never got a backbone again. The cache is
+  // machine-local and fully rebuildable by definition (that is what makes it a cache), so clear it and
+  // re-clone rather than fail identically forever.
+  if (fs.existsSync(cache)) {
+    try {
+      fs.rmSync(cache, { recursive: true, force: true });
+      log.warn("git", `storage ${storageId}: ${cache} had no .git (a previous clone did not finish) — removed it to re-clone`);
+    } catch (e) {
+      log.warn("git", `storage ${storageId}: could not clear the incomplete clone at ${cache}: ${(e as Error).message}`);
+      return null;
+    }
+  }
   try {
     fs.mkdirSync(path.dirname(cache), { recursive: true });
     await openRepo(path.dirname(cache)).clone(remote, cache);
@@ -417,6 +439,12 @@ export async function resolveWorkingCopy(storageId: string, remote: string): Pro
     return cache;
   } catch (e) {
     log.warn("git", `storage ${storageId}: clone of ${remote} failed: ${(e as Error).message}`);
+    // Leave no half-clone behind, or the NEXT cycle inherits exactly the wedge cleared above.
+    try {
+      if (!fs.existsSync(path.join(cache, ".git"))) fs.rmSync(cache, { recursive: true, force: true });
+    } catch {
+      /* the branch above cleans it up on the next attempt */
+    }
     return null;
   }
 }
@@ -737,6 +765,13 @@ export class GitBackbone {
    * never touched by this code path at all (a GitBackbone only ever exists for a storage's own dedicated
    * repo — `resolveWorkingCopy`). Returns the committed paths. Never throws; a checkpoint that fails just
    * leaves the merge to fail the way it used to, which is strictly no worse.
+   *
+   * THE QUIET GATE APPLIES HERE TOO (§6.6). This is a second, independent path to a commit, and it ran
+   * with no semantic opinion about what it was committing — so every volatile-only write that happened to
+   * be dirty at pull time (`repo_storage.yaml`'s `last_scan` heartbeat, which the SCAN path rewrites at
+   * arbitrary moments via `mirrorToSyncRepo`; a device file's churning IP list) became a commit and a push
+   * BEFORE `commitAndPushInner`'s gate ever got a chance to look at it. A choke point with a second door
+   * in it is not a choke point.
    */
   private async checkpointOwnWrites(): Promise<string[]> {
     let status: Awaited<ReturnType<SimpleGit["status"]>>;
@@ -757,12 +792,36 @@ export class GitBackbone {
     if (ours.length === 0) return [];
     try {
       await this.git.add(["--", ...ours]);
-      await this.git.commit(`LFB: checkpoint ${ours.length} generated file(s) before merge`, ours);
-      log.info("git", `${this.dir}: checkpointed ${ours.length} LFB-generated file(s) before the merge`);
-      return ours;
+      await this.dropVolatileOnlyChanges(); // §6.6 — a heartbeat must never become a commit, on EITHER path
+      // Re-read: the gate may have reverted every path we staged, and a checkpoint of nothing must not
+      // become an empty commit (nor claim it cleared the way for the merge — there was nothing in the way).
+      const stillStaged = await this.stagedOwnPaths(ours);
+      if (stillStaged.length === 0) {
+        log.debug("git", `${this.dir}: pre-merge checkpoint had nothing but volatile-only churn — no commit`);
+        return [];
+      }
+      await this.git.commit(
+        `LFB: checkpoint ${stillStaged.length} generated file(s) before merge`,
+        stillStaged,
+      );
+      log.info("git", `${this.dir}: checkpointed ${stillStaged.length} LFB-generated file(s) before the merge`);
+      return stillStaged;
     } catch (e) {
       log.warn("git", `${this.dir}: pre-merge checkpoint commit failed: ${(e as Error).message}`);
       return [];
+    }
+  }
+
+  /** Which of `candidates` are still staged against HEAD after the quiet gate ran. On any error we assume
+   *  they all are — a redundant commit is always safer than a silently skipped one. */
+  private async stagedOwnPaths(candidates: string[]): Promise<string[]> {
+    try {
+      const out = await this.git.raw(["diff", "--cached", "--name-only", "--", ...candidates]);
+      const staged = new Set(out.split("\n").map((s) => s.trim()).filter(Boolean));
+      return candidates.filter((p) => staged.has(p));
+    } catch (e) {
+      log.debug("git", `${this.dir}: could not re-read the staged checkpoint: ${(e as Error).message}`);
+      return candidates;
     }
   }
 
@@ -788,7 +847,16 @@ export class GitBackbone {
       }
       const abs = path.join(this.dir, rel);
       try {
-        const quarantine = path.join(resolveStateDir(), "merge-quarantine", path.basename(this.dir), stamp, rel);
+        // Keyed by STORAGE ID, not the directory basename: two storages whose working copies are both
+        // named e.g. `git` (the URL-remote cache layout, `pin/s/<id>/git/`) quarantined into the same
+        // folder and overwrote each other's only copy of the file being cleared.
+        const quarantine = path.join(
+          resolveStateDir(),
+          "merge-quarantine",
+          `${this.storageId}-${path.basename(this.dir)}`,
+          stamp,
+          rel,
+        );
         fs.mkdirSync(path.dirname(quarantine), { recursive: true });
         if (fs.existsSync(abs)) fs.copyFileSync(abs, quarantine);
       } catch (e) {

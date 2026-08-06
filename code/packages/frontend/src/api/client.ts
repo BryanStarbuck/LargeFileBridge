@@ -110,6 +110,14 @@ import { http, unwrap } from "./axios.js";
 // The shared per-repo decision policy payload the repo router returns (decisions.mdx §9/§14): the policy
 // doc itself + THIS computer's share status (whether decisions travel to teammates — storage/decisions
 // .service.ts `shareStatus()`).
+/** What POST /ipfs/enforce answers: the refreshed page, the config keys it wrote, and whether the DAEMON
+ *  still has to be restarted before any of it is in effect. */
+export interface IpfsEnforceResult {
+  page: IpfsPageData;
+  changed: string[];
+  restartRequired: boolean;
+}
+
 export type DecisionShareStatus = "shared" | "local_only_no_remote" | "local_only_consent_off";
 export interface DecisionPolicyResult {
   policy: DecisionPolicyDoc;
@@ -242,7 +250,10 @@ export const api = {
   // Toggle a single CID's pin (ipfs.mdx §3). Returns the VERIFIED state read back from the node.
   ipfsPin: (body: { cid: string; pinned: boolean }) =>
     unwrap<IpfsPinToggle>(http.post("/ipfs/pin", body)),
-  ipfsEnforce: () => unwrap<IpfsPageData>(http.post("/ipfs/enforce")),
+  // Fix returns the refreshed page PLUS what it actually wrote. `restartRequired` is not decoration: Kubo
+  // reads every only-our-content key at daemon START, so the card goes green while the running node is
+  // still relaying strangers' traffic — the user has to be told to restart it (ipfs.mdx §3.2).
+  ipfsEnforce: () => unwrap<IpfsEnforceResult>(http.post("/ipfs/enforce")),
 
   // IPFS dashboard (ipfs_ui.mdx) — node status, install, on/off toggle, install/start progress.
   ipfsNode: () => unwrap<IpfsNodeStatus>(http.get("/ipfs/node")),

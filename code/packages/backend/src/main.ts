@@ -94,7 +94,9 @@ async function bootstrapState(): Promise<void> {
   });
   // Bring the IPFS node into only-our-content compliance (best effort — a missing/offline IPFS node
   // must not block boot, but the failure is worth a trail so a broken compliance run is visible).
-  ipfs.enforceCompliance().catch((e) => log.warn("main", `IPFS compliance enforcement failed: ${(e as Error).message}`));
+  ipfs
+    .enforceCompliance({ force: true })
+    .catch((e) => log.warn("main", `IPFS compliance enforcement failed: ${(e as Error).message}`));
   const pid = await ipfs.peerId();
   if (pid) await updateAppConfig((c) => ((c.computer.ipfs_peer_id = pid), c));
   // The device-registration worker is ON BY DEFAULT (devices.mdx §11.1): auto-install + enable its

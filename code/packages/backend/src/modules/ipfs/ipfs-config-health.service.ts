@@ -14,6 +14,7 @@ import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import type { IpfsConfigHealth, IpfsConfigIssue, IpfsUpgradeInfo, IpfsPlatform } from "@lfb/shared";
+import { stableIpfsBin } from "./ipfs-bin.js";
 import { log } from "../../shared/logging.js";
 
 const run = promisify(execFile);
@@ -66,7 +67,9 @@ function versionGte(a: string | null, b: string): boolean {
 /** Read `ipfs version --number` from the CLI (works with the daemon OFF, unlike the RPC). null if absent. */
 export async function cliVersion(): Promise<string | null> {
   try {
-    const { stdout } = await run("ipfs", ["version", "--number"], { timeout: 5000 });
+    // Absolute path (ipfs-bin.ts) — a bare `ipfs` misses entirely under a background PATH, and this read
+    // is what decides whether the "your Kubo is too old" nudge can be shown at all.
+    const { stdout } = await run(stableIpfsBin(), ["version", "--number"], { timeout: 5000 });
     const v = stdout.trim();
     return v || null;
   } catch (e) {

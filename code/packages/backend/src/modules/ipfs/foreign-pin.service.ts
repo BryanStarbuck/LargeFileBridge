@@ -228,7 +228,10 @@ export interface DiscoveryCtx {
  *  passes (kept-set + per-CID sizes); returns an empty ctx when the node is unreachable so discovery no-ops. */
 export async function buildDiscoveryCtx(): Promise<DiscoveryCtx> {
   try {
-    const [keptSet, sizeIdx] = await Promise.all([keptCidSet(), keptSizeIndex()]);
+    // ONE kept-set, reused for the size index. Asking for both in parallel made `keptSizeIndex()` build a
+    // second one internally — two full `pin/ls` enumerations + two MFS listings per scan, for one answer.
+    const keptSet = await keptCidSet();
+    const sizeIdx = await keptSizeIndex(keptSet);
     return { keptSet, keptSizes: [...sizeIdx.keys()].sort((a, b) => a - b) };
   } catch (e) {
     log.debug("ipfs", `buildDiscoveryCtx skipped: ${(e as Error).message}`);
