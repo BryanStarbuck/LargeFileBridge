@@ -4,6 +4,7 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
+import { confineRequestPaths } from "../fs/allow-root.js";
 import { log } from "../../shared/logging.js";
 import {
   transcribeToolStatus,
@@ -19,6 +20,9 @@ import { describeReadiness, provision, repair, removeModel, recordConsent, setEn
 
 export const transcribeRouter = Router();
 transcribeRouter.use(requireAllowListed);
+// Every `path` / `root` / `paths[]` this router takes is an absolute filesystem path it will read,
+// rewrite, or ship to a provider — confine them to the allow-roots before any handler sees them.
+transcribeRouter.use(confineRequestPaths);
 
 // GET /api/transcribe/tools — are whisper + ffmpeg installed (drives the disabled state + install hint).
 transcribeRouter.get("/tools", (_req, res) => {

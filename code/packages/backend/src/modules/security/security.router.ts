@@ -5,6 +5,7 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { z } from "zod";
 import { getPublicSecurityConfig, completeSetup, SecurityError } from "./security.service.js";
 import { rebuildAuthFrontend } from "../auth/auth-frontend.js";
+import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
 export const securityRouter = Router();
@@ -14,11 +15,12 @@ securityRouter.get("/config", (_req, res) => {
   res.json({ ok: true, data: getPublicSecurityConfig() });
 });
 
-// Loopback-only guard (same as internal.router). `trust proxy: loopback` (main.ts) keeps a spoofed
-// X-Forwarded-For from faking loopback.
+// Loopback-only guard (same as internal.router). Asks the TCP PEER, not `req.ip` — this route writes the
+// allow-list with no authentication at all, so it must not be reachable by a caller who merely claims to
+// be local in a header (shared/loopback.ts).
 function loopbackOnly(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip || req.socket.remoteAddress || "";
-  if (ip.includes("127.0.0.1") || ip.includes("::1") || ip === "::ffff:127.0.0.1") return next();
+  if (isLoopback(req)) return next();
+  const ip = req.socket?.remoteAddress ?? "unknown";
   log.warn("security", `Rejected non-loopback setup attempt from ${ip}`);
   res.status(403).json({ ok: false, error: "Setup is only available on this computer (loopback).", code: "not_loopback" });
 }

@@ -174,7 +174,7 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
 | **Pin process** | The 15-min background pin: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract) |
 | **Scanner roots** | Which top-level dirs the scan walks + global ignore globs. | [storage_local.mdx §3/§7](./storage_local.mdx#7-the-scanner--discovering-repos-and-the-mask) |
-| **IPFS node** | API/gateway multiaddrs, pin mode, reprovide. | [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
+| **IPFS node** | API/gateway multiaddrs, pin mode, reprovide, and the only-your-content verdict (§4.4). | [storage_local.mdx §3](./storage_local.mdx#3-app-level-configyaml--computer-wide-settings-hierarchical) |
 | **Access / allow-list** | The OpenAuthFederated allow-listed emails (admin only). | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
 | **Account** | The signed-in user, theme/density, sign out. | [storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) |
 
@@ -304,6 +304,20 @@ The slider surface (and the live "≈ N of M cores" readout) is implemented in c
 The resolved mass-compute budget is computed live from this setting in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
 (reads `performance.max_core_fraction`); the fixed responsive floor is `responsiveBudget()` (`cores − 2`).
+
+### 4.4 The IPFS node verdict — the SAME three states the IPFS page shows
+
+The **IPFS node** section's one-line verdict is the charter's only-your-content posture, and it must agree
+with the IPFS page exactly: a Settings page reading *"Serving only your content"* while `/ipfs` reads
+*"Restart needed"* is worse than either alone, because nothing tells the user which one is describing their
+computer. So it carries three states, not two — **Unreachable**, **Restart needed** (amber: the settings are
+saved but Kubo reads them at startup, so this machine is still relaying strangers' traffic —
+[ipfs.mdx §3.1.1](./ipfs.mdx#311-a-written-setting-is-not-a-live-setting-locked-learned-from-a-defect)),
+and **Serving only your content**. The restart itself lives on the IPFS page; Settings names the state and
+points there.
+
+Reporting the posture with its restart-pending state is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `toGlobalSettings()` (`ipfs.compliant` + `ipfs.restartRequired`, from `ipfs.service.ts` — `isCompliant()` / `compliancePendingRestart()`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` IPFS node section.
 
 ---
 

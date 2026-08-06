@@ -2,9 +2,11 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
+import { currentUser } from "../auth/current-user.js";
 import { scanAll } from "../scanner/scanner.service.js";
-import { computeIpfsPage, importPins } from "./ipfs-page.service.js";
-import { nodeStatus, startInstall, getJob, controlDaemon, startUpgrade, liveness } from "./ipfs-node.service.js";
+import { computeIpfsPage, importPins, syncedPinTargets } from "./ipfs-page.service.js";
+import { recordDecision } from "../storage/decisions.service.js";
+import { nodeStatus, startInstall, getJob, controlDaemon, restartDaemon, startUpgrade, liveness } from "./ipfs-node.service.js";
 import { configHealth, repairConfig } from "./ipfs-config-health.service.js";
 import { installAutostart, removeAutostart } from "./ipfs-autostart.service.js";
 import * as ipfs from "./ipfs.service.js";
@@ -64,6 +66,20 @@ ipfsRouter.post("/daemon", async (req, res) => {
     });
   } catch (e) {
     log.error("ipfs", `daemon ${body.data.action} failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/ipfs/restart — stop and bring the daemon back as ONE watchable job (ipfs.mdx §3.1.1). Backs
+// the "Restart IPFS" on the restart-needed card. NOT a stop followed by a start from the browser: `start`
+// answers as soon as its job begins, so that pair reports success over a daemon still coming up — and
+// nothing at all about one that never did, after a healthy node was already taken down.
+ipfsRouter.post("/restart", async (_req, res) => {
+  log.info("ipfs", "daemon restart requested");
+  try {
+    res.json({ ok: true, data: await restartDaemon() });
+  } catch (e) {
+    log.error("ipfs", `daemon restart failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });
@@ -178,11 +194,41 @@ ipfsRouter.post("/pin", async (req, res) => {
   if (!body.success) return res.status(400).json({ ok: false, error: body.error.message });
   const { cid, pinned } = body.data;
   try {
+    // UNPIN IS A TWO-PART ANSWER (ipfs-page.service.ts `syncedPinTargets`). Dropping the pin alone leaves
+    // the file decided Add-to-IPFS, and the next pin pass re-adds it — the user's click reverts itself
+    // within a cycle, silently. Clear the decision FIRST so a pass that starts mid-request can't re-pin
+    // between the two writes.
+    const unsynced: string[] = [];
+    if (!pinned) {
+      for (const t of syncedPinTargets(cid)) {
+        try {
+          await recordDecision(t.folder, [t.rel], { ipfs: false }, currentUser(req).email);
+          unsynced.push(t.name);
+        } catch (e) {
+          log.warn("ipfs", `unpin ${cid}: clearing the sync decision for ${t.rel} failed: ${(e as Error).message}`);
+        }
+      }
+    }
     if (pinned) await ipfs.pinAdd(cid);
     else await ipfs.pinRm(cid);
     const verified = await ipfs.isPinned(cid);
     log.info("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} -> pinned=${verified}`);
-    res.json({ ok: true, data: { cid, pinned: verified } });
+    // The read-back is the OUTCOME, not just a value to echo. `pinRm` swallows its own RPC failure by
+    // design (other callers treat a failed unpin as informational), so a router that reported whatever
+    // the node happened to hold answered a failed unpin with a green "Pinned" — the opposite word to
+    // the one the user clicked. Disagreement with the request is an error, and it says which way.
+    if (verified !== pinned) {
+      // The decision half already landed and a ledger append is not undoable, so an unpin that failed at
+      // the pin says BOTH things. Reporting only the failure would leave the user believing nothing
+      // changed while the file has in fact stopped syncing.
+      const alsoUnsynced = unsynced.length > 0 ? ` ${unsynced.length === 1 ? "It was" : "They were"} still taken out of syncing.` : "";
+      const msg = pinned
+        ? "IPFS didn't take the pin — the node still doesn't have this file."
+        : `IPFS still has this file pinned — it couldn't be unpinned.${alsoUnsynced}`;
+      log.warn("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} did not take effect`);
+      return res.status(500).json({ ok: false, error: msg });
+    }
+    res.json({ ok: true, data: { cid, pinned: verified, unsynced } });
   } catch (e) {
     log.error("ipfs", `pin ${pinned ? "add" : "rm"} ${cid} failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });

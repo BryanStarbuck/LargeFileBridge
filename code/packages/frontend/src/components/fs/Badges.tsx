@@ -29,7 +29,7 @@ export const BADGE_META: Record<FsBadge, BadgeMeta> = {
     bg: "var(--lfb-badge-repo-root)",
     ink: "#fff",
     name: "Repo root",
-    desc: "The top of a git working tree LFBridge manages.",
+    desc: "The top of a git working tree Large File Bridge manages.",
   },
   repo_descendant: {
     letter: "r",

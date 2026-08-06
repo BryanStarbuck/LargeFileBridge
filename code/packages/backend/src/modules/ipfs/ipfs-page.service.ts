@@ -105,6 +105,43 @@ function buildTrackedIndex(): Map<string, TrackedInfo> {
   return index;
 }
 
+/** A repo file that is BOTH tracked under this CID and still decided Add-to-IPFS. */
+export interface SyncedPinTarget {
+  folder: string; // the repo folder key `recordDecision` takes
+  rel: string; // repo-relative manifest path
+  name: string; // basename, for the toast
+}
+
+/**
+ * Which repo files a CID would be re-pinned FOR (ipfs.mdx §3, pin_process.mdx §4).
+ *
+ * `ipfs pin rm` on a CID whose file is still decided `sync` does not survive: the next pin pass finds
+ * the decided file absent from the pinset and adds+pins it straight back, so the user's unpin quietly
+ * un-does itself within a cycle and nothing ever says why. The unpin path uses this to clear the
+ * decision alongside the pin — matching what "Remove from IPFS" already means everywhere else
+ * (menus.mdx §5.3, full_paths.mdx §3.5) — so intent and reality end up agreeing.
+ *
+ * Only `sync` files are returned: recording `ipfs:false` for an UNDECIDED file would freeze it out of
+ * every future pin pass, which is a much bigger answer than the one the user gave.
+ */
+export function syncedPinTargets(cid: string): SyncedPinTarget[] {
+  const target = ipfs.canonicalCid(cid);
+  const out: SyncedPinTarget[] = [];
+  for (const folder of listRepoFolders()) {
+    try {
+      const cfg = getRepoConfig(folder);
+      for (const f of getRepoManifest(folder).files) {
+        if (!f.cid || !f.path || ipfs.canonicalCid(f.cid) !== target) continue;
+        if (cfg.decisions[f.path] !== "sync") continue;
+        out.push({ folder, rel: f.path, name: path.basename(f.path) });
+      }
+    } catch (e) {
+      log.warn("ipfs", `synced-pin lookup skipped repo ${folder}: ${(e as Error).message}`);
+    }
+  }
+  return out;
+}
+
 /** Run async `fn` over `items` with bounded concurrency (keeps object/stat from flooding the node). */
 async function pool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
@@ -216,6 +253,9 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
     relayServiceOff: posture.relayServiceOff,
     dhtClientOnly: posture.dhtClientOnly,
     compliant: health === "ok" ? compliant : false,
+    // A compliant CONFIG the running daemon has not read yet (ipfs.mdx §3.1.1) — the banner shows the
+    // "restart to apply" state instead of a green all-clear it hasn't earned.
+    restartRequired: health === "ok" && ipfs.compliancePendingRestart(),
     gcOn: posture.gcOn,
     pinnedCount: rows.length,
     pinnedBytes: rows.reduce((sum, r) => sum + (r.sizeBytes || 0), 0),
@@ -246,7 +286,10 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
  */
 export async function importPins(opts: { cids?: string[]; all?: boolean }): Promise<number> {
   const health = await ipfs.health();
-  if (health !== "ok") return 0;
+  // A down node cannot tell us what is pinned, so there is nothing to import FROM. Returning 0 made the
+  // page toast a green "Imported 0 pins into tracking" for a request that never had a chance to run —
+  // the user reads that as "there was nothing to do", which is the one thing it does not mean.
+  if (health !== "ok") throw new Error("IPFS isn't running, so its pins can't be read yet.");
 
   const index = buildTrackedIndex();
   const pinned = await ipfs.listPins();

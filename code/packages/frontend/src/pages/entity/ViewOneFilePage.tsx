@@ -162,7 +162,7 @@ function fileVerdict(v: EntityView): { state: Health; headline: string; sub?: st
     return {
       state: "neutral",
       headline: "Not tracked — this file isn't inside a managed repo",
-      sub: "LFBridge only pins files inside repos it manages.",
+      sub: "Large File Bridge only pins files inside repos it manages.",
     };
   }
   if (v.decision !== "sync") {
@@ -192,7 +192,7 @@ function fileVerdict(v: EntityView): { state: Health; headline: string; sub?: st
     return {
       state: "warn",
       headline: "Set to pin, but on 0 other computers — not backed up yet",
-      sub: "Open LFBridge on another machine so it can pull this file.",
+      sub: "Open Large File Bridge on another machine so it can pull this file.",
     };
   }
   if (v.transfer && v.transfer !== "pinned") {

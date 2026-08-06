@@ -3,13 +3,13 @@ import { Router, type Request, type Response, type NextFunction } from "express"
 import { startScan } from "../scanner/scan-job.js";
 import { startRun } from "../schedule/run-job.js";
 import { requestShutdown } from "./shutdown-hook.js";
+import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
 export const internalRouter = Router();
 
 function loopbackOnly(req: Request, res: Response, next: NextFunction): void {
-  const ip = req.ip || req.socket.remoteAddress || "";
-  if (ip.includes("127.0.0.1") || ip.includes("::1") || ip === "::ffff:127.0.0.1") return next();
+  if (isLoopback(req)) return next();
   res.status(403).json({ ok: false, error: "loopback only" });
 }
 internalRouter.use(loopbackOnly);

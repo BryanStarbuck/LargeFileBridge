@@ -75,7 +75,7 @@ export function ViewOneDirectoryPage() {
       danger: true,
       confirm: {
         title: `Compress media inside ${v.name}?`,
-        body: "Videos and images under this directory are compressed; originals move to LFBridge trash (recoverable).",
+        body: "Videos and images under this directory are compressed; originals move to Large File Bridge trash (recoverable).",
         confirmLabel: "Compress",
       },
       onSelect: compressDirConfirmed,

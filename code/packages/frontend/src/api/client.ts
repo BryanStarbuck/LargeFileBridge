@@ -262,8 +262,14 @@ export const api = {
   ipfsInstall: () => unwrap<IpfsInstallJob>(http.post("/ipfs/install")),
   ipfsInstallStatus: () => unwrap<IpfsInstallJob>(http.get("/ipfs/install/status")),
   // The on/off toggle. `autostart` (start only) ALSO sets IPFS to come back after a reboot (§12).
-  ipfsDaemon: (body: { action: IpfsDaemonAction; autostart?: boolean }) =>
+  // `migrate` (start only) runs `ipfs daemon --migrate` — the one-click answer to a repo left behind by
+  // an older Kubo, offered by the error panel when a start failed with `cause: "needs_migrate"` (§14.2).
+  ipfsDaemon: (body: { action: IpfsDaemonAction; autostart?: boolean; migrate?: boolean }) =>
     unwrap<IpfsDaemonResult>(http.post("/ipfs/daemon", body)),
+  // Stop + start as ONE job, so the answer is the real outcome (ipfs.mdx §3.1.1). Never do this as a
+  // `stop` then a `start` from here: `start` returns as its job BEGINS, so the pair reports success over a
+  // daemon still coming up and nothing at all about one that never did. Await it via `restartIpfsAndWait`.
+  ipfsRestart: () => unwrap<IpfsDaemonResult>(http.post("/ipfs/restart")),
   // Set up or remove reboot auto-start directly; returns the fresh node status (ipfs_ui.mdx §13).
   ipfsAutostart: (action: IpfsAutostartAction) =>
     unwrap<IpfsNodeStatus>(http.post("/ipfs/autostart", { action })),

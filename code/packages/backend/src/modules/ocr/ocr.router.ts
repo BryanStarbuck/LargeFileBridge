@@ -7,11 +7,15 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
+import { confineRequestPaths } from "../fs/allow-root.js";
 import { log } from "../../shared/logging.js";
 import { ocrEngines, readOcr, ocrOne, ocrMany, ocrTree, enqueueOcr, previewOcr } from "./ocr.service.js";
 
 export const ocrRouter = Router();
 ocrRouter.use(requireAllowListed);
+// Every `path` / `root` / `paths[]` this router takes is an absolute filesystem path it will read,
+// rewrite, or ship to a provider — confine them to the allow-roots before any handler sees them.
+ocrRouter.use(confineRequestPaths);
 
 const Engine = z.enum(["auto", "vision", "tesseract"]);
 

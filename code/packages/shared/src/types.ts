@@ -445,6 +445,10 @@ export interface IpfsNodeCard {
   relayServiceOff: boolean; // we don't relay other peers' traffic (Swarm.RelayService.Enabled=false)
   dhtClientOnly: boolean; // we don't answer other peers' DHT queries (Routing.Type=autoclient)
   compliant: boolean; // ALL FOUR vectors clean — content (reprovide+gateway) AND traffic (relay+routing)
+  // The config SAYS compliant, but the daemon running right now started before we wrote it (ipfs.mdx
+  // §3.1.1). Every charter key is startup-only in Kubo, so `compliant` above describes the FILE — this
+  // says the process hasn't adopted it yet, and the card must not render a green all-clear over it.
+  restartRequired: boolean;
   gcOn: boolean; // garbage collection enabled (incidental third-party cache stays transient)
   pinnedCount: number;
   pinnedBytes: number;
@@ -479,6 +483,15 @@ export interface IpfsImportResult {
 export interface IpfsPinToggle {
   cid: string;
   pinned: boolean;
+  /**
+   * Files whose Add-to-IPFS decision this unpin ALSO cleared (basenames, for the toast).
+   *
+   * An unpin of a `sync`-decided file is only half an answer: the pin pass re-adds and re-pins anything
+   * still decided `sync` (pin_process.mdx §4), so a bare `pin rm` reverts itself within the next cycle.
+   * The decision is cleared with it — the same "Remove from IPFS" meaning menus.mdx §5.3 gives the file
+   * catalog — so what the user asked for is what stays true.
+   */
+  unsynced: string[];
 }
 
 // ── The IPFS DASHBOARD / node control panel (ipfs_ui.mdx) ────────────────────
@@ -630,6 +643,7 @@ export interface IpfsNodeStatus {
   relayServiceOff: boolean; // Swarm.RelayService.Enabled=false — we don't relay strangers' traffic
   dhtClientOnly: boolean; // Routing.Type=autoclient — we don't answer strangers' DHT queries
   compliant: boolean;
+  restartRequired: boolean; // the compliant config is written but this daemon predates it (ipfs.mdx §3.1.1)
   autostart: IpfsAutostartStatus; // will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13)
   configHealth: IpfsConfigHealth; // is the node config sane / repairable? (ipfs_ui.mdx §14)
   upgrade: IpfsUpgradeInfo; // installed version vs. recommended baseline (ipfs_ui.mdx §15)
@@ -638,7 +652,9 @@ export interface IpfsNodeStatus {
 // ── Install / start jobs — server-side, single-flight, re-attachable (ipfs_ui.mdx §7.2) ──
 // All long IPFS actions share one job/progress view (ipfs_ui.mdx §16): install, start/stop the
 // daemon, repair/migrate the config (§14), and upgrade the binary (§15).
-export type IpfsJobKind = "install" | "start" | "stop" | "repair" | "upgrade";
+// `restart` is its OWN kind, not a start: it stops a healthy daemon first, so it is the one job that can
+// leave the machine worse than it found it, and its outcome has to be reported as such (ipfs.mdx §3.1.1).
+export type IpfsJobKind = "install" | "start" | "stop" | "repair" | "upgrade" | "restart";
 export type IpfsJobPhase =
   | "idle"
   | "detecting"
@@ -661,9 +677,23 @@ export interface IpfsInstallJob {
   log: string[]; // append-only, human-readable progress lines
   manualCommand: string | null; // the copyable fallback command (always set on error)
   error: string | null; // fatal message when status === "error"
+  // WHY the start failed, when we could read it out of the daemon's own log (ipfs_ui.mdx §14.2). The UI
+  // needs the machine-readable cause, not just the sentence: `needs_migrate` has a one-click fix
+  // (`start` with `migrate: true`) that the error panel can offer instead of a terminal command.
+  cause: IpfsStartCause | null;
   startedAt: string | null;
   finishedAt: string | null;
 }
+
+// Why a daemon start failed — classified from the daemon's own log (ipfs_ui.mdx §14.2).
+export type IpfsStartCause =
+  | "deprecated_config"
+  | "needs_migrate"
+  | "port_busy"
+  | "lock_held"
+  | "init_needed"
+  | "timeout"
+  | "unknown";
 
 export type IpfsDaemonAction = "start" | "stop";
 
@@ -673,6 +703,9 @@ export type IpfsDaemonAction = "start" | "stop";
 export interface IpfsDaemonRequest {
   action: IpfsDaemonAction;
   autostart?: boolean;
+  // `start` only: run `ipfs daemon --migrate` so a repo left behind by an older Kubo migrates itself
+  // (ipfs_ui.mdx §14.2). The one-click answer to a `needs_migrate` start failure.
+  migrate?: boolean;
 }
 
 // POST /api/ipfs/daemon result — either the fresh node status, or a job the UI should watch.
@@ -722,7 +755,12 @@ export interface GlobalSettings {
     reprovideStrategy: "pinned" | "roots" | "all";
     publicGateway: boolean;
     health: IpfsHealth;
-    compliant: boolean; // does the running node honor only-our-content? (knowledge/ipfs.mdx §6)
+    compliant: boolean; // does the node's CONFIG honor only-our-content? (knowledge/ipfs.mdx §6)
+    // …and has the running daemon actually READ it? Kubo takes every one of those keys at startup, so
+    // `compliant` alone describes a file (ipfs.mdx §3.1.1). Settings must not claim "Serving only your
+    // content" over a daemon that predates the write — that is the same green-over-a-relay this state
+    // exists to prevent, one page over.
+    restartRequired: boolean;
   };
   allowedEmails: string[];
   access: SecurityAccess; // full allow-list (companies + individuals) — security.mdx §7.3

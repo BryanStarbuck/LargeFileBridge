@@ -168,10 +168,18 @@ async function* ndjsonLines(res: Response, guard: StallGuard): AsyncGenerator<st
 export async function health(): Promise<IpfsHealth> {
   try {
     await rpc("id");
+    unreachableProbes = 0;
     return "ok";
   } catch (e) {
     // The daemon being off is routine, not a fault — keep it out of error.err (debug only).
     log.debug("ipfs", `health probe unreachable: ${(e as Error).message}`);
+    // ONE failed probe is not "down". `rpc` aborts at RPC_TIMEOUT_MS, and a daemon busy with a large pin
+    // pass or a GC sweep can miss that deadline while it is still running — and still un-adopted. Clearing
+    // `pendingComplianceRestart` on that blip would be PERMANENT (nothing re-sets the flag once the config
+    // already matches what enforcement would write), so the card would go green over a node that is still
+    // a relay. So a daemon has to be MISSING across consecutive probes before we call it gone. Our own
+    // restarts never rely on this: `waitForStopped` watched the stop and says so via `noteDaemonStopped`.
+    if (++unreachableProbes >= DOWN_CONFIRM_PROBES) pendingComplianceRestart = false;
     return "unreachable";
   }
 }
@@ -1184,6 +1192,47 @@ let lastEnforceAt = 0;
 /** TEST-ONLY: forget the throttle window so a spec can exercise enforcement back-to-back. */
 export function resetComplianceThrottle(): void {
   lastEnforceAt = 0;
+  pendingComplianceRestart = false;
+  unreachableProbes = 0;
+}
+
+/**
+ * A compliance write is on disk that the RUNNING daemon has not adopted (`ComplianceEnforcement.restartRequired`).
+ *
+ * This outlives the call that set it because the GAP outlives it: the daemon keeps its old posture for as
+ * long as it keeps running, and the status card is re-read every few seconds by a UI that would otherwise
+ * paint "Only your content ✓" over a node still relaying strangers' traffic.
+ *
+ * It clears on the two observations that mean a DIFFERENT process will answer next: a stop we watched
+ * (`noteDaemonStopped`, from `waitForStopped`), and a daemon missing across consecutive health probes —
+ * which is how a restart done OUTSIDE the app (a terminal, a reboot, launchd) is caught. Deliberately not
+ * a single failed probe: see `health()`.
+ *
+ * In-memory ON PURPOSE. Kubo exposes no way to read a RUNNING daemon's effective config (`config` reads the
+ * file), and its peer ID is stable across restarts, so nothing on disk could tell a restored flag whether
+ * the daemon it described is still the one running. Persisting it would trade a rare false-negative (the app
+ * restarts while an un-adopted daemon keeps running) for a routine false-positive (a reboot brings both back
+ * and the card sits amber on a node that IS compliant) — and a warning that cries wolf stops being read.
+ */
+let pendingComplianceRestart = false;
+export function compliancePendingRestart(): boolean {
+  return pendingComplianceRestart;
+}
+
+// How many consecutive unreachable probes mean "gone" rather than "slow". Two, because the cost of the two
+// mistakes is not symmetric: waiting one more probe delays clearing an amber card that the user can act on
+// anyway, while clearing early paints a permanent green over a node still relaying strangers' traffic.
+const DOWN_CONFIRM_PROBES = 2;
+let unreachableProbes = 0;
+
+/**
+ * We WATCHED the daemon go down (`waitForStopped`), so the flag is no longer waiting on anything — whatever
+ * we wrote is on disk and the next start reads it. This is the signal for every stop the APP performs; the
+ * consecutive-probe rule in `health()` exists only for the stops it doesn't perform.
+ */
+export function noteDaemonStopped(): void {
+  pendingComplianceRestart = false;
+  unreachableProbes = 0;
 }
 
 export async function enforceCompliance(opts: { force?: boolean } = {}): Promise<ComplianceEnforcement> {
@@ -1276,6 +1325,9 @@ export async function enforceCompliance(opts: { force?: boolean } = {}): Promise
   // green card. That gap is the same silence-is-safety failure §3.2 exists to prevent, one axis over, so it
   // is said out loud in the fault trail rather than left for the user to discover.
   if (changed.length > 0) {
+    // Remembered, not just logged: the card is re-read continuously and must keep saying this for as long
+    // as the un-adopted daemon keeps running (compliancePendingRestart).
+    pendingComplianceRestart = true;
     log.warn(
       "ipfs",
       `Only-our-content settings were rewritten (${changed.join(", ")}), but Kubo reads these at startup — ` +

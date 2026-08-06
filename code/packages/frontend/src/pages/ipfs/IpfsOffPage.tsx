@@ -119,6 +119,9 @@ export function IpfsOffPage() {
         <ErrorPanel
           job={job}
           onRetry={() => (job.kind === "install" ? install.mutate() : daemon.mutate({ action: "start" }))}
+          // `--migrate` is a START flag, so the one-click migration is a start whichever job failed —
+          // an install that got as far as the daemon leaves the same needs-migration repo behind.
+          onMigrate={() => daemon.mutate({ action: "start", migrate: true })}
           onDismiss={() => qc.setQueryData(["ipfsJob"], { ...job, status: "idle" })}
         />
       ) : node && !node.running ? (

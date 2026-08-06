@@ -429,9 +429,16 @@ export function PinKebab({ pin }: { pin: IpfsPinRow }) {
       )
         return;
       try {
-        await api.ipfsPin({ cid: pin.cid, pinned: false });
+        const r = await api.ipfsPin({ cid: pin.cid, pinned: false });
         refreshIpfs();
-        toast.success("Unpinned on this computer");
+        // These rows are the pins with no local file, so an Add-to-IPFS decision behind the CID is not
+        // expected — but the server clears one when it finds it (ipfs.mdx §5.1.2), and the surface that
+        // caused it is the one that has to say so.
+        toast.success(
+          r.unsynced.length > 0
+            ? `Unpinned — ${r.unsynced.length === 1 ? r.unsynced[0] : `${r.unsynced.length} files`} will no longer sync across your computers`
+            : "Unpinned on this computer",
+        );
       } catch (e) {
         clientLog.error("RowKebabs.unpin", e);
         toast.error(e instanceof Error ? e.message : "Couldn't unpin");

@@ -5,12 +5,16 @@
 import { Router } from "express";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
+import { confineRequestPaths } from "../fs/allow-root.js";
 import { log } from "../../shared/logging.js";
 import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, previewDescribe, getAiConfig, setAiConfig, aiCredentialsInfo, providerHealth, resumeDescribeProvider } from "./describe.service.js";
 import { promptView, customizePrompt, savePrompt, resetPrompt } from "./prompts.js";
 
 export const describeRouter = Router();
 describeRouter.use(requireAllowListed);
+// Every `path` / `root` / `paths[]` this router takes is an absolute filesystem path it will read,
+// rewrite, or ship to a provider — confine them to the allow-roots before any handler sees them.
+describeRouter.use(confineRequestPaths);
 
 const Kind = z.enum(["image", "video"]);
 const Provider = z.enum(["auto", "gemini", "grok", "openai"]);

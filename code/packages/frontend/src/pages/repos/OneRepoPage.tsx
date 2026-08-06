@@ -328,7 +328,7 @@ export function OneRepoPage() {
     if (!detail?.path) return;
     const paths = absPaths();
     if (!paths.length) return;
-    if (!(await confirmModal({ title: `Compress ${paths.length} file${paths.length === 1 ? "" : "s"}?`, body: "Medium quality, same resolution — originals move to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
+    if (!(await confirmModal({ title: `Compress ${paths.length} file${paths.length === 1 ? "" : "s"}?`, body: "Medium quality, same resolution — originals move to Large File Bridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     compressBatch.mutate(paths);
   };
 
@@ -366,7 +366,7 @@ export function OneRepoPage() {
     if (!detail?.path || f.compress === "na") return;
     const abs = `${detail.path}/${f.path}`;
     if (f.compress === "could") {
-      if (await confirmModal({ title: `Compress ${f.path}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" })) compressBatch.mutate([abs]);
+      if (await confirmModal({ title: `Compress ${f.path}?`, body: "Medium quality, same resolution — the original moves to Large File Bridge trash (recoverable).", confirmLabel: "Compress" })) compressBatch.mutate([abs]);
     } else {
       const name = f.path.slice(f.path.lastIndexOf("/") + 1);
       navigate({ to: viewerRouteForName(name), search: { path: abs } });

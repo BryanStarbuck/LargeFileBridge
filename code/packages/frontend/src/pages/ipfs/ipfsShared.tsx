@@ -1,6 +1,6 @@
-// Shared IPFS-dashboard primitives used by BOTH the running dashboard (/ipfs, IpfsDashboardPage) and
-// the IPFS-off page (/ipfs/off, IpfsOffPage). Extracted so the two very-different pages (ipfs_ui.mdx
-// §5 running vs §12 off) don't duplicate the progress/error/security building blocks.
+// Shared IPFS primitives used by the running dashboard (/ipfs, IpfsDashboardPage), the IPFS-off page
+// (/ipfs/off, IpfsOffPage) and the pins page's node verdict (IpfsPage). Extracted so the very-different
+// pages (ipfs_ui.mdx §5 running vs §12 off) don't duplicate the progress/error/security building blocks.
 import { useEffect, useRef, useState } from "react";
 import {
   RefreshCw, AlertCircle, Terminal, Copy, Check, ShieldCheck, ShieldAlert, RotateCw, X,
@@ -11,10 +11,42 @@ import type {
   IpfsConfigHealth, IpfsUpgradeInfo,
 } from "@lfb/shared";
 import { toast } from "sonner";
+import { api } from "../../api/client.js";
 import { writeClipboard } from "@/lib/clipboard";
 
 export function num(n: number | null): string {
   return n == null ? "—" : n.toLocaleString();
+}
+
+// ── Restarting the daemon, waited out ────────────────────────────────────────
+const RESTART_POLL_MS = 1000;
+// The server-side job has its own start timeout; this only stops the browser polling forever if the API
+// itself becomes unreachable mid-restart.
+const RESTART_WAIT_MS = 180_000;
+
+/**
+ * Restart IPFS and WAIT for the real outcome (ipfs.mdx §3.1.1) — the one way any surface should do this.
+ *
+ * The restart runs server-side as a single job (`POST /ipfs/restart`) precisely because the stop and the
+ * start are not independent: the stop is what takes a healthy node down, and `POST /ipfs/daemon` with
+ * `start` answers the instant its background job BEGINS. A caller that awaited that pair would toast
+ * "restarted" over a daemon still coming up, and would say nothing whatever about one that never came
+ * back. So this polls the job to completion and THROWS the job's own error — including the sentence and
+ * the `cause` the off-page's error panel can act on.
+ *
+ * `onJob` (optional) receives each polled job so a page that renders `ProgressView` can show it live.
+ */
+export async function restartIpfsAndWait(onJob?: (job: IpfsInstallJob) => void): Promise<void> {
+  let job = (await api.ipfsRestart()).job;
+  const deadline = Date.now() + RESTART_WAIT_MS;
+  while (job && job.status === "running" && Date.now() < deadline) {
+    onJob?.(job);
+    await new Promise((r) => setTimeout(r, RESTART_POLL_MS));
+    job = await api.ipfsInstallStatus();
+  }
+  if (job) onJob?.(job);
+  if (job?.status === "error") throw new Error(job.error ?? "IPFS didn't come back after the restart.");
+  if (job?.status === "running") throw new Error("IPFS is still restarting — watch its progress on the IPFS page.");
 }
 
 // ── The redesigned turn-on/progress view (ipfs_ui.mdx §16) — a friendly status HERO with step chips
@@ -45,6 +77,11 @@ function jobSteps(kind: IpfsJobKind): Array<{ phases: IpfsJobPhase[]; label: str
       ];
     case "stop":
       return [{ phases: ["stopping"], label: "Stop" }];
+    case "restart":
+      return [
+        { phases: ["stopping"], label: "Stop" },
+        { phases: ["starting"], label: "Start" },
+      ];
     default: // start
       return [
         { phases: ["initializing"], label: "Initialize" },
@@ -60,6 +97,7 @@ const JOB_TITLE: Record<IpfsJobKind, string> = {
   stop: "Stopping IPFS…",
   repair: "Fixing your IPFS configuration…",
   upgrade: "Upgrading IPFS…",
+  restart: "Restarting IPFS…",
 };
 const JOB_SUB: Record<IpfsJobKind, string> = {
   install: "Setting up the engine that pins your big files between your computers.",
@@ -67,6 +105,7 @@ const JOB_SUB: Record<IpfsJobKind, string> = {
   stop: "Taking your node offline on this computer.",
   repair: "Migrating your configuration so IPFS can start again.",
   upgrade: "Updating to a newer, healthier version of IPFS.",
+  restart: "Putting your saved settings into effect — IPFS reads them when it starts.",
 };
 
 export function ProgressView({ job }: { job: IpfsInstallJob }) {
@@ -148,20 +187,37 @@ export function CollapsibleLog({ lines }: { lines: string[] }) {
 }
 
 export function ErrorPanel({
-  job, onRetry, onDismiss,
-}: { job: IpfsInstallJob; onRetry: () => void; onDismiss: () => void }) {
+  job, onRetry, onMigrate, onDismiss,
+}: { job: IpfsInstallJob; onRetry: () => void; onMigrate: () => void; onDismiss: () => void }) {
+  // A repo left behind by an older Kubo needs a ONE-TIME migration, and the app can run it — `start`
+  // with `migrate: true` is `ipfs daemon --migrate` (ipfs_ui.mdx §14.2). Plain Retry can only fail the
+  // same way forever, so the panel used to hand the user a terminal command for a repair it could do
+  // itself. The manual command stays below as the escape hatch.
+  const needsMigrate = job.cause === "needs_migrate";
   return (
     <div className="rounded-lg border border-red-200 bg-red-50 p-5">
       <div className="flex items-center gap-2 text-red-800">
         <AlertCircle className="h-5 w-5" />
         <div className="font-semibold">{job.error ?? "Something went wrong"}</div>
       </div>
+      {needsMigrate && (
+        <p className="mt-2 max-w-2xl text-sm text-red-900/80">
+          Large File Bridge can run the migration for you. It updates the on-disk IPFS repository to the
+          format this version needs — your pinned files and your node identity are kept.
+        </p>
+      )}
       {job.log.length > 0 && <LogBox lines={job.log} />}
       {job.manualCommand && <ManualCommand command={job.manualCommand} note="Run this in a terminal to finish by hand:" />}
       <div className="mt-4 flex gap-2">
-        <button onClick={onRetry} className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
-          Retry
-        </button>
+        {needsMigrate ? (
+          <button onClick={onMigrate} className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+            Run the one-time migration
+          </button>
+        ) : (
+          <button onClick={onRetry} className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+            Retry
+          </button>
+        )}
         <button onClick={onDismiss} className="rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-white">
           Dismiss
         </button>
@@ -221,16 +277,33 @@ export function CopyText({
 }
 
 // ── Security posture card (only-our-content — ipfs_ui.mdx §8) ─────────────────
-export function SecurityCard({ node, onFix }: { node: IpfsNodeStatus; onFix: () => Promise<void> }) {
+export function SecurityCard({
+  node, onFix, onRestart,
+}: {
+  node: IpfsNodeStatus;
+  onFix: () => Promise<void>;
+  // Kubo reads every charter key at startup (ipfs.mdx §3.1.1), so a written setting is not a live one.
+  // Without this the card's "Only your content ✓" describes the config FILE while the running daemon is
+  // still relaying strangers' traffic — the one state this card exists to make impossible.
+  onRestart: () => Promise<void>;
+}) {
   const [fixing, setFixing] = useState(false);
+  const [restarting, setRestarting] = useState(false);
   const nonCompliant = node.running && !node.compliant;
   const acknowledged = nonCompliant && node.publicGateway;
+  const pendingRestart = node.running && node.compliant && node.restartRequired;
   return (
     <div className="rounded-lg border border-[var(--lfb-border)] bg-white">
       <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-4 py-3 text-sm">
         <span className="inline-flex items-center gap-1.5 font-medium">
-          {node.compliant ? <ShieldCheck className="h-4 w-4 text-green-600" /> : <ShieldAlert className="h-4 w-4 text-red-600" />}
-          {node.compliant ? "Only your content ✓" : "Check needed"}
+          {pendingRestart ? (
+            <RotateCw className="h-4 w-4 text-amber-600" />
+          ) : node.compliant ? (
+            <ShieldCheck className="h-4 w-4 text-green-600" />
+          ) : (
+            <ShieldAlert className="h-4 w-4 text-red-600" />
+          )}
+          {pendingRestart ? "Restart needed" : node.compliant ? "Only your content ✓" : "Check needed"}
         </span>
         <Posture label="Reprovide" ok={node.reprovideStrategy !== "all"} value={node.reprovideStrategy} />
         <Posture label="Gateway" ok={node.gatewayLocalOnly} value={node.gatewayLocalOnly ? "local-only" : "public"} />
@@ -241,6 +314,22 @@ export function SecurityCard({ node, onFix }: { node: IpfsNodeStatus; onFix: () 
         <Posture label="Routing" ok={node.dhtClientOnly} value={node.dhtClientOnly ? "client-only" : "serving"} />
         <Posture label="GC" ok={node.gcOn} value={node.gcOn ? "on" : "off"} />
       </div>
+      {pendingRestart && (
+        <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <RotateCw className="h-4 w-4" />
+          <span className="flex-1">
+            Your only-your-content settings are saved, but IPFS only reads them when it starts — until it
+            restarts, this computer is still using its previous ones.
+          </span>
+          <button
+            onClick={async () => { setRestarting(true); await onRestart(); setRestarting(false); }}
+            disabled={restarting}
+            className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+          >
+            {restarting ? "Restarting…" : "Restart IPFS"}
+          </button>
+        </div>
+      )}
       {nonCompliant && (
         <div className={`flex items-center gap-2 border-t px-4 py-2 text-sm ${acknowledged ? "border-amber-200 bg-amber-50 text-amber-800" : "border-red-200 bg-red-50 text-red-800"}`}>
           {acknowledged ? <ShieldCheck className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}

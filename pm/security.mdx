@@ -460,11 +460,25 @@ loopback** (`127.0.0.1` / `::1`), reusing the same guard as the internal worker 
 (`internal.router.ts → loopbackOnly`). First-run security setup is therefore performed **on the box**
 (localhost), which is the correct trust boundary for a one-time bootstrap. Server-mode operators may
 alternatively pre-seed `config.yaml → access` out-of-band (config file / env) before exposing the port;
-LFB reads that as already-`configured` and never shows the page. `trust proxy` is set to `loopback`
-(`main.ts`) so a spoofed `X-Forwarded-For` cannot fake a loopback address.
+LFB reads that as already-`configured` and never shows the page.
 
-The loopback-only guard on the unauthenticated setup write is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.router.ts` — `loopbackOnly()` (middleware on `POST /setup`)
+**The guard asks the TCP PEER, never `req.ip` (LOCKED, learned from a defect).** `trust proxy` is set to
+`loopback` (`main.ts`), and the earlier reading of that — "so a spoofed `X-Forwarded-For` cannot fake a
+loopback address" — had it backwards. `trust proxy: loopback` means Express *starts believing*
+`X-Forwarded-For` the moment the connecting socket is loopback, which is exactly the situation a same-host
+reverse proxy creates. A bare `proxy_pass` sends no `X-Forwarded-For` at all, so `req.ip` resolves to
+`127.0.0.1` for **every remote visitor**; a caller who does send one only has to write
+`X-Forwarded-For: 127.0.0.1` to be believed. On a `server`-mode deployment — which binds `0.0.0.0` — that
+made this unauthenticated allow-list write, the loopback shutdown/worker triggers (§code_plan §6), the
+OS-open hand-off (os_open.mdx §3) and the dev-auth/CLI principals (§6.3) reachable from the network. The
+peer socket address cannot be rewritten by a header, so it is the only thing these guards read.
+
+Residual, and stated rather than hidden: a reverse proxy **on this same machine** IS a loopback peer, so a
+hosted install fronted by one still needs its own edge rule for `/api/internal` and `/api/security`. What
+the app can guarantee is that no request TALKS its way into being local.
+
+Deciding whether a request physically originated on this computer is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/loopback.ts` — `isLoopback()` (the one implementation; `security.router.ts → loopbackOnly()`, `internal.router.ts → loopbackOnly()`, `os-open.ts → isLocalRequest()` and `identify.ts` all delegate to it)
 
 ### 8.5 Post-auth privilege confusion (enforcement bypass)
 
@@ -505,6 +519,27 @@ standing surface.
 Covered by the existing `main.ts` posture: HSTS is **off** on plain-http localhost (so the OAuth
 callback isn't force-upgraded to a non-existent `https://localhost`), **on** in server mode behind real
 TLS. `cookieSecure` follows `COOKIE_SECURE`. The security page adds no new transport surface.
+
+### 8.9 An allow-listed principal aiming an ENGINE at a file outside the browse roots
+
+**Attack.** Being on the allow-list is not the same as being trusted with the whole disk — and in server
+mode an allow-listed **domain** is a great many principals. The browse, media-stream and entity routes each
+confine their path to the allow-roots and refuse the secret stashes (file_system.mdx §3, `allow-root.ts`).
+The media **engines** did not: `compress`, `ocr`, `transcribe`, `describe` and `git-ignore` took the
+caller's absolute path straight out of the request and used it. Those routes do more than read — compress
+**rewrites the file in place**, OCR/transcribe write an artifact beside it and hand its text back, and
+describe **ships the bytes to a third-party AI provider**. One `POST` was arbitrary read, arbitrary
+overwrite, and an exfiltration channel, all outside the roots the app is meant to serve.
+
+**Mitigation — confine at the router edge, not at each service.** Every `path`, `root` and `paths[]` a
+request carries (query or body) is resolved and passed through the same `assertAllowedPath` the browser
+routes use, before any handler runs. Router-level so a route added tomorrow inherits it; per-entry so a
+batch is checked as strictly as its worst item; symlink-safe because `assertAllowedPath` canonicalizes with
+`realpath` first. The routes whose *job* is to point somewhere new — registering a repo or a storage root
+**defines** an allow-root — are deliberately outside this guard.
+
+Confining every filesystem path a media-engine request carries is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts` — `confineRequestPaths()` (mounted after `requireAllowListed` on the ocr / transcribe / describe / compress / git-ignore routers)
 
 ---
 

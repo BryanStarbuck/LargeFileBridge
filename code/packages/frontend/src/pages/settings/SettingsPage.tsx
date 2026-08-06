@@ -79,7 +79,10 @@ export function SettingsPage() {
   }
 
   const ipfsOk = data.ipfs.health === "ok";
-  const ipfsState = !ipfsOk ? "bad" : data.ipfs.compliant ? "ok" : "warn";
+  // A compliant CONFIG the running daemon hasn't read yet is NOT "serving only your content" (ipfs.mdx
+  // §3.1.1) — until it restarts this computer is still relaying strangers' traffic. Amber, and it says so.
+  const ipfsPendingRestart = ipfsOk && data.ipfs.compliant && data.ipfs.restartRequired;
+  const ipfsState = !ipfsOk ? "bad" : data.ipfs.compliant && !ipfsPendingRestart ? "ok" : "warn";
   const authConfigured = !!auth?.oauthConfigured;
 
   return (
@@ -205,16 +208,24 @@ export function SettingsPage() {
         state={ipfsState}
         right={
           <span style={{ color: healthColor(ipfsState) }}>
-            {!ipfsOk ? "Unreachable" : data.ipfs.compliant ? "Serving only your content" : "Needs a fix"}
+            {!ipfsOk
+              ? "Unreachable"
+              : ipfsPendingRestart
+                ? "Restart needed"
+                : data.ipfs.compliant
+                  ? "Serving only your content"
+                  : "Needs a fix"}
           </span>
         }
       >
         <p className="text-sm text-black/70">
           {!ipfsOk
             ? "The IPFS engine isn't answering. Start it from the IPFS page so your files can move."
-            : data.ipfs.compliant
-              ? "This computer serves only your own content — it is not a public gateway for the internet. This is the secure default."
-              : "This computer is serving more than your own content. It will be corrected on the next pin (or fix it now from the IPFS page)."}
+            : ipfsPendingRestart
+              ? "Your only-your-content settings are saved, but IPFS only reads them when it starts — until it restarts, this computer can still relay other people's traffic. Restart it from the IPFS page."
+              : data.ipfs.compliant
+                ? "This computer serves only your own content — it is not a public gateway for the internet. This is the secure default."
+                : "This computer is serving more than your own content. It will be corrected on the next pin (or fix it now from the IPFS page)."}
         </p>
         <div className="mt-2 flex gap-4">
           <Link to="/ipfs" className="text-sm text-[var(--lfb-primary)]">Open IPFS →</Link>

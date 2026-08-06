@@ -100,7 +100,7 @@ export function StoragesPage() {
         <Tile
           icon={<FolderGit2 className="h-5 w-5" />}
           title={`Repos${data ? ` — ${data.repos.count}` : ""}`}
-          sub="Every Git repo LFBridge tracks. Opens the Repos tab (the long list)."
+          sub="Every Git repo Large File Bridge tracks. Opens the Repos tab (the long list)."
           onClick={() => navigate({ to: "/" })}
         />
       </div>

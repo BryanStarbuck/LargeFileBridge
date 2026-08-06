@@ -294,7 +294,7 @@ function ActionBar({
   const del = useMutation({
     mutationFn: () => api.deleteEntity(v.path),
     onSuccess: () => {
-      toast.success("Moved to LFBridge trash");
+      toast.success("Moved to Large File Bridge trash");
       qc.invalidateQueries({ queryKey: ["repo"] });
       qc.invalidateQueries({ queryKey: ["fs"] });
       navigate({ to: "/fs", search: { path: parent } });
@@ -319,7 +319,7 @@ function ActionBar({
     onError: (e: Error) => { clientLog.error("MediaViewer.compress", e); toast.error(e.message); },
   });
   const onCompress = async () => {
-    if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
+    if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to Large File Bridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     compress.mutate();
   };
   const onMove = async () => {
@@ -328,7 +328,7 @@ function ActionBar({
     move.mutate(dest.trim());
   };
   const onDelete = async () => {
-    if (!(await confirmModal({ title: `Move ${v.name} to LFBridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
+    if (!(await confirmModal({ title: `Move ${v.name} to Large File Bridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
     del.mutate();
   };
   const copyPath = () => { void copyText(v.path, "Path", "MediaViewer.copyPath"); };
@@ -1145,7 +1145,7 @@ function reportCompress(r: CompressResult): void {
  *  the H.264 codec regardless of the user's default video-compression preference, so the result plays in
  *  every browser and uploads to TikTok/X/YouTube/Instagram. Explicit-click + confirm (charter §6.1). */
 async function runConvertOffer(v: EntityView): Promise<void> {
-  if (!(await confirmModal({ title: `Convert ${v.name} to H.264 MP4?`, body: "This re-encodes to a browser- and upload-friendly copy (same resolution); the original moves to LFBridge trash (recoverable).", confirmLabel: "Convert" }))) return;
+  if (!(await confirmModal({ title: `Convert ${v.name} to H.264 MP4?`, body: "This re-encodes to a browser- and upload-friendly copy (same resolution); the original moves to Large File Bridge trash (recoverable).", confirmLabel: "Convert" }))) return;
   api.compressFile(v.path, { videoCodec: "h264" })
     .then(reportCompress)
     .catch((e: Error) => { clientLog.error("MediaViewer.convertFile", e); toast.error(e.message); });

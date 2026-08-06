@@ -291,7 +291,7 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   // the real outcome (with an execCommand fallback), so a failed copy never claims success.
   const copy = (text: string, label: string) => async (): Promise<void> => { await copyText(text, label, "EntityMenu.copy"); };
   const compress = async () => {
-    if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to LFBridge trash (recoverable).", confirmLabel: "Compress" }))) return;
+    if (!(await confirmModal({ title: `Compress ${v.name}?`, body: "Medium quality, same resolution — the original moves to Large File Bridge trash (recoverable).", confirmLabel: "Compress" }))) return;
     api.compressFile(v.path)
       .then((r) => {
         if (r.status === "compressed") toast.success(`Compressed → ${r.codec ?? "smaller"}`);
@@ -320,9 +320,9 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
   };
   // Delete… (menus.mdx §5.3 Danger) — RECOVERABLE: moves to LFBridge trash, never unlinks.
   const del = async () => {
-    if (!(await confirmModal({ title: `Move ${v.name} to LFBridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
+    if (!(await confirmModal({ title: `Move ${v.name} to Large File Bridge trash?`, body: "This is recoverable — the file is moved to the trash folder, not erased.", confirmLabel: "Move to trash" }))) return;
     api.deleteEntity(v.path).then(() => {
-      toast.success("Moved to LFBridge trash");
+      toast.success("Moved to Large File Bridge trash");
       refreshLists();
       ctx.navigate({ to: "/fs", search: { path: parent } });
     }).catch((e) => { clientLog.error("EntityMenu.delete", e); toast.error(e.message); });

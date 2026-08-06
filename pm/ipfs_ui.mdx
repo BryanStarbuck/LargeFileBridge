@@ -392,6 +392,21 @@ it's an amber *acknowledged* note, not a red error.
 Restoring the only-our-content defaults behind the security card's **Fix** is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`
 
+**A third state sits between red and green: "Restart needed" (amber).** Kubo reads every one of these keys
+at daemon **startup** ([ipfs.mdx §3.1.1](./ipfs.mdx#311-a-written-setting-is-not-a-live-setting-locked-learned-from-a-defect)),
+so between a **Fix** and the next restart the config is compliant and the running node is not. The card must
+show **"Restart needed"** with a **Restart IPFS** button for exactly that window — never the green
+"Only your content ✓", which would be describing a file rather than this machine.
+
+That button **waits for the daemon to come back before it says it did.** The restart runs as one server-side
+job (`POST /api/ipfs/restart`) rather than a `stop` then a `start` from the browser, because `start` answers
+as soon as its job begins — see [ipfs.mdx §3.1.1](./ipfs.mdx#311-a-written-setting-is-not-a-live-setting-locked-learned-from-a-defect).
+The job's steps show in the usual `ProgressView`, and a failure reports the real reason with its `cause`
+([§14.2.1](#1421-the-cause-travels-with-the-job-and-needs_migrate-is-one-click-locked-learned-from-a-defect)).
+
+Rendering the restart-needed state and its one action is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `SecurityCard` (`node.restartRequired` → `onRestart`) over `restartIpfsAndWait()`, fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `compliancePendingRestart()` and carried out by `ipfs-node.service.ts` — `restartDaemon()`
+
 > **LOCKED — enforce writes the MODERN key.** Enforcing compliance must set **`Provide.Strategy`**, never
 > `Reprovider.Strategy`. On Kubo 0.42+ writing the deprecated `Reprovider.Strategy` **re-creates** the
 > `Reprovider` block, which makes the daemon FATAL on the next start — i.e. "enforcing compliance" would
@@ -740,6 +755,23 @@ Classifying the daemon's own output (deprecated-config / migrate / port-in-use /
 
 Wiring that diagnosis into the start/install jobs — so the job's `error` names the real cause and, when it's a config crash, hands off to the repair — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` / `startInstall()` / `controlDaemon()`
+
+#### 14.2.1 The CAUSE travels with the job, and `needs_migrate` is ONE CLICK (LOCKED, learned from a defect)
+
+Classifying the failure is only half the job — the **UI has to be able to act on the classification.** The
+job carried the diagnosis as *prose* (`error` + a copyable `manualCommand`) and nothing machine-readable, so
+the error panel could offer only a **Retry** that was guaranteed to fail the same way, plus a terminal
+command. Meanwhile `POST /ipfs/daemon` had accepted `{ action: "start", migrate: true }` — a real
+`ipfs daemon --migrate` — the whole time, and **no surface in the product could send it**: a repair the app
+could perform was being handed back to the user as homework.
+
+So the job carries `cause`, and when it is **`needs_migrate`** the error panel's primary becomes **"Run the
+one-time migration"** (the manual command stays below as the escape hatch — [§9](#9-errors--the-exhaustive-taxonomy-every-failure-is-a-designed-state)'s
+rule that we never remove the way out by hand). `--migrate` is a **start** flag, so the one-click is a start
+whichever job failed — an install that got as far as the daemon leaves the same repo behind.
+
+Carrying the classified cause on the job, and offering the migration as the primary action, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `fail()` (stamps `IpfsInstallJob.cause`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ErrorPanel` and wired by `IpfsOffPage.tsx` (`onMigrate` → `api.ipfsDaemon({ action: "start", migrate: true })`)
 
 ### 14.3 The Config-health card — review, then fix (confirm-then-apply, LOCKED)
 

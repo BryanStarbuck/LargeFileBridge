@@ -20,6 +20,7 @@ settingsRouter.use(requireAllowListed);
 
 async function toGlobalSettings(): Promise<GlobalSettings> {
   const c = getAppConfig();
+  const ipfsHealth = await ipfs.health();
   return {
     bigFile: {
       thresholdBytes: c.big_file.threshold_bytes,
@@ -33,8 +34,12 @@ async function toGlobalSettings(): Promise<GlobalSettings> {
       gatewayAddr: c.ipfs.gateway_addr,
       reprovideStrategy: c.ipfs.reprovide_strategy,
       publicGateway: c.ipfs.public_gateway,
-      health: await ipfs.health(),
+      health: ipfsHealth,
       compliant: await ipfs.isCompliant(),
+      // `isCompliant()` reads the CONFIG FILE. This says the daemon answering right now started before we
+      // wrote it, so Settings shows the same amber "Restart needed" the IPFS page does rather than a
+      // green claim about a file (ipfs.mdx §3.1.1).
+      restartRequired: ipfsHealth === "ok" && ipfs.compliancePendingRestart(),
     },
     allowedEmails: c.access.allowed_emails,
     access: getSecurityAccess(),

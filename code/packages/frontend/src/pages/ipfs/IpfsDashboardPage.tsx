@@ -21,7 +21,7 @@ import { middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { writeClipboard } from "@/lib/clipboard";
-import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, num } from "./ipfsShared.js";
+import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, restartIpfsAndWait, num } from "./ipfsShared.js";
 
 export function IpfsDashboardPage() {
   const qc = useQueryClient();
@@ -141,6 +141,21 @@ export function IpfsDashboardPage() {
             }
             catch (e) { clientLog.error("IpfsDashboardPage.enforce", e); toast.error((e as Error).message); }
           }}
+          // The restart that makes a written setting a live one (ipfs.mdx §3.1.1). ONE server-side job,
+          // waited out: it takes a healthy daemon down first, so "restarted" has to mean it came back.
+          // Each polled job feeds ["ipfsJob"], which is what puts the live ProgressView on screen.
+          onRestart={async () => {
+            try {
+              await restartIpfsAndWait((j) => qc.setQueryData(["ipfsJob"], j));
+              qc.invalidateQueries({ queryKey: ["ipfsNode"] });
+              toast.success("IPFS restarted — your only-your-content settings are now in force");
+            }
+            catch (e) {
+              clientLog.error("IpfsDashboardPage.restart", e);
+              toast.error((e as Error).message);
+              qc.invalidateQueries({ queryKey: ["ipfsNode"] });
+            }
+          }}
         />
       ) : (
         // Node not running and no job → the redirect above is taking us to /ipfs/off.
@@ -152,7 +167,7 @@ export function IpfsDashboardPage() {
 
 // ── Running dashboard ───────────────────────────────────────────────────────
 function RunningDashboard({
-  node, navigate, onToggleOff, toggling, onAutostart, autostartBusy, onUpgrade, upgradeBusy, onRepair, repairBusy, onFix,
+  node, navigate, onToggleOff, toggling, onAutostart, autostartBusy, onUpgrade, upgradeBusy, onRepair, repairBusy, onFix, onRestart,
 }: {
   node: IpfsNodeStatus;
   navigate: ReturnType<typeof useNavigate>;
@@ -165,6 +180,7 @@ function RunningDashboard({
   onRepair: (issueIds: string[]) => void;
   repairBusy: boolean;
   onFix: () => Promise<void>;
+  onRestart: () => Promise<void>;
 }) {
   const m = node.metrics;
   return (
@@ -258,7 +274,7 @@ function RunningDashboard({
       <ConfigHealthCard health={node.configHealth} busy={repairBusy} onFix={onRepair} />
 
       {/* Security posture */}
-      <SecurityCard node={node} onFix={onFix} />
+      <SecurityCard node={node} onFix={onFix} onRestart={onRestart} />
     </div>
   );
 }

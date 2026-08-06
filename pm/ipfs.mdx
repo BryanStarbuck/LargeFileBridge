@@ -234,6 +234,58 @@ restart IPFS. Nothing claims the machine is compliant on the strength of a write
 Reporting which keys were written and that a restart is required is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` returning `ComplianceEnforcement { changed, restartRequired }`; surfaced to the user by `IpfsPage.tsx` / `IpfsDashboardPage.tsx` (`onFix`). Regression test: `code/packages/backend/src/modules/ipfs/compliance-enforcement.spec.ts`.
 
+**The gap OUTLIVES the call that opened it, so the card must too.** Returning `restartRequired` to the one
+caller that toasts it is not enough: the node card is re-read every few seconds by pages that stay open for
+hours, and the moment the toast fades every surface goes back to painting **"Only your content ✓"** over the
+un-adopted daemon. So the pending state is **remembered** and rides on the node payload
+(`IpfsNodeCard.restartRequired` / `IpfsNodeStatus.restartRequired`); the status banner and the security card
+render an **amber "Restart needed"** state — never the green all-clear — with the restart as its one action.
+It clears when the daemon is **observed down**, which is the honest signal (a stopped daemon reads the file
+we already wrote) and the only one that also catches a restart done **outside** the app.
+
+**"Down" means CONFIRMED down, not one failed probe.** The health probe aborts at a short cap, and a daemon
+mid-GC or mid-pin-pass can miss that deadline while it is still running — and still un-adopted. Clearing on
+that blip would be *permanent*, because nothing re-sets the flag once the config already matches what
+enforcement would write: the green card would come straight back over a node that is still a relay, which
+is the exact state this whole mechanism exists to make impossible. So the outside-restart path waits for
+the daemon to be missing across **consecutive** probes, and the restarts the app performs itself don't wait
+at all — they *watched* the stop and say so.
+
+Remembering the un-adopted write, and clearing it only when a different process will answer next, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `compliancePendingRestart()` (set by `enforceCompliance()`; cleared by `noteDaemonStopped()` for a stop we watched, and by `health()` after consecutive unreachable probes for one we didn't). Rendered by `IpfsPage.tsx` — `NodeVerdict`, `ipfsShared.tsx` — `SecurityCard`, and `SettingsPage.tsx` (settings.mdx §5). Regression test: `code/packages/backend/src/modules/ipfs/compliance-restart-pending.spec.ts`.
+
+**Every surface that speaks for the posture shows the amber state**, including Settings — a page that
+reads "Serving only your content" while the IPFS page reads "Restart needed" is worse than either alone,
+because the user has no way to tell which one is describing their computer.
+
+**A setup job APPLIES what it wrote rather than banking a warning on the user.** Enforcement writes over the
+HTTP RPC, which needs a *running* daemon — so install / turn-on / upgrade necessarily start the node
+**first** and enforce **after**, which is exactly the written-not-live state, on a machine the user just
+asked to set up. Kubo's defaults make that node a relay and a DHT server for strangers, so those three
+flows restart the daemon themselves once a write actually happened. Best-effort where it can be: a restart
+we could not even *begin* (the daemon refused to stop) leaves the node **up**, the pending flag set, and the
+card showing the amber state instead of a green claim.
+
+**But a job that turned IPFS OFF has failed, whatever else it achieved.** There is exactly one outcome that
+leaves the machine worse than the job found it — we stopped the daemon for the settings and it did not come
+back. Treating that as a footnote would stamp the job `done` and say *"IPFS is installed and running"* over
+a computer where IPFS is now off, so it fails the job with the real start diagnosis (and therefore the
+`cause`, [ipfs_ui.mdx §14.2.1](./ipfs_ui.mdx)) instead.
+
+Restarting the daemon so a fresh node's only-our-content settings are in force is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `applyComplianceWithRestart()` (returns a `StartDiagnosis` only when the daemon did not come back; called by `startInstall()`, `controlDaemon("start")` and `startUpgrade()`, each failing the job on it)
+
+**The USER's restart button holds the same rule, so it is ONE call.** The amber card's **Restart IPFS** takes
+a healthy daemon down before it brings one back, so it carries exactly the risk above — and a browser doing
+it as a `stop` then a `start` cannot report on it: `POST /ipfs/daemon` with `start` answers the instant its
+background job *begins*. That pair toasts *"IPFS restarted"* over a daemon still coming up, and says nothing
+whatever about one that never did, on a page with no error panel. So the restart is a single server-side job
+with a single outcome — including a daemon that refused to **stop**, which is an error too: the node is up
+but still un-adopted, which is the state the user clicked the button to leave.
+
+Restarting on the user's say-so, as one job with one answer, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `restartDaemon()` (behind `POST /api/ipfs/restart`), awaited to completion by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `restartIpfsAndWait()`, which both `IpfsPage.tsx` — `NodeVerdict` and `IpfsDashboardPage.tsx` — `onRestart` go through
+
 **Enforcement is also THROTTLED**, for the same reason §6.6 of [git_backbone.mdx](./git_backbone.mdx)
 throttles commits: it is a *reconciliation of four settings*, not a work item, and running it twice is never
 more correct than running it once. The pin pass called it once **per unit**, so a machine with 30 repos and
@@ -445,6 +497,30 @@ The row `⋮` **pin** catalog (Copy CID · View on IPFS · Import · Unpin) is r
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component
 Pinning/unpinning a single CID behind that menu (and the pin toggle) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()` / `pinRm()` (exposed by the `POST /pin` handler in `ipfs.router.ts`)
+
+### 5.1.2 UNPIN IS A TWO-PART ANSWER, AND THE TOAST REPORTS THE OUTCOME (LOCKED, learned from a defect)
+
+**An unpin the engine undoes is not an unpin.** `ipfs pin rm` on a CID whose file is still decided
+**Add-to-IPFS** does not survive: the [pin pass](./pin_process.mdx#4-the-pass) finds a `sync` file missing
+from the pinset, reads it as a **lost pin**, and adds+pins it straight back. The click reverted itself
+inside a cycle, the toast had already said *"Unpinned"*, and nothing anywhere explained the pin's return.
+So an unpin **clears the Add-to-IPFS decision with the pin** — the same meaning **Remove from IPFS** already
+carries in the file menu ([menus.mdx §5.3](./menus.mdx)) and on
+[Full paths §3.5](./full_paths.mdx) — and the answer **names the files that stopped syncing**, because that
+is the larger consequence and the half the user did not click on. The decision is cleared **before** the
+`pin rm`, so a pass starting mid-request cannot re-pin between the two writes.
+
+**Only `sync` files are touched.** Recording *"do not add this to IPFS"* for an **Undecided** file would
+freeze it out of every future pin pass — a far bigger answer than the one given, and the same shape as the
+git-ignore defect [decisions.mdx §1](./decisions.mdx) exists to prevent.
+
+**The read-back is the OUTCOME, not a value to echo.** `pinRm` swallows its own RPC failure by design
+(other callers treat a failed unpin as informational), so reporting whatever the node happened to hold
+answered a *failed unpin* with a green **"Pinned"** — the opposite word to the one the user clicked. A
+read-back that disagrees with the request is an **error**, and it says which way it disagreed.
+
+Clearing the decision alongside the pin, and refusing to report a pin/unpin that did not take effect, is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the `POST /pin` handler, over `ipfs-page.service.ts` — `syncedPinTargets()`; the answer's `unsynced[]` is spoken by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/usePinCid.ts` — `usePinCid()`. Regression test: `code/packages/backend/src/modules/ipfs/synced-pin-targets.spec.ts`.
 
 ### 5.2 Cell navigation ([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link))
 

@@ -18,6 +18,7 @@ import { PageActions } from "../../components/menu/PageActions.js";
 import { publishIpfsList } from "../../components/menu/domainActions.js";
 import { PinKebab } from "../../components/menu/RowKebabs.js";
 import { usePinCid } from "../../components/usePinCid.js";
+import { restartIpfsAndWait } from "./ipfsShared.js";
 // The shared icon control-column kit (tables.mdx icon-columns): the unified Pin box + the Transcribe /
 // AI-description / OCR icons, derived from each pin's analysis[] + resolved file kind.
 import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, boolStatus, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
@@ -48,10 +49,12 @@ export function IpfsPage() {
   const { repo } = useSearch({ strict: false }) as { repo?: string };
   const [untrackedOnly, setUntrackedOnly] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
-  const pin = usePinCid(); // per-CID pin/unpin toggle (ipfs.mdx §3)
 
   const { data, isLoading } = useQuery({ queryKey: ["ipfs"], queryFn: api.ipfs });
   useLiveRefresh(["ipfs", "storages"], [["ipfs"]]);
+  // per-CID pin/unpin toggle (ipfs.mdx §3). Fed the page payload so a settled override yields to the
+  // pinset the server just re-read, rather than outliving it.
+  const pin = usePinCid(data);
 
   const set = (d: IpfsPageData) => qc.setQueryData(["ipfs"], d);
 
@@ -69,6 +72,16 @@ export function IpfsPage() {
     onSuccess: (r) => {
       set(r.data);
       setSelected(new Set());
+      // Importing NOTHING is not a success story. It means every CID asked for was already tracked (or
+      // has left the pinset since the page loaded), and a green "Imported 0 pins" reads as work done.
+      if (r.imported === 0) {
+        toast.message(
+          r.skipped > 0
+            ? `Nothing to import — ${r.skipped === 1 ? "that pin is" : `those ${r.skipped} pins are`} already tracked.`
+            : "Nothing to import — those pins are already tracked.",
+        );
+        return;
+      }
       toast.success(`Imported ${r.imported} pin${r.imported === 1 ? "" : "s"} into tracking`);
     },
     onError: (e: Error) => { clientLog.error("IpfsPage.import", e); toast.error(e.message); },
@@ -349,14 +362,14 @@ export function IpfsPage() {
       {node && !nodeDown && (
         <StatTileRow>
           <StatTile label="Pinned files" value={node.pinnedCount.toLocaleString()} sub={formatBytes(node.pinnedBytes)} />
-          <StatTile label="Tracked" value={node.trackedCount.toLocaleString()} sub="known to LFBridge" />
+          <StatTile label="Tracked" value={node.trackedCount.toLocaleString()} sub="known to Large File Bridge" />
           <StatTile
             label="Untracked"
             value={node.untrackedCount.toLocaleString()}
             sub={untrackedCount > 0 ? "click to review" : "all imported"}
             state={untrackedCount > 0 ? "warn" : "ok"}
             onClick={untrackedCount > 0 ? () => setUntrackedOnly(true) : undefined}
-            title="Pinned but not yet tracked by LFBridge"
+            title="Pinned but not yet tracked by Large File Bridge"
           />
         </StatTileRow>
       )}
@@ -367,7 +380,7 @@ export function IpfsPage() {
           <DiagnosticCard
             state="warn"
             title={`${untrackedCount} pinned file${untrackedCount === 1 ? "" : "s"} aren't tracked yet`}
-            summary="LFBridge found pins on this computer that it isn't managing. Import them so they pin and back up like the rest."
+            summary="Large File Bridge found pins on this computer that it isn't managing. Import them so they pin and back up like the rest."
             fix={
               <FixButton state="warn" onClick={() => doImport.mutate({ all: true })} disabled={doImport.isPending}>
                 <DownloadCloud className="h-4 w-4" /> Import all
@@ -523,6 +536,47 @@ function NodeVerdict({
       />
     );
   }
+  // WRITTEN, NOT YET LIVE (ipfs.mdx §3.1.1). The config says only-our-content; the daemon answering right
+  // now started before we wrote it and Kubo reads every one of these keys once, at startup. So this node
+  // IS still a relay and a DHT server for strangers, and the green banner below would be describing a
+  // file rather than this machine. Amber, with the restart that makes it true.
+  if (node.compliant && node.restartRequired) {
+    const warning: WarningDef = {
+      id: "ipfs-compliance-restart",
+      state: "warn",
+      headline: "Restart IPFS to finish serving only your own content",
+      sub: "The settings are saved, but IPFS only reads them when it starts.",
+      popup: {
+        whatThisIs:
+          "Your only-your-content settings have been written to the IPFS configuration on this computer. IPFS reads those settings once, when it starts up — so the copy running right now is still using the ones it started with.",
+        whyItMatters:
+          "Until it restarts, this computer can still relay other people's traffic and answer strangers' network queries — the thing these settings exist to stop. Restarting takes a few seconds and doesn't touch any of your files or pins.",
+        actionLabel: "Restart IPFS",
+        progress: {
+          kind: "configure",
+          target: "IPFS engine",
+          doneLabel: "IPFS restarted",
+          invalidate: [["ipfs"], ["ipfsNode"]],
+        },
+        apply: async () => {
+          // ONE server-side job, waited out (ipfs.mdx §3.1.1). A stop-then-start from here would take a
+          // healthy daemon down and then declare victory the instant the start job began — this page has
+          // no error panel, so a node that never came back would show as a bare "not running" banner
+          // under a green "IPFS restarted". Throwing the job's own error is what makes the dock say so.
+          await restartIpfsAndWait();
+        },
+      },
+    };
+    return (
+      <StatusBanner
+        state="warn"
+        headline="Restart IPFS to finish serving only your own content"
+        sub="The settings are saved. IPFS reads them when it starts, so this computer is still using its previous ones."
+        warning={warning}
+        onWarningApplied={onWarningApplied}
+      />
+    );
+  }
   const nonCompliant = !node.compliant;
   const acknowledged = nonCompliant && node.publicGateway;
   if (nonCompliant) {
@@ -539,7 +593,7 @@ function NodeVerdict({
         sub={
           acknowledged
             ? "You changed the public-gateway setting on this machine, so this is allowed."
-            : "LFBridge should serve only your own files — not act as a public gateway for the internet."
+            : "Large File Bridge should serve only your own files — not act as a public gateway for the internet."
         }
         action={
           acknowledged ? undefined : (

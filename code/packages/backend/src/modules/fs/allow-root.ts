@@ -16,7 +16,9 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import type { Request, Response, NextFunction } from "express";
 import { getAppConfig } from "../store-model/config.service.js";
+import { log } from "../../shared/logging.js";
 import { listRepoFolders, getRepoConfig } from "../store-model/units.service.js";
 import { detectCloudRoots } from "./cloud-roots.js";
 import { isDirAt } from "../../shared/fs-probe.js";
@@ -126,4 +128,40 @@ export function assertAllowedPath(abs: string): string {
     if (isUnder(real, d)) throw new Error("path not allowed");
   }
   return real;
+}
+
+/**
+ * Confine EVERY filesystem path a request carries, at the router edge (`?path=`, `?root=`, and the
+ * `path` / `root` / `paths[]` body fields every media-processing route shares).
+ *
+ * The browse/stream/entity routes each call `assertAllowedPath` themselves, but the media ENGINES —
+ * compress, OCR, transcribe, describe, git-ignore — took the caller's absolute path and used it
+ * unchecked. That is the same hole this module was written to close, on routes that do more than read:
+ * compress REWRITES the file in place, OCR and transcribe write an artifact beside it, and describe
+ * ships its contents to a third-party AI provider. Any allow-listed principal — and in server mode an
+ * allow-listed DOMAIN is a lot of principals — could aim them at any file the app's user can touch.
+ *
+ * Applied as a router-level guard rather than at each service entry so a route added tomorrow inherits
+ * it. It does NOT cover the routes whose whole job is to point at new places (registering a repo or a
+ * storage root DEFINES an allow-root) — those are deliberately outside.
+ */
+export function confineRequestPaths(req: Request, res: Response, next: NextFunction): void {
+  const raw: unknown[] = [req.query?.path, req.query?.root];
+  const body = req.body as Record<string, unknown> | undefined;
+  if (body && typeof body === "object") {
+    raw.push(body.path, body.root);
+    if (Array.isArray(body.paths)) raw.push(...body.paths);
+  }
+  for (const v of raw) {
+    if (typeof v !== "string" || !v.trim()) continue;
+    try {
+      if (v.includes("\0")) throw new Error("invalid path");
+      assertAllowedPath(path.resolve(expandHome(v.trim())));
+    } catch {
+      log.warn("fs", `${req.method} ${req.originalUrl}: refused a path outside the allowed roots`);
+      res.status(403).json({ ok: false, error: "path not allowed" });
+      return;
+    }
+  }
+  next();
 }

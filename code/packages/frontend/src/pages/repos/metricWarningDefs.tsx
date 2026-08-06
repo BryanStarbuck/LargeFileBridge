@@ -719,9 +719,9 @@ export function buildCompressWarning(
     state: "warn",
     scope: "file",
     headline: `${n} ${noun}${n === 1 ? "" : "s"} look${n === 1 ? "s" : ""} uncompressed`,
-    sub: "Large File Bridge can compress these to reclaim space — the originals move to LFBridge trash (recoverable).",
+    sub: "Large File Bridge can compress these to reclaim space — the originals move to Large File Bridge trash (recoverable).",
     popup: {
-      whatThisIs: `Large File Bridge found ${n} ${noun}${n === 1 ? "" : "s"} that look uncompressed and could be made smaller with no meaningful quality loss. Compression runs on this computer; the original moves to the recoverable LFBridge trash.`,
+      whatThisIs: `Large File Bridge found ${n} ${noun}${n === 1 ? "" : "s"} that look uncompressed and could be made smaller with no meaningful quality loss. Compression runs on this computer; the original moves to the recoverable Large File Bridge trash.`,
       whyItMatters:
         "Uncompressed media wastes disk and slows every sync over IPFS. Compressing reclaims space while keeping the same resolution. Review the list on the right and uncheck any you want to leave as-is.",
       targets: files.map((f) => ({

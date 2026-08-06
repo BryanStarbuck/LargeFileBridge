@@ -21,6 +21,7 @@ import type { PlatformInfo, OsOpenResult } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { assertAllowedPath } from "./allow-root.js";
 import { expandHome } from "./badges.js";
+import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
 /** The OS family + the human label the "Open on {label}" button shows (os_open.mdx §2). */
@@ -44,8 +45,7 @@ export function platformFamily(): { os: PlatformInfo["os"]; label: string } {
  */
 export function isLocalRequest(req: Request): boolean {
   if (getAppConfig().server.mode !== "local") return false;
-  const ip = req.ip || req.socket.remoteAddress || "";
-  return ip === "127.0.0.1" || ip === "::1" || ip === "::ffff:127.0.0.1";
+  return isLoopback(req); // the TCP peer — a header must never be able to ask us to launch an app
 }
 
 /** What the front end needs to render the OS buttons: the label, and whether hand-off is possible here. */

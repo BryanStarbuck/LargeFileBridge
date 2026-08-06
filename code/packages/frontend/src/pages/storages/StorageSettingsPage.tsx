@@ -61,7 +61,7 @@ export function StorageSettingsPage() {
       </div>
 
       {/* The IPFS-pinning opt-in — gates whether this storage's mapped-dir bytes are pinned over IPFS. */}
-      <Section title="Pin over IPFS (add)" subtitle="When on, this computer adds, pins, and fetches this storage's large files over IPFS, placing each file at its grafted local path. Off by default — LFB never pins content without your say-so.">
+      <Section title="Pin over IPFS (add)" subtitle="When on, this computer adds, pins, and fetches this storage's large files over IPFS, placing each file at its grafted local path. Off by default — Large File Bridge never pins content without your say-so.">
         <Toggle
           label="Pin this storage's files over IPFS on this computer"
           checked={s.pinned}

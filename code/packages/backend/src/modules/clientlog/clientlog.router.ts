@@ -31,6 +31,11 @@ function rateLimited(key: string): boolean {
   const now = Date.now();
   const cur = rateHits.get(key);
   if (!cur || now >= cur.resetAt) {
+    // Session ids rotate on every sign-in, so the key set grows for the life of the process. Sweep the
+    // expired windows whenever it gets large rather than keeping a counter per session ever seen.
+    if (rateHits.size > 1000) {
+      for (const [k, v] of rateHits) if (now >= v.resetAt) rateHits.delete(k);
+    }
     rateHits.set(key, { count: 1, resetAt: now + RATE_WINDOW_MS });
     return false;
   }

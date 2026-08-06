@@ -16,6 +16,7 @@ import type {
   IpfsPlatform,
   IpfsDaemonResult,
   IpfsLiveness,
+  IpfsStartCause,
 } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -223,6 +224,9 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     relayServiceOff: posture.relayServiceOff,
     dhtClientOnly: posture.dhtClientOnly,
     compliant,
+    // `compliant` describes the CONFIG. This says the daemon answering us right now started before we
+    // wrote it, so the green card would be a claim about a file rather than about this machine.
+    restartRequired: running && ipfs.compliancePendingRestart(),
     autostart,
     configHealth: cfgHealth,
     upgrade,
@@ -290,6 +294,7 @@ function idleJob(): IpfsInstallJob {
     log: [],
     manualCommand: null,
     error: null,
+    cause: null,
     startedAt: null,
     finishedAt: null,
   };
@@ -308,14 +313,64 @@ function append(line: string): void {
   bumpTopicThrottled(IPFS_TOPIC);
 }
 
-function fail(message: string, manualCommand: string | null): void {
+function fail(message: string, manualCommand: string | null, cause: IpfsStartCause | null = null): void {
   job.status = "error";
   job.phase = "error";
   job.error = message;
   job.manualCommand = manualCommand;
+  // The CLASSIFIED reason travels with the job, not just the sentence: `needs_migrate` has a one-click
+  // fix the error panel can offer (ipfs_ui.mdx §14.2), and a UI that only sees prose has to fall back to
+  // handing the user a terminal command for a repair the app can perform itself.
+  job.cause = cause;
   job.finishedAt = new Date().toISOString();
   append(`✗ ${message}`);
   log.warn("ipfs", `job ${job.kind} failed: ${message}`);
+}
+
+/**
+ * Write the only-our-content settings and, when they didn't already hold, RESTART the daemon so they are
+ * actually in force (ipfs.mdx §3.1.1).
+ *
+ * Every charter key is startup-only in Kubo and enforcement writes over the HTTP RPC — which needs a
+ * RUNNING daemon — so a fresh node is necessarily started non-compliant and enforced afterwards. Leaving
+ * it there means "Turn on IPFS" hands back a machine that is a circuit-relay server and a DHT server for
+ * strangers until something restarts it, while the card reads green (it reads the config we just wrote).
+ * These three flows are already a watched, user-initiated setup job with nothing of ours in flight, so
+ * the honest completion is to bounce the daemon here rather than bank a warning on the user.
+ *
+ * Returns a StartDiagnosis ONLY for the one outcome that leaves the machine worse than it found it — we
+ * stopped the daemon and it did not come back. That is a failed job, not a footnote: without it the caller
+ * stamps `done` and says "IPFS is installed and running" over a computer where IPFS is now off. Every other
+ * outcome (nothing to change, couldn't stop it) leaves the daemon UP and returns null; the settings are on
+ * disk, `compliancePendingRestart()` stays set, and the status card shows "restart to apply" rather than a
+ * green all-clear.
+ */
+async function applyComplianceWithRestart(): Promise<StartDiagnosis | null> {
+  const outcome = await ipfs
+    .enforceCompliance({ force: true })
+    .catch((e) => {
+      log.warn("ipfs", `enforce compliance failed: ${(e as Error).message}`);
+      return null;
+    });
+  if (!outcome?.restartRequired) return null;
+  append("Applying your only-your-content settings (restarting IPFS)…");
+  try {
+    await ipfs.shutdownDaemon();
+  } catch (e) {
+    log.warn("ipfs", `shutdown for compliance restart failed: ${(e as Error).message}`);
+  }
+  if (!(await waitForStopped(10_000))) {
+    // Still running — un-adopted, but running. The job succeeded; the card carries the rest.
+    append("(couldn't restart IPFS to apply the settings — they'll take effect next time it starts)");
+    return null;
+  }
+  const diag = await startDaemon();
+  if (diag) {
+    log.warn("ipfs", `compliance restart failed to bring the daemon back: ${diag.message}`);
+    return diag;
+  }
+  append("✓ Only-your-content settings are in force.");
+  return null;
 }
 
 /** Spawn a process and stream its output into the job log; resolves with the exit code. */
@@ -362,7 +417,13 @@ async function waitForHealthy(timeoutMs: number): Promise<boolean> {
 async function waitForStopped(timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if ((await ipfs.health()) !== "ok") return true;
+    if ((await ipfs.health()) !== "ok") {
+      // We watched this one go down, so a pending compliance write is no longer pending on anything —
+      // say so directly rather than letting `health()`'s consecutive-probe rule get there in its own time
+      // (it deliberately won't, on a single probe: ipfs.service.ts `health`).
+      ipfs.noteDaemonStopped();
+      return true;
+    }
     await sleep(500);
   }
   return false;
@@ -541,12 +602,22 @@ export function startInstall(): IpfsInstallJob {
       }
       const diag = await startDaemon();
       if (diag) {
-        return fail(`Installed, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand);
+        return fail(
+          `Installed, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`,
+          diag.manualCommand,
+          diag.cause,
+        );
       }
-      // Bring the fresh node into only-our-content compliance (best effort).
-      await ipfs.enforceCompliance({ force: true }).catch((e) =>
-        log.warn("ipfs", `enforce compliance after install failed: ${(e as Error).message}`),
-      );
+      // Bring the fresh node into only-our-content compliance — and RESTART it so the settings are live,
+      // because a brand-new Kubo repo is a relay + DHT server for strangers by default (ipfs.mdx §3.2).
+      const settle = await applyComplianceWithRestart();
+      if (settle) {
+        return fail(
+          `Installed, but IPFS didn't come back after applying your only-your-content settings — ${settle.message[0].toLowerCase()}${settle.message.slice(1)}`,
+          settle.manualCommand,
+          settle.cause,
+        );
+      }
       job.status = "done";
       job.phase = "done";
       job.finishedAt = new Date().toISOString();
@@ -606,11 +677,16 @@ export async function controlDaemon(
       }
       const diag = await startDaemon({ migrate: opts?.migrate });
       if (diag) {
-        return fail(diag.message, diag.manualCommand);
+        return fail(diag.message, diag.manualCommand, diag.cause);
       }
-      await ipfs.enforceCompliance({ force: true }).catch((e) =>
-        log.warn("ipfs", `enforce compliance after start failed: ${(e as Error).message}`),
-      );
+      const settle = await applyComplianceWithRestart();
+      if (settle) {
+        return fail(
+          `IPFS didn't come back after applying your only-your-content settings — ${settle.message[0].toLowerCase()}${settle.message.slice(1)}`,
+          settle.manualCommand,
+          settle.cause,
+        );
+      }
       // Primary-button path: also set IPFS to come back on its own after a reboot (best-effort — a
       // failure here does NOT fail the start; the daemon is already up).
       if (wantAutostart) {
@@ -632,6 +708,55 @@ export async function controlDaemon(
       job.phase = "done";
       job.finishedAt = new Date().toISOString();
       append("✓ IPFS is running.");
+    } catch (e) {
+      fail((e as Error).message, "ipfs daemon --enable-gc");
+    }
+  })();
+
+  return { job, node: await nodeStatus() };
+}
+
+/**
+ * Stop the daemon and bring it back, as ONE watchable job with ONE outcome (ipfs.mdx §3.1.1).
+ *
+ * This backs the user-facing **Restart IPFS** on the amber restart-needed card, and it is a single call
+ * because the stop and the start are not independent. A caller that fires them as two requests learns
+ * nothing about the second one: `controlDaemon("start")` returns the moment its background job BEGINS, so
+ * a UI awaiting the pair says "restarted" over a daemon that is still coming up — and says nothing at all
+ * about one that never did, after it already took a healthy node down. Here the job carries the real
+ * answer, including the start `cause` the error panel acts on (ipfs_ui.mdx §14.2.1).
+ *
+ * A daemon that refuses to STOP is also an error, not a shrug: the node is still up but still un-adopted,
+ * which is exactly the state the user clicked this to leave.
+ */
+export async function restartDaemon(): Promise<IpfsDaemonResult> {
+  if (job.status === "running") return { job, node: await nodeStatus() };
+  job = { ...idleJob(), kind: "restart", status: "running", phase: "stopping", startedAt: new Date().toISOString() };
+  append("Restarting IPFS so your saved settings take effect…");
+
+  void (async () => {
+    try {
+      try {
+        await ipfs.shutdownDaemon();
+      } catch (e) {
+        append(`(shutdown RPC error: ${(e as Error).message})`);
+        log.warn("ipfs", `shutdown for restart failed: ${(e as Error).message}`);
+      }
+      if (!(await waitForStopped(10_000))) {
+        return fail(
+          "IPFS didn't stop, so it's still running the settings it started with — quit it yourself, then start it again.",
+          null,
+        );
+      }
+      job.phase = "starting";
+      const diag = await startDaemon();
+      if (diag) {
+        return fail(`IPFS didn't come back — ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand, diag.cause);
+      }
+      job.status = "done";
+      job.phase = "done";
+      job.finishedAt = new Date().toISOString();
+      append("✓ IPFS is running with your saved settings.");
     } catch (e) {
       fail((e as Error).message, "ipfs daemon --enable-gc");
     }
@@ -681,11 +806,20 @@ export function startUpgrade(): IpfsInstallJob {
       // Restart the (now newer) daemon, diagnosing any start failure the upgrade surfaced.
       const diag = await startDaemon();
       if (diag) {
-        return fail(`Upgraded, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`, diag.manualCommand);
+        return fail(
+          `Upgraded, but ${diag.message[0].toLowerCase()}${diag.message.slice(1)}`,
+          diag.manualCommand,
+          diag.cause,
+        );
       }
-      await ipfs.enforceCompliance({ force: true }).catch((e) =>
-        log.warn("ipfs", `enforce compliance after upgrade failed: ${(e as Error).message}`),
-      );
+      const settle = await applyComplianceWithRestart();
+      if (settle) {
+        return fail(
+          `Upgraded, but IPFS didn't come back after applying your only-your-content settings — ${settle.message[0].toLowerCase()}${settle.message.slice(1)}`,
+          settle.manualCommand,
+          settle.cause,
+        );
+      }
       job.status = "done";
       job.phase = "done";
       job.finishedAt = new Date().toISOString();

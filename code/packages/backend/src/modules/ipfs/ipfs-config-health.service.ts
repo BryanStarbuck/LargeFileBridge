@@ -13,7 +13,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { IpfsConfigHealth, IpfsConfigIssue, IpfsUpgradeInfo, IpfsPlatform } from "@lfb/shared";
+import type { IpfsConfigHealth, IpfsConfigIssue, IpfsUpgradeInfo, IpfsPlatform, IpfsStartCause } from "@lfb/shared";
 import { stableIpfsBin } from "./ipfs-bin.js";
 import { log } from "../../shared/logging.js";
 
@@ -186,7 +186,7 @@ export async function configHealth(): Promise<IpfsConfigHealth> {
       severity: "info",
       title: "Garbage collection isn't configured",
       detail:
-        "No GC period is set, so any content your node incidentally caches wouldn't be reclaimed. LFB runs the daemon with --enable-gc, so this is usually harmless.",
+        "No GC period is set, so any content your node incidentally caches wouldn't be reclaimed. Large File Bridge runs the daemon with --enable-gc, so this is usually harmless.",
       keys: ["Datastore.GCPeriod"],
       changes: ['Set Datastore.GCPeriod = "1h"'],
       fixable: false,
@@ -201,7 +201,10 @@ export async function configHealth(): Promise<IpfsConfigHealth> {
 
 // ── diagnose a failed daemon start (ipfs_ui.mdx §14.2 / §9) ──────────────────
 export interface StartDiagnosis {
-  cause: "deprecated_config" | "needs_migrate" | "port_busy" | "lock_held" | "init_needed" | "timeout" | "unknown";
+  // The SHARED union, not a second copy of it: the cause now travels to the browser on the job
+  // (`IpfsInstallJob.cause`) so the error panel can offer the one-click migration, and two spellings of
+  // the same list would drift the moment one gained a member.
+  cause: IpfsStartCause;
   message: string; // human — becomes the job's `error`
   manualCommand: string; // the always-present escape hatch
   isConfigBlocker: boolean; // → the off-page shows the Config-health card, not a raw error
