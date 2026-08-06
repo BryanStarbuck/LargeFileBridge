@@ -119,6 +119,23 @@ must also **show its count on the label** so its scope is legible before the cli
 Mapping the checked set to the path form each route speaks is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()` (pin + decisions) / `selectedAbsPaths()` (compress + the producing trio).
 
+**THE SCOPE BINDS EVERY HALF OF THE PASS, and it binds what the pass WRITES BACK.** A paths-scoped run is
+one the user asked for over specific files — the bulk **Pin now (selected)**, and the targeted pin every
+decision click fires. Three rules, each learned from a real break:
+
+* **Add** honors the scope (`onlyPaths`) — it always did.
+* **Fetch-missing** must honor it too. It did not, so a "Pin now (5)" quietly pulled down every missing
+  file in the repo and reported `fetched`/`failed` counts for files the user never checked.
+* **Status write-back** must MERGE, never replace. A scoped run only classified the paths it was handed,
+  so writing its orphan map wholesale erased every other file's `first_seen_at`. With a decision click or
+  two a day the 24h grace never lapsed, and a file deleted here was never staled back to Undecided
+  ([decisions.mdx §12](./decisions.mdx)). `mergeOrphans()` (`code/packages/backend/src/modules/pin/orphans.service.ts`)
+  carries the untouched records forward; inside the scope this run's verdict wins.
+
+And the selection is an **intersection**: a pin moves bytes for `sync`-decided files only, so a selection
+of undecided rows is eligible for nothing. That is a UI obligation, not a silent server no-op — the button
+asks to decide them first ([one_repo.mdx §4.4](./one_repo.mdx#44-bulk-actions)).
+
 **Overlap guard.** Passes are idempotent, but overlapping passes waste work, so a single in-flight
 guard collapses a second pass that starts while one is running (rapid Pin-now clicks, or a
 scheduleTask that fires mid-pass). The **priority unit is always pinned by its own trigger** and is
@@ -250,6 +267,14 @@ The rules this locks in:
   `eligible === added + fetched + skipped + failed + missing + orphaned` is the shape to hold.
 * **Success ≠ "the call returned."** A green toast requires the work to have occurred (or an honest
   "nothing to do"), and a failure must surface, not be swallowed.
+* **A run that never STARTED is not a no-op.** A dead daemon, a failed `pin ls`, a repo that is gone —
+  each returns the same all-zero tally as a healthy nothing-to-do, and the UI printed the same benign
+  "Nothing to pin — no files marked Pin" for all four. The counts therefore carry `error`, and the toast
+  says the real reason ("Pin didn't run — IPFS node unreachable"). Same rule as the bucket split above:
+  distinct situations must never share one sentence. And an offer that cannot work is withdrawn, not
+  quietly attempted — with the node unreachable, `Pin now` is disabled and its tooltip says why.
+* **A no-op must name its SCOPE.** "Nothing to pin — no files marked Pin" is false comfort after a click
+  on `Pin now (5)`; a scoped run says "none of the selected files is set to Add to IPFS."
 * **Long work must be VISIBLE while it runs, not only summarized after.** Every pin — the manual one, the
   decision-triggered one, and the every-15-minute full pass — registers in the progress registry and
   reports **per-file** (`n / N files`) or **per-unit** (`n / N units`) counts, so the dock shows a moving

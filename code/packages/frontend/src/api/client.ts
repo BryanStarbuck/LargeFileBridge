@@ -164,8 +164,14 @@ export const api = {
     unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, decision })),
   // Two-axis decision (decisions.mdx §1): Add-to-IPFS and Add-to-git-ignore, each independent. Both-off
   // is a valid, recorded decision. The backend stamps who/when/SID into the shared .lfbridge/decisions.yaml.
-  setFileDecisions: (repoId: string, paths: string[], axes: { ipfs?: boolean; gitignore?: boolean }) =>
-    unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, ...axes })),
+  // `pin: false` says the CALLER will pin these paths itself, so the server writes the decision without
+  // firing its own targeted pin — two pin runs over one unit at the same time race on its manifest.
+  setFileDecisions: (
+    repoId: string,
+    paths: string[],
+    axes: { ipfs?: boolean; gitignore?: boolean },
+    opts?: { pin?: boolean },
+  ) => unwrap<RepoDetail>(http.patch(`/repos/${repoId}/files`, { paths, ...axes, ...(opts ?? {}) })),
   pinNow: (repoId: string, paths?: string[]) =>
     unwrap<PinNowResult>(http.post(`/repos/${repoId}/pin`, paths ? { paths } : {})),
   // Pull-them-down (warnings.mdx §10.8.12): pin each checked file's manifest CID on THIS node — which

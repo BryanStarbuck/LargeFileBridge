@@ -20,6 +20,31 @@ export function selectedRelPaths(files: readonly FileRow[], selected: ReadonlySe
   return selectedRows(files, selected).map((f) => f.path);
 }
 
+/**
+ * Split the checked rows the way "Pin now (N selected)" has to read them (one_repo.mdx §4.4).
+ *
+ * A pin pass moves bytes for files DECIDED Add-to-IPFS and nothing else, so a selection is an INTERSECTION
+ * with that set — checking five undecided rows and picking "Pin now (5)" ran a full pass, found nothing
+ * eligible and toasted a green "Nothing to pin" while the label had just promised to pin those five. The
+ * caller offers to decide `needsDecision` first; `blocked` (sticky Never-IPFS, decisions.mdx §17) is refused
+ * at the write path, so it is named to the user and never sent.
+ */
+export function partitionForPin(rows: readonly FileRow[]): {
+  ready: string[];
+  needsDecision: string[];
+  blocked: string[];
+} {
+  const ready: string[] = [];
+  const needsDecision: string[] = [];
+  const blocked: string[] = [];
+  for (const f of rows) {
+    if (f.decision === "sync") ready.push(f.path);
+    else if (f.neverIpfs) blocked.push(f.path);
+    else needsDecision.push(f.path);
+  }
+  return { ready, needsDecision, blocked };
+}
+
 /** Absolute paths for the checked rows — what the path-scoped batch routes take. */
 export function selectedAbsPaths(
   files: readonly FileRow[],

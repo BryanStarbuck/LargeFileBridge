@@ -15,6 +15,7 @@
 // The GLYPH SHAPE + the icon-header tell the columns apart; the unique color appears only when done.
 // It is a CONTROL CELL: it stops click propagation and never navigates the row.
 import { cloneElement, isValidElement, type ReactNode } from "react";
+import { RefreshCw } from "lucide-react";
 import type { TaskStatus } from "@lfb/shared";
 
 const COULD_GLYPH = "#6b7280"; // grey outline for an actionable not-done icon (the "white / not-set" look)
@@ -33,6 +34,10 @@ export interface StatusActionIconProps {
   /** Fired on click for the actionable ("could") and completed ("done") states; "na" is inert. */
   onActivate?: () => void;
   disabled?: boolean;
+  /** This cell's action is in flight: the glyph spins and the button is inert until it settles. A decision
+   *  write can take seconds (ledger + repo recompose), and an icon that neither moves nor refuses reads as
+   *  a click that did nothing. */
+  busy?: boolean;
   size?: number;
   onMouseEnter?: () => void;
   onMouseLeave?: () => void;
@@ -46,11 +51,12 @@ export function StatusActionIcon({
   title,
   onActivate,
   disabled = false,
+  busy = false,
   size = 16,
   onMouseEnter,
   onMouseLeave,
 }: StatusActionIconProps) {
-  const inert = state === "na" || disabled;
+  const inert = state === "na" || disabled || busy;
   const color = state === "done" ? doneColor : state === "could" ? COULD_GLYPH : NA_GLYPH;
   const fill = state === "done" && fillWhenDone ? doneColor : "none";
   // Color the glyph in place — no surrounding box. cloneElement injects the per-state stroke color and fill
@@ -68,8 +74,9 @@ export function StatusActionIcon({
     >
       <button
         type="button"
-        title={title}
+        title={busy ? `${title} — working…` : title}
         aria-label={title}
+        aria-busy={busy || undefined}
         disabled={inert}
         onClick={() => {
           if (!inert) onActivate?.();
@@ -77,7 +84,16 @@ export function StatusActionIcon({
         style={{ width: size, height: size }}
         className={`inline-flex items-center justify-center bg-transparent border-0 p-0 ${inert ? "cursor-default" : "cursor-pointer"}`}
       >
-        {painted}
+        {busy ? (
+          <RefreshCw
+            className="h-[15px] w-[15px] animate-spin"
+            color="var(--lfb-primary)"
+            strokeWidth={2.25}
+            aria-hidden
+          />
+        ) : (
+          painted
+        )}
       </button>
     </span>
   );

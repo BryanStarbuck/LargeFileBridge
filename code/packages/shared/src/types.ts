@@ -309,6 +309,10 @@ export interface PinCounts {
   orphaned?: number;
   // Orphans whose grace period lapsed this run: decision tombstoned + this computer's pin dropped.
   staled?: number;
+  // Why the run could not START (IPFS unreachable, `pin ls` failed, the repo is gone). Absent = the run
+  // ran. Without it every one of those failures returns the same all-zero tally as a healthy no-op and
+  // the UI says "Nothing to pin — no files marked Pin", which is a lie about a broken daemon (§6).
+  error?: string;
 }
 
 // ── TO DO Batches (to_do_batches.mdx / to_do.mdx) ────────────────────────────────

@@ -3,7 +3,7 @@
 // tests lock the rule that fixes it (decisions.mdx §12), and the one it must never break: on a SECOND
 // computer an absent decided file is the healthy pull-down offer and must keep being fetched.
 import { describe, it, expect } from "vitest";
-import { classifyAbsent, type OrphanRecord } from "./orphans.service.js";
+import { classifyAbsent, mergeOrphans, type OrphanRecord } from "./orphans.service.js";
 
 const DAY = 24 * 60 * 60 * 1000;
 const NOW = Date.parse("2026-08-05T12:00:00.000Z");
@@ -107,5 +107,39 @@ describe("classifyAbsent — the grace period", () => {
     const bad = { "video.mp4": { first_seen_at: "not-a-date", cid: "bafy1" } };
     const r = run({ absent: ["video.mp4"], entries, prior: bad });
     expect(r.stale).toEqual([]);
+  });
+});
+
+// The grace period only works if the RECORD survives between passes — and a paths-scoped run classifies
+// only the paths it was handed. Writing its map wholesale wiped every other file's `first_seen_at`, and
+// since each decision click fires a targeted pin, the 24h clock was restarted for the whole repo several
+// times a day: the file deleted here was never staled back to Undecided.
+describe("mergeOrphans — a scoped pass must not erase what it never looked at", () => {
+  const prior: Record<string, OrphanRecord> = {
+    "old.mp4": { first_seen_at: "2026-08-04T12:00:00.000Z", cid: "bafyOld" },
+    "other.mp4": { first_seen_at: "2026-08-04T13:00:00.000Z", cid: "bafyOther" },
+  };
+
+  it("a WHOLE-REPO pass writes its own answer — it looked at everything", () => {
+    const fresh = { "old.mp4": { first_seen_at: "2026-08-05T12:00:00.000Z", cid: "bafyOld" } };
+    expect(mergeOrphans(prior, fresh)).toEqual(fresh); // "other.mp4" came back — dropping it is correct
+  });
+
+  it("a SCOPED pass keeps the records of files outside its scope, clock untouched", () => {
+    const scope = new Set(["old.mp4"]);
+    const fresh = { "old.mp4": { first_seen_at: "2026-08-04T12:00:00.000Z", cid: "bafyOld" } };
+    const merged = mergeOrphans(prior, fresh, scope);
+    expect(merged["other.mp4"]).toEqual(prior["other.mp4"]);
+    expect(merged["old.mp4"]!.first_seen_at).toBe("2026-08-04T12:00:00.000Z");
+  });
+
+  it("inside the scope the fresh verdict wins — a file whose bytes came back loses its record", () => {
+    const merged = mergeOrphans(prior, {}, new Set(["old.mp4"]));
+    expect(merged).toEqual({ "other.mp4": prior["other.mp4"] });
+  });
+
+  it("a scoped pass over a file with no prior record still records it", () => {
+    const fresh = { "new.mp4": { first_seen_at: "2026-08-05T12:00:00.000Z", cid: "bafyNew" } };
+    expect(mergeOrphans(prior, fresh, new Set(["new.mp4"]))).toEqual({ ...prior, ...fresh });
   });
 });

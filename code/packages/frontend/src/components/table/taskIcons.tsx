@@ -120,6 +120,7 @@ export function TaskIconCell({
   state,
   onActivate,
   disabled,
+  busy,
   title,
   extraHover,
   doneColor,
@@ -128,6 +129,8 @@ export function TaskIconCell({
   state: TaskStatus;
   onActivate?: () => void;
   disabled?: boolean;
+  /** This row's action is in flight — the glyph spins until it settles (StatusActionIcon `busy`). */
+  busy?: boolean;
   /** Override the native tooltip (defaults to the kind's explanation). */
   title?: string;
   /** Extra per-row line appended under the explanation in the hover-info region. */
@@ -147,6 +150,7 @@ export function TaskIconCell({
       glyph={def.glyph}
       onActivate={onActivate}
       disabled={disabled}
+      busy={busy}
       onMouseEnter={() => setHoverInfo(hover)}
       onMouseLeave={() => setHoverInfo(null)}
     />

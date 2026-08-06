@@ -700,8 +700,20 @@ path for triaging many files:
 
 * **Set to Add to IPFS (pin)** · **Set to Ignore** · **Set to Undecided** — bulk-writes the decision
   (the `sync`/`ignore`/`undecided` value).
-* **Pin now (N selected)** — queues transfers for the selected `sync`-decision files. The count is in the
-  label, so this item and the action row's `Pin now (N)` state the same scope the same way.
+* **Pin now (N selected)** — pins the selected files. The count is in the label, so this item and the
+  action row's `Pin now (N)` state the same scope the same way.
+
+  **A pin pass moves bytes for `sync`-decided files only, so the selection is an INTERSECTION with that
+  set — and the item must NEVER quietly return the empty half of it.** Checking five undecided rows and
+  picking `Pin now (5)` ran a full pass, found nothing eligible and toasted a green "Nothing to pin",
+  while its own label had just promised to pin those five; clicking a row's pin icon looked like it
+  worked only because that path DECIDES the file first. So when the selection contains rows that are not
+  set to Add to IPFS, the item **asks** — *"Add 3 files to IPFS and pin?"* — and on confirm writes the
+  decision for exactly those rows and then pins the whole selection in ONE run. Declining is an answer,
+  not a cancel: whatever in the selection IS set still pins, and a selection with nothing set says so.
+  Sticky Never-IPFS rows (decisions.mdx §17) are named in the offer and never sent — the write path
+  refuses them. The decision write carries `pin: false` so the server does not ALSO fire its own targeted
+  pin: two pin runs over one unit at the same time race on its manifest.
 
 Selecting the header checkbox selects the whole current page; a "Select all N matching" affordance
 appears when a filter is active, to act on the entire filtered set, not just the page.

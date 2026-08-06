@@ -64,6 +64,36 @@ user *looked at these files and chose to do nothing* — which is precisely what
 reappearing (§2, §7). The prior model had no way to say "I saw it, leave it," so a re-scan kept re-raising
 the same yellow banner; that is the bug this fixes.
 
+### 1.0a INDEPENDENT means a write may touch ONE axis — an omitted axis is "leave as-is" (LOCKED)
+
+The axes are independent, so a surface that flips one of them **sends only that one**. An omitted axis is
+**"leave as-is" — never a decision of "no"**, and a write path that coerces `undefined → false` has quietly
+converted a one-axis click into a two-axis decision the user never made.
+
+> **The defect this is learned from (2026-08-05, repo `all`).** The row's ⊘ toggle carried both axes, so
+> every click on an **undecided** file also recorded `ipfs: false`. Five training videos git-ignored one
+> after another were thereby decided *"never add to IPFS"*: they vanished from the **Add to IPFS** tile
+> (which counts UNDECIDED files, §7) and, because a pin pass moves bytes for `sync`-decided files only,
+> **Pin now over all five reported "Nothing to pin"** — while the row's pin icon still worked, because that
+> path decides the file first. Git-ignoring a big video had opted it out of the sync git-ignoring exists to
+> enable — the exact inversion of the canonical both-on flow above.
+
+The rule, in the write path (`recordDecision` → `axesToRecord`):
+
+* **Prior decision exists** → the omitted axis **carries it forward**.
+* **No prior decision** → there is nothing to carry and no answer the user gave, so the path records **no
+  event at all** and stays **Undecided**. Nothing user-visible is lost: the git-ignore itself lands in
+  `.gitignore` (which travels in git), and the ⊘ state is read back from `git check-ignore` (§1.1), never
+  from this ledger.
+* A **tombstone** (`asked: false`) is unaffected — it un-decides both axes by design (§2).
+
+An **explicit** both-off write is still a real, recorded decision (the table above) — the rule is about
+axes the caller never mentioned, not about axes the user deliberately turned off.
+
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `axesToRecord()`,
+locked by `decision-axis-independence.spec.ts`.
+
 ### 1.1 This ledger records INTENT — git records the git-ignore STATE (LOCKED)
 
 The `gitignore` axis stored here is **what the user asked for**. It is **not** the answer to *"is this

@@ -62,6 +62,27 @@ export interface ClassifyAbsentResult {
  * prior record is not carried forward — the bytes came back, the record is live again, and §12's "no
  * surprise re-asking" holds without any extra branch.
  */
+/**
+ * The orphan map a pass WRITES BACK, given what it just classified.
+ *
+ * A whole-repo pass looked at every decided file, so its result is the whole answer. A PATHS-SCOPED pass —
+ * the bulk "Pin now (selected)", and the targeted pin every decision click fires — only classified the paths
+ * it was given, and writing that map wholesale erased every other file's `first_seen_at`. With a click or
+ * two a day the 24h grace never lapsed, so a file deleted here was never staled back to Undecided (§12).
+ * Scoped runs therefore carry the untouched records forward; within the scope, this run's verdict is
+ * authoritative — including "no longer absent", which is expressed by simply not being in `fresh`.
+ */
+export function mergeOrphans(
+  prior: Readonly<Record<string, OrphanRecord>>,
+  fresh: Readonly<Record<string, OrphanRecord>>,
+  scope?: ReadonlySet<string>,
+): Record<string, OrphanRecord> {
+  if (!scope) return { ...fresh };
+  const merged = { ...prior };
+  for (const rel of scope) delete merged[rel];
+  return Object.assign(merged, fresh);
+}
+
 export function classifyAbsent(args: ClassifyAbsentArgs): ClassifyAbsentResult {
   const { absent, entryFor, heldHere, label, prior, nowMs, graceMs } = args;
   const missing: string[] = [];

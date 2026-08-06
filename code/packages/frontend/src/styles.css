@@ -77,6 +77,15 @@
 .lfb-actions a.danger {
   color: var(--lfb-bad);
 }
+/* A withdrawn offer must LOOK withdrawn (page_actions.mdx §3): an unavailable action that still reads as a
+   live blue link invites a click that silently does nothing. Its `title` carries the reason. */
+.lfb-actions a[aria-disabled="true"] {
+  color: var(--lfb-muted, #94a3b8);
+  cursor: default;
+}
+.lfb-actions a[aria-disabled="true"]:hover {
+  text-decoration: none;
+}
 .lfb-actions .sep {
   color: var(--lfb-border);
   user-select: none;

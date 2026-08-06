@@ -59,7 +59,7 @@ import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRel, healWindowsPath } from "../../shared/rel-path.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
-import { classifyAbsent } from "./orphans.service.js";
+import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
@@ -156,11 +156,16 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   const missing = t.preflightError?.();
   if (missing) {
     markUnitError(t, missing);
+    // The run never STARTED — say so. An all-zero tally alone renders as the benign "Nothing to pin —
+    // no files marked Pin", which is the same sentence a healthy no-op prints: three completely
+    // different situations wearing one face (pin_process.mdx §6).
+    counts.error = missing;
     return counts;
   }
   const health = await ipfs.health();
   if (health !== "ok") {
     markUnitError(t, "IPFS node unreachable");
+    counts.error = "IPFS node unreachable";
     return counts;
   }
   await ipfs.enforceCompliance();
@@ -185,7 +190,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     // A failed/timed-out `pin ls` must NEVER be read as "nothing is pinned" — an empty pinset here makes
     // every previously-pinned file look pin-lost and re-uploads the whole unit. Skip this pass instead;
     // the next scheduled pass retries with a healthy daemon.
-    markUnitError(t, `pin ls failed — skipping pin pass: ${(e as Error).message}`);
+    const msg = `pin ls failed — skipping pin pass: ${(e as Error).message}`;
+    markUnitError(t, msg);
+    counts.error = msg;
     return counts;
   }
 
@@ -370,6 +377,11 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     // fetched rather than every entry in the manifest.
     const fetchTargets = [...byPath.values()].filter((entry) => {
       if (!entry.cid) return false;
+      // SCOPE APPLIES TO BOTH HALVES (pin_process.mdx §3). A paths-scoped run — the bulk "Pin now
+      // (selected)", and the targeted pin every decision click fires — asked for THESE files. Without this
+      // the add half honored the selection while the fetch half quietly pulled down every missing file in
+      // the repo, and reported `fetched`/`failed` counts for files the user never selected.
+      if (onlyPaths && !onlyPaths.has(entry.path)) return false;
       // A peer-known file this computer has NOT decided to sync is an OFFER, not an obligation
       // (storage_company.mdx §8.5). Fetching it here would silently download every big file the user's
       // other machines hold — the opposite of "we surface and offer, we never act on files on our own"
@@ -452,7 +464,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     }
   }
 
-  t.writeStatus({ ...t.status, last_pin_at: new Date().toISOString(), last_error: null, orphans });
+  // A paths-scoped run only classified the paths it was given, so it must not write its map wholesale over
+  // every OTHER file's grace record (mergeOrphans — the rule and why it exists live next to classifyAbsent).
+  const orphansToWrite = mergeOrphans(t.status.orphans ?? {}, orphans, onlyPaths);
+  t.writeStatus({ ...t.status, last_pin_at: new Date().toISOString(), last_error: null, orphans: orphansToWrite });
   log.info(
     "pin",
     `Pinned ${t.name}: ${next.files.length} file(s) — added ${counts.added}, fetched ${counts.fetched}, pinned ${counts.pinned}, ` +

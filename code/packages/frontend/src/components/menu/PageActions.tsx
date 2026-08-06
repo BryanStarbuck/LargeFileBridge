@@ -220,7 +220,9 @@ const ActionLink = forwardRef<
       ref={ref}
       role="button"
       tabIndex={0}
-      title={label}
+      // `a.title` is the Action contract's REASON (why it's disabled) — a greyed link whose tooltip just
+      // repeats its own label is the dead end that contract exists to prevent.
+      title={a.title ?? label}
       aria-disabled={a.disabled}
       className={`whitespace-nowrap ${danger ? "danger" : ""}`}
       onClick={(e) => {

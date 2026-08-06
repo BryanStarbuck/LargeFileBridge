@@ -35,7 +35,7 @@ import { TASK_TABS, type TaskTabId } from "./taskTabs.config.js";
 import { MetricsStrip, type MetricView } from "./MetricsStrip.js";
 import { METRIC_CATALOG, metricCount, type MetricId } from "./metricWarnings.js";
 import { buildMetricWarning, topRecommendation, scanIsStale } from "./metricWarningDefs.js";
-import { selectedRelPaths, selectedAbsPaths } from "./selection.js";
+import { selectedRows, selectedRelPaths, selectedAbsPaths, partitionForPin } from "./selection.js";
 import { setHoverInfo } from "./HoverInfoRegion.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { WarningPopup } from "../../components/ui/WarningPopup.js";
@@ -86,9 +86,16 @@ function fileSummary(f: FileRow): string {
   return bits.join(" · ");
 }
 
-/** Human summary of what a pin run actually did — the honest counts, never a fixed string (pin_process.mdx §6). */
-function pinSummary(c: PinCounts): string {
-  if (c.eligible === 0) return "Nothing to pin — no files marked Pin";
+/** Human summary of what a pin run actually did — the honest counts, never a fixed string (pin_process.mdx §6).
+ *  `scoped` = the run was restricted to checked rows, so a no-op has to say WHICH files it found nothing in. */
+function pinSummary(c: PinCounts, scoped = false): string {
+  // A run that never started (daemon down, `pin ls` failed, repo gone) also returns an all-zero tally. Say
+  // the real reason instead of the healthy-no-op sentence — they are not the same event (§6).
+  if (c.error) return `Pin didn't run — ${c.error}`;
+  if (c.eligible === 0)
+    return scoped
+      ? "Nothing to pin — none of the selected files is set to Add to IPFS"
+      : "Nothing to pin — no files marked Pin";
   const parts: string[] = [];
   if (c.added) parts.push(`${c.added} added`);
   if (c.fetched) parts.push(`${c.fetched} fetched`);
@@ -108,12 +115,38 @@ function pinSummary(c: PinCounts): string {
 // stacking a second one next to it.
 const PIN_TOAST_ID = "repo-pin-now";
 
-/** What the inline decision toggles send. `axis` is the toggle the user clicked — it selects the answer. */
+/**
+ * What the inline decision toggles send. `axis` is the toggle the user clicked — it selects the answer AND
+ * is the ONLY axis carried: an omitted axis means "leave as-is" (DecisionAxes, decisions.mdx §1). Sending
+ * the other one is how git-ignoring an undecided file used to record "never add this to IPFS", which then
+ * made Pin now skip it forever.
+ */
 interface SetAxesVars {
   paths: string[];
-  ipfs: boolean;
-  gitignore: boolean;
+  ipfs?: boolean;
+  gitignore?: boolean;
   axis: "ipfs" | "gitignore";
+}
+
+/** One toast per (axis, target) so a second click on the same icon REPLACES its toast instead of stacking. */
+const axesToastId = (v: SetAxesVars): string => `axes-${v.axis}-${v.paths.join("|")}`;
+
+/** What a decision-toggle click says at click time and once the server answers — same voice, both halves. */
+function axesLabel(v: SetAxesVars): { pending: string; done: string } {
+  const n = v.paths.length;
+  const what =
+    n === 1 ? middleTruncate(v.paths[0].slice(v.paths[0].lastIndexOf("/") + 1), 44) : `${n} files`;
+  if (v.axis === "ipfs") {
+    return v.ipfs
+      ? {
+          pending: `Adding ${what} to IPFS…`,
+          done: `Adding ${what} to IPFS — pinning has started, watch its progress in the dock.`,
+        }
+      : { pending: `Removing ${what} from IPFS…`, done: `${what} will no longer sync over IPFS.` };
+  }
+  return v.gitignore
+    ? { pending: `Git-ignoring ${what}…`, done: `Git-ignoring ${what}.` }
+    : { pending: `Un-ignoring ${what}…`, done: `${what} no longer git-ignored.` };
 }
 
 // The shared presentation for a leading icon control column (tables.mdx icon-columns): narrow, tight
@@ -144,6 +177,15 @@ export function OneRepoPage() {
   // The educate-and-fix popup the header "View recommendation" primary opens (one_repo.mdx §3.1). The
   // metric tiles host their own popup inside MetricsStrip; this is the header button's separate host.
   const [headerWarning, setHeaderWarning] = useState<WarningDef | null>(null);
+  // Rows with a decision write in flight. The icon they were clicked on spins for exactly that long, so a
+  // click on a slow write is visibly WORKING rather than visibly ignored.
+  const [busyPaths, setBusyPaths] = useState<Set<string>>(new Set());
+  const markBusy = (paths: string[], on: boolean): void =>
+    setBusyPaths((prev) => {
+      const next = new Set(prev);
+      for (const p of paths) (on ? next.add(p) : next.delete(p));
+      return next;
+    });
 
   const { data: detail, isLoading } = useQuery({
     queryKey: ["repo", repoId],
@@ -174,37 +216,53 @@ export function OneRepoPage() {
     },
   });
 
-  // Two-axis write for the inline decision toggles (decision_toggles.mdx §2). Flipping ONE axis sends
-  // BOTH values so the other axis is preserved (a bare single-axis write would clobber it).
+  // Single-axis write for the inline decision toggles (decision_toggles.mdx §2). The click carries ONLY the
+  // axis it flipped; the other is omitted, which the write path reads as "leave as-is" — sending both is how
+  // a ⊘ click on an undecided file recorded "never add to IPFS" and hid it from Pin now forever.
   //
-  // `axis` names the toggle the user actually clicked, so the answer can SAY WHAT HAPPENED. Turning the IPFS
-  // axis on starts real byte work on the server (repos.router fires a targeted pin), and until now the click
-  // produced no toast, no card and no visible change beyond an icon colour — indistinguishable from a click
-  // that did nothing.
+  // `axis` names the toggle the user actually clicked, so the answer can SAY WHAT HAPPENED — and it says it
+  // AT CLICK TIME. The decision write is a heavy server round-trip (a six-figure-line ledger is re-folded
+  // and the repo detail recomposed), so waiting for the response to give the first sign of life is what made
+  // the icon look dead: the toast and the icon now move on the click and reconcile when the server answers.
   const setAxes = useMutation({
     mutationFn: ({ paths, ipfs, gitignore }: SetAxesVars) =>
       api.setFileDecisions(repoId, paths, { ipfs, gitignore }),
+    onMutate: (v: SetAxesVars) => {
+      toast.loading(axesLabel(v).pending, { id: axesToastId(v) });
+      markBusy(v.paths, true);
+      // Optimistic row state so the icon answers the click immediately. The server's own detail replaces
+      // this wholesale on success; on failure we put the previous rows back.
+      const prev = qc.getQueryData<RepoDetail>(["repo", repoId]);
+      if (prev) {
+        const touched = new Set(v.paths);
+        qc.setQueryData<RepoDetail>(["repo", repoId], {
+          ...prev,
+          files: prev.files.map((f) =>
+            touched.has(f.path)
+              ? {
+                  ...f,
+                  ...(v.ipfs === undefined ? {} : { decision: (v.ipfs ? "sync" : "ignore") as Decision }),
+                  ...(v.gitignore === undefined ? {} : { gitignore: v.gitignore }),
+                }
+              : f,
+          ),
+        });
+      }
+      return { prev };
+    },
     onSuccess: (d: RepoDetail, v: SetAxesVars) => {
       qc.setQueryData(["repo", repoId], d);
-      const n = v.paths.length;
-      const files = `${n} file${n === 1 ? "" : "s"}`;
-      if (v.axis === "ipfs") {
-        // The pin the server just kicked off registers a dock card; ask for it now rather than waiting on
-        // the live-stream bump, so the card appears while the click still feels connected to it.
-        void qc.invalidateQueries({ queryKey: ["progress"] });
-        toast.success(
-          v.ipfs
-            ? `Adding ${files} to IPFS — pinning has started, watch its progress in the dock.`
-            : `${files} will no longer sync over IPFS.`,
-        );
-      } else {
-        toast.success(v.gitignore ? `Git-ignoring ${files}.` : `${files} no longer git-ignored.`);
-      }
+      // The pin the server just kicked off registers a dock card; ask for it now rather than waiting on
+      // the live-stream bump, so the card appears while the click still feels connected to it.
+      if (v.ipfs !== undefined) void qc.invalidateQueries({ queryKey: ["progress"] });
+      toast.success(axesLabel(v).done, { id: axesToastId(v) });
     },
-    onError: (e: Error) => {
+    onError: (e: Error, v: SetAxesVars, ctx) => {
       clientLog.error("OneRepoPage.setAxes", e);
-      toast.error(e.message);
+      if (ctx?.prev) qc.setQueryData(["repo", repoId], ctx.prev);
+      toast.error(e.message, { id: axesToastId(v) });
     },
+    onSettled: (_d, _e, v: SetAxesVars) => markBusy(v.paths, false),
   });
 
   // Pull ONE remote-only file's bytes down over IPFS (storage_company.mdx §8.5). The row is built from a
@@ -237,12 +295,14 @@ export function OneRepoPage() {
       );
       void qc.invalidateQueries({ queryKey: ["progress"] });
     },
-    onSuccess: (r: PinNowResult) => {
+    onSuccess: (r: PinNowResult, paths?: string[]) => {
       qc.setQueryData(["repo", repoId], r.detail);
       // Report what the run ACTUALLY did, never a blanket "complete" (pin_process.mdx §6): an honest
-      // "nothing to pin" for a no-op, real counts otherwise, and an error toast when only failures occurred.
-      const summary = pinSummary(r.counts);
-      if (r.counts.failed > 0 && r.counts.added === 0 && r.counts.fetched === 0) toast.error(summary, { id: PIN_TOAST_ID });
+      // "nothing to pin" for a no-op, real counts otherwise, and an error toast when only failures occurred
+      // or the run could not start at all.
+      const summary = pinSummary(r.counts, !!paths?.length);
+      const noWork = r.counts.added === 0 && r.counts.fetched === 0;
+      if (r.counts.error || (r.counts.failed > 0 && noWork)) toast.error(summary, { id: PIN_TOAST_ID });
       else toast.success(summary, { id: PIN_TOAST_ID });
     },
     onError: (e: Error) => {
@@ -356,6 +416,67 @@ export function OneRepoPage() {
 
   const ipfsDown = detail?.ipfs === "unreachable";
 
+  /**
+   * "Pin now" — nothing checked pins the whole repo, checked rows pin exactly those (one_repo.mdx §4.4).
+   *
+   * A pin pass only moves bytes for files DECIDED Add-to-IPFS, and the selection is an INTERSECTION with
+   * that set — so checking five undecided rows and picking "Pin now (5)" ran a full pass, found nothing
+   * eligible and reported a green "Nothing to pin", while the label had just promised to pin those five.
+   * Clicking a row's pin icon looked like it worked only because that path DECIDES the file first. So ask
+   * for the missing half instead of silently doing nothing, then pin the whole selection in ONE run
+   * (`pin: false` on the decision write, or its own targeted pin would race this one over the same unit).
+   */
+  const pinNowScoped = async (): Promise<void> => {
+    if (selected.size === 0) {
+      pinNow.mutate(undefined);
+      return;
+    }
+    const rows = selectedRows(detail?.files ?? [], selected);
+    if (rows.length === 0) {
+      // Every checked row has left the data since it was checked (a rescan dropped it) — pinning the whole
+      // repo instead would be a much bigger action than the one the label offered.
+      toast.message("Nothing pinned — the checked files are no longer in this repo.");
+      return;
+    }
+    const { ready, needsDecision, blocked } = partitionForPin(rows);
+    if (needsDecision.length > 0) {
+      const n = needsDecision.length;
+      const ok = await confirmModal({
+        title: `Add ${n} file${n === 1 ? "" : "s"} to IPFS and pin?`,
+        body:
+          `${n} of the ${rows.length} selected file${rows.length === 1 ? " is" : "s are"} not set to Add to IPFS yet, ` +
+          `and pinning only moves files that are. Adding them starts syncing them across your computers.` +
+          (blocked.length ? ` ${blocked.length} flagged Never IPFS will be left out.` : ""),
+        confirmLabel: "Add and pin",
+      });
+      if (!ok) {
+        // Declining is an answer, not a cancel: pin whatever in the selection IS set, and say so plainly.
+        if (ready.length) pinNow.mutate(ready);
+        else toast.message("Nothing pinned — none of the selected files is set to Add to IPFS.");
+        return;
+      }
+      markBusy(needsDecision, true);
+      toast.loading(`Adding ${n} file${n === 1 ? "" : "s"} to IPFS…`, { id: PIN_TOAST_ID });
+      try {
+        qc.setQueryData(
+          ["repo", repoId],
+          await api.setFileDecisions(repoId, needsDecision, { ipfs: true }, { pin: false }),
+        );
+      } catch (e) {
+        clientLog.error("OneRepoPage.pinNowScoped", e);
+        toast.error((e as Error).message, { id: PIN_TOAST_ID });
+        return;
+      } finally {
+        markBusy(needsDecision, false);
+      }
+    } else if (ready.length === 0) {
+      // Every checked row is flagged Never-IPFS: there is no pin to run and no offer to make (§17).
+      toast.message("Nothing pinned — the selected files are flagged Never IPFS.");
+      return;
+    }
+    pinNow.mutate([...ready, ...needsDecision]);
+  };
+
   // The action-links row scope (page_actions.mdx §1.1): checked rows → their absolute paths; nothing
   // checked → the repo root, walked recursively on the server. Evaluated at click time via producingActions.
   const pageScope = (): ActionScope => {
@@ -394,7 +515,11 @@ export function OneRepoPage() {
       icon: <RefreshCw className="h-3.5 w-3.5" />,
       group: "Work",
       countWhenSelected: true,
-      onSelect: () => pinNow.mutate(selected.size > 0 ? relPaths() : undefined),
+      // A pin pass cannot do anything while the node is down, and it reports that as an error rather than
+      // a count — so the offer is withdrawn and says why (one_repo.mdx §3.2 IPFS row), not silently tried.
+      disabled: ipfsDown,
+      title: ipfsDown ? "The IPFS node is unreachable — start it, then pin." : undefined,
+      onSelect: pinNowScoped,
     },
     { id: "rescan", label: "Rescan", icon: <RefreshCw className="h-3.5 w-3.5" />, group: "Work", onSelect: rescanRepo },
   ];
@@ -462,6 +587,7 @@ export function OneRepoPage() {
             kind="pin"
             state={state}
             doneColor={doneColor}
+            busy={busyPaths.has(f.path)}
             disabled={ipfsDown || (blockedByNeverIpfs && !remoteOnly)}
             title={
               remoteOnly
@@ -477,12 +603,12 @@ export function OneRepoPage() {
                         : "Synced (pinned) on this computer — click to stop syncing this file"
             }
             extraHover={fileSummary(f)}
-            // Two-axis write preserving the git-ignore axis (decision_toggles.mdx §2) — except for a
-            // remote-only row, whose only meaningful action is to fetch the bytes.
+            // ONE axis per click (decision_toggles.mdx §2): the git-ignore axis is left as-is rather than
+            // re-asserted — except for a remote-only row, whose only meaningful action is to fetch the bytes.
             onActivate={() =>
               remoteOnly
                 ? pullOne.mutate(f.path)
-                : setAxes.mutate({ paths: [f.path], ipfs: !decided, gitignore: !!f.gitignore, axis: "ipfs" })
+                : setAxes.mutate({ paths: [f.path], ipfs: !decided, axis: "ipfs" })
             }
           />
         );
@@ -516,12 +642,14 @@ export function OneRepoPage() {
           <TaskIconCell
             kind="ignore"
             state={on ? "done" : "could"}
+            busy={busyPaths.has(f.path)}
             disabled={locked || remoteOnly}
             title={title}
             extraHover={fileSummary(f)}
-            onActivate={() =>
-              setAxes.mutate({ paths: [f.path], ipfs: f.decision === "sync", gitignore: !on, axis: "gitignore" })
-            }
+            // GIT-IGNORE ONLY. Sending `ipfs: f.decision === "sync"` alongside meant every click on an
+            // UNDECIDED file also recorded "do not add this to IPFS" — the file left the Add-to-IPFS tile
+            // (which counts undecided files) and Pin now, which pins `sync` files only, skipped it forever.
+            onActivate={() => setAxes.mutate({ paths: [f.path], gitignore: !on, axis: "gitignore" })}
           />
         );
       },
@@ -849,7 +977,9 @@ export function OneRepoPage() {
                     </button>
                   ))}
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100 text-[var(--lfb-primary)]"
-                    onClick={() => { pinNow.mutate(relPaths()); setBulkOpen(false); }}>
+                    disabled={ipfsDown}
+                    title={ipfsDown ? "The IPFS node is unreachable — start it, then pin." : undefined}
+                    onClick={() => { void pinNowScoped(); setBulkOpen(false); }}>
                     Pin now ({selected.size} selected)
                   </button>
                   <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"

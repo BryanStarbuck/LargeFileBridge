@@ -449,6 +449,10 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
       gitignore: z.boolean().optional(),
       // Legacy single-axis form.
       decision: z.enum(["sync", "ignore", "undecided"]).optional(),
+      // Whether turning the IPFS axis on should also fire the targeted pin below (default true). The bulk
+      // "Pin now (selected)" sets it false: it marks the undecided rows and then runs ONE pin over the whole
+      // selection, and two concurrent pin runs over the same unit race on its manifest.
+      pin: z.boolean().optional(),
     })
     .safeParse(req.body);
   if (!body.success || (body.data.decision === undefined && body.data.ipfs === undefined && body.data.gitignore === undefined)) {
@@ -511,16 +515,23 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
     // entry travelled to the company sync repo, and every other computer's Pull-down stayed 0 forever.
     // Fire-and-forget targeted pin of exactly the decided paths; `manual: true` because a decision IS the
     // explicit opt-in (it also enables the 15-min background pass for this repo, keeping the pin fresh).
-    if (settingIpfsOn) {
+    //
+    // AFTER THE RESPONSE, and on a fresh tick. "Fire-and-forget" is only true from the first `await`
+    // onward: `pinRepoFolder` runs a long SYNCHRONOUS prelude first (the sync-repo marker, the reconcile
+    // that re-parses and rewrites a six-figure-line ledger, the manifest merge), and starting it here held
+    // the event loop — so this response, and every other request including the progress poll the dock
+    // feeds on, waited on it. That is why clicking a row's pin icon looked like it did nothing.
+    const firePin = (): void => {
       const repoName = getRepoConfig(folder).repo.name || folder;
       const target = `${repoName} (${paths.length} file${paths.length === 1 ? "" : "s"})`;
       void track("pin", target, (report) =>
         pinRepoFolder(folder, new Set(paths), { manual: true, report }),
       ).catch((e) => log.error("repos", `${folder}: decision-triggered pin failed: ${(e as Error).message}`));
-    }
+    };
     const detail: RepoDetail = await repoDetailWithPins(folder);
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
     res.json({ ok: true, data: detail });
+    if (settingIpfsOn && body.data.pin !== false) setImmediate(firePin);
   } catch (e) {
     log.error("repos", `${folder}: file decision update failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });

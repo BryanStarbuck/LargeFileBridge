@@ -216,8 +216,12 @@ function writeLedger(repoRoot: string, events: DecisionEvent[]): void {
 }
 
 /** Append events to the shared ledger (read → concat → deterministic write). */
-function appendEvents(repoRoot: string, events: DecisionEvent[]): void {
-  const existing = readLedger(repoRoot);
+function appendEvents(repoRoot: string, events: DecisionEvent[], alreadyRead?: DecisionEvent[]): void {
+  // `alreadyRead` lets a caller that just folded the ledger (recordDecision's carry-forward) reuse that
+  // read — this file runs to six figures of lines on a busy repo, so parsing it twice per click is real
+  // time. It must be the FULL ledger that was actually read: pass `undefined` to re-read, never an empty
+  // array standing in for a failed read — that would write a ledger holding only `events`.
+  const existing = alreadyRead ?? readLedger(repoRoot);
   writeLedger(repoRoot, [...existing, ...events]);
 }
 
@@ -245,6 +249,34 @@ function decisionSid(folder: string, repoRoot: string): string {
     return "r:" + crypto.createHash("sha1").update(remote.trim()).digest("hex").slice(0, 12);
   }
   return storageSid(repoRoot);
+}
+
+/**
+ * What ONE path's decision event stamps on the two axes — or `null` when there is nothing honest to record
+ * and the write must be SKIPPED for that path.
+ *
+ * An omitted axis means "leave as-is" (DecisionAxes, decisions.mdx §1); it is NOT a decision of "no".
+ * `!!axes.ipfs` broke that contract on the surface where it mattered most: the ⊘ git-ignore toggle carries
+ * only its own axis, so every click on an UNDECIDED file also recorded `ipfs:false` — "never add this to
+ * IPFS". The file then left the Add-to-IPFS tile (which counts UNDECIDED files) AND became invisible to Pin
+ * now, which moves bytes for `sync`-decided files only. Git-ignoring a big video quietly opted it out of the
+ * very sync git-ignoring it exists to enable.
+ *
+ * With a prior decision, the omitted axis carries it forward. With NO prior decision there is nothing to
+ * carry and no answer the user gave, so the path records no event at all and stays Undecided. Nothing
+ * user-visible is lost: the git-ignore itself is applied to `.gitignore` (which travels in git), and the
+ * row's ⊘ state is read back from `git check-ignore`, never from this ledger (composeFileRows).
+ */
+export function axesToRecord(
+  axes: DecisionAxes,
+  asked: boolean,
+  was: Pick<FoldedDecision, "asked" | "ipfs" | "gitignore"> | undefined,
+): { ipfs: boolean; gitignore: boolean } | null {
+  // A tombstone (asked:false) un-decides BOTH axes on the fold, so its axis values are inert padding.
+  if (!asked) return { ipfs: !!axes.ipfs, gitignore: !!axes.gitignore };
+  const prior = was?.asked ? was : undefined;
+  if (axes.ipfs === undefined && !prior) return null;
+  return { ipfs: axes.ipfs ?? !!prior?.ipfs, gitignore: axes.gitignore ?? !!prior?.gitignore };
 }
 
 /**
@@ -282,23 +314,43 @@ export async function recordDecision(
     /* no index yet → fingerprints stay null */
   }
 
+  // The prior state an omitted axis carries forward (axesToRecord). Folded ONCE, and the same read is
+  // reused for the append below, so honoring the contract costs no extra parse of a large ledger.
+  const needsPrior = asked && (axes.ipfs === undefined || axes.gitignore === undefined);
+  // null = "we do not have the ledger". NEVER an empty array on failure: handing `[]` to appendEvents would
+  // write a ledger containing only this click's events — every decision the team ever made, deleted.
+  let existingEvents: DecisionEvent[] | null = null;
+  let prior = new Map<string, FoldedDecision>();
+  if (needsPrior) {
+    try {
+      existingEvents = readLedger(repoRoot);
+      prior = foldLedger(existingEvents);
+    } catch (e) {
+      // An unreadable ledger must not silently fabricate decisions: appendEvents re-reads (and throws on
+      // the same fault) below, so fall through with no prior state rather than guessing one.
+      log.warn("decisions", `${repoRoot}: prior-decision read failed: ${(e as Error).message}`);
+    }
+  }
+
   // THE WRITE FUNNEL for every decision surface (router, entity menu, compress re-stamp, pin tombstone), so
   // normalizing here is what guarantees no NEW `\` event is ever recorded, on any OS (repo__list_syns.mdx
   // §6.1a). It also repairs the fingerprint join: the tracking index is POSIX-keyed, so a `\` path silently
   // looked up nothing and every Windows-recorded decision lost its fingerprint.
-  const events: DecisionEvent[] = relPaths.map((raw) => {
+  const events: DecisionEvent[] = [];
+  for (const raw of relPaths) {
     const p = healWindowsPath(raw);
-    return {
+    const stamp = axesToRecord(axes, asked, needsPrior ? prior.get(p) : undefined);
+    if (!stamp) continue; // nothing honest to record for this path — see axesToRecord
+    events.push({
       sid,
       path: p,
       fingerprint: fpByPath.get(p) ?? null,
       asked, // asked:false is a TOMBSTONE that returns the file to Undecided (decisions.mdx §2)
-      ipfs: !!axes.ipfs,
-      gitignore: !!axes.gitignore,
+      ...stamp,
       decided_by: stampedBy,
       decided_at: decidedAt,
-    };
-  });
+    });
+  }
 
   // The ledger is ALWAYS written — to Local Storage, unconditionally (decisions.mdx §6, LOCKED). It never
   // touches the working repo, so the keep-`.lfbridge/` consent (which now governs only Category-A content
@@ -308,13 +360,15 @@ export async function recordDecision(
   // cache-only shape behind the 2026-07-20 "not backed up: 22 / 0" defect.
   // Append the events (decisions AND tombstones) to the team-shared ledger, then reconcile — the fold
   // projects the ledger onto the local frozen enum, so a tombstone (asked:false) correctly un-decides.
-  try {
-    appendEvents(repoRoot, events);
-  } catch (e) {
-    log.error("decisions", `${repoRoot}: shared ledger append failed: ${(e as Error).message}`);
-    throw e;
+  if (events.length > 0) {
+    try {
+      appendEvents(repoRoot, events, existingEvents ?? undefined);
+    } catch (e) {
+      log.error("decisions", `${repoRoot}: shared ledger append failed: ${(e as Error).message}`);
+      throw e;
+    }
+    await reconcile(folder);
   }
-  await reconcile(folder);
 
   // Apply the git-ignore axis through the engine (anchored, idempotent, skip-already-ignored) only when
   // the user turned it ON — we never git-ignore on our own (charter / git_ignore.mdx). Independent of the
