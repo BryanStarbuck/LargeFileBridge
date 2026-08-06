@@ -6,6 +6,7 @@ import { RefreshCw, Plus, Bookmark } from "lucide-react";
 import { toast } from "sonner";
 import type { RepoRow, RepoStatus } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { streamRepoRows } from "../../api/streamQueries.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoGear, RepoKebab } from "../../components/menu/RowKebabs.js";
@@ -30,7 +31,13 @@ export function ReposPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [showAdd, setShowAdd] = useState(false);
-  const { data: repos, isLoading } = useQuery({ queryKey: ["repos"], queryFn: api.repos });
+  // STREAMED (performance.mdx P-37): the rows land in batches as the server composes them, so the table
+  // starts filling in tens of milliseconds instead of after the last repo on the machine. The cache key and
+  // its contents are unchanged — every mutation, invalidation and optimistic patch below still owns it.
+  const { data: repos, isLoading } = useQuery({
+    queryKey: ["repos"],
+    queryFn: ({ signal }) => streamRepoRows(qc, signal),
+  });
 
   // The scan runs server-side. The always-mounted ScanProgressBar is the single poller for
   // ["scanStatus"] (performance.mdx P-07) — here we just subscribe to that SHARED cache, with no second

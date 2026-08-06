@@ -286,6 +286,12 @@ export interface RepoDetail {
   taskMetrics?: TaskMetrics;
   // Company/personal mapping (repo_company_mapping.mdx §7) — drives the Ownership section + grouping.
   owner?: RepoOwner;
+  // TRUE while this detail is still being STREAMED (performance.mdx P-37): the header is real, but `files`
+  // is only the rows composed so far and every aggregate below it is a running subtotal. Absent/false means
+  // the composition finished and every number is final. The page uses it to hold back the one thing an
+  // intermediate count would get WRONG rather than merely early — the header's single "most important
+  // recommendation", which is a ranking across metrics and can only be ranked once they are all in.
+  partial?: boolean;
 }
 
 export type IpfsHealth = "ok" | "unreachable";
@@ -1289,6 +1295,44 @@ export type FlatStreamEvent =
   | { t: "meta"; root: string; home: string; thresholdBytes: number }
   | { t: "batch"; files: FsEntry[] }
   | { t: "done"; truncated: boolean; total: number }
+  | { t: "error"; error: string };
+
+// ── Streaming repo list + repo detail (performance.mdx P-37) ──────────────────
+// The same NDJSON shape as the flat listing above, applied to the two screens that used to answer with
+// ONE fully-composed blob: the Repos landing table and the One-repo detail. Both are O(repos) / O(files)
+// walks over the disk, so on a slow or cloud-mounted machine the user stared at a skeleton for the whole
+// walk — time-to-first-row was time-to-LAST-row. Streaming makes the first rows land in tens of ms and the
+// rest fill in behind them.
+
+/** `GET /api/repos/stream` — the Repos table, one batch of rows at a time. */
+export type RepoRowsStreamEvent =
+  | { t: "meta"; total: number } // how many repos this walk will visit (drives "N of M" progress)
+  | { t: "batch"; rows: RepoRow[] }
+  | { t: "done"; total: number }
+  | { t: "error"; error: string };
+
+/**
+ * `GET /api/repos/:repoId/detail/stream` — the One-repo detail, in the order the facts become known.
+ *
+ * `head` carries everything readable from the unit's config + status (name, path, remote, pin toggle, scan
+ * times) with `partial: true` and no rows; `files` batches stream as rows are composed; `totals` closes the
+ * aggregates; `pins` patches in the LIVE pin reality once the node's pinset has been enumerated (that call
+ * alone can take seconds on a large pinset, and making the whole page wait on it is what it used to do);
+ * `extras` carries the peer/IPFS-dependent warnings. A row carries `pinnedHere: undefined` until `pins`
+ * lands, which is the already-defined "we don't know yet" state — never a false red.
+ */
+export type RepoDetailStreamEvent =
+  | { t: "head"; detail: RepoDetail }
+  | { t: "files"; files: FileRow[] }
+  | { t: "totals"; counts: RepoCounts; taskMetrics?: TaskMetrics; peerCount: number; status: RepoStatus }
+  | { t: "pins"; ipfs: IpfsHealth; pinnedHere: Record<string, boolean> }
+  | {
+      t: "extras";
+      missingPinned: MissingPinnedFile[];
+      deletedHere: DeletedHereFile[];
+      syncBlocked: RepoSyncBlock | null;
+    }
+  | { t: "done" }
   | { t: "error"; error: string };
 
 // ── Git Ignore (the pop-over dialog + the .gitignore-writing engine) — git_ignore.mdx §5/§6 ──

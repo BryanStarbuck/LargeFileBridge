@@ -115,8 +115,8 @@ describe("remoteOnlyRows — the laptop sees the Tower's file (§8.5)", () => {
   const cfg = { repo: { path: root }, decisions: {} } as unknown as RepoUnitConfig;
   const entry = { path: VIDEO, cid: CID, size: 5340486, sha256: null, modified_at: "2026-07-20T13:00:56.644Z", pinned_by: [TOWER] };
 
-  it("produces a remote-only row for a peer's file this computer lacks", () => {
-    const rows = remoteOnlyRows(cfg, manifest([entry]), [], root, LAPTOP);
+  it("produces a remote-only row for a peer's file this computer lacks", async () => {
+    const rows = await remoteOnlyRows(cfg, manifest([entry]), [], root, LAPTOP);
     expect(rows).toHaveLength(1);
     const r = rows[0]!;
     // Identity comes from the manifest, because there is nothing on disk to stat.
@@ -129,25 +129,25 @@ describe("remoteOnlyRows — the laptop sees the Tower's file (§8.5)", () => {
     expect(r.pinnedHere).toBe(false);
   });
 
-  it("does NOT duplicate a file the scan already produced a row for", () => {
+  it("does NOT duplicate a file the scan already produced a row for", async () => {
     const scanned = [{ path: VIDEO } as FileRow];
-    expect(remoteOnlyRows(cfg, manifest([entry]), scanned, root, LAPTOP)).toHaveLength(0);
+    expect(await remoteOnlyRows(cfg, manifest([entry]), scanned, root, LAPTOP)).toHaveLength(0);
   });
 
-  it("does NOT resurrect a file only THIS computer ever claimed", () => {
+  it("does NOT resurrect a file only THIS computer ever claimed", async () => {
     // Deleted here on purpose: a stale self-only entry must not become a row offering bytes nobody has.
     const selfOnly = { ...entry, pinned_by: [LAPTOP] };
-    expect(remoteOnlyRows(cfg, manifest([selfOnly]), [], root, LAPTOP)).toHaveLength(0);
+    expect(await remoteOnlyRows(cfg, manifest([selfOnly]), [], root, LAPTOP)).toHaveLength(0);
   });
 
-  it("skips an entry with no CID — there is nothing to pull", () => {
-    expect(remoteOnlyRows(cfg, manifest([{ ...entry, cid: null }]), [], root, LAPTOP)).toHaveLength(0);
+  it("skips an entry with no CID — there is nothing to pull", async () => {
+    expect(await remoteOnlyRows(cfg, manifest([{ ...entry, cid: null }]), [], root, LAPTOP)).toHaveLength(0);
   });
 
-  it("skips a file that IS on this disk", () => {
+  it("skips a file that IS on this disk", async () => {
     fs.mkdirSync(path.join(root, "videos"), { recursive: true });
     fs.writeFileSync(path.join(root, VIDEO), "bytes");
-    expect(remoteOnlyRows(cfg, manifest([entry]), [], root, LAPTOP)).toHaveLength(0);
+    expect(await remoteOnlyRows(cfg, manifest([entry]), [], root, LAPTOP)).toHaveLength(0);
   });
 });
 

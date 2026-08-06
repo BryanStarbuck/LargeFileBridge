@@ -1031,6 +1031,24 @@ This table opts in via the DataTable `hoverPreview` prop, wired in code:
   looks for git-ignored files under `large/` and the ignored media extensions."
 * **All decided:** the summary shows `Undecided 0`; the quick-filter for Undecided is disabled.
 * **Loading:** skeleton rows sized to the columns; no layout shift.
+* **Loading PROGRESSIVELY (performance.mdx P-37).** The page does not wait for the whole repo. The server
+  streams the detail, so the header (name, path, controls) paints at once, the table fills in batches, and
+  the metric tiles count up behind it. While that is happening the payload carries `partial: true`, and the
+  page must not state anything it has only partly counted:
+  * the table stays in its **skeleton** state until the FIRST row arrives — the "No large files found in
+    this repo" card must never show at a repo whose rows are still on their way;
+  * a metric tile reading 0 stays **neutral**, never the all-clear green — green is a claim that nothing is
+    owed, and a subtotal has not established that;
+  * the header primary ("View recommendation ›") is a **ranking across every metric**, so it appears only
+    once the counts are final;
+  * IPFS health arrives with the pin data near the end, so until then the details disclosure reads
+    "IPFS checking…" and Pin now is **not** disabled on a node whose state is simply not known yet.
+  On a REFETCH (a live-refresh bump) none of this applies: the finished table stays on screen until the new
+  answer lands, exactly as §7 of [repos.mdx](./repos.mdx) requires of its own list.
+
+The detail stream and the reducer that folds it back into the page's existing query cache are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/:repoId/detail/stream` handler; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoDetail()`
+
 * **IPFS node unreachable:** a banner at the top of the content; Pin now and per-row transfers are
   disabled, but decisions can still be edited (they queue for when the node returns).
 

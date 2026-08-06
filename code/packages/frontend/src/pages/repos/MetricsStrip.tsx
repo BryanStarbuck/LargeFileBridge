@@ -35,11 +35,18 @@ export interface MetricView {
   onOpen: () => void;
 }
 
-function MetricPanel({ m, onClick }: { m: MetricView; onClick: () => void }) {
-  const clear = m.count === 0;
+function MetricPanel({ m, onClick, pending }: { m: MetricView; onClick: () => void; pending: boolean }) {
+  // THE ALL-CLEAR GREEN IS A CLAIM, AND IT IS ONLY EARNED BY A FINISHED COUNT (performance.mdx P-37).
+  // While the detail is still streaming, every number here is a rising SUBTOTAL — so a tile that happens
+  // to read 0 right now has not established that there is nothing to do, and painting it green would say
+  // exactly that. Pending tiles stay neutral until the walk finishes; the numbers themselves are real and
+  // climb as rows arrive.
+  const clear = m.count === 0 && !pending;
   const style: React.CSSProperties = clear
     ? { background: "var(--lfb-ok-bg)", color: "var(--lfb-ok)", borderColor: "transparent" }
-    : { background: healthBg(m.positive), color: healthColor(m.positive), borderColor: "var(--lfb-border)" };
+    : pending && m.count === 0
+      ? { background: "transparent", color: "rgba(0,0,0,0.35)", borderColor: "var(--lfb-border)" }
+      : { background: healthBg(m.positive), color: healthColor(m.positive), borderColor: "var(--lfb-border)" };
   return (
     <button
       type="button"
@@ -54,7 +61,7 @@ function MetricPanel({ m, onClick }: { m: MetricView; onClick: () => void }) {
       // Describable") wraps INSIDE the tile onto as many lines as it needs. The tile itself never wraps
       // the STRIP — that is the rule the ≥25% hover reservation used to break (one_repo.mdx §3.2).
       className="flex w-min min-w-[2.75rem] shrink-0 flex-col items-center justify-center gap-0.5 rounded-lg border px-2.5 py-1.5 text-center"
-      aria-label={`${m.label}: ${m.count}. Open.`}
+      aria-label={pending ? `${m.label}: ${m.count} so far, still counting. Open.` : `${m.label}: ${m.count}. Open.`}
     >
       {/* Small label over a big number. NOT `capitalize` — that would lower-case nothing but would also
           fight labels that carry meaningful casing ("Add to IPFS", "AI Describable", "OCRable"); the
@@ -69,11 +76,14 @@ export function MetricsStrip({
   metrics,
   defaultHint,
   onApplied,
+  pending = false,
 }: {
   metrics: MetricView[];
   defaultHint: string;
   /** Fired after a metric popup's fix lands so the page can refetch and the panel re-derives its count. */
   onApplied?: () => void;
+  /** The detail is still streaming, so every count is a running subtotal — see {@link MetricPanel}. */
+  pending?: boolean;
 }) {
   // The metric whose popup is open (null = none). Only one popup at a time.
   const [openWarning, setOpenWarning] = useState<WarningDef | null>(null);
@@ -93,7 +103,7 @@ export function MetricsStrip({
           a second line; `overflow-x-auto` is the (rare) escape hatch on a very narrow window. */}
       <div className="flex w-full flex-nowrap items-stretch gap-2 overflow-x-auto">
         {metrics.map((m) => (
-          <MetricPanel key={m.id} m={m} onClick={() => handle(m)} />
+          <MetricPanel key={m.id} m={m} onClick={() => handle(m)} pending={pending} />
         ))}
       </div>
       {openWarning && (

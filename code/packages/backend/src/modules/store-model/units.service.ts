@@ -26,7 +26,7 @@ import {
 import type { ComputerUnitConfig, PlacementChoice, StorageType } from "@lfb/shared";
 import type { RepoOwner } from "@lfb/shared";
 import { compressInfo } from "../fs/badges.js";
-import { resolveRepoOwner, checkIgnoreVerboseDetailed, type IgnoreRule } from "../git/git.service.js";
+import { resolveRepoOwner, checkIgnoreVerboseAsyncDetailed, type IgnoreRule } from "../git/git.service.js";
 // storage.service <-> units.service form a static import cycle used ONLY inside functions (getStorageRow is
 // called from ownerForRepoConfig, never at module-eval), which is safe under NodeNext ESM — same pattern the
 // storage.service <-> storage-settings.service pair documents.
@@ -57,7 +57,7 @@ import {
 import { ensureDir } from "../../config/state-dir.js";
 import { getPeers } from "./peers.service.js";
 import { readLedger, foldLedger, type FoldedDecision } from "../storage/decisions.service.js";
-import { effectiveFlags, getAppConfig, computerLabel } from "./config.service.js";
+import { flagsResolver, getAppConfig, computerLabel } from "./config.service.js";
 import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
@@ -294,11 +294,44 @@ export async function setRepoOwnerOverride(
 }
 
 // ── Row / detail composition ────────────────────────────────────────────────
-export function computeRepoRow(folder: string): RepoRow {
+//
+// EVERYTHING BELOW THAT WALKS A REPO'S FILES IS ASYNC AND COOPERATIVELY YIELDING (performance.mdx P-37).
+// Composition is O(files) of synchronous disk work — a `stat` storm for the four task axes, a `git
+// check-ignore` per repo, an `existsSync` per manifest entry — and it used to run to completion without
+// once handing the event loop back. On a machine where each of those calls is slow (a cloud mount, a
+// network home directory, a virus scanner in the path) that is seconds during which the single Node thread
+// serves NOTHING: not the other page the user just clicked, not the progress poll, not `/health`. This is
+// the same T3 rule the scanner walk (scan.mdx §10) and the flat listing (P-04) already follow; these two
+// paths were the last request-serving walks that did not.
+//
+// The yield interval is per-ROW, not per-repo: a single repo with thousands of candidates is exactly the
+// case a per-repo yield fails to cover.
+const ROW_YIELD_EVERY = 200;
+const rowYield = (): Promise<void> => new Promise<void>((r) => setImmediate(r));
+
+/** How the caller receives rows AS they are composed, and how it stops a composition it no longer wants. */
+export interface RowStreamOpts {
+  /** Called with each chunk of freshly composed rows. Chunk size is {@link ROW_BATCH}. */
+  onFileBatch?: (files: FileRow[]) => void;
+  /**
+   * Called at each chunk boundary with a FULLY ASSEMBLED RepoDetail over the rows composed so far
+   * (`partial: true`). It exists so a streaming reader's metric tiles COUNT UP with the rows instead of
+   * sitting at a false zero until the walk ends — and it is produced by the same assembly step that
+   * produces the final detail, so a running subtotal can never be computed differently from the total.
+   */
+  onSnapshot?: (detail: RepoDetail) => void;
+  /** Abort (client disconnected / page navigated away) — the walk stops at the next batch boundary. */
+  signal?: AbortSignal;
+}
+
+/** Rows per streamed chunk — the same order of magnitude as the flat listing's FLAT_BATCH (250). */
+const ROW_BATCH = 250;
+
+export async function computeRepoRow(folder: string): Promise<RepoRow> {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
   const manifest = getRepoManifest(folder);
-  const { counts, peerCount, transferring } = repoRowStats(cfg, status, manifest);
+  const { counts, peerCount, transferring } = await repoRowStats(cfg, status, manifest);
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
     bookmarked: cfg.bookmarked,
@@ -350,60 +383,103 @@ function mergeRepoManifests(folder: string, cfg: RepoUnitConfig): Manifest {
   }
 }
 
-export function computeRepoDetail(folder: string, ipfs: IpfsHealth, pinset?: Set<string>): RepoDetail {
+export async function computeRepoDetail(
+  folder: string,
+  ipfs: IpfsHealth,
+  pinset?: Set<string>,
+  opts?: RowStreamOpts,
+): Promise<RepoDetail> {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
+  // Cheap head-read of this repo's fingerprint index (never a parse) — see tracking.service
+  // storageIndexDroppedFiles(). Non-throwing: a repo with no path or no index reads as complete.
+  const indexDropped = cfg.repo.path
+    ? storageIndexDroppedFiles(path.resolve(expandHome(cfg.repo.path)))
+    : 0;
+
+  /**
+   * THE ONE assembly step. It is a closure rather than straight-line code at the end because a streaming
+   * caller needs the very same shape for a partial row set (see `onSnapshot`) — two assemblies would be two
+   * chances for a running subtotal and the final total to be computed differently.
+   */
+  const assemble = (files: FileRow[], partial: boolean): RepoDetail => {
+    const counts = countDecisions(files);
+    return {
+      repoId: repoIdFromPath(cfg.repo.path || folder),
+      name: cfg.repo.name || folder,
+      path: cfg.repo.path || "",
+      remote: cfg.repo.remote,
+      pinned: cfg.pinned,
+      status: rollupStatus(
+        cfg.pinned,
+        counts,
+        status,
+        files.some((f) => f.transfer === "fetching" || f.transfer === "pushing"),
+      ),
+      peerCount: peerCountForFiles(files),
+      lastPinAt: status.last_pin_at,
+      lastScanAt: status.last_scan_at,
+      // Surface scan truncation (scan.mdx §4.5): >0 means the last scan's hard candidate cap dropped
+      // exactly this many candidates, so `files` below is NOT the complete census. Absent when complete.
+      ...(status.scan_dropped_candidates ? { scanDroppedCandidates: status.scan_dropped_candidates } : {}),
+      // Surface tracking-index truncation the same way (storages.mdx §4.1a): >0 means the last index build hit
+      // its backstop, so exactly this many large files are unfingerprinted — and therefore never pinned, never
+      // synced, and missing from every rollup this page shows. Absent when the index is complete (the norm).
+      ...(indexDropped > 0 ? { indexDroppedFiles: indexDropped } : {}),
+      ipfs,
+      counts,
+      files,
+      taskMetrics: computeTaskMetrics(files),
+      owner: ownerForRepoConfig(cfg),
+      ...(partial ? { partial: true } : {}),
+    };
+  };
+
+  // A streaming caller wants the header BEFORE any row exists — that is the whole point: the page paints
+  // its title, path and controls while the walk is still going. Emitted here, ahead of the manifest fold
+  // below, because that fold parses two YAML documents that on a heavily-tracked repo carry thousands of
+  // entries — real work, and none of it is anything the header needs.
+  opts?.onSnapshot?.(assemble([], true));
+
   // BOTH manifests, folded (storage_company.mdx §8.6). The unit manifest is what the pin pass maintains;
   // the Local-Storage tracking manifest is where a peer's entries land when the sync repo is reconciled —
   // and it is also what the `Pull down` metric is computed from. Reading only the unit manifest here made
   // the tile and the table disagree: on a computer whose Pin toggle is off, the count could be non-zero
   // while the list showed nothing, because nothing had ever folded the two together.
   const manifest = mergeRepoManifests(folder, cfg);
-  const files = composeFileRows(folder, cfg, status, manifest, pinset);
-  const counts = countDecisions(files);
-  // Cheap head-read of this repo's fingerprint index (never a parse) — see tracking.service
-  // storageIndexDroppedFiles(). Non-throwing: a repo with no path or no index reads as complete.
-  const indexDropped = cfg.repo.path
-    ? storageIndexDroppedFiles(path.resolve(expandHome(cfg.repo.path)))
-    : 0;
-  return {
-    repoId: repoIdFromPath(cfg.repo.path || folder),
-    name: cfg.repo.name || folder,
-    path: cfg.repo.path || "",
-    remote: cfg.repo.remote,
-    pinned: cfg.pinned,
-    status: rollupStatus(
-      cfg.pinned,
-      counts,
-      status,
-      files.some((f) => f.transfer === "fetching" || f.transfer === "pushing"),
-    ),
-    peerCount: peerCountForFiles(files),
-    lastPinAt: status.last_pin_at,
-    lastScanAt: status.last_scan_at,
-    // Surface scan truncation (scan.mdx §4.5): >0 means the last scan's hard candidate cap dropped
-    // exactly this many candidates, so `files` below is NOT the complete census. Absent when complete.
-    ...(status.scan_dropped_candidates ? { scanDroppedCandidates: status.scan_dropped_candidates } : {}),
-    // Surface tracking-index truncation the same way (storages.mdx §4.1a): >0 means the last index build hit
-    // its backstop, so exactly this many large files are unfingerprinted — and therefore never pinned, never
-    // synced, and missing from every rollup this page shows. Absent when the index is complete (the norm).
-    ...(indexDropped > 0 ? { indexDroppedFiles: indexDropped } : {}),
-    ipfs,
-    counts,
-    files,
-    taskMetrics: computeTaskMetrics(files),
-    owner: ownerForRepoConfig(cfg),
-  };
+
+  // Only build the running-snapshot machinery when someone is actually listening; the buffered callers
+  // (files-query, the TO DO recalc, the debug export) must not pay for it.
+  const composeOpts: RowStreamOpts | undefined = opts?.onSnapshot
+    ? (() => {
+        const seen: FileRow[] = [];
+        return {
+          signal: opts.signal,
+          onFileBatch: (batch: FileRow[]) => {
+            for (const r of batch) seen.push(r);
+            opts.onFileBatch?.(batch);
+            opts.onSnapshot?.(assemble(seen, true));
+          },
+        };
+      })()
+    : opts;
+
+  const files = await composeFileRows(folder, cfg, status, manifest, pinset, composeOpts);
+  // An ABORTED composition stops mid-walk, so what it returns is a subset — and `partial` is precisely the
+  // word for "this is not the complete census". Reporting it as complete would let a future caller treat a
+  // truncated row set as authoritative, which is the one thing the whole streaming design must never do.
+  return assemble(files, opts?.signal?.aborted === true);
 }
 
 // One FileRow per discovered big-file candidate, joined with its decision + manifest CID.
-function composeFileRows(
+async function composeFileRows(
   _folder: string,
   cfg: RepoUnitConfig,
   status: UnitStatus,
   manifest: Manifest,
   pinset?: Set<string>,
-): FileRow[] {
+  opts?: RowStreamOpts,
+): Promise<FileRow[]> {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
   // Fold the shared decision ledger ONCE per repo for provenance (decisions.mdx §10; one_repo.mdx §4.8):
   // who decided each file and when. Cheap read+fold, wrapped so a bad/locked/conflicted ledger never
@@ -421,8 +497,10 @@ function composeFileRows(
   // (git_ignore.mdx §5.5). Never let it break row composition. A path git could NOT answer for comes back
   // in `unknown` and the row's git-ignore axis is left UNDECIDED (`gitignore` undefined) — reporting it as
   // "not ignored" would mis-file the file into the big-files-to-ignore nudge on nothing but a spawn failure.
+  // AWAITED, never `execFileSync`: this is a request path, and the spawn is the single longest synchronous
+  // step in the whole composition (performance.mdx P-37).
   const ignoreLookup = repoRootAbs
-    ? checkIgnoreVerboseDetailed(
+    ? await checkIgnoreVerboseAsyncDetailed(
         repoRootAbs,
         status.candidates.map((c) => joinRel(repoRootAbs, c.path)),
       )
@@ -435,20 +513,27 @@ function composeFileRows(
   const storageType = repoRootAbs ? resolveStorageType(repoRootAbs) : undefined;
   // THIS device's pinned_by identity, resolved once per repo — pin truth is self-claim-only (ipfs.mdx §1.1).
   const selfLabel = computerLabel();
-  const local: FileRow[] = status.candidates.map((cand) => {
+  // The sticky-flag map, snapshotted ONCE per repo instead of re-read and re-resolved per row
+  // (config.service `flagsResolver`) — the per-row form was O(rows × flags) of repeated work.
+  const flagsFor = flagsResolver();
+  const local: FileRow[] = [];
+  let batch: FileRow[] = [];
+  let sinceYield = 0;
+  for (const cand of status.candidates) {
+    if (opts?.signal?.aborted) break;
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
     const peers = m?.pinned_by ?? [];
     const prov = foldedByPath.get(cand.path);
     // Sticky Never-IPFS flag (decisions.mdx §17) — surfaced so the UI can disable the Add-to-IPFS axis.
-    // Cheap per-row config read; never let a flag lookup break row composition.
+    // Cheap per-row lookup against the snapshot above; never let a flag lookup break row composition.
     let neverIpfs = false;
     try {
-      if (repoRootAbs) neverIpfs = effectiveFlags(joinRel(repoRootAbs, cand.path)).neverIpfs;
+      if (repoRootAbs) neverIpfs = flagsFor(joinRel(repoRootAbs, cand.path)).neverIpfs;
     } catch {
       /* flags unavailable → default false */
     }
-    return {
+    const row: FileRow = {
       fileId: `${repoIdFromPath(cfg.repo.path || "")}:${cand.path}`,
       path: cand.path,
       sizeBytes: cand.size,
@@ -499,8 +584,26 @@ function composeFileRows(
       analysisOnly: cand.analysisOnly === true,
       presence: "local" as const,
     };
-  });
-  return [...local, ...remoteOnlyRows(cfg, manifest, local, repoRootAbs, selfLabel)];
+    local.push(row);
+    batch.push(row);
+    // Ship the chunk, THEN breathe. Flushing before the yield is what makes the browser paint these rows
+    // during the pause rather than after the whole walk (performance.mdx P-37).
+    if (batch.length >= ROW_BATCH) {
+      opts?.onFileBatch?.(batch);
+      batch = [];
+    }
+    if ((sinceYield += 1) >= ROW_YIELD_EVERY) {
+      sinceYield = 0;
+      await rowYield();
+    }
+  }
+  if (batch.length) opts?.onFileBatch?.(batch);
+
+  const remote = await remoteOnlyRows(cfg, manifest, local, repoRootAbs, selfLabel, opts?.signal);
+  for (let i = 0; i < remote.length; i += ROW_BATCH) {
+    opts?.onFileBatch?.(remote.slice(i, i + ROW_BATCH));
+  }
+  return [...local, ...remote];
 }
 
 /**
@@ -520,7 +623,7 @@ function composeFileRows(
  * `pinned_by` token is a JOIN key, and the user must read a NAME. The registry is resolved ONCE per repo and
  * only when this repo actually produced a remote-only row — never per row, because this is a hot path.
  */
-export function remoteOnlyRows(
+export async function remoteOnlyRows(
   cfg: RepoUnitConfig,
   manifest: Manifest,
   // Only the PATHS of the already-scanned rows matter here, so the parameter asks for exactly that much.
@@ -529,11 +632,21 @@ export function remoteOnlyRows(
   local: ReadonlyArray<Pick<FileRow, "path">>,
   repoRootAbs: string | null,
   selfLabel: string,
-): FileRow[] {
+  signal?: AbortSignal,
+): Promise<FileRow[]> {
   if (!repoRootAbs) return [];
   const scanned = new Set(local.map((r) => r.path));
   const out: FileRow[] = [];
+  // One `existsSync` per manifest entry the scan did not already account for. A repo whose peers hold far
+  // more than this computer does makes that loop long, so it yields on the same interval as the row walk
+  // above — otherwise it would hand back a thread the row walk had just been careful to share.
+  let sinceYield = 0;
   for (const m of manifest.files) {
+    if (signal?.aborted) break;
+    if ((sinceYield += 1) >= ROW_YIELD_EVERY) {
+      sinceYield = 0;
+      await rowYield();
+    }
     if (!m.cid) continue; // no CID → nothing to pull
     if (scanned.has(m.path)) continue; // the scan already produced a row for it
     const peers = (m.pinned_by ?? []).filter((d) => d && d !== selfLabel);
@@ -851,11 +964,11 @@ function peerCountForFiles(files: FileRow[]): number {
  * from the cached foreign-pin index), and the remote-only rows come from the SAME {@link remoteOnlyRows}
  * composer, so the counts here and the counts on the One-repo page cannot drift apart.
  */
-function repoRowStats(
+async function repoRowStats(
   cfg: RepoUnitConfig,
   status: UnitStatus,
   manifest: Manifest,
-): { counts: RepoCounts; peerCount: number; transferring: boolean } {
+): Promise<{ counts: RepoCounts; peerCount: number; transferring: boolean }> {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
   const repoRootAbs = cfg.repo.path
     ? path.resolve(expandHome(cfg.repo.path))
@@ -888,7 +1001,14 @@ function repoRowStats(
     }
   };
 
+  // Yielding on the same interval as the row walk: this loop is cheap PER candidate but a repo can hold
+  // tens of thousands of them, and the Repos list runs it once per repo (performance.mdx P-37).
+  let sinceYield = 0;
   for (const cand of status.candidates) {
+    if ((sinceYield += 1) >= ROW_YIELD_EVERY) {
+      sinceYield = 0;
+      await rowYield();
+    }
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
     const peers = m?.pinned_by ?? [];
@@ -902,7 +1022,7 @@ function repoRowStats(
   }
   // Files only another of the user's computers holds (storage_company.mdx §8.5). Composed, not
   // re-derived: the four conditions that admit one of these rows live in exactly one place.
-  for (const r of remoteOnlyRows(cfg, manifest, status.candidates, repoRootAbs, selfLabel)) {
+  for (const r of await remoteOnlyRows(cfg, manifest, status.candidates, repoRootAbs, selfLabel)) {
     tally(r.decision, r.transfer, r.peers, !!r.analysisOnly, !!r.pinnedForeign);
   }
 

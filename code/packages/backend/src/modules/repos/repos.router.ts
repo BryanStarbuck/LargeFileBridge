@@ -1,8 +1,19 @@
 // REST for the Repos + One-repo + per-repo settings screens (repos.mdx, one_repo.mdx, repo_settings.mdx).
 import path from "node:path";
-import { Router } from "express";
+import { Router, type Response } from "express";
 import { z } from "zod";
-import type { RepoRow, RepoSettings, Decision, RepoDetail, MissingPinnedFile, DeletedHereFile } from "@lfb/shared";
+import type {
+  RepoRow,
+  RepoSettings,
+  Decision,
+  RepoDetail,
+  MissingPinnedFile,
+  DeletedHereFile,
+  FileRow,
+  IpfsHealth,
+  RepoRowsStreamEvent,
+  RepoDetailStreamEvent,
+} from "@lfb/shared";
 import {
   listRepoFolders,
   computeRepoRow,
@@ -28,7 +39,7 @@ import {
   readLedger,
   foldLedger,
 } from "../storage/decisions.service.js";
-import { effectiveFlags, computerLabel } from "../store-model/config.service.js";
+import { flagsResolver, computerLabel } from "../store-model/config.service.js";
 import { ensureSyncRepoMarker } from "../storage/tracking-sync.service.js";
 import { resolveOwnerDedicatedRepo } from "../storage/artifact-placement.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
@@ -63,7 +74,8 @@ function repoRootFor(folder: string): string {
 /**
  * Best-effort list of peer-pinned files this computer is missing (warnings.mdx §10.8.12). Wrapped so a slow
  * or erroring IPFS node never blocks / fails the repo-detail page — a fault yields [] and the warning simply
- * doesn't show. Augmented onto the RepoDetail at the router (computeRepoDetail stays sync + shared).
+ * doesn't show. Augmented onto the RepoDetail at the router, because computeRepoDetail is the SHARED
+ * composer every caller uses and none of the others wants an IPFS round-trip.
  */
 async function missingPinnedSafe(repoRoot: string): Promise<MissingPinnedFile[]> {
   try {
@@ -110,6 +122,14 @@ function deletedHereFor(folder: string): DeletedHereFile[] {
  * handler uses, so a pin toggle's response reflects reality the same way the initial GET does.
  */
 async function repoDetailWithPins(folder: string): Promise<RepoDetail> {
+  const { health, pinset } = await pinReality(folder);
+  return computeRepoDetail(folder, health, pinset);
+}
+
+/** The node's health + canonical pinset, both best-effort. Split out of {@link repoDetailWithPins} so the
+ *  streaming route can start this — the slowest single step on the page, since a full `pin ls` enumeration
+ *  can take seconds on a large pinset — CONCURRENTLY with composing the rows, instead of before them. */
+async function pinReality(folder: string): Promise<{ health: IpfsHealth; pinset: Set<string> | undefined }> {
   const health = await ipfs.health();
   let pinset: Set<string> | undefined;
   try {
@@ -117,7 +137,7 @@ async function repoDetailWithPins(folder: string): Promise<RepoDetail> {
   } catch (e) {
     log.debug("repos", `pinset fetch skipped for ${folder} (node unreachable?): ${(e as Error).message}`);
   }
-  return computeRepoDetail(folder, health, pinset);
+  return { health, pinset };
 }
 
 /**
@@ -153,62 +173,138 @@ function syncRepoSetting(c: ReturnType<typeof getRepoConfig>): RepoSettings["syn
 }
 
 /** Repo-relative paths that carry the sticky Never-IPFS flag (decisions.mdx §17) — the IPFS axis is rejected
- *  for these at the write path. The flag is path-scoped (own entry OR any ancestor dir), read via the SAME
- *  accessor the policy engine uses (config.service `effectiveFlags`). */
+ *  for these at the write path. The flag is path-scoped (own entry OR any ancestor dir), read through the
+ *  SAME fold the policy engine uses (config.service `flagsResolver` / `effectiveFlags` — one predicate). */
 function neverIpfsPaths(repoRoot: string, relPaths: string[]): string[] {
-  return relPaths.filter((rel) => effectiveFlags(joinRel(repoRoot, rel)).neverIpfs);
+  const flagsFor = flagsResolver(); // one snapshot for the whole (possibly bulk) list, not one per path
+  return relPaths.filter((rel) => flagsFor(joinRel(repoRoot, rel)).neverIpfs);
 }
 
 export const reposRouter = Router();
 reposRouter.use(requireAllowListed);
 
 /**
- * How many repos to compose before handing the event loop back (see {@link buildRepoRows}).
+ * How many repos to compose before handing the event loop back (see {@link startRepoRowsFeed}).
  * Small enough that the pause between two chunks is a few milliseconds, large enough that the yields
  * themselves cost nothing measurable on a machine with a handful of repos.
+ *
+ * It is also the streamed BATCH size — the walk flushes what it has to every listener at each pause, so a
+ * reader sees the first rows after ~10 repos rather than after all of them.
  */
 const REPO_ROWS_YIELD_EVERY = 10;
 
 /**
- * Build every Repos-table row, YIELDING to the event loop as it goes.
+ * ONE Repos-table walk, MULTICAST to every reader — buffered and streaming alike (performance.mdx P-37).
  *
- * `computeRepoRow` is synchronous and reads the disk, so composing N of them back-to-back occupies the
- * single Node thread for the whole walk — nothing else runs, not even a request that is already parsed
- * and waiting. On a machine tracking ~180 repos that was long enough that clicking a repo row looked
- * broken: the One-repo detail (`GET /api/repos/:repoId`) simply sat in the queue until the list finished,
- * and if a second list refetch had already stacked up behind the first, it waited for that one too.
- * Pausing every {@link REPO_ROWS_YIELD_EVERY} repos costs this request a few milliseconds and lets every
- * other request be served WHILE the list is being built.
+ * Two problems share one answer here.
+ *
+ * The first is the older one: the Repos page invalidates `["repos"]` on every live-refresh bump, and a
+ * burst of bumps (a scan pass, a pin pass) used to turn into a burst of overlapping `GET /api/repos` walks
+ * that serialised on the event loop — each finishing later than the last (10s, 21s, 31s…) while every
+ * unrelated request queued behind the growing backlog. A single in-flight walk is what keeps a bump storm
+ * costing one walk.
+ *
+ * The second is the one this rewrite fixes: that shared walk RESOLVED ALL AT ONCE, so however well it
+ * yielded, the browser still waited for the last repo before it could draw the first. The feed keeps the
+ * one-walk guarantee and adds a subscriber list: a reader that attaches mid-walk is handed the rows already
+ * composed and then receives each later batch as it lands, so N tabs opening the list at once still cost
+ * exactly one pass over the disk and every one of them paints immediately.
+ *
+ * A reader disconnecting does NOT abort the walk — the other subscribers still want it, and unlike a
+ * filesystem walk this one is bounded by the repo count and yields throughout.
  */
-async function buildRepoRows(): Promise<RepoRow[]> {
-  const folders = listRepoFolders();
-  const rows: RepoRow[] = [];
-  for (let i = 0; i < folders.length; i++) {
-    rows.push(computeRepoRow(folders[i]));
-    if ((i + 1) % REPO_ROWS_YIELD_EVERY === 0) await new Promise<void>((r) => setImmediate(r));
-  }
-  return rows;
+interface RepoRowsFeed {
+  rows: RepoRow[]; // every row composed so far — a late subscriber's catch-up payload
+  total: number; // how many repos this walk will visit
+  done: boolean;
+  error: Error | null;
+  listeners: Set<(batch: RepoRow[]) => void>;
+  finished: Set<(err: Error | null) => void>;
+  promise: Promise<RepoRow[]>;
 }
 
-/**
- * The in-flight list build, so concurrent callers SHARE one walk instead of each starting their own.
- *
- * The Repos page invalidates `["repos"]` on every live-refresh bump, and a burst of bumps (a scan pass, a
- * pin pass) used to turn into a burst of overlapping `GET /api/repos` walks that serialised on the event
- * loop — each one finishing later than the last (10s, then 21s, then 31s…) while every unrelated request
- * queued behind the growing backlog. Coalescing is what keeps a bump storm costing one walk.
- */
-let repoRowsInFlight: Promise<RepoRow[]> | null = null;
+let liveFeed: RepoRowsFeed | null = null;
 
-function repoRows(): Promise<RepoRow[]> {
-  if (repoRowsInFlight) return repoRowsInFlight;
-  const p = buildRepoRows();
-  repoRowsInFlight = p;
-  const clear = (): void => {
-    if (repoRowsInFlight === p) repoRowsInFlight = null;
+function startRepoRowsFeed(): RepoRowsFeed {
+  if (liveFeed && !liveFeed.done) return liveFeed;
+  const folders = listRepoFolders();
+  const feed: RepoRowsFeed = {
+    rows: [],
+    total: folders.length,
+    done: false,
+    error: null,
+    listeners: new Set(),
+    finished: new Set(),
+    promise: undefined as unknown as Promise<RepoRow[]>,
   };
-  p.then(clear, clear);
-  return p;
+  // Published BEFORE the walk starts. A zero-repo walk finishes synchronously, and if the publish came
+  // after, the `finally` below would clear a `liveFeed` that had not been set yet and we would leave a
+  // finished feed installed as the live one.
+  liveFeed = feed;
+  feed.promise = (async () => {
+    let batch: RepoRow[] = [];
+    const flush = (): void => {
+      if (batch.length === 0) return;
+      const out = batch;
+      batch = [];
+      feed.rows.push(...out);
+      // A listener that throws must never take the walk (or the other listeners) down with it.
+      for (const l of feed.listeners) {
+        try {
+          l(out);
+        } catch (e) {
+          log.warn("repos", `repo-rows listener failed: ${(e as Error).message}`);
+        }
+      }
+    };
+    try {
+      for (let i = 0; i < folders.length; i++) {
+        batch.push(await computeRepoRow(folders[i]));
+        if ((i + 1) % REPO_ROWS_YIELD_EVERY === 0) {
+          flush();
+          await new Promise<void>((r) => setImmediate(r));
+        }
+      }
+      flush();
+      return feed.rows;
+    } catch (e) {
+      feed.error = e as Error;
+      throw e;
+    } finally {
+      feed.done = true;
+      if (liveFeed === feed) liveFeed = null;
+      for (const f of feed.finished) {
+        try {
+          f(feed.error);
+        } catch (e) {
+          log.warn("repos", `repo-rows finish listener failed: ${(e as Error).message}`);
+        }
+      }
+      feed.listeners.clear();
+      feed.finished.clear();
+      // Working-repo convergence (backbone_resilience.mdx §6.4), fired ONCE PER WALK rather than once per
+      // reader. It runs here — after the walk, after every listener has been answered — because it re-reads
+      // every repo's config and must never compete with the rows it follows. A walk that FAILED gets no
+      // sweep: the trigger means "the list was loaded", and it wasn't.
+      // The `.catch` is load-bearing, not decoration: an unhandled rejection is a process fatal here
+      // (main.ts), and a freshness trigger must never be able to take the server down.
+      if (!feed.error) {
+        void convergeAllWorkingRepos().catch((e) =>
+          log.warn("repos", `working-repo convergence sweep failed: ${(e as Error).message}`),
+        );
+      }
+    }
+  })();
+  // The feed's promise is consumed by whoever asked for it; a subscriber that only wants BATCHES still
+  // leaves the promise unhandled, and an unhandled rejection is a process-fatal in this app (main.ts).
+  // The rejection is already reported through `feed.error` / the `finished` listeners.
+  feed.promise.catch(() => {});
+  return feed;
+}
+
+/** The whole list as one array — the buffered `GET /api/repos`, riding the same single walk. */
+function repoRows(): Promise<RepoRow[]> {
+  return startRepoRowsFeed().promise;
 }
 
 /**
@@ -229,6 +325,74 @@ async function convergeAllWorkingRepos(): Promise<void> {
   }
 }
 
+/**
+ * Open an NDJSON response and return the per-event writer (performance.mdx P-22 transport, reused).
+ *
+ * One JSON object per line, flushed after every write so chunks leave the process immediately even when a
+ * compression or proxy layer would otherwise buffer them — without the flush the whole point of streaming
+ * is lost behind the dev proxy.
+ */
+function ndjson<E>(res: Response): (ev: E) => void {
+  res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
+  res.setHeader("Cache-Control", "no-store");
+  res.setHeader("X-Accel-Buffering", "no"); // don't let a reverse proxy buffer the stream
+  return (ev: E): void => {
+    // `destroyed` as well as `writableEnded`: a reader that vanishes mid-walk leaves a DESTROYED socket
+    // that has not been `end()`ed, and writing to it raises ERR_STREAM_DESTROYED — which, unhandled, is a
+    // process fatal in this app (main.ts). Both producers stop within one batch of an abort, so this
+    // guards the one write that can still be in flight when they do.
+    if (res.writableEnded || res.destroyed) return;
+    try {
+      res.write(JSON.stringify(ev) + "\n");
+      (res as unknown as { flush?: () => void }).flush?.();
+    } catch (e) {
+      log.debug("repos", `stream write dropped (reader gone?): ${(e as Error).message}`);
+    }
+  };
+}
+
+// GET /api/repos/stream — the Repos table as an NDJSON STREAM (performance.mdx P-37). Same rows as
+// `GET /api/repos`, same single shared walk, delivered `meta` → `batch`× → `done` so the landing page
+// paints its first repos in tens of milliseconds instead of after the last one. Registered BEFORE
+// `/:repoId` so "stream" is not captured as a repo id.
+reposRouter.get("/stream", (_req, res) => {
+  const write = ndjson<RepoRowsStreamEvent>(res);
+  maybeTriggerStaleScan("Repos list loaded"); // same freshness self-heal as the buffered route
+  const feed = startRepoRowsFeed();
+
+  write({ t: "meta", total: feed.total });
+  // Catch-up FIRST: a reader that attached mid-walk must receive what has already been composed, or those
+  // rows are lost to it forever (the walk will never re-emit them).
+  if (feed.rows.length) write({ t: "batch", rows: feed.rows.slice() });
+
+  const onBatch = (rows: RepoRow[]): void => write({ t: "batch", rows });
+  const onFinish = (err: Error | null): void => {
+    detach();
+    if (err) {
+      log.error("repos", `list stream failed: ${err.message}`);
+      write({ t: "error", error: err.message });
+    } else {
+      write({ t: "done", total: feed.rows.length });
+    }
+    if (!res.writableEnded) res.end();
+  };
+  const detach = (): void => {
+    feed.listeners.delete(onBatch);
+    feed.finished.delete(onFinish);
+  };
+
+  if (feed.done) {
+    // The walk finished between `startRepoRowsFeed()` and here (or was already complete): everything is in
+    // the catch-up batch above, so close immediately rather than waiting for an event that will never come.
+    onFinish(feed.error);
+    return;
+  }
+  feed.listeners.add(onBatch);
+  feed.finished.add(onFinish);
+  // The reader went away. Detach only — the walk is shared and bounded, so other subscribers keep it.
+  res.on("close", detach);
+});
+
 // GET /api/repos — the Repos table.
 reposRouter.get("/", async (_req, res) => {
   try {
@@ -238,11 +402,8 @@ reposRouter.get("/", async (_req, res) => {
     maybeTriggerStaleScan("Repos list loaded");
     const rows: RepoRow[] = await repoRows();
     res.json({ ok: true, data: rows });
-    // Working-repo convergence (backbone_resilience.mdx §6.4): pull down other computers' finished
-    // `.lfbridge/` artifacts. Cheap per repo (throttled 30 min, gated to artifact-bearing repos) and
-    // fire-and-forget — but it still re-reads every repo's config, so it runs AFTER the response is on the
-    // wire and yields between chunks, exactly like the row build above.
-    void convergeAllWorkingRepos();
+    // (The working-repo convergence sweep is fired by the shared feed when its walk completes — once per
+    // walk, not once per reader. See startRepoRowsFeed.)
   } catch (e) {
     log.error("repos", `list failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
@@ -308,7 +469,7 @@ reposRouter.post("/:repoId/bookmark", async (req, res) => {
   try {
     await updateRepoConfig(folder, (c) => ({ ...c, bookmarked: body.data.bookmarked }));
     log.info("repos", `${folder}: bookmarked -> ${body.data.bookmarked}`);
-    res.json({ ok: true, data: computeRepoRow(folder) });
+    res.json({ ok: true, data: await computeRepoRow(folder) });
   } catch (e) {
     log.error("repos", `${folder}: bookmark update failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
@@ -365,7 +526,7 @@ reposRouter.post("/:repoId/owner", async (req, res) => {
     }
 
     log.info("repos", `${folder}: owner reassigned -> ${next ? next.kind + (nextCompanyId ? `:${nextCompanyId}` : "") : "auto"}`);
-    res.json({ ok: true, data: computeRepoRow(folder) });
+    res.json({ ok: true, data: await computeRepoRow(folder) });
   } catch (e) {
     log.error("repos", `${folder}: owner reassign failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
@@ -386,28 +547,116 @@ reposRouter.delete("/:repoId", (req, res) => {
   }
 });
 
+/**
+ * Fire this repo's three freshness triggers (scan / backbone / working-tree convergence). All three are
+ * non-blocking + single-flighted + throttled; shared by the buffered detail route and the stream so the two
+ * cannot fall out of step about what a page load implies.
+ */
+function touchRepoFreshness(folder: string): void {
+  maybeTriggerStaleScan(`One-repo detail loaded (${folder})`);
+  maybeSyncBackbone(`One-repo detail loaded (${folder})`);
+  try {
+    maybeConvergeWorkingRepo(repoRootFor(folder), `One-repo detail loaded (${folder})`);
+  } catch (e) {
+    // A repo with no readable path still has a detail worth rendering — never fail the page on a trigger.
+    log.debug("repos", `${folder}: convergence trigger skipped: ${(e as Error).message}`);
+  }
+}
+
+// GET /api/repos/:repoId/detail/stream — the One-repo detail as an NDJSON STREAM (performance.mdx P-37).
+//
+// Same facts as `GET /:repoId`, delivered in the order they become knowable instead of all at the end:
+// `head` (config + scan status — instant) → `files` batches as rows are composed → `totals` after each
+// batch → `pins` once the node's pinset enumeration returns → `extras` (peer/IPFS warnings) → `done`.
+//
+// The pinset fetch is started HERE, concurrently with the walk, and folded in at the end. The buffered
+// route awaits it FIRST, and a `pin ls` over a large pinset can take seconds — seconds during which the
+// page had every fact it needed to draw the table and drew nothing. Rows stream with `pinnedHere`
+// undefined, which is the already-defined "not known yet" state (never a false red), until `pins` lands.
+reposRouter.get("/:repoId/detail/stream", async (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  // Answer the 404 as ORDINARY JSON — before any NDJSON header is set, so a bad id is a normal HTTP error
+  // the client's error path already understands rather than a 200 stream carrying one error line.
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+
+  const write = ndjson<RepoDetailStreamEvent>(res);
+  const ac = new AbortController();
+  res.on("close", () => ac.abort());
+
+  try {
+    touchRepoFreshness(folder);
+    // Started but NOT awaited — it runs while the rows compose. `.catch` here (not later) so a rejection can
+    // never be an unhandled one in the window before we await it.
+    const pins = pinReality(folder).catch((e): { health: IpfsHealth; pinset: Set<string> | undefined } => {
+      log.debug("repos", `${folder}: pin reality unavailable: ${(e as Error).message}`);
+      return { health: "unreachable", pinset: undefined };
+    });
+
+    let headSent = false;
+    const detail = await computeRepoDetail(folder, "unreachable", undefined, {
+      signal: ac.signal,
+      onFileBatch: (files: FileRow[]) => write({ t: "files", files }),
+      onSnapshot: (d: RepoDetail) => {
+        if (!headSent) {
+          headSent = true;
+          // The header, with no rows on it — everything the page needs to paint its chrome.
+          write({ t: "head", detail: { ...d, files: [] } });
+          return;
+        }
+        write({ t: "totals", counts: d.counts, taskMetrics: d.taskMetrics, peerCount: d.peerCount, status: d.status });
+      },
+    });
+    if (ac.signal.aborted) return; // reader left mid-walk — nothing to close, the socket is gone
+    // The FINAL aggregates. The per-batch snapshots above are subtotals; this one is the answer.
+    write({
+      t: "totals",
+      counts: detail.counts,
+      taskMetrics: detail.taskMetrics,
+      peerCount: detail.peerCount,
+      status: detail.status,
+    });
+
+    // Live pin reality, folded in now that the enumeration has had the whole walk to finish.
+    const { health, pinset } = await pins;
+    if (ac.signal.aborted) return;
+    const pinnedHere: Record<string, boolean> = {};
+    if (pinset) {
+      for (const f of detail.files) {
+        // EXACTLY the rows composeFileRows would have given a defined `pinnedHere` — computed here, from the
+        // same three conditions, so the patch can never disagree with the buffered route's rows.
+        if (f.presence === "remote-only") pinnedHere[f.path] = false;
+        else if (f.decision === "sync" && f.cid) pinnedHere[f.path] = pinset.has(ipfs.canonicalCid(f.cid));
+      }
+    }
+    write({ t: "pins", ipfs: health, pinnedHere });
+
+    // The peer/IPFS-dependent warnings — last, because each is another round-trip and none of them gates a
+    // single row of the table.
+    const root = repoRootFor(folder);
+    write({
+      t: "extras",
+      missingPinned: await missingPinnedSafe(root),
+      deletedHere: deletedHereFor(folder),
+      syncBlocked: getRepoSyncBlock(root) ?? null,
+    });
+    write({ t: "done" });
+  } catch (e) {
+    log.error("repos", `${folder}: detail stream failed: ${(e as Error).message}`);
+    write({ t: "error", error: (e as Error).message });
+  }
+  if (!res.writableEnded) res.end();
+});
+
 // GET /api/repos/:repoId — the One-repo detail (header + status strip + files).
 reposRouter.get("/:repoId", async (req, res) => {
   const folder = folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
-    // Freshness self-heal on page load (>4h stale → background scan). Non-blocking + single-flight, so it
-    // never delays the detail response and coalesces harmlessly if a scan is already running.
-    maybeTriggerStaleScan(`One-repo detail loaded (${folder})`);
-    // The SECOND freshness axis (storage_company.mdx §8.9). The scan above answers "is this disk state
-    // current?"; this answers "has another of the user's computers told us something we haven't folded in
-    // yet?" — the axis that decides whether a peer's file is a row at all. Also non-blocking + single-
-    // flight. Without it the only trigger is a launchd timer, and a launchd job that cannot start fails
-    // silently forever.
-    maybeSyncBackbone(`One-repo detail loaded (${folder})`);
-    // The THIRD freshness axis (backbone_resilience.mdx §6.4): the WORKING REPO ITSELF. Another computer's
-    // finished transcripts / AI descriptions travel INSIDE this repo's committed `.lfbridge/`, so until
-    // someone pulls the repo they simply do not exist here and every tile re-offers work already done.
-    // Non-blocking, throttled, fetch + ff-only merge, gated to repos where LFB artifacts are in play.
-    maybeConvergeWorkingRepo(repoRootFor(folder), `One-repo detail loaded (${folder})`);
+    touchRepoFreshness(folder);
     const detail: RepoDetail = await repoDetailWithPins(folder);
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
-    // Best-effort at the router (computeRepoDetail is sync + shared): a down/slow IPFS never blocks the page.
+    // Best-effort at the router (computeRepoDetail is the shared composer): a down/slow IPFS never blocks
+    // the page — the streaming route sends this as its own `extras` event, after the rows.
     detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
     // Deletions the pin pass noticed on THIS computer — the other half of "a decided file has no bytes here"
     // (decisions.mdx §12). Sync + local, so it costs the page nothing.

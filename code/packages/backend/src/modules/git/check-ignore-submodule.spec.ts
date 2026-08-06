@@ -11,7 +11,13 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { checkIgnore, checkIgnoreAsync, checkIgnoreVerbose } from "./git.service.js";
+import {
+  checkIgnore,
+  checkIgnoreAsync,
+  checkIgnoreVerbose,
+  checkIgnoreVerboseDetailed,
+  checkIgnoreVerboseAsyncDetailed,
+} from "./git.service.js";
 
 let parent: string;
 let ignoredInParent: string;
@@ -74,5 +80,30 @@ describe("checkIgnore — a submodule-contained path no longer poisons the batch
 
   it("exit-1 (nothing ignored) is still a normal empty result, not a failure", () => {
     expect(checkIgnore(parent, [notIgnored]).size).toBe(0);
+  });
+});
+
+// THE DRIFT GUARD for the async verbose twin (performance.mdx P-37). Row composition runs on a REQUEST
+// path, so it must use the non-blocking spawn — but the ⊘ column, the `gitignoreLocked` decision and the
+// bigNotIgnored nudge are all read off this verdict. If the two twins ever disagreed, the One-repo page
+// would report a different git truth from the write path that acts on it, over nothing but which spawn
+// primitive it happened to use. They share one runner and one parser; this pins that they stay shared.
+describe("checkIgnoreVerboseAsyncDetailed — identical verdict to the sync twin", () => {
+  it("returns the same rules and the same unknown set, submodule split included", async () => {
+    const paths = [ignoredInParent, ignoredInSub, notIgnored];
+    const sync = checkIgnoreVerboseDetailed(parent, paths);
+    const async_ = await checkIgnoreVerboseAsyncDetailed(parent, paths);
+    expect([...async_.rules.entries()].sort()).toEqual([...sync.rules.entries()].sort());
+    expect([...async_.unknown].sort()).toEqual([...sync.unknown].sort());
+    // Not merely self-consistent — the verdict itself has to be the real one.
+    expect(async_.rules.get(ignoredInParent)?.pattern).toBe("*.log");
+    expect(async_.rules.get(ignoredInSub)?.pattern).toBe("*.mp4");
+    expect(async_.rules.has(notIgnored)).toBe(false);
+  });
+
+  it("an empty path list costs no spawn and answers empty", async () => {
+    const r = await checkIgnoreVerboseAsyncDetailed(parent, []);
+    expect(r.rules.size).toBe(0);
+    expect(r.unknown.size).toBe(0);
   });
 });

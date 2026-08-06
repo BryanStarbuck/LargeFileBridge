@@ -106,7 +106,7 @@ export async function collectKnownMedia(
       if (!cfg.repo.path) continue;
       const root = resolveHome(cfg.repo.path);
       roots.add(root);
-      const rows = computeRepoDetail(folder, health).files;
+      const rows = (await computeRepoDetail(folder, health)).files;
       for (const row of rows) {
         if (row.presence === "remote-only") continue;
         const kind = mediaKindForName(row.path);

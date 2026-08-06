@@ -140,7 +140,7 @@ export async function recalcRepo(folder: string): Promise<TodoBatchDoc | null> {
   // category (the enum/pattern existed but nothing ever emitted it).
   try {
     const threshold = getAppConfig().big_file.threshold_bytes;
-    const detail = computeRepoDetail(folder, await health());
+    const detail = await computeRepoDetail(folder, await health());
     for (const f of detail.files) {
       if (seen.has(f.path)) continue;
       if (f.decision === "undecided" && f.sizeBytes >= threshold && !f.neverIpfs) {

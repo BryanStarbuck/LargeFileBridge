@@ -142,20 +142,54 @@ export function ownFlags(absPath: string): FileFlags {
   return { neverIpfs: e?.never_ipfs ?? false, noCompress: e?.no_compress ?? false };
 }
 
-/** The effective flags for this path: its own entry OR any ancestor directory's entry (path-scoped). */
-export function effectiveFlags(absPath: string): FileFlags {
-  const map = getAppConfig().file_flags;
+/** One flag map entry with its key ALREADY resolved — the shape both lookups below fold over. */
+interface ResolvedFlagEntry {
+  key: string;
+  neverIpfs: boolean;
+  noCompress: boolean;
+}
+
+function resolvedFlagEntries(): ResolvedFlagEntry[] {
+  return Object.entries(getAppConfig().file_flags).map(([key, val]) => ({
+    key: path.resolve(key),
+    neverIpfs: !!val.never_ipfs,
+    noCompress: !!val.no_compress,
+  }));
+}
+
+/** THE path-scoped predicate — own entry OR any ancestor directory's entry. Defined once so the one-shot
+ *  and the reusable-resolver forms below cannot answer differently. */
+function foldFlags(entries: ResolvedFlagEntry[], absPath: string): FileFlags {
+  if (entries.length === 0) return { neverIpfs: false, noCompress: false };
   const target = path.resolve(absPath);
   let neverIpfs = false;
   let noCompress = false;
-  for (const [key, val] of Object.entries(map)) {
-    const k = path.resolve(key);
-    if (target === k || target.startsWith(k + path.sep)) {
-      neverIpfs = neverIpfs || !!val.never_ipfs;
-      noCompress = noCompress || !!val.no_compress;
+  for (const e of entries) {
+    if (target === e.key || target.startsWith(e.key + path.sep)) {
+      neverIpfs = neverIpfs || e.neverIpfs;
+      noCompress = noCompress || e.noCompress;
     }
   }
   return { neverIpfs, noCompress };
+}
+
+/** The effective flags for this path: its own entry OR any ancestor directory's entry (path-scoped). */
+export function effectiveFlags(absPath: string): FileFlags {
+  return foldFlags(resolvedFlagEntries(), absPath);
+}
+
+/**
+ * A resolver that answers {@link effectiveFlags} for MANY paths against one snapshot of the flag map.
+ *
+ * Row composition asks this question once per file, and the one-shot form above re-reads the config and
+ * re-`path.resolve`s every flag key on every call — O(rows × flags) of pure repeated work on the One-repo
+ * hot path. Hoisting the snapshot out of the loop makes it O(rows + flags). The snapshot is deliberately
+ * frozen for the resolver's lifetime: a flag toggled mid-compose belongs to the NEXT render, not to half
+ * of this one.
+ */
+export function flagsResolver(): (absPath: string) => FileFlags {
+  const entries = resolvedFlagEntries();
+  return (absPath: string) => foldFlags(entries, absPath);
 }
 
 /** Write one or both flags for a path; a flag that turns fully off is pruned so the map stays lean. */

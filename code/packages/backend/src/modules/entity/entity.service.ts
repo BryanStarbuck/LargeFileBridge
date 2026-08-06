@@ -138,7 +138,7 @@ export async function buildEntityView(
     // may simply have bytes this one hasn't pulled yet (nothing went wrong → the red "not on this computer
     // yet" state whose one action is pull it down). The manifest is what tells the two apart, so consult it
     // BEFORE reporting an all-null view.
-    const remote = remoteOnlyEntity(e.abs);
+    const remote = await remoteOnlyEntity(e.abs);
     return {
       kind: e.kind,
       name,
@@ -234,9 +234,9 @@ export async function buildEntityView(
  * through the same registry path (devices.mdx §6.9). One entry in means at most one row out, so this costs a
  * single `existsSync`, not a walk of the whole manifest.
  */
-function remoteOnlyEntity(
+async function remoteOnlyEntity(
   abs: string,
-): { repo: EntityView["repo"]; decision: Decision; cid: string | null; peers: string[]; sizeBytes: number; addedByDevice: string | null } | null {
+): Promise<{ repo: EntityView["repo"]; decision: Decision; cid: string | null; peers: string[]; sizeBytes: number; addedByDevice: string | null } | null> {
   const match = enclosingRepo(abs);
   if (!match) return null; // outside every registered repo → no manifest could know it
   const rel = relPosix(match.repoPath, abs);
@@ -253,7 +253,7 @@ function remoteOnlyEntity(
   if (!entry) return null;
   const cfg = getRepoConfig(match.folder);
   const selfLabel = computerLabel();
-  const row = remoteOnlyRows(cfg, { ...manifest, files: [entry] }, [], match.repoPath, selfLabel)[0];
+  const row = (await remoteOnlyRows(cfg, { ...manifest, files: [entry] }, [], match.repoPath, selfLabel))[0];
   if (!row) return null;
   return {
     repo: { repoId: match.repoId, name: match.repoName, relPath: rel },

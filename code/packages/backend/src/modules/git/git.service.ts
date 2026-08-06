@@ -1512,11 +1512,11 @@ export interface CheckIgnoreVerboseResult {
   unknown: Set<string>;
 }
 
-export function checkIgnoreVerboseDetailed(repoRoot: string, absPaths: string[]): CheckIgnoreVerboseResult {
+/** Parse `check-ignore -v` stdout into the path → owning-rule map. ONE parser, shared by the sync and
+ *  async twins below — the two must never disagree about what git said. */
+function parseVerboseCheckIgnore(out: string): Map<string, IgnoreRule> {
   const rules = new Map<string, IgnoreRule>();
-  if (absPaths.length === 0) return { rules, unknown: new Set<string>() };
-  const res = runCheckIgnore(repoRoot, absPaths, true);
-  for (const raw of res.out.split("\n")) {
+  for (const raw of out.split("\n")) {
     if (!raw.trim()) continue;
     // `-v` format: "<source>:<linenum>:<pattern>\t<pathname>". Split on the TAB first so a pattern
     // containing colons (or a path containing them) can never be mis-parsed.
@@ -1528,7 +1528,31 @@ export function checkIgnoreVerboseDetailed(repoRoot: string, absPaths: string[])
     if (!m || !pathname) continue;
     rules.set(pathname, { source: m[1], line: Number(m[2]), pattern: m[3] });
   }
-  return { rules, unknown: new Set(res.unknown) };
+  return rules;
+}
+
+export function checkIgnoreVerboseDetailed(repoRoot: string, absPaths: string[]): CheckIgnoreVerboseResult {
+  if (absPaths.length === 0) return { rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() };
+  const res = runCheckIgnore(repoRoot, absPaths, true);
+  return { rules: parseVerboseCheckIgnore(res.out), unknown: new Set(res.unknown) };
+}
+
+/**
+ * Async twin of {@link checkIgnoreVerboseDetailed} — the SAME verdict off a non-blocking spawn.
+ *
+ * This is the one every REQUEST path must use. The sync twin runs `execFileSync`, and the One-repo detail
+ * called it once per page load with every scanned candidate: on a repo with thousands of candidates that is
+ * several git processes the Node thread waits on, doing nothing else — no other request served, not even
+ * the progress poll (performance.mdx P-37, the same T3 disease as P-04/P-16/P-27). The sync form stays for
+ * the write paths (`gitignore.service`) that are already off the hot path.
+ */
+export async function checkIgnoreVerboseAsyncDetailed(
+  repoRoot: string,
+  absPaths: string[],
+): Promise<CheckIgnoreVerboseResult> {
+  if (absPaths.length === 0) return { rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() };
+  const res = await runCheckIgnoreAsync(repoRoot, absPaths, true);
+  return { rules: parseVerboseCheckIgnore(res.out), unknown: new Set(res.unknown) };
 }
 
 /** `checkIgnoreVerboseDetailed` without the unknown axis — callers that only act on a positive hit. */

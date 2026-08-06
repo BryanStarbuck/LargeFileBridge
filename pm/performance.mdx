@@ -610,10 +610,100 @@ The cheap row aggregates are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (consumed by `computeRepoRow()`)
 
 The yielding, coalesced list endpoint is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `buildRepoRows()` / `repoRows()` / `convergeAllWorkingRepos()`
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `startRepoRowsFeed()` / `repoRows()` / `convergeAllWorkingRepos()`
+(P-35 shipped this as `buildRepoRows()` + a single in-flight promise; **P-37** replaced that with the
+multicast feed, which keeps the one-walk guarantee and adds progressive delivery.)
 
 The drift guard that keeps the two counting paths honest is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts`
+
+---
+
+## Fifth pass (P-37) — the two repo screens still answered in one piece · T3/T1
+
+### 🔴 P-37 — The Repos list and the One-repo detail were composed synchronously and delivered as one blob
+- **Where:**
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+  `computeRepoDetail()` / `composeFileRows()` / `remoteOnlyRows()` / `repoRowStats()` (all synchronous,
+  no yields, no partial delivery);
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+  `GET /api/repos` and `GET /api/repos/:repoId`.
+- **Symptom — reported as "the lists are slow on some machines".** Two distinct faults, and the second is
+  the one that made it *machine-dependent*:
+  1. **It blocked the event loop.** `composeFileRows` ran a `git check-ignore` through **`execFileSync`**
+     and then, per candidate row, the `analysisOutputs` probe (~12 `statSync`s), a foreign-pin lookup and a
+     full re-scan of the sticky-flag map — start to finish, without ever handing the loop back. On a machine
+     where each of those calls is *slow* rather than *free* — a cloud-mounted repo, a network home
+     directory, a virus scanner in the syscall path — a repo with thousands of candidates froze the entire
+     server for the duration: no other page, no progress poll, no `/health`. This is T3 (P-04/P-16/P-27)
+     alive on the last two request-serving walks that had never been converted, and it is why the symptom
+     was *"everything is slow"* rather than *"this page is slow"*.
+     P-35 had fixed the LIST's version of this by not composing rows at all; the DETAIL, which must compose
+     them, was never converted — and every background consumer of the same composer (the CLI file query, the
+     TO DO recalc that runs at the end of **every scan**, the videos census, the debug export) inherited it.
+  2. **Time-to-first-row was time-to-last-row.** Even once it yields, a walk that resolves all at once
+     leaves the browser with a skeleton until the final row. The detail was worse than the list: it
+     `await`ed a full `ipfs pin ls` enumeration — seconds on a large pinset — **before** composing a single
+     row, purely to decide one icon's colour, and then two more IPFS round-trips for the warnings after.
+- **Fix (done), four parts:**
+  1. **Async + cooperatively yielding, per ROW.** Composition yields every `ROW_YIELD_EVERY` (200) rows —
+     per row, not per repo, because one repo with thousands of candidates is exactly the case a per-repo
+     yield fails to cover — and `git check-ignore` moved to the existing non-blocking spawn
+     (`checkIgnoreVerboseAsyncDetailed`). Every caller of the shared composer got this for free.
+  2. **Streamed, not blobbed.** Two NDJSON routes on the transport P-22 already established. The detail
+     sends `head` (identity + scan times, before the manifest fold) → `files` batches of 250 → running
+     `totals` → `pins` → `extras` → `done`; the list sends `meta` → `batch` → `done`. **Measured:
+     time-to-first-row 22 ms of a 37 ms total** on a 600-row fixture.
+  3. **The pinset stops gating the page.** Its enumeration now runs *concurrently* with the walk and is
+     folded in afterwards as a `pins` patch. Rows stream with `pinnedHere` **undefined** — the
+     already-defined "not known yet" state — so the icon shows intent only and never a false red.
+  4. **One walk, many readers.** The list's single-flight promise became a multicast feed: a reader that
+     attaches mid-walk gets the rows already composed plus every later batch, so N tabs still cost one pass.
+- **The honesty rules this pass is built on** — a progressive page must never state as settled what it has
+  only partly counted:
+  * every streamed detail carries **`partial: true`** until `done`, and an **aborted** composition returns
+    `partial: true` too — a stopped walk is not a complete census that happens to be short;
+  * the metric tiles **count up** (real subtotals, produced by the same assembly step as the total) but the
+    all-clear **green is withheld** while pending, because green is a *claim* that nothing is owed;
+  * the header's single "most important recommendation" is a RANKING across metrics, so it waits for the
+    finished counts; the files table stays in its LOADING state until the first row rather than showing
+    "No large files found in this repo" at a repo whose rows are still arriving;
+  * a broken stream **falls back to the buffered endpoint** — complete-and-correct beats fast-and-partial —
+    and both buffered routes stay, unchanged, as that fallback;
+  * intermediate states are published only onto a screen that has **nothing complete on it already**; a
+    refetch (every live-refresh bump is one) keeps its finished table until the new answer lands.
+
+The async, yielding, batch-emitting composer and its one assembly step are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (the `assemble` closure + `RowStreamOpts`) / `composeFileRows()` / `remoteOnlyRows()` / `repoRowStats()`
+
+The non-blocking `git check-ignore -v` twin the request path now uses is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerboseAsyncDetailed()`, sharing `runCheckIgnoreAsync()` + `parseVerboseCheckIgnore()` with the sync twin
+
+The two NDJSON routes, the multicast row feed, and the concurrent pinset fold are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/stream` / `GET /api/repos/:repoId/detail/stream` / `startRepoRowsFeed()` / `pinReality()` / `ndjson()`
+
+The wire contract (`RepoRowsStreamEvent`, `RepoDetailStreamEvent`, `RepoDetail.partial`) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts`
+
+The client-side reducers that fold the events into the SAME react-query keys the pages already own are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()` / `streamRepoDetail()` / `framePublisher()`
+
+The hoisted sticky-flag snapshot that removed the O(rows × flags) per-row rescan is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `flagsResolver()` (sharing `foldFlags()` with `effectiveFlags()`)
+
+The three guards that keep streaming from drifting away from buffering are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — streamed rows === buffered rows;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos-stream.spec.ts` — the wire, folded back, === the buffered route;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.spec.ts` — the client reducer, the publish policy, and the fallback
+
+- **Known follow-up, deliberately not taken here.** `discoverRoots()` in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` is still a
+  synchronous depth-3 `readdirSync` walk with a descriptor read per directory, behind a 5-second cache, and
+  it is reachable from the repo-row path (`ownerForRepoConfig` → `getStorageRow`). It measures 344 visits /
+  3 ms on the development machine, so it is not the reported fault — but it is the same shape, it is the
+  only walk in the codebase with **no** iteration budget, and making it async cascades through
+  `listStoragesPage` / `getStorageRow` / `listStorageIds` into many synchronous callers. It wants its own
+  pass, not a rider on this one.
 
 ---
 
@@ -986,6 +1076,7 @@ ScansPage's former constant 10s `["jobs"]` poll is **deleted** — its lifecycle
 | P-34 | **BEGIN/END for every job and every API call** — the work ledger | `backend/shared/transactions.ts`, `backend/modules/describe/describe.service.ts`, `adapters.ts`, `fit-media.ts`, `backend/modules/transcribe/transcribe.service.ts`, `backend/tools/transcribe/engine.ts`, `backend/modules/jobqueue/jobqueue.service.ts` |
 | P-36 | **Sitewide shell-first + live pages (Aspect 6b)** — six pages that hard-blocked first paint (Settings, Repo Settings, Storage Settings, Tools, IPFS dashboard/off) now render their shell + `PageSkeleton` immediately; seven new topics (`jobs`/`scans`/`progress`/`todo`/`devices`/`settings`/`ipfs`) bumped at their write choke points with a trailing-edge coalesced bump; `useLiveRefresh` wired on every data page (was: One Repo only), `storages` finally emitted; idle polls deleted (ScansPage 10s, ProgressContext 3s idle, ScanProgressBar 15s idle) — running-state fast polls kept for determinate progress | `backend/modules/events/state-events.service.ts` (`bumpTopicThrottled`), `jobqueue.service.ts`, `batch settle in runTask`, `scan-job.ts`, `progress.registry.ts`, `decisions.service.ts`, `storage.service.ts`, `storage-settings.service.ts`, `todo-batches.store.ts`, `pin.service.ts`, `config.service.ts`, `ipfs.service.ts`, `ipfs-node.service.ts`; `frontend/components/ui/PageSkeleton.tsx`, `ScanProgressBar.tsx`, `progress/ProgressContext.tsx`, and every page under `frontend/src/pages/` |
 | P-35 | **Progressive, non-blocking consumption** (completes P-22; formerly numbered P-23, which the pin-pass entry owns) — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
+| P-37 | **The two repo screens go async + progressive** — row composition is async, yields every 200 rows and uses the non-blocking `check-ignore`, so the whole app stops freezing while a repo is composed (and every background consumer of the same composer inherits it); two NDJSON routes stream `head`/`files`/`totals`/`pins`/`extras` and `meta`/`batch`; the `ipfs pin ls` enumeration runs concurrently instead of gating the first row; the list's single-flight promise became a multicast feed; sticky flags snapshotted once per repo. Partial states are marked `partial` and the UI withholds every claim it has not finished counting | `backend/store-model/units.service.ts`, `backend/repos/repos.router.ts`, `backend/git/git.service.ts`, `backend/store-model/config.service.ts`, `shared/src/types.ts`, `frontend/src/api/streamQueries.ts`, `frontend/src/pages/repos/{ReposPage,OneRepoPage,MetricsStrip}.tsx`; guards: `backend/store-model/repo-row-stats.spec.ts`, `backend/repos/repos-stream.spec.ts`, `frontend/src/api/streamQueries.spec.ts` |
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop

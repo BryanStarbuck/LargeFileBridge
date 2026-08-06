@@ -63,7 +63,7 @@ async function main() {
   } catch {
     pinset = undefined; // node down → intent-only, exactly as the page degrades
   }
-  const detail: RepoDetail = computeRepoDetail(folder, health, pinset);
+  const detail: RepoDetail = await computeRepoDetail(folder, health, pinset);
   let missingPinned: Awaited<ReturnType<typeof missingPinnedFromPeers>> = [];
   try {
     missingPinned = await missingPinnedFromPeers(root);

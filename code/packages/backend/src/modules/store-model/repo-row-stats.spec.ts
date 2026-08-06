@@ -15,7 +15,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { describe, it, expect, beforeAll } from "vitest";
-import { ManifestSchema, UnitStatusSchema, type RepoCounts, type FileRow } from "@lfb/shared";
+import { ManifestSchema, UnitStatusSchema, type RepoCounts, type FileRow, type RepoDetail } from "@lfb/shared";
 import {
   updateRepoConfig,
   writeRepoStatus,
@@ -53,8 +53,8 @@ const manifestEntry = (p: string, cid: string | null, pinnedBy: string[]) => ({
 });
 
 /** The row aggregates recomputed the EXPENSIVE way, from fully-composed FileRows. */
-function aggregatesFromDetail(): { counts: RepoCounts; peerCount: number } {
-  const detail = computeRepoDetail(FOLDER, "unreachable");
+async function aggregatesFromDetail(): Promise<{ counts: RepoCounts; peerCount: number }> {
+  const detail = await computeRepoDetail(FOLDER, "unreachable");
   const files: FileRow[] = detail.files;
   const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0, pinnedForeign: 0 };
   const peers = new Set<string>();
@@ -121,17 +121,17 @@ beforeAll(async () => {
 });
 
 describe("computeRepoRow — the cheap Repos-table path", () => {
-  it("counts exactly what the fully-composed One-repo rows count", () => {
-    expect(computeRepoRow(FOLDER).counts).toEqual(aggregatesFromDetail().counts);
+  it("counts exactly what the fully-composed One-repo rows count", async () => {
+    expect((await computeRepoRow(FOLDER)).counts).toEqual((await aggregatesFromDetail()).counts);
   });
 
-  it("reports the same distinct peer count as the composed rows", () => {
-    expect(computeRepoRow(FOLDER).peerCount).toEqual(aggregatesFromDetail().peerCount);
+  it("reports the same distinct peer count as the composed rows", async () => {
+    expect((await computeRepoRow(FOLDER)).peerCount).toEqual((await aggregatesFromDetail()).peerCount);
   });
 
-  it("gets the counts themselves right, not merely self-consistent", () => {
+  it("gets the counts themselves right, not merely self-consistent", async () => {
     // A row that agrees with a broken composer is worthless — pin the actual numbers too.
-    expect(computeRepoRow(FOLDER).counts).toEqual({
+    expect((await computeRepoRow(FOLDER)).counts).toEqual({
       pinned: 1, // pinned-here.mp4 — decided AND claimed by this computer
       pending: 1, // wanted-not-here.mp4 — decided, but only a peer claims it
       undecided: 2, // undecided.mp4 + the peer's only-on-the-tower.mp4 remote-only row
@@ -140,23 +140,78 @@ describe("computeRepoRow — the cheap Repos-table path", () => {
     });
   });
 
-  it("excludes small analysis-only media from the decision counts (scan.mdx §4.1 rule 5)", () => {
-    const counts = computeRepoRow(FOLDER).counts;
+  it("excludes small analysis-only media from the decision counts (scan.mdx §4.1 rule 5)", async () => {
+    const counts = (await computeRepoRow(FOLDER)).counts;
     const total = counts.pinned + counts.pending + counts.undecided + counts.ignored + counts.pinnedForeign;
     // Five scanned candidates + one remote-only row = six rows, but the thumbnail owes no decision.
     expect(total).toBe(5);
   });
 
-  it("counts a peer's file this computer lacks — the remote-only row reaches the table", () => {
+  it("counts a peer's file this computer lacks — the remote-only row reaches the table", async () => {
     // The Repos table must not under-report a repo just because the bytes live on another computer:
     // the peer's entry is exactly the file the user needs to pull down.
-    expect(computeRepoRow(FOLDER).peerCount).toBeGreaterThan(0);
-    expect(computeRepoDetail(FOLDER, "unreachable").files.some((f) => f.presence === "remote-only")).toBe(true);
+    expect((await computeRepoRow(FOLDER)).peerCount).toBeGreaterThan(0);
+    const detail = await computeRepoDetail(FOLDER, "unreachable");
+    expect(detail.files.some((f: FileRow) => f.presence === "remote-only")).toBe(true);
   });
 
-  it("rolls up the SAME status the composed path would (repos.mdx §4.2)", () => {
+  it("rolls up the SAME status the composed path would (repos.mdx §4.2)", async () => {
     // pending > 0 outranks undecided, so this repo reads "behind" on both paths.
-    expect(computeRepoRow(FOLDER).status).toBe("behind");
-    expect(computeRepoDetail(FOLDER, "unreachable").status).toBe(computeRepoRow(FOLDER).status);
+    const row = await computeRepoRow(FOLDER);
+    expect(row.status).toBe("behind");
+    expect((await computeRepoDetail(FOLDER, "unreachable")).status).toBe(row.status);
+  });
+});
+
+// THE DRIFT GUARD for streaming (performance.mdx P-37). `GET /api/repos/:repoId/detail/stream` does not
+// compute anything of its own: it forwards the batches and snapshots `computeRepoDetail` hands it, so the
+// property that has to hold is that streaming CHANGES NOTHING — the rows a reader assembles from the
+// batches must be the rows the buffered route would have returned, in the same order, and the last running
+// subtotal must be the final total. A streamed page that quietly disagreed with the buffered one would be
+// the worst outcome of this whole change: two numbers for one repo, and no way to tell which is right.
+describe("computeRepoDetail — streaming composes exactly what buffering composes", () => {
+  it("the concatenated batches ARE the buffered rows, in order", async () => {
+    const buffered = await computeRepoDetail(FOLDER, "unreachable");
+    const batched: FileRow[] = [];
+    const streamed = await computeRepoDetail(FOLDER, "unreachable", undefined, {
+      onFileBatch: (b) => batched.push(...b),
+      onSnapshot: () => {},
+    });
+    expect(batched).toEqual(buffered.files);
+    expect(streamed.files).toEqual(buffered.files);
+    // The streamed result is the SAME detail, minus nothing — including the aggregates beside the rows.
+    expect(streamed).toEqual(buffered);
+  });
+
+  it("emits a rows-free header first, then subtotals, and the last subtotal is the total", async () => {
+    const snapshots: RepoDetail[] = [];
+    const final = await computeRepoDetail(FOLDER, "unreachable", undefined, {
+      onFileBatch: () => {},
+      onSnapshot: (d) => snapshots.push(d),
+    });
+    expect(snapshots.length).toBeGreaterThan(1);
+    // The header: real identity, no rows yet.
+    expect(snapshots[0]!.name).toBe(final.name);
+    expect(snapshots[0]!.files).toEqual([]);
+    // Every snapshot is marked provisional; the returned detail is not.
+    expect(snapshots.every((s) => s.partial === true)).toBe(true);
+    expect(final.partial).toBeUndefined();
+    const last = snapshots[snapshots.length - 1]!;
+    expect(last.counts).toEqual(final.counts);
+    expect(last.taskMetrics).toEqual(final.taskMetrics);
+    expect(last.peerCount).toEqual(final.peerCount);
+    expect(last.status).toEqual(final.status);
+  });
+
+  it("an aborted signal stops the walk instead of throwing", async () => {
+    // What a reader navigating away looks like from here. It must end the work, not fail the request —
+    // and it must never leave a half list looking like a whole one, which is why the stream's terminal
+    // `done` is what clears `partial` on the client.
+    const ac = new AbortController();
+    ac.abort();
+    const detail = await computeRepoDetail(FOLDER, "unreachable", undefined, { signal: ac.signal });
+    expect(detail.files).toEqual([]);
+    // And it says so: a stopped walk is a PARTIAL census, never a complete one that happens to be empty.
+    expect(detail.partial).toBe(true);
   });
 });

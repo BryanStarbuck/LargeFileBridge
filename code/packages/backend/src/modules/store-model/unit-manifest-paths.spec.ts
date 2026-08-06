@@ -85,10 +85,10 @@ describe("remoteOnlyRows — one file, one row", () => {
       file("jfk/videos/clip.mp4", "lenovo-laptop"),
     ]);
     // BEFORE the heal this is the bug, verbatim: two rows for one file.
-    expect(remoteOnlyRows(cfg(repo), both, [], repo, "bryan-mac-pro")).toHaveLength(2);
+    expect(await remoteOnlyRows(cfg(repo), both, [], repo, "bryan-mac-pro")).toHaveLength(2);
     // AFTER it — which is what every manifest reader now does — one.
     const healed = normalizeManifestPaths(both, "test");
-    const rows = remoteOnlyRows(cfg(repo), healed, [], repo, "bryan-mac-pro");
+    const rows = await remoteOnlyRows(cfg(repo), healed, [], repo, "bryan-mac-pro");
     expect(rows).toHaveLength(1);
     expect(rows[0]!.path).toBe("jfk/videos/clip.mp4");
   });
@@ -103,6 +103,6 @@ describe("remoteOnlyRows — one file, one row", () => {
     const m = normalizeManifestPaths(manifest([file(String.raw`jfk\videos\clip.mp4`, "lenovo-laptop")]), "test");
     // The whole "the pull-down list never clears" symptom: unhealed, existsSync(`repo/jfk\videos\clip.mp4`)
     // is false forever, so the row is re-offered on every single pass even though the bytes are right here.
-    expect(remoteOnlyRows(cfg(repo), m, [], repo, "bryan-mac-pro")).toHaveLength(0);
+    expect(await remoteOnlyRows(cfg(repo), m, [], repo, "bryan-mac-pro")).toHaveLength(0);
   });
 });

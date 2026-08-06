@@ -22,7 +22,7 @@ import { log } from "../../shared/logging.js";
 import { repoFolderKey } from "../../shared/store/sanitize.js";
 import YAML from "yaml";
 import { writeYaml } from "../../shared/store/yaml-store.js";
-import { computeRepoDetail, folderForRepoId, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote } from "../store-model/units.service.js";
+import { computeRepoDetail, folderForRepoId, getRepoConfig, getRepoManifest, listRepoFolders, readGitRemote, repoIdFromPath } from "../store-model/units.service.js";
 import { repoUidFor } from "../storage/repo-identity.js";
 import { computerLabel, getAppConfig } from "../store-model/config.service.js";
 import { getStorageRow, listStoragesPage } from "../storage/storage.service.js";
@@ -284,9 +284,17 @@ function foldersInScope(opts: ExportDebugOptions): string[] {
   return listRepoFolders();
 }
 
+/**
+ * The repo id for a state-root folder.
+ *
+ * Derived straight from the unit config's path — the SAME `repoIdFromPath(cfg.repo.path || folder)`
+ * expression `computeRepoDetail` itself uses for the field. It used to compose the entire detail (every
+ * file row, the git-ignore spawn, the per-file artifact probes) and read one string off it, which made a
+ * scope header cost a full repo walk.
+ */
 function computeRepoIdSafe(folder: string): string | null {
   try {
-    return computeRepoDetail(folder, "unreachable").repoId;
+    return repoIdFromPath(getRepoConfig(folder).repo.path || folder);
   } catch {
     return null;
   }
@@ -625,7 +633,7 @@ async function exportOneUnit(
 ): Promise<Record<string, unknown>> {
   // §5.5 — call the product's OWN composition path and bucket THOSE rows. Never re-derive: an export that
   // computes a metric even slightly differently from the tile lies, and lies plausibly.
-  const detail = computeRepoDetail(folder, health, pinset);
+  const detail = await computeRepoDetail(folder, health, pinset);
   const root = repoRootFor(folder);
   const missing = await safeAsync(() => missingPinnedFromPeers(root), []);
 

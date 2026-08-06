@@ -495,8 +495,20 @@ implemented in code:
 * **No repos:** the table is replaced by a dashed card — "No repos yet. Add your first repo →"
   (opens the Add-repo dialog).
 * **Loading:** skeleton rows sized to the columns, so there is no layout shift.
+* **Loading PROGRESSIVELY (performance.mdx P-37).** The rows are STREAMED: the server composes them in
+  batches and the table starts filling in tens of milliseconds rather than after the last repo on the
+  machine. Every reader shares ONE walk, so N tabs — or a burst of live-refresh bumps — still cost one pass
+  over the disk.
 * **Refetch:** existing rows stay visible until new data replaces them; a repo mid-pin shows the
-  animated `pinning` pill without blocking interaction.
+  animated `pinning` pill without blocking interaction. This is why progressive filling applies to the
+  FIRST load only — replacing a finished table with a growing one on every bump would be a blink, not
+  progress.
+
+The streamed list endpoint (one shared walk, multicast to every reader) is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/stream` handler + `startRepoRowsFeed()`
+
+The client reducer that folds the batches into the page's existing `["repos"]` cache is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()`
 
 ---
 

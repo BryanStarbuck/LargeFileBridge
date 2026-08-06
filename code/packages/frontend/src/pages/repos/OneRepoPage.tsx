@@ -12,6 +12,7 @@ import { toast } from "sonner";
 import type { FileRow, Decision, RepoDetail, PinCounts, PinNowResult, TaskStatus } from "@lfb/shared";
 import { formatBytes, viewerRouteForName, mediaKindForName, fileTypeForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
+import { streamRepoDetail } from "../../api/streamQueries.js";
 import { DataTable } from "../../components/table/DataTable.js";
 import type { LfbColumn } from "../../components/table/types.js";
 import { RepoStatusPill } from "../../components/Pill.js";
@@ -187,10 +188,16 @@ export function OneRepoPage() {
       return next;
     });
 
+  // STREAMED (performance.mdx P-37): the header arrives at once, the file rows fill in as the server
+  // composes them, and the metric tiles count up behind them — instead of a blank page held until the last
+  // row, the IPFS pinset enumeration and the peer warnings had all finished. Same cache key, same
+  // RepoDetail shape, so every mutation below still reads and writes it unchanged; while the walk is in
+  // flight the published detail carries `partial: true`.
   const { data: detail, isLoading } = useQuery({
     queryKey: ["repo", repoId],
-    queryFn: () => api.repo(repoId),
+    queryFn: ({ signal }) => streamRepoDetail(qc, repoId, signal),
   });
+  const streaming = detail?.partial === true;
 
   // LIVE REFRESH (one_repo.mdx §4.11, storage_company.mdx §8.9). While this page is open, a backbone pull
   // on the server can reconcile another of the user's computers' manifests and produce new remote-only rows.
@@ -414,7 +421,10 @@ export function OneRepoPage() {
     else setActiveTab("ipfs");
   };
 
-  const ipfsDown = detail?.ipfs === "unreachable";
+  // The node's health is one of the LAST facts the stream delivers (the pinset enumeration it rides can take
+  // seconds), so while `streaming` is true we do not yet know it. Reporting "unreachable" then would grey out
+  // Pin now on a perfectly healthy node for the first moment of every page load.
+  const ipfsDown = !streaming && detail?.ipfs === "unreachable";
 
   /**
    * "Pin now" — nothing checked pins the whole repo, checked rows pin exactly those (one_repo.mdx §4.4).
@@ -804,7 +814,10 @@ export function OneRepoPage() {
   // (worst-first: IPFS-down → pull-down → undecided). When there's nothing to recommend and no scan is
   // due, there is no header primary — the metric panels (all green zeros) already say "all clear".
   const scanDue = detail ? scanIsStale(detail) : false;
-  const topRec = detail && !scanDue ? topRecommendation(detail, repoId) : null;
+  // The header primary is a RANKING across every metric ("what is the single most important thing here?"),
+  // so it cannot be answered from subtotals — a half-composed repo could nominate a recommendation the
+  // finished one would not. It waits for the walk to finish; the tiles themselves count up meanwhile.
+  const topRec = detail && !detail.partial && !scanDue ? topRecommendation(detail, repoId) : null;
   // The header primary's label is per-metric (one_repo.mdx §3.1): a content-work recommendation names its
   // verb ("Transcribe ›" / "Describe ›" / "Compress ›") so the button says exactly what it will do; the
   // triage recommendations (undecided / pull-down / ipfs-down) keep the generic "View recommendation ›".
@@ -878,6 +891,7 @@ export function OneRepoPage() {
         <MetricsStrip
           metrics={metricViews}
           defaultHint={tab.defaultHint}
+          pending={streaming}
           onApplied={() => refetchUntilResolved(qc, [["repo", repoId]])}
         />
       )}
@@ -959,7 +973,10 @@ export function OneRepoPage() {
         // Trailing ⋮ kebab — the file entity menu (menus.mdx §3), same catalog as View-one-file.
         rowMenu={(f) => (detail?.path ? <EntityKebab path={`${detail.path}/${f.path}`} /> : null)}
         itemNoun="files"
-        loading={isLoading}
+        // Still LOADING while the stream has yet to deliver a row: the empty state below says "No large
+        // files found in this repo", which would be a false statement about a repo whose rows are still on
+        // their way. Once the first row lands the table renders and simply grows.
+        loading={isLoading || (streaming && tabRows.length === 0)}
         selection={{
           selected,
           onChange: setSelected,
@@ -1004,9 +1021,13 @@ export function OneRepoPage() {
               <span className="flex items-center gap-1">Status <RepoStatusPill status={detail.status} /></span>
               <span>Peers <b>{detail.peerCount}</b></span>
               <span>Last pin <b title={absoluteTime(detail.lastPinAt)}>{relativeTime(detail.lastPinAt)}</b></span>
-              <span style={{ color: ipfsDown ? "var(--lfb-bad)" : "var(--lfb-ok)" }}>
-                IPFS {ipfsDown ? "unreachable" : "ok"}
-              </span>
+              {streaming ? (
+                <span className="text-black/50">IPFS checking…</span>
+              ) : (
+                <span style={{ color: ipfsDown ? "var(--lfb-bad)" : "var(--lfb-ok)" }}>
+                  IPFS {ipfsDown ? "unreachable" : "ok"}
+                </span>
+              )}
             </div>
           </Disclosure>
         </div>

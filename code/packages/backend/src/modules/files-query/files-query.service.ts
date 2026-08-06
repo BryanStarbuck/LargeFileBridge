@@ -107,7 +107,7 @@ export async function listFilesByCategory(
     unitsSearched++;
     let rows: FileRow[];
     try {
-      rows = computeRepoDetail(folder, health, pinset).files;
+      rows = (await computeRepoDetail(folder, health, pinset)).files;
     } catch (e) {
       log.warn("files-query", `row composition failed for repo ${folder}: ${(e as Error).message}`);
       continue;
