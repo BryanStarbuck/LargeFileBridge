@@ -22,7 +22,7 @@ function CopyButton({ text, label }: { text: string; label: string }) {
           clientLog.warn("CredentialsSetupCard.copy", e);
         }
       }}
-      className="inline-flex items-center gap-1 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs text-black/60 hover:bg-black/5"
+      className="lfb-btn lfb-btn-secondary lfb-btn-sm"
       aria-label={`Copy ${label}`}
     >
       {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}

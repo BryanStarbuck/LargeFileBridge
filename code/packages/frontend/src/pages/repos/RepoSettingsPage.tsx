@@ -91,9 +91,9 @@ export function RepoSettingsPage() {
           onChange={(v) => patch.mutate({ bigFileOverride: { ...s.bigFileOverride, enabled: v } })} />
         {s.bigFileOverride.enabled && (
           <div className="mt-2 flex items-center gap-2">
-            <input type="number" value={s.bigFileOverride.value} className="w-28 rounded border border-[var(--lfb-border)] px-2 py-1"
+            <input type="number" value={s.bigFileOverride.value} className="lfb-input w-28 px-2 py-1"
               onChange={(e) => patch.mutate({ bigFileOverride: { ...s.bigFileOverride, value: Number(e.target.value) } })} />
-            <select value={s.bigFileOverride.unit} className="rounded border border-[var(--lfb-border)] px-2 py-1"
+            <select value={s.bigFileOverride.unit} className="lfb-input px-2 py-1"
               onChange={(e) => patch.mutate({ bigFileOverride: { ...s.bigFileOverride, unit: e.target.value as SizeUnit } })}>
               {SIZE_UNITS.map((u) => <option key={u}>{u}</option>)}
             </select>
@@ -193,7 +193,7 @@ function GlobField({ label, value, placeholder, onSave }: {
       <span className="mb-1 block text-black/70">{label}</span>
       <textarea value={draft} placeholder={placeholder} rows={2} onBlur={commit}
         onChange={(e) => setDraft(e.target.value)}
-        className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs" />
+        className="lfb-input w-full px-2 py-1 font-mono text-xs" />
     </label>
   );
 }

@@ -740,7 +740,7 @@ export function OneRepoPage() {
     { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
       cell: (f) => <span className={f.decision === "sync" && f.cid && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
     { id: "cid", header: "CID", kind: "text", accessor: (f) => f.cid,
-      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); void copyText(f.cid!, "CID", "OneRepoPage.copyCid"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
+      cell: (f) => f.cid ? <code className="whitespace-nowrap text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); void copyText(f.cid!, "CID", "OneRepoPage.copyCid"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
     { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
       cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
     // ── Task-tab columns (task_tabs.mdx §4). Present in the union; shown only on the tabs that list them.
@@ -862,7 +862,7 @@ export function OneRepoPage() {
             <button
               onClick={() => navigate({ to: "/repos/$repoId/settings", params: { repoId } })}
               title="Repo settings"
-              className="rounded-md border border-[var(--lfb-border)] p-2 hover:bg-slate-100"
+              className="lfb-btn lfb-btn-secondary p-2"
             >
               <Settings className="h-4 w-4" />
             </button>
@@ -874,7 +874,7 @@ export function OneRepoPage() {
               <button
                 onClick={rescanRepo}
                 title="This repo hasn't been scanned recently — scan it for large files"
-                className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
+                className="lfb-btn lfb-btn-primary"
               >
                 <Search className="h-4 w-4" />
                 Scan now
@@ -995,11 +995,11 @@ export function OneRepoPage() {
           onChange: setSelected,
           bulk: selected.size > 0 ? (
             <div className="relative">
-              <button onClick={() => setBulkOpen((o) => !o)} className="rounded-md border border-[var(--lfb-border)] px-2 py-1 text-sm hover:bg-slate-100">
+              <button onClick={() => setBulkOpen((o) => !o)} className="lfb-btn lfb-btn-secondary lfb-btn-sm">
                 ⋮ {selected.size} selected
               </button>
               {bulkOpen && (
-                <div className="absolute right-0 z-10 mt-1 w-48 rounded-lg border border-[var(--lfb-border)] bg-white shadow-lg py-1">
+                <div className="lfb-popover absolute right-0 z-10 mt-1 w-48 py-1">
                   {DECISIONS.map((d) => (
                     <button key={d} className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
                       onClick={() => { setDecision.mutate({ paths: relPaths(), decision: d }); setBulkOpen(false); }}>

@@ -102,7 +102,7 @@ export function ViewOneFilePage() {
                 <select
                   value={v.decision ?? "undecided"}
                   onChange={(e) => decide.mutate(e.target.value as Decision)}
-                  className="rounded border border-[var(--lfb-border)] px-1 py-0.5 text-xs"
+                  className="lfb-input px-1 py-0.5 text-xs"
                 >
                   {(["sync", "ignore", "undecided"] as Decision[]).map((d) => (
                     <option key={d} value={d} disabled={d === "sync" && v.flags.neverIpfs}>
@@ -211,7 +211,7 @@ function OpenViewer({ view: v, navigate }: { view: EntityView; navigate: ReturnT
   return (
     <button
       onClick={() => navigate({ to, search: { path: v.path } })}
-      className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
+      className="lfb-btn lfb-btn-primary"
     >
       {v.compressible === "image" ? <ImageIcon className="h-4 w-4" /> : <Film className="h-4 w-4" />}
       Open {v.compressible} viewer
@@ -225,7 +225,7 @@ function pickPrimary(v: EntityView, decide: { mutate: (d: Decision) => void }) {
     return (
       <button
         onClick={() => decide.mutate("sync")}
-        className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
+        className="lfb-btn lfb-btn-primary"
       >
         <UploadCloud className="h-4 w-4" /> Add to IPFS
       </button>

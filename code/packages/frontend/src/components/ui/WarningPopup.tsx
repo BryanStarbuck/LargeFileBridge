@@ -461,9 +461,9 @@ export function WarningPopup({
   };
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
+    <div className="lfb-scrim fixed inset-0 z-50 grid place-items-center p-4" onClick={onClose}>
       <div
-        className={`flex max-h-[85vh] flex-col overflow-hidden rounded-xl bg-white shadow-xl ${
+        className={`flex max-h-[85vh] flex-col overflow-hidden lfb-modal ${
           hasTargets ? "w-[80vw] max-w-[80rem] md:min-w-[44rem]" : "w-[34rem] max-w-full"
         }`}
         onClick={(e) => e.stopPropagation()}
@@ -482,7 +482,7 @@ export function WarningPopup({
             type="button"
             aria-label="Close"
             onClick={onClose}
-            className="-mr-1 -mt-1 rounded p-1 text-black/40 hover:bg-black/5 hover:text-black/70"
+            className="-mr-1 -mt-1 lfb-icon-btn p-1"
           >
             <span aria-hidden className="text-lg leading-none">×</span>
           </button>
@@ -638,6 +638,8 @@ export function WarningPopup({
                       value={query}
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder="Filter…"
+                      // NOT `.lfb-input` — the wrapper above already draws the border and padding, so
+                      // the house field shape would render a box inside a box.
                       className="w-28 bg-transparent text-xs outline-none"
                     />
                   </div>

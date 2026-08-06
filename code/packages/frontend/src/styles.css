@@ -3,7 +3,35 @@
 :root {
   --lfb-primary: #2563eb; /* brand accent (left_bar.mdx §1) */
   --lfb-primary-tint: rgba(37, 99, 235, 0.1);
+  /* Pressed/hover steps for the accent. A solid button DARKENS on hover instead of going translucent —
+     `opacity` washes the fill against whatever sits behind it and reads as "disabled", not "hovered". */
+  --lfb-primary-hover: #1d4ed8; /* blue-700 */
+  --lfb-primary-active: #1e40af; /* blue-800 */
   --lfb-border: #e2e8f0;
+  --lfb-border-strong: #cbd5e1; /* slate-300 — the hover/emphasis hairline */
+  --lfb-muted: #94a3b8; /* slate-400 — the one withdrawn/placeholder ink */
+
+  /* Surfaces. Every raised card is --lfb-surface on a --lfb-surface-sunken page region; --lfb-surface-2
+     is the quiet inset (table headers, code blocks, the read-only detail strips). */
+  --lfb-surface: #ffffff;
+  --lfb-surface-2: #f8fafc; /* slate-50 */
+  --lfb-surface-sunken: #f1f5f9; /* slate-100 */
+  --lfb-hover: rgba(15, 23, 42, 0.04); /* the house hover fill — one value, not five bg-black/5 guesses */
+  --lfb-active: rgba(15, 23, 42, 0.07);
+
+  /* Elevation scale. Tailwind's stock shadow-lg/xl are far too heavy for a dense local app — these are
+     tuned so a popover reads as ~1 step above the page and a modal as ~2, with no visible grey haze. */
+  --lfb-shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.05);
+  --lfb-shadow: 0 1px 3px rgba(15, 23, 42, 0.07), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --lfb-shadow-md: 0 4px 12px rgba(15, 23, 42, 0.08), 0 1px 3px rgba(15, 23, 42, 0.05);
+  --lfb-shadow-lg: 0 12px 32px rgba(15, 23, 42, 0.12), 0 2px 8px rgba(15, 23, 42, 0.06);
+
+  /* The ONE keyboard focus ring (a11y). Before this the app had no visible focus anywhere, so a
+     keyboard user could not see where they were. Rendered as an outline with an offset so it reads
+     clearly on both white cards and tinted rows. */
+  --lfb-ring: #2563eb;
+  --lfb-ring-width: 2px;
+  --lfb-ring-offset: 2px;
 
   /* Pin toggle (ipfs.mdx §3). One control everywhere a file/CID can be pinned:
      SOLID dark-blue fill = pinned; muted outline = not pinned. */
@@ -21,10 +49,14 @@
      One vocabulary, one color language — every page's health color comes from here. */
   --lfb-ok: #16a34a; /* green-600  — Fixed */
   --lfb-ok-bg: #f0fdf4; /* green-50 */
+  --lfb-ok-border: #bbf7d0; /* green-200 — the hairline; the full-strength color was too loud as a border */
   --lfb-warn: #d97706; /* amber-600  — Improvable (an offer, never an alarm) */
   --lfb-warn-bg: #fffbeb; /* amber-50 */
+  --lfb-warn-border: #fde68a; /* amber-200 */
   --lfb-bad: #dc2626; /* red-600    — Broken */
   --lfb-bad-bg: #fef2f2; /* red-50 */
+  --lfb-bad-border: #fecaca; /* red-200 */
+  --lfb-bad-hover: #b91c1c; /* red-700 — the destructive button's darken step */
 
   /* File System code-badge palette (directory.mdx §4). White letter on solid fill. */
   --lfb-badge-repo-root: #5b3a1a; /* R  dark brown */
@@ -46,6 +78,375 @@
   --lfb-fold-video-fill: #eef4ff; /* very light blue, near white */
   --lfb-fold-image-line: #2f6fed; /* blue */
   --lfb-fold-image-fill: transparent; /* outline only, no fill */
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   BASE — the things that must be true on every surface, including the ones no
+   component file touches.
+   ───────────────────────────────────────────────────────────────────────────── */
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+
+  body {
+    margin: 0;
+    font-family:
+      ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    color: #000;
+    background: var(--lfb-surface);
+    /* Dense UI type renders thin and slightly ragged without these; they are the difference between
+       "a web page" and "an app". */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv05" 1; /* straight-tailed l — fewer 1/l collisions in paths and CIDs */
+  }
+
+  /* THE focus ring. Scoped to real interactive elements so a `tabIndex` scroll container doesn't
+     draw one, and :focus-visible so a mouse click never leaves a ring behind. */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  summary:focus-visible,
+  [role="button"]:focus-visible,
+  [tabindex]:not([tabindex="-1"]):focus-visible {
+    /* No border-radius here — a modern outline already follows the element's own corners. */
+    outline: var(--lfb-ring-width) solid var(--lfb-ring);
+    outline-offset: var(--lfb-ring-offset);
+  }
+
+  /* A disabled control must LOOK unclickable under the pointer, not just faded. */
+  button:disabled,
+  [aria-disabled="true"] {
+    cursor: not-allowed;
+  }
+
+  ::placeholder {
+    color: var(--lfb-muted);
+  }
+
+  /* The app's checkboxes are native (table row selection, every facet list). One line makes all of them
+     brand-colored and clickable-looking instead of the OS default grey. */
+  input[type="checkbox"],
+  input[type="radio"] {
+    accent-color: var(--lfb-primary);
+    cursor: pointer;
+  }
+  input[type="checkbox"]:disabled,
+  input[type="radio"]:disabled {
+    cursor: not-allowed;
+  }
+
+  ::selection {
+    background: var(--lfb-primary-tint);
+  }
+
+  /* Thin, self-colored scrollbars. The stock Linux/Windows scrollbar is ~15px of grey furniture and it
+     shows up inside every table body, popover and column browser in this app. */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--lfb-border-strong) transparent;
+  }
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--lfb-border-strong);
+    border: 3px solid transparent;
+    border-radius: 999px;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--lfb-muted);
+    border: 3px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  /* Motion is decoration here — never the carrier of meaning — so it is safe to drop entirely. */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* ─────────────────────────────────────────────────────────────────────────────
+   COMPONENTS — the shared shapes. These exist as CSS classes (not only as React
+   components) so an inline `<button>` deep inside a page can adopt the house
+   button with one class instead of re-guessing padding, weight and hover.
+   ───────────────────────────────────────────────────────────────────────────── */
+@layer components {
+  /* ---- Buttons ------------------------------------------------------------ */
+  .lfb-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    white-space: nowrap;
+    border-radius: 0.375rem;
+    border: 1px solid transparent;
+    padding: 0.375rem 0.75rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    font-weight: 500;
+    cursor: pointer;
+    user-select: none;
+    transition:
+      background-color 120ms ease,
+      border-color 120ms ease,
+      color 120ms ease,
+      box-shadow 120ms ease;
+  }
+  /* NO `pointer-events: none` here. The `disabled` attribute already blocks the click, and killing
+     pointer events on top of it also kills the native `title` tooltip — which on a disabled button is
+     usually the only place the REASON it is disabled is written (e.g. ViewOneDevicePage's "Open in File
+     System"). It would also make the `cursor: not-allowed` above unreachable. `aria-disabled` call sites
+     guard the action in JS. */
+  .lfb-btn:disabled,
+  .lfb-btn[aria-disabled="true"] {
+    opacity: 0.45; /* ONE disabled opacity app-wide (it was 0.4 / 0.5 / 0.6 depending on the file) */
+  }
+  .lfb-btn:active:not(:disabled) {
+    transform: translateY(0.5px); /* a press you can feel; too small to shift the layout */
+  }
+  .lfb-btn > svg {
+    flex-shrink: 0;
+  }
+
+  .lfb-btn-primary {
+    background: var(--lfb-primary);
+    color: #fff;
+    box-shadow: var(--lfb-shadow-sm);
+  }
+  .lfb-btn-primary:hover:not(:disabled) {
+    background: var(--lfb-primary-hover);
+  }
+  .lfb-btn-primary:active:not(:disabled) {
+    background: var(--lfb-primary-active);
+  }
+
+  .lfb-btn-secondary {
+    background: var(--lfb-surface);
+    border-color: var(--lfb-border);
+    color: #000;
+    box-shadow: var(--lfb-shadow-sm);
+  }
+  .lfb-btn-secondary:hover:not(:disabled) {
+    background: var(--lfb-surface-2);
+    border-color: var(--lfb-border-strong);
+  }
+  .lfb-btn-secondary:active:not(:disabled) {
+    background: var(--lfb-surface-sunken);
+  }
+
+  .lfb-btn-ghost {
+    background: transparent;
+    color: rgba(0, 0, 0, 0.7);
+  }
+  .lfb-btn-ghost:hover:not(:disabled) {
+    background: var(--lfb-hover);
+    color: #000;
+  }
+  .lfb-btn-ghost:active:not(:disabled) {
+    background: var(--lfb-active);
+  }
+
+  /* The amber CTA on the IPFS / live-updates banners. It is deliberately NOT the primary blue: those
+     banners offer a remedy for a degraded state, and recoloring them to the app's normal CTA would
+     erase the distinction the banner exists to make. */
+  .lfb-btn-warn {
+    background: var(--lfb-warn);
+    color: #fff;
+    box-shadow: var(--lfb-shadow-sm);
+  }
+  .lfb-btn-warn:hover:not(:disabled) {
+    background: #b45309; /* amber-700 */
+  }
+
+  .lfb-btn-danger {
+    background: var(--lfb-bad);
+    color: #fff;
+    box-shadow: var(--lfb-shadow-sm);
+  }
+  .lfb-btn-danger:hover:not(:disabled) {
+    background: var(--lfb-bad-hover);
+  }
+
+  /* Sizes. `md` is the default above; these are the two steps the app actually uses. */
+  .lfb-btn-sm {
+    padding: 0.25rem 0.625rem;
+    font-size: 0.8125rem;
+    line-height: 1.125rem;
+    gap: 0.3125rem;
+  }
+  .lfb-btn-lg {
+    padding: 0.5rem 1rem;
+    font-size: 0.875rem;
+  }
+
+  /* The square icon-only button (table controls, kebabs, close buttons). */
+  .lfb-icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 0.375rem;
+    padding: 0.375rem;
+    color: rgba(0, 0, 0, 0.6);
+    cursor: pointer;
+    transition:
+      background-color 120ms ease,
+      color 120ms ease;
+  }
+  .lfb-icon-btn:hover:not(:disabled) {
+    background: var(--lfb-hover);
+    color: #000;
+  }
+  .lfb-icon-btn:disabled {
+    opacity: 0.45; /* see .lfb-btn:disabled — no pointer-events:none, it would eat the title tooltip */
+  }
+
+  /* ---- Fields ------------------------------------------------------------- */
+  .lfb-input {
+    /* Deliberately NO width: most call sites are inline <select>s that must stay intrinsically sized.
+       Full-width fields opt in with `w-full` (the Field primitives below do it for you). */
+    border-radius: 0.375rem;
+    border: 1px solid var(--lfb-border);
+    background: var(--lfb-surface);
+    padding: 0.375rem 0.625rem;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    color: #000;
+    transition:
+      border-color 120ms ease,
+      box-shadow 120ms ease;
+  }
+  .lfb-input:hover:not(:disabled):not(:focus) {
+    border-color: var(--lfb-border-strong);
+  }
+  /* The focus signal is a ring, not a 1px border swap — a hairline color change is easy to miss and
+     was the app's only focus feedback on every text field. */
+  .lfb-input:focus {
+    outline: none;
+    border-color: var(--lfb-primary);
+    box-shadow: 0 0 0 3px var(--lfb-primary-tint);
+  }
+  .lfb-input:disabled {
+    background: var(--lfb-surface-sunken);
+    color: rgba(0, 0, 0, 0.45);
+    cursor: not-allowed;
+  }
+  .lfb-input-invalid,
+  .lfb-input[aria-invalid="true"] {
+    border-color: var(--lfb-bad);
+  }
+  .lfb-input-invalid:focus,
+  .lfb-input[aria-invalid="true"]:focus {
+    border-color: var(--lfb-bad);
+    box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.12);
+  }
+
+  /* ---- Surfaces ----------------------------------------------------------- */
+  .lfb-card {
+    border-radius: 0.5rem;
+    border: 1px solid var(--lfb-border);
+    background: var(--lfb-surface);
+  }
+
+  /* Any floating layer: dropdown, popover, hover card. */
+  .lfb-popover {
+    border-radius: 0.5rem;
+    border: 1px solid var(--lfb-border);
+    background: var(--lfb-surface);
+    box-shadow: var(--lfb-shadow-md);
+  }
+
+  /* ---- Modals ------------------------------------------------------------- */
+  /* The app hand-rolls 13 modals in 13 files. These two classes are the shared LOOK (scrim density,
+     blur, radius, elevation, entrance) so they stop drifting apart; each file keeps its own z-index,
+     which is deliberate layering, and its own behaviour. */
+  .lfb-scrim {
+    background: rgba(15, 23, 42, 0.45);
+    backdrop-filter: blur(2px);
+    animation: lfb-fade-in 120ms ease-out;
+  }
+  .lfb-modal {
+    border-radius: 0.75rem;
+    background: var(--lfb-surface);
+    box-shadow: var(--lfb-shadow-lg);
+    border: 1px solid var(--lfb-border);
+    animation: lfb-modal-in 140ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* ---- Chips -------------------------------------------------------------- */
+  /* One pill shape. Tone comes from the caller; this fixes only the geometry and weight, which used to
+     vary between `px-2 py-0.5 text-xs` and `px-2.5 py-1 text-[11px]` across the pages. */
+  .lfb-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    border-radius: 999px;
+    padding: 0.0625rem 0.5rem;
+    font-size: 0.75rem;
+    line-height: 1.125rem;
+    font-weight: 500;
+    white-space: nowrap;
+  }
+
+  /* The small uppercase eyebrow used over stat labels, filter-dropdown group headings and table
+     headers. It existed as an ad-hoc `text-[11px] uppercase tracking-wide text-black/40` in five
+     places; naming it is what keeps the sixth one consistent. */
+  .lfb-eyebrow {
+    font-size: 0.6875rem;
+    line-height: 1rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(0, 0, 0, 0.45);
+  }
+}
+
+@keyframes lfb-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes lfb-modal-in {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.985);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* The sticky table header's "there is content scrolled under me" cue (tables.mdx). DataTable puts this on
+   each <th> only once the body has actually scrolled, so a table at rest keeps its flat, chromeless look.
+   It lives on the <th> and not the <thead> because table SECTIONS don't paint box-shadow reliably. */
+.lfb-th-scrolled {
+  box-shadow: 0 6px 6px -6px rgba(15, 23, 42, 0.18);
 }
 
 /* Page action-links row (page_actions.mdx §3) — the visible horizontal row of blue text hyperlinks
@@ -70,12 +471,18 @@
   padding: 0;
   font: inherit;
   line-height: 1.2;
+  border-radius: 3px;
+  transition: color 120ms ease;
 }
 .lfb-actions a:hover {
   text-decoration: underline;
+  color: var(--lfb-primary-hover);
 }
 .lfb-actions a.danger {
   color: var(--lfb-bad);
+}
+.lfb-actions a.danger:hover {
+  color: var(--lfb-bad-hover);
 }
 /* A withdrawn offer must LOOK withdrawn (page_actions.mdx §3): an unavailable action that still reads as a
    live blue link invites a click that silently does nothing. Its `title` carries the reason. */
@@ -85,23 +492,11 @@
 }
 .lfb-actions a[aria-disabled="true"]:hover {
   text-decoration: none;
+  color: var(--lfb-muted, #94a3b8);
 }
 .lfb-actions .sep {
   color: var(--lfb-border);
   user-select: none;
-}
-
-html,
-body,
-#root {
-  height: 100%;
-}
-body {
-  margin: 0;
-  font-family:
-    ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  color: #000;
-  background: #fff;
 }
 
 .tabular-nums {

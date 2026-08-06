@@ -189,12 +189,12 @@ function StorageHeader({
           <input
             type="number" min={0} step={1} value={gib}
             onChange={(e) => setGib(e.target.value)}
-            className="w-24 rounded-md border border-[var(--lfb-border)] px-2 py-1 text-right text-black"
+            className="lfb-input w-24 px-2 py-1 text-right"
           />
           <button
             disabled={busy}
             onClick={() => { const n = Number(gib); onApplyBudget(Number.isFinite(n) ? Math.max(0, n) * GIB : null); }}
-            className="rounded-md bg-[var(--lfb-primary)] px-2 py-1 text-white disabled:opacity-60"
+            className="lfb-btn lfb-btn-primary lfb-btn-sm"
           >
             Set
           </button>
@@ -222,7 +222,7 @@ function BookmarkToggle({ on, onToggle }: { on: boolean; onToggle: () => void })
       aria-label={on ? "Bookmarked — click to remove" : "Bookmark this community"}
       title={on ? "Bookmarked" : "Bookmark"}
       onClick={(e) => { e.stopPropagation(); onToggle(); }}
-      className="grid place-items-center rounded p-0.5 hover:bg-slate-100"
+      className="lfb-icon-btn p-0.5"
     >
       <Bookmark
         className={`h-4 w-4 ${on ? "text-yellow-500" : "text-black/25 hover:text-yellow-400"}`}

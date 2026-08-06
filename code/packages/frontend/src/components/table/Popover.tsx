@@ -43,13 +43,13 @@ export function Popover({
         // page (duplicates.mdx §3.0a) a dropdown taller than the space beneath it would be clipped by the
         // shell with no page scroll left to reveal it. Bounded here, the window scrolls inside itself and
         // stays fully reachable on any screen height; overscroll-contain keeps that from moving the page.
-        className={`absolute right-0 z-10 mt-1 max-h-[70vh] overflow-y-auto overscroll-contain ${wide ? "w-[36rem] max-w-[90vw]" : "w-72"} rounded-lg border border-[#e8e8e8] bg-white py-1 shadow-lg`}
+        className={`absolute right-0 z-10 mt-1 max-h-[70vh] overflow-y-auto overscroll-contain ${wide ? "w-[36rem] max-w-[90vw]" : "w-72"} lfb-popover py-1`}
       >
         {children}
         {showApply && onClose && (
           <div className="flex justify-end border-t border-[var(--lfb-border)] px-3 pb-1.5 pt-1.5">
             <button
-              className="rounded-md bg-[var(--lfb-primary)] px-4 py-1 text-sm text-white hover:opacity-90"
+              className="lfb-btn lfb-btn-primary lfb-btn-lg"
               onClick={onClose}
             >
               Apply

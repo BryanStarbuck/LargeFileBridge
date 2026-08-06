@@ -188,7 +188,7 @@ export default function FileSystemPage() {
         <button
           onClick={goHome}
           title="Home directory"
-          className="inline-flex items-center gap-1 rounded px-2 py-1 text-sm text-black hover:bg-slate-100"
+          className="lfb-btn lfb-btn-ghost lfb-btn-sm"
         >
           <Home size={15} /> Home
         </button>
@@ -204,7 +204,7 @@ export default function FileSystemPage() {
             onChange={(e) => setPathInput(e.target.value)}
             placeholder={deepest || "Absolute path…"}
             spellCheck={false}
-            className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs text-black"
+            className="lfb-input w-full px-2 py-1 font-mono text-xs"
           />
         </form>
         <label className="flex items-center gap-1 text-xs text-black select-none">

@@ -48,9 +48,9 @@ function BatchLoadingModal({
   }, [onCancel]);
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onCancel}>
+    <div className="lfb-scrim fixed inset-0 z-50 grid place-items-center p-4" onClick={onCancel}>
       <div
-        className="flex w-[26rem] max-w-full flex-col items-center gap-3 rounded-xl bg-white px-6 py-8 text-center shadow-xl"
+        className="flex w-[26rem] max-w-full flex-col items-center gap-3 lfb-modal px-6 py-8 text-center "
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"

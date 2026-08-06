@@ -14,6 +14,37 @@ import { useProgress } from "../../progress/progress-context.js";
 import { NavIcon } from "./NavIcon.js";
 import { HoverInfoPanel } from "../hoverinfo/HoverInfoPanel.js";
 
+// The nav row shapes, in ONE place. The active/inactive treatment used to be an inline `style` ternary
+// copy-pasted at five call sites, so a change to it only ever landed in some of them. Colors are the
+// LOCKED ones from left_bar.mdx §2 (labels black; active + wordmark stay accent); what is new is the
+// motion, the left accent rail on the active row, and hover being suppressed while active so the tint
+// doesn't flicker under the pointer.
+const NAV_BASE =
+  "relative mx-2 my-0.5 flex items-center rounded-md text-sm transition-colors duration-150 " +
+  "before:absolute before:-left-2 before:top-1 before:bottom-1 before:w-[3px] before:rounded-r-full " +
+  "before:bg-[var(--lfb-primary)] before:transition-opacity before:duration-150";
+
+function navRowClass(active: boolean): string {
+  return `${NAV_BASE} gap-2.5 px-3 py-2 ${
+    active
+      ? "bg-[var(--lfb-primary-tint)] font-medium text-[var(--lfb-primary)] before:opacity-100"
+      : "text-black before:opacity-0 hover:bg-slate-100"
+  }`;
+}
+
+function navChildClass(active: boolean): string {
+  return `${NAV_BASE} gap-2 py-1.5 pl-9 pr-3 ${
+    active
+      ? "bg-[var(--lfb-primary-tint)] font-medium text-[var(--lfb-primary)] before:opacity-100"
+      : "text-black before:opacity-0 hover:bg-slate-100"
+  }`;
+}
+
+// The count badge on Storages / To Do. min-w + tabular figures so a 1-digit and a 3-digit count are
+// the same shape instead of a narrow oval next to a wide one.
+const NAV_BADGE =
+  "grid min-w-[1.25rem] place-items-center rounded-full px-1.5 py-px text-[11px] font-semibold tabular-nums text-white";
+
 export function Sidebar({ user }: { user: CurrentUser }) {
   const navigate = useNavigate();
   const path = useRouterState({ select: (s) => s.location.pathname });
@@ -93,7 +124,7 @@ export function Sidebar({ user }: { user: CurrentUser }) {
       <Link
         to={leftBar.clickRoute}
         title={leftBar.wordmarkAlt}
-        className="h-14 flex items-center px-4 border-b text-lg font-semibold"
+        className="flex h-14 shrink-0 items-center border-b px-4 text-lg font-semibold tracking-normal transition-colors duration-150 hover:bg-slate-50"
         style={{ color: "var(--lfb-primary)", borderColor: "var(--lfb-border)" }}
       >
         {leftBar.wordmark}
@@ -117,20 +148,13 @@ export function Sidebar({ user }: { user: CurrentUser }) {
               <Link
                 to={item.route}
                 title={item.description}
-                className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm hover:bg-slate-100"
-                style={
-                  parentSelected
-                    ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
-                    : { color: "#000" }
-                }
+                aria-current={parentSelected ? "page" : undefined}
+                className={navRowClass(parentSelected)}
               >
                 <NavIcon name={item.icon} className="h-4 w-4" />
                 <span className="flex-1">{item.label}</span>
                 {item.id === "todo" && todoCount > 0 && (
-                  <span
-                    className="rounded-full px-1.5 text-xs font-medium text-white"
-                    style={{ background: "var(--lfb-primary)" }}
-                  >
+                  <span className={NAV_BADGE} style={{ background: "var(--lfb-primary)" }}>
                     {todoCount}
                   </span>
                 )}
@@ -145,20 +169,20 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                       e.stopPropagation();
                       navigate({ to: "/company-mappings/review" });
                     }}
-                    className="rounded-full px-1.5 text-xs font-medium text-white"
+                    className={`${NAV_BADGE} cursor-pointer`}
                     style={{ background: "var(--lfb-primary)" }}
                   >
                     {pendingMappingCount}
                   </span>
                 )}
                 {isIpfs && onIpfs && pinningRepos.length > 0 && (
-                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
+                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 shrink-0 text-black/40" />
                 )}
                 {isStorages && onStorages && (
-                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
+                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 shrink-0 text-black/40" />
                 )}
                 {staticChildren && active && (
-                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 text-black/40" />
+                  <NavIcon name="ChevronDown" className="h-3.5 w-3.5 shrink-0 text-black/40" />
                 )}
               </Link>
 
@@ -173,12 +197,8 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                       key={child.id}
                       to={child.route}
                       title={child.description ?? child.label}
-                      className="mx-2 my-0.5 flex items-center gap-2 rounded-md py-1.5 pl-9 pr-3 text-sm hover:bg-slate-100"
-                      style={
-                        childActive
-                          ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
-                          : { color: "#000" }
-                      }
+                      aria-current={childActive ? "page" : undefined}
+                      className={navChildClass(childActive)}
                     >
                       <span className="flex-1 truncate">{child.label}</span>
                     </Link>
@@ -194,12 +214,8 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                       key={child.key}
                       to={child.route}
                       title={child.label}
-                      className="mx-2 my-0.5 flex items-center gap-2 rounded-md py-1.5 pl-9 pr-3 text-sm hover:bg-slate-100"
-                      style={
-                        childActive
-                          ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
-                          : { color: "#000" }
-                      }
+                      aria-current={childActive ? "page" : undefined}
+                      className={navChildClass(childActive)}
                     >
                       <span className="flex-1 truncate">{child.label}</span>
                     </Link>
@@ -216,12 +232,8 @@ export function Sidebar({ user }: { user: CurrentUser }) {
                       to="/ipfs/pins"
                       search={{ repo: repo.repoId }}
                       title={`${repo.name} — ${repo.pinnedCount} pinned`}
-                      className="mx-2 my-0.5 flex items-center gap-2 rounded-md py-1.5 pl-9 pr-3 text-sm hover:bg-slate-100"
-                      style={
-                        childActive
-                          ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
-                          : { color: "#000" }
-                      }
+                      aria-current={childActive ? "page" : undefined}
+                      className={navChildClass(childActive)}
                     >
                       <span className="flex-1 truncate">{repo.name}</span>
                       <span className="text-xs text-black/40">{repo.pinnedCount}</span>
@@ -243,12 +255,8 @@ export function Sidebar({ user }: { user: CurrentUser }) {
           <Link
             to="/processing"
             title={recentlyFinished ? "Background work just finished" : "Background work in progress"}
-            className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm hover:bg-slate-100"
-            style={
-              path.startsWith("/processing")
-                ? { color: "var(--lfb-primary)", background: "var(--lfb-primary-tint)", fontWeight: 500 }
-                : { color: "#000" }
-            }
+            aria-current={path.startsWith("/processing") ? "page" : undefined}
+            className={navRowClass(path.startsWith("/processing"))}
           >
             {/* The icon carries the live/settled distinction — a spinner over finished work would be
                 fake progress (processing.mdx §1's never-fake rule). */}
@@ -284,7 +292,7 @@ export function Sidebar({ user }: { user: CurrentUser }) {
               target="_blank"
               rel="noopener noreferrer"
               title={`${link.label} — opens in a new tab`}
-              className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-black hover:bg-slate-100"
+              className="mx-2 my-0.5 flex items-center gap-2.5 rounded-md px-3 py-2 text-sm text-black transition-colors duration-150 hover:bg-slate-100"
             >
               <NavIcon name="ExternalLink" className="h-4 w-4 text-black/40" />
               <span className="flex-1 truncate">{link.label}</span>
@@ -304,19 +312,22 @@ export function Sidebar({ user }: { user: CurrentUser }) {
       {/* Account slot (bottom; menu expands upward) */}
       <div className="relative border-t p-2" style={{ borderColor: "var(--lfb-border)" }}>
         {menuOpen && (
-          <div className="absolute bottom-full left-2 right-2 mb-1 rounded-lg border bg-white shadow-lg py-1"
-            style={{ borderColor: "var(--lfb-border)" }}>
+          <div
+            role="menu"
+            className="lfb-popover absolute bottom-full left-2 right-2 mb-1 py-1"
+            style={{ animation: "lfb-modal-in 120ms cubic-bezier(0.16,1,0.3,1)" }}
+          >
             {leftBar.accountMenu
               .filter((m) => !m.permissionGate || (m.permissionGate === "role:admin" && user.roles.includes("admin")))
               .map((m) =>
                 m.action === "sign_out" ? (
                   <a key={m.id} href="/api/v1/client/sessions/current/remove"
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm text-black hover:bg-slate-100">
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm text-black transition-colors duration-150 hover:bg-slate-100">
                     {m.icon && <NavIcon name={m.icon} className="h-4 w-4" />} {m.label}
                   </a>
                 ) : (
                   <Link key={m.id} to={m.route ?? "/"} onClick={() => setMenuOpen(false)}
-                    className="flex items-center gap-2 px-3 py-1.5 text-sm text-black hover:bg-slate-100">
+                    className="flex items-center gap-2 px-3 py-1.5 text-sm text-black transition-colors duration-150 hover:bg-slate-100">
                     {m.icon && <NavIcon name={m.icon} className="h-4 w-4" />} {m.label}
                   </Link>
                 ),
@@ -325,15 +336,22 @@ export function Sidebar({ user }: { user: CurrentUser }) {
         )}
         <button
           onClick={() => setMenuOpen((o) => !o)}
-          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-slate-100"
+          aria-expanded={menuOpen}
+          aria-haspopup="menu"
+          className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors duration-150 hover:bg-slate-100"
         >
-          <div className="h-8 w-8 rounded-full bg-[var(--lfb-primary-tint)] text-[var(--lfb-primary)] grid place-items-center text-sm font-semibold">
+          <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-[var(--lfb-primary-tint)] text-sm font-semibold text-[var(--lfb-primary)]">
             {(user.name || user.email || "?").slice(0, 1).toUpperCase()}
           </div>
-          <div className="min-w-0 leading-tight">
+          <div className="min-w-0 flex-1 leading-tight">
             <div className="truncate text-sm text-black">{user.name || "Signed in"}</div>
             <div className="truncate text-xs text-black">{user.email}</div>
           </div>
+          {/* The slot is a menu trigger; without a chevron it reads as a static identity card. */}
+          <NavIcon
+            name="ChevronDown"
+            className={`h-4 w-4 shrink-0 text-black/40 transition-transform duration-150 ${menuOpen ? "" : "rotate-180"}`}
+          />
         </button>
       </div>
     </aside>

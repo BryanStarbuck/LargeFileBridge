@@ -134,7 +134,7 @@ export function TodoPage() {
           <button
             onClick={() => transcribeScan.mutate()}
             disabled={transcribeScan.isPending}
-            className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-50"
+            className="lfb-btn lfb-btn-secondary"
           >
             {transcribeScan.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListTodo className="h-4 w-4" />}
             {transcribeScan.isPending ? "Looking…" : "Show what could be transcribed"}
@@ -205,7 +205,7 @@ function TodoSlug({ s, onOpen, onDismiss }: { s: TodoBatchSummary; onOpen: () =>
         <button
           onClick={onOpen}
           title="Review and apply"
-          className="flex h-8 items-center gap-1 rounded-md bg-[var(--lfb-primary)] px-2.5 text-sm text-white"
+          className="h-8 lfb-btn lfb-btn-primary lfb-btn-sm"
         >
           Review <ChevronRight className="h-4 w-4" />
         </button>
@@ -316,8 +316,8 @@ function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
 
   if (isLoading || !warning || !batch) {
     return (
-      <div className="fixed inset-0 z-50 grid place-items-center bg-black/40 p-4" onClick={onClose}>
-        <div className="rounded-xl bg-white px-6 py-5 text-sm text-black/50 shadow-xl" onClick={(e) => e.stopPropagation()}>
+      <div className="lfb-scrim fixed inset-0 z-50 grid place-items-center p-4" onClick={onClose}>
+        <div className="lfb-modal px-6 py-5 text-sm text-black/50 " onClick={(e) => e.stopPropagation()}>
           <Loader2 className="mr-2 inline h-4 w-4 animate-spin" />
           Loading…
         </div>

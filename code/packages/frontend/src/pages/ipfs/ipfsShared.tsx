@@ -210,15 +210,15 @@ export function ErrorPanel({
       {job.manualCommand && <ManualCommand command={job.manualCommand} note="Run this in a terminal to finish by hand:" />}
       <div className="mt-4 flex gap-2">
         {needsMigrate ? (
-          <button onClick={onMigrate} className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+          <button onClick={onMigrate} className="lfb-btn lfb-btn-primary">
             Run the one-time migration
           </button>
         ) : (
-          <button onClick={onRetry} className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm font-medium text-white hover:opacity-90">
+          <button onClick={onRetry} className="lfb-btn lfb-btn-primary">
             Retry
           </button>
         )}
-        <button onClick={onDismiss} className="rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-white">
+        <button onClick={onDismiss} className="lfb-btn lfb-btn-secondary">
           Dismiss
         </button>
       </div>
@@ -324,7 +324,7 @@ export function SecurityCard({
           <button
             onClick={async () => { setRestarting(true); await onRestart(); setRestarting(false); }}
             disabled={restarting}
-            className="rounded-md bg-amber-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-amber-700 disabled:opacity-50"
+            className="lfb-btn lfb-btn-warn lfb-btn-sm"
           >
             {restarting ? "Restarting…" : "Restart IPFS"}
           </button>
@@ -342,7 +342,7 @@ export function SecurityCard({
             <button
               onClick={async () => { setFixing(true); await onFix(); setFixing(false); }}
               disabled={fixing}
-              className="rounded-md bg-red-600 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:opacity-50"
+              className="lfb-btn lfb-btn-danger lfb-btn-sm"
             >
               {fixing ? "Fixing…" : "Fix"}
             </button>
@@ -421,7 +421,7 @@ export function ConfigHealthCard({
           <button
             onClick={() => onFix(fixableIds)}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary lfb-btn-lg"
           >
             <Wrench className="h-4 w-4" /> {busy ? "Fixing…" : "Review & Fix Configuration"}
           </button>
@@ -570,7 +570,7 @@ export function AutostartRow({
           <button
             onClick={onRemove}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-2.5 py-1 text-sm hover:bg-slate-100 disabled:opacity-50"
+            className="lfb-btn lfb-btn-secondary lfb-btn-sm"
             title={
               conflict
                 ? `Remove Large File Bridge's auto-start agent, leaving ${conflict.source} as the only one that starts IPFS`
@@ -583,7 +583,7 @@ export function AutostartRow({
           <button
             onClick={onInstall}
             disabled={busy}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-2.5 py-1 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary lfb-btn-sm"
             title="Set IPFS to start automatically every time you reboot"
           >
             <RotateCw className="h-3.5 w-3.5" /> Turn on auto-start

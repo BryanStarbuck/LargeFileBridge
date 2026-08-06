@@ -72,7 +72,7 @@ export function SecuritySetupPage({ config }: { config: SecurityConfigPublic }) 
           type="button"
           disabled={!valid || save.isPending}
           onClick={() => save.mutate()}
-          className="mt-6 w-full rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-white disabled:opacity-40"
+          className="mt-6 w-full lfb-btn lfb-btn-primary lfb-btn-lg"
         >
           {save.isPending ? "Saving…" : "Save & enable sign-in"}
         </button>

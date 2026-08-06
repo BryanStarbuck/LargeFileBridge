@@ -51,7 +51,7 @@ export function ScanProgressBar() {
 
   return (
     <div className="pointer-events-none fixed inset-x-0 bottom-0 z-30 flex justify-center px-4 pb-4">
-      <div className="pointer-events-auto w-full max-w-2xl rounded-lg border border-[var(--lfb-border)] bg-white/95 px-4 py-3 shadow-lg backdrop-blur">
+      <div className="lfb-popover pointer-events-auto w-full max-w-2xl bg-white/95 px-4 py-3 backdrop-blur">
         <div className="flex items-center gap-3">
           {running ? (
             <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-[var(--lfb-primary)]" />

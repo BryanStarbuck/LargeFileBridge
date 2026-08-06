@@ -172,14 +172,14 @@ export function ReposPage() {
           <button
             onClick={() => rescan.mutate()}
             disabled={scanning || rescan.isPending}
-            className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-60"
+            className="lfb-btn lfb-btn-secondary"
           >
             <RefreshCw className={`h-4 w-4 ${scanning ? "animate-spin" : ""}`} />{" "}
             {scanning ? "Scanning…" : "Rescan"}
           </button>
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
+            className="lfb-btn lfb-btn-primary"
           >
             <Plus className="h-4 w-4" /> Add repo
           </button>
@@ -253,7 +253,7 @@ function BookmarkToggle({ on, onToggle }: { on: boolean; onToggle: () => void })
         e.stopPropagation();
         onToggle();
       }}
-      className="grid place-items-center rounded p-0.5 hover:bg-slate-100"
+      className="lfb-icon-btn p-0.5"
     >
       <Bookmark
         className={`h-4 w-4 ${on ? "text-yellow-500" : "text-black/25 hover:text-yellow-400"}`}
@@ -280,8 +280,8 @@ function AddRepoDialog({ onClose }: { onClose: () => void }) {
     },
   });
   return (
-    <div className="fixed inset-0 z-20 grid place-items-center bg-black/30" onClick={onClose}>
-      <div className="w-96 rounded-xl bg-white p-5 shadow-xl" onClick={(e) => e.stopPropagation()}>
+    <div className="lfb-scrim fixed inset-0 z-20 grid place-items-center p-4" onClick={onClose}>
+      <div className="w-96 lfb-modal p-5 " onClick={(e) => e.stopPropagation()}>
         <h2 className="mb-2 text-lg font-semibold">Add repo</h2>
         <p className="mb-3 text-sm text-black/60">Enter the absolute path to a git working tree.</p>
         <input
@@ -290,16 +290,16 @@ function AddRepoDialog({ onClose }: { onClose: () => void }) {
           onChange={(e) => setPath(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && path && add.mutate()}
           placeholder="~/BGit/Bryan_git/LargeFileBridge"
-          className="w-full rounded-md border border-[var(--lfb-border)] px-2 py-1.5 text-sm outline-none focus:border-[var(--lfb-primary)]"
+          className="lfb-input w-full px-2 py-1.5 text-sm focus:border-[var(--lfb-primary)]"
         />
         <div className="mt-4 flex justify-end gap-2">
-          <button onClick={onClose} className="rounded-md px-3 py-1.5 text-sm hover:bg-slate-100">
+          <button onClick={onClose} className="lfb-btn lfb-btn-ghost">
             Cancel
           </button>
           <button
             onClick={() => add.mutate()}
             disabled={!path || add.isPending}
-            className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary"
           >
             Add
           </button>

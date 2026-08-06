@@ -24,15 +24,15 @@ export function Disclosure({
         type="button"
         aria-expanded={open}
         onClick={() => setOpen((o) => !o)}
-        className="flex w-full items-center gap-2 rounded-md px-1 py-1.5 text-left text-sm text-black/70 hover:text-black"
+        className="flex w-full items-center gap-2 rounded-md px-1.5 py-1.5 text-left text-sm text-black/70 transition-colors duration-150 hover:bg-[var(--lfb-hover)] hover:text-black"
       >
         <ChevronRight
-          className={`h-4 w-4 shrink-0 text-black/40 transition-transform ${open ? "rotate-90" : ""}`}
+          className={`h-4 w-4 shrink-0 text-black/40 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
         />
         <span className="flex-1 font-medium">{label}</span>
         {meta != null && <span className="shrink-0 text-xs text-black/50">{meta}</span>}
       </button>
-      {open && <div className="pl-6 pr-1 pb-2 pt-0.5">{children}</div>}
+      {open && <div className="pb-2 pl-7 pr-1 pt-0.5">{children}</div>}
     </div>
   );
 }

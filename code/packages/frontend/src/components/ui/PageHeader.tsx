@@ -20,7 +20,7 @@ export function PageHeader({
   above?: ReactNode; // e.g. a breadcrumb / back link that sits over the title
 }) {
   return (
-    <div className="mb-3">
+    <div className="mb-4">
       {above}
       {/* ROW 1 — the title and the right-aligned actions slot ONLY. The title never wraps: it truncates
           with the full text on hover, so a long repo name can't push the tab strip down or force a
@@ -31,7 +31,7 @@ export function PageHeader({
             every pixel it wanted and the repo name was the thing that shrank. Capped at half the row so a
             pathological name can't crush the tab strip entirely; past the cap it ellipsizes. */}
         <h1
-          className="min-w-0 max-w-[50%] shrink truncate whitespace-nowrap text-2xl font-bold text-black"
+          className="min-w-0 max-w-[50%] shrink truncate whitespace-nowrap text-2xl font-bold tracking-tight text-black"
           title={typeof title === "string" ? title : undefined}
         >
           {title}
@@ -44,13 +44,13 @@ export function PageHeader({
           (one_repo.mdx §3.1). One line, ellipsized, full text on hover. */}
       {subtitle && (
         <p
-          className="mt-0.5 w-full truncate whitespace-nowrap text-sm text-black/60"
+          className="mt-1 w-full truncate whitespace-nowrap text-sm text-black/55"
           title={typeof subtitle === "string" ? subtitle : undefined}
         >
           {subtitle}
         </p>
       )}
-      {actionsRow && <div className="mt-2">{actionsRow}</div>}
+      {actionsRow && <div className="mt-2.5">{actionsRow}</div>}
     </div>
   );
 }

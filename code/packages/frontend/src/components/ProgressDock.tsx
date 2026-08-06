@@ -40,7 +40,7 @@ function Card({ job }: { job: ProgressJob }) {
   const line = detail(job);
   return (
     <div
-      className="min-w-[260px] max-w-[360px] rounded-lg border bg-white/95 px-3 py-2 shadow-md backdrop-blur"
+      className="min-w-[260px] max-w-[360px] rounded-lg border bg-white/95 px-3 py-2 shadow-[var(--lfb-shadow-md)] backdrop-blur"
       style={{ borderColor: "var(--lfb-border)" }}
       role={determinate ? "progressbar" : undefined}
       aria-valuenow={determinate ? pct : undefined}
@@ -54,7 +54,7 @@ function Card({ job }: { job: ProgressJob }) {
         {line && <span className="shrink-0 text-xs text-black/50">{line}</span>}
       </div>
       {determinate && (
-        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-slate-100">
+        <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[var(--lfb-surface-sunken)]">
           <div
             className="h-full rounded-full bg-[var(--lfb-primary)] transition-[width] duration-300"
             style={{ width: `${pct}%` }}
@@ -97,7 +97,7 @@ export function ProgressDock() {
           column-reverse stack, it sits UNDER the live cards; drains to nothing as workers pick tasks up. */}
       {queued > 0 && (
         <div
-          className="min-w-[260px] rounded-lg border bg-white/95 px-3 py-1 text-xs text-black/50 shadow-md backdrop-blur"
+          className="min-w-[260px] rounded-lg border bg-white/95 px-3 py-1 text-xs text-black/50 shadow-[var(--lfb-shadow-md)] backdrop-blur"
           style={{ borderColor: "var(--lfb-border)" }}
         >
           + {queued.toLocaleString()} queued
@@ -107,7 +107,7 @@ export function ProgressDock() {
           cards so, in the column-reverse stack, it sits directly UNDER them (and above the queued footer). */}
       {moreRunning > 0 && (
         <div
-          className="min-w-[260px] rounded-lg border bg-white/95 px-3 py-1 text-xs text-black/50 shadow-md backdrop-blur"
+          className="min-w-[260px] rounded-lg border bg-white/95 px-3 py-1 text-xs text-black/50 shadow-[var(--lfb-shadow-md)] backdrop-blur"
           style={{ borderColor: "var(--lfb-border)" }}
         >
           + {moreRunning.toLocaleString()} more running

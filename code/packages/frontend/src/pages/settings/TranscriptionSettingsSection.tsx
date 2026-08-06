@@ -139,7 +139,7 @@ export function TranscriptionSettingsSection() {
           <button
             disabled={busy}
             onClick={() => provision.mutate()}
-            className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary"
           >
             Download &amp; install model
           </button>
@@ -148,7 +148,7 @@ export function TranscriptionSettingsSection() {
           <button
             disabled={busy}
             onClick={() => repair.mutate()}
-            className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary"
           >
             {readiness === "outdated" ? "Update model" : "Repair model"}
           </button>
@@ -157,7 +157,7 @@ export function TranscriptionSettingsSection() {
           <button
             disabled={busy}
             onClick={() => remove.mutate()}
-            className="rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/60 disabled:opacity-50"
+            className="lfb-btn lfb-btn-secondary"
           >
             Remove model
           </button>
@@ -165,7 +165,7 @@ export function TranscriptionSettingsSection() {
         <button
           disabled={isFetching}
           onClick={() => refetch()}
-          className="rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/60 disabled:opacity-50"
+          className="lfb-btn lfb-btn-secondary"
         >
           {isFetching ? "Checking…" : "Re-check"}
         </button>
@@ -181,7 +181,7 @@ export function TranscriptionSettingsSection() {
           value={s.configured}
           disabled={setEngine.isPending}
           onChange={(e) => setEngine.mutate(e.target.value as "auto" | "speech" | "qwen" | "mac")}
-          className="rounded-md border border-[var(--lfb-border)] px-2 py-1 text-sm disabled:opacity-50"
+          className="lfb-input px-2 py-1 text-sm disabled:opacity-50"
         >
           <option value="auto">Auto (recommended — best available for this machine)</option>
           <option value="speech">Apple SpeechAnalyzer</option>

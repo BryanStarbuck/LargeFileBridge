@@ -858,7 +858,7 @@ function GeneratePane({
       <button
         onClick={onGenerate}
         disabled={disabled || busy}
-        className="mt-1 flex items-center gap-2 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+        className="mt-1 lfb-btn lfb-btn-primary lfb-btn-lg"
       >
         {busy ? <RefreshCw className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} {busy ? busyLabel ?? "Working…" : cta}
       </button>
@@ -1172,7 +1172,7 @@ function IpfsPrimary({
     <button
       {...disabledProps}
       onClick={() => decide.mutate("ignore")}
-      className="flex shrink-0 items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent"
+      className="shrink-0 lfb-btn lfb-btn-secondary"
     >
       <DownloadCloud className="h-4 w-4" /> Remove from IPFS
     </button>
@@ -1180,7 +1180,7 @@ function IpfsPrimary({
     <button
       {...disabledProps}
       onClick={() => decide.mutate("sync")}
-      className="flex shrink-0 items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
+      className="shrink-0 lfb-btn lfb-btn-primary"
     >
       <UploadCloud className="h-4 w-4" /> Add to IPFS
     </button>

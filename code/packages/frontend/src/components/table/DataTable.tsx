@@ -20,7 +20,7 @@ import {
   type SortingState,
   type ColumnFiltersState,
 } from "@tanstack/react-table";
-import { Search, Filter, ArrowUpDown, Columns3 } from "lucide-react";
+import { Search, Filter, ArrowUpDown, Columns3, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useDebounced } from "../../lib/useDebounced.js";
 import { setOptionPreviewTarget } from "../preview/OptionImagePreview.js";
 import { useWindowedRows } from "./useWindowedRows.js";
@@ -161,7 +161,7 @@ const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) 
 // drifts from this — a taller control, a bigger font, a browser zoom — used to make the scroll height move
 // as the window slid, which is what made a long list jitter at the bottom. useWindowedRows measures the
 // rendered row and uses that instead (performance.mdx P-38).
-const ROW_H = 41;
+const ROW_H = 34;
 
 export function DataTable<T>({
   data,
@@ -458,6 +458,13 @@ export function DataTable<T>({
     [manualColumns, containerW, selection, hiddenCount],
   );
 
+  // THE flexible column (tables.mdx): the leading non-icon, non-numeric column — the identity column
+  // (File / Repo / Name), the one whose content is unbounded. It is the ONLY cell left able to wrap, and
+  // that is deliberate: it keeps a real preferred width, so the auto table-layout algorithm still gives
+  // it the lion's share, and if the window really does get too narrow it re-wraps instead of pushing the
+  // table into a horizontal scrollbar. Every OTHER column is pinned to one line (below) — they are short
+  // by construction (a byte count, a peer count, a truncated CID, a relative time) and were only
+  // wrapping because the identity column had crowded them down to a few characters.
   // Column model — selection is NOT part of it (P-03), so this only rebuilds when the caller's
   // logical columns change, never when a checkbox toggles.
   const tanColumns = useMemo<ColumnDef<T>[]>(
@@ -477,7 +484,7 @@ export function DataTable<T>({
           return String(v ?? "").toLowerCase().includes(String(value).toLowerCase());
         },
         cell: ({ row }) => (c.cell ? c.cell(row.original) : String(c.accessor(row.original) ?? "")),
-        meta: { align: c.align, tight: c.tight },
+        meta: { align: c.align, tight: c.tight, kind: c.kind },
       })),
     [visibleColumns],
   );
@@ -549,6 +556,9 @@ export function DataTable<T>({
 
   // Windowing (P-01): render only the rows on screen inside a bounded scroll container.
   const scrollRef = useRef<HTMLDivElement>(null);
+  // True once the body has scrolled at all — the sticky header then casts a shadow over the rows
+  // running under it, so the header stops looking like it is floating on nothing.
+  const [scrolled, setScrolled] = useState(false);
   const win = useWindowedRows(pageRows.length, ROW_H, scrollRef);
   const visibleRows = pageRows.slice(win.start, win.end);
 
@@ -568,14 +578,25 @@ export function DataTable<T>({
     <>
       {/* Control row (repos.mdx §3.1) */}
       <div className="flex shrink-0 items-center gap-2 py-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-4 w-4 text-black/40" />
+        <div className="relative max-w-sm flex-1">
+          <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-black/40" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
-            placeholder="search…"
-            className="w-full pl-8 pr-2 py-1.5 rounded-md border border-[var(--lfb-border)] text-sm outline-none focus:border-[var(--lfb-primary)]"
+            placeholder="Search…"
+            aria-label="Search this table"
+            className="lfb-input w-full pl-8 pr-8"
           />
+          {search && (
+            <button
+              type="button"
+              aria-label="Clear search"
+              onClick={() => setSearch("")}
+              className="absolute right-1.5 top-1/2 grid h-5 w-5 -translate-y-1/2 place-items-center rounded text-black/40 transition-colors duration-150 hover:bg-[var(--lfb-hover)] hover:text-black"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
         </div>
         <div className="flex-1" />
         {selection?.bulk}
@@ -818,7 +839,7 @@ export function DataTable<T>({
                   <span className="w-24 shrink-0 text-black/70">{c.header}</span>
                   {c.kind === "enum" ? (
                     <select
-                      className="flex-1 border border-[var(--lfb-border)] rounded px-1 py-0.5"
+                      className="lfb-input flex-1 px-1 py-0.5"
                       value={String(current)}
                       onChange={(e) => setColumnFilter(setColumnFilters, c.id, e.target.value)}
                     >
@@ -831,7 +852,7 @@ export function DataTable<T>({
                     </select>
                   ) : (
                     <input
-                      className="flex-1 border border-[var(--lfb-border)] rounded px-1 py-0.5"
+                      className="lfb-input flex-1 px-1 py-0.5"
                       placeholder={c.kind === "int" || c.kind === "bytes" ? "≥ value" : "contains…"}
                       value={String(current)}
                       onChange={(e) => setColumnFilter(setColumnFilters, c.id, e.target.value)}
@@ -933,6 +954,9 @@ export function DataTable<T>({
           // overscroll-contain: a trackpad flick that hits the end of the rows stops THERE. Without it
           // the momentum chains to the ancestor scroller (or rubber-bands the document on macOS), which
           // is exactly the "the whole page moved when I only meant to scroll the table" complaint.
+          // Drives the sticky header's shadow. setState bails on an unchanged value, so this costs a
+          // render only at the 0 ↔ scrolled boundary, not on every scroll frame.
+          onScroll={(e) => setScrolled(e.currentTarget.scrollTop > 0)}
           className={`overflow-auto overscroll-contain ${fillHeight ? "min-h-0 flex-1" : "max-h-[65vh]"}`}
         >
           <table className={`w-full text-sm border-collapse ${hasWidths ? "table-fixed" : ""}`}>
@@ -945,11 +969,11 @@ export function DataTable<T>({
                 <col style={{ width: "3rem" }} />
               </colgroup>
             )}
-            <thead className="sticky top-0 z-10 bg-white">
+            <thead className="sticky top-0 z-10 bg-[var(--lfb-surface-2)]">
               {table.getHeaderGroups().map((hg) => (
-                <tr key={hg.id} className="border-b border-[var(--lfb-border)] text-left text-black/60">
+                <tr key={hg.id} className="border-b border-[var(--lfb-border)] text-left">
                   {selection && (
-                    <th className="w-8 py-2 px-2">
+                    <th className={`w-8 px-2 py-1.5 ${scrolled ? "lfb-th-scrolled" : ""}`}>
                       <input
                         type="checkbox"
                         checked={allOnPage}
@@ -973,8 +997,13 @@ export function DataTable<T>({
                         key={h.id}
                         onClick={canSort ? toggleSort : undefined}
                         aria-sort={dir ? (dir.desc ? "descending" : "ascending") : undefined}
-                        className={`py-2 ${padX} font-medium ${align === "right" ? "text-right" : ""} ${
-                          canSort ? "cursor-pointer select-none hover:text-black" : ""
+                        // The eyebrow treatment the app already uses for the filter-dropdown group
+                        // headings — small, uppercase, tracked. It separates the header band from the
+                        // data without needing a heavier rule or a darker fill.
+                        className={`py-1.5 ${padX} text-[11px] font-semibold uppercase tracking-wide text-black/45 ${
+                          align === "right" ? "text-right" : ""
+                        } ${canSort ? "cursor-pointer select-none transition-colors duration-150 hover:text-black" : ""} ${
+                          scrolled ? "lfb-th-scrolled" : ""
                         }`}
                       >
                         {h.isPlaceholder ? null : (
@@ -990,7 +1019,7 @@ export function DataTable<T>({
                       </th>
                     );
                   })}
-                  <th />
+                  <th className={scrolled ? "lfb-th-scrolled" : undefined} />
                 </tr>
               ))}
             </thead>
@@ -1048,7 +1077,7 @@ export function DataTable<T>({
                     }
                     onMouseLeave={hoverPreview ? () => setOptionPreviewTarget(null) : undefined}
                     style={{ height: ROW_H }}
-                    className={`border-b border-[var(--lfb-border)] ${onRowClick ? `cursor-pointer ${rowHoverClass}` : ""} ${rowClassName ? rowClassName(row.original) : ""}`}
+                    className={`group border-b border-[var(--lfb-border)] transition-colors duration-100 ${onRowClick ? `cursor-pointer ${rowHoverClass}` : ""} ${rowClassName ? rowClassName(row.original) : ""}`}
                   >
                     {selection && (
                       <td className="px-2" onClick={(e) => e.stopPropagation()}>
@@ -1060,13 +1089,22 @@ export function DataTable<T>({
                       </td>
                     )}
                     {row.getVisibleCells().map((cell) => {
-                      const cmeta = cell.column.columnDef.meta as { align?: string; tight?: boolean } | undefined;
+                      const cmeta = cell.column.columnDef.meta as { align?: string; tight?: boolean; kind?: string } | undefined;
                       const align = cmeta?.align;
                       const cellPadX = cmeta?.tight ? "px-0.5" : "px-2"; // very-narrow icon columns (tables.mdx)
                       return (
                         <td
                           key={cell.id}
-                          className={`py-2 ${cellPadX} ${align === "right" ? "text-right tabular-nums" : ""}`}
+                          // Single-line ONLY for the columns that are short by type — a byte count, a
+                          // count, a relative time, an enum/pill, an icon. Those were wrapping merely
+                          // because a wide text column had crowded them down to a few characters, and
+                          // pinning them costs the layout almost nothing.
+                          // TEXT columns (path, name, CID) stay shrinkable on purpose: `nowrap` there
+                          // makes the column demand its FULL content width, and the auto table-layout
+                          // algorithm then overflows the container — that is the horizontal scrollbar.
+                          className={`py-1.5 ${cellPadX} ${
+                            cmeta?.kind === "text" && !cmeta?.tight ? "" : "whitespace-nowrap"
+                          } ${align === "right" ? "text-right tabular-nums" : ""}`}
                         >
                           {flexRender(cell.column.columnDef.cell, cell.getContext())}
                         </td>
@@ -1077,7 +1115,11 @@ export function DataTable<T>({
                         row; the chevron still reads as "this row navigates". */}
                     <td className="pr-2">
                       <div className="flex items-center justify-end gap-1">
-                        {onRowClick && <span className="text-black/30">›</span>}
+                        {onRowClick && (
+                          <span className="text-black/20 transition-colors duration-100 group-hover:text-black/50">
+                            ›
+                          </span>
+                        )}
                         {rowMenu?.(row.original)}
                       </div>
                     </td>
@@ -1095,32 +1137,35 @@ export function DataTable<T>({
       )}
 
       {/* Count + pagination (default 500) — pinned below the scrolling body in fill mode. */}
-      <div className="flex shrink-0 items-center justify-between py-2 text-sm text-black/60">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-t border-[var(--lfb-border)] py-2 text-sm text-black/60">
         <span>
-          {rowCount} {itemNoun}
+          <span className="font-medium tabular-nums text-black">{rowCount.toLocaleString()}</span> {itemNoun}
         </span>
         <div className="flex items-center gap-3">
-          <span>
-            page {table.getState().pagination.pageIndex + 1} / {Math.max(1, table.getPageCount())}
+          <span className="tabular-nums">
+            Page {table.getState().pagination.pageIndex + 1} of {Math.max(1, table.getPageCount())}
           </span>
           <div className="flex gap-1">
             <button
-              className="px-2 py-0.5 border border-[var(--lfb-border)] rounded disabled:opacity-40"
+              aria-label="Previous page"
+              className="lfb-btn lfb-btn-secondary lfb-btn-sm px-2"
               disabled={!table.getCanPreviousPage()}
               onClick={() => table.previousPage()}
             >
-              ‹
+              <ChevronLeft className="h-4 w-4" />
             </button>
             <button
-              className="px-2 py-0.5 border border-[var(--lfb-border)] rounded disabled:opacity-40"
+              aria-label="Next page"
+              className="lfb-btn lfb-btn-secondary lfb-btn-sm px-2"
               disabled={!table.getCanNextPage()}
               onClick={() => table.nextPage()}
             >
-              ›
+              <ChevronRight className="h-4 w-4" />
             </button>
           </div>
           <select
-            className="border border-[var(--lfb-border)] rounded px-1 py-0.5"
+            aria-label="Rows per page"
+            className="lfb-input w-auto cursor-pointer py-1 pr-1 text-xs"
             value={pageSize}
             onChange={(e) => setPageSize(Number(e.target.value))}
           >
@@ -1262,7 +1307,7 @@ function IconButton({
       title={title}
       onClick={onClick}
       data-popover-toggle
-      className={`p-1.5 rounded-md hover:bg-slate-100 ${active ? "text-[var(--lfb-primary)]" : "text-black/70"}`}
+      className={`lfb-icon-btn ${active ? "bg-[var(--lfb-primary-tint)] text-[var(--lfb-primary)]" : ""}`}
     >
       {children}
     </button>
@@ -1273,9 +1318,9 @@ function SkeletonRows({ cols }: { cols: number }) {
   return (
     <div className="animate-pulse">
       {Array.from({ length: 6 }).map((_, i) => (
-        <div key={i} className="flex gap-2 py-2 border-b border-[var(--lfb-border)]">
+        <div key={i} className="flex gap-2 border-b border-[var(--lfb-border)] py-2">
           {Array.from({ length: cols }).map((__, j) => (
-            <div key={j} className="h-4 bg-slate-100 rounded flex-1" />
+            <div key={j} className="h-4 flex-1 rounded bg-[var(--lfb-surface-sunken)]" />
           ))}
         </div>
       ))}

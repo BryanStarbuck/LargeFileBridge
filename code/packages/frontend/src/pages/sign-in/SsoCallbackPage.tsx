@@ -45,7 +45,7 @@ export function SsoCallbackPage() {
             Sign-in didn’t complete
           </h1>
           <p className="mb-6 mt-2 text-sm text-black/60">{error}</p>
-          <a href="/" className="inline-block rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-white">
+          <a href="/" className="lfb-btn lfb-btn-primary lfb-btn-lg">
             Back to sign in
           </a>
         </div>

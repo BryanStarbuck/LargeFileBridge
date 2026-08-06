@@ -62,7 +62,7 @@ export class ErrorBoundary extends Component<Props, State> {
             </button>
             <button
               onClick={this.reset}
-              className="rounded-md border px-4 py-1.5 text-sm text-black/70 hover:bg-slate-100"
+              className="lfb-btn lfb-btn-secondary lfb-btn-lg"
               style={{ borderColor: "var(--lfb-border)" }}
             >
               Try again

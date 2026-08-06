@@ -176,7 +176,7 @@ function StoppedCard({
               <button
                 onClick={onTurnOnWithAutostart}
                 disabled={starting}
-                className="inline-flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+                className="lfb-btn lfb-btn-primary lfb-btn-lg"
               >
                 <Power className="h-4 w-4" /> Turn On IPFS
               </button>
@@ -195,7 +195,7 @@ function StoppedCard({
             <button
               onClick={onTurnOnOnly}
               disabled={starting}
-              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-4 py-2 text-sm font-medium hover:bg-slate-100 disabled:opacity-50"
+              className="lfb-btn lfb-btn-secondary lfb-btn-lg"
             >
               <Power className="h-4 w-4" /> Turn On IPFS
             </button>
@@ -210,7 +210,7 @@ function StoppedCard({
           <button
             onClick={onTurnOnOnly}
             disabled={starting}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary lfb-btn-lg"
           >
             <Power className="h-4 w-4" /> Turn On IPFS
           </button>
@@ -249,7 +249,7 @@ function InstallCard({ node, onInstall, installing }: { node: IpfsNodeStatus; on
           <button
             onClick={onInstall}
             disabled={installing}
-            className="inline-flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90 disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary lfb-btn-lg"
           >
             <DownloadCloud className="h-4 w-4" /> Install IPFS
           </button>

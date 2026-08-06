@@ -67,7 +67,7 @@ export function Tooltip({
               top: coords.top,
               transform: placement === "top" ? "translate(-50%, -100%)" : "translate(-50%, 0)",
             }}
-            className="pointer-events-none z-[1000] max-w-[16rem] rounded-md bg-black/90 px-2 py-1 text-xs leading-snug text-white shadow-lg"
+            className="lfb-tooltip pointer-events-none z-[1000] max-w-[16rem] rounded-md bg-slate-900 px-2 py-1 text-xs leading-snug text-white shadow-[var(--lfb-shadow-md)]"
           >
             {content}
           </span>,

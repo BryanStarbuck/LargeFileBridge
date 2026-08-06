@@ -111,7 +111,7 @@ export function ToolsPage() {
             <button
               disabled={installing || !node.packageManagerPresent}
               onClick={() => startInstall.mutate()}
-              className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              className="lfb-btn lfb-btn-primary"
             >
               {installing ? "Installing…" : "Install all required"}
             </button>
@@ -207,13 +207,13 @@ function AiDescriptionSection() {
         value={value}
         onChange={(e) => setDraft(e.target.value)}
         spellCheck={false}
-        className="h-64 w-full rounded-lg border border-[var(--lfb-border)] bg-white p-3 font-mono text-xs text-black/80"
+        className="lfb-input h-64 w-full bg-white p-3 font-mono text-xs text-black/80"
       />
       <div className="mt-2 flex items-center gap-2">
         <button
           disabled={save.isPending || draft === null}
           onClick={() => save.mutate()}
-          className="rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+          className="lfb-btn lfb-btn-primary"
         >
           {save.isPending ? "Saving…" : "Save (customize)"}
         </button>
@@ -221,7 +221,7 @@ function AiDescriptionSection() {
           <button
             disabled={reset.isPending}
             onClick={() => reset.mutate()}
-            className="rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/60 disabled:opacity-50"
+            className="lfb-btn lfb-btn-secondary"
           >
             Reset to default
           </button>
@@ -324,7 +324,7 @@ function ToolRowView({
         <button
           disabled={installing}
           onClick={onInstall}
-          className="rounded border border-[var(--lfb-border)] px-2 py-1 text-xs disabled:opacity-50"
+          className="lfb-btn lfb-btn-secondary lfb-btn-sm"
         >
           Install
         </button>

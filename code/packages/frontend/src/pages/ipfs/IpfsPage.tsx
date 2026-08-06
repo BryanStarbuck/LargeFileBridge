@@ -340,7 +340,7 @@ export function IpfsPage() {
             <button
               onClick={() => rescan.mutate()}
               disabled={rescan.isPending || nodeDown}
-              className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
+              className="lfb-btn lfb-btn-secondary"
             >
               <RefreshCw className={`h-4 w-4 ${rescan.isPending ? "animate-spin" : ""}`} /> Rescan
             </button>

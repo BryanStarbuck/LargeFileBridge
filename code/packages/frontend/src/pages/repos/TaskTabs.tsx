@@ -115,7 +115,7 @@ export function TaskTabs({
             {open && (
               <div
                 role="menu"
-                className="absolute right-0 top-full z-50 mt-1 min-w-[12rem] rounded-md border border-[var(--lfb-border)] bg-white py-1 shadow-lg"
+                className="lfb-popover absolute right-0 top-full z-50 mt-1 min-w-[12rem] py-1"
               >
                 {hidden.map((id) => {
                   const t = TASK_TABS[id];

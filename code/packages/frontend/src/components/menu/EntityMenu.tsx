@@ -107,7 +107,7 @@ export function MenuPortal({ pos, onClose, children }: { pos: MenuPos; onClose: 
       ref={ref}
       role="menu"
       style={{ position: "fixed", left: adj.x, top: adj.y, zIndex: 60 }}
-      className="min-w-[15rem] rounded-lg border border-[var(--lfb-border)] bg-white py-1 shadow-xl"
+      className="lfb-popover min-w-[15rem] py-1"
       onContextMenu={(e) => e.preventDefault()}
       // Menu isolation (menus.mdx §3.2) — REQUIRED, not belt-and-braces. This popover is portaled to
       // <body>, but React re-dispatches its events through the REACT tree, not the DOM tree: the kebab

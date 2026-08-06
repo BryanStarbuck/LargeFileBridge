@@ -173,7 +173,7 @@ export function ViewOneDevicePage() {
             {device.ipfsPeerId && (
               <button
                 onClick={() => copy(device.ipfsPeerId!, "Peer ID")}
-                className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100"
+                className="lfb-btn lfb-btn-secondary"
               >
                 <Copy className="h-4 w-4" /> Copy Peer ID
               </button>
@@ -183,7 +183,7 @@ export function ViewOneDevicePage() {
                 onClick={() => navigate({ to: "/fs", search: { path: hw.homeDir } })}
                 title={device.isSelf ? "Browse this computer's home in the File System" : "This path is on the other computer"}
                 disabled={!device.isSelf}
-                className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100 disabled:opacity-40"
+                className="lfb-btn lfb-btn-secondary"
               >
                 <FolderOpen className="h-4 w-4" /> Open in File System
               </button>

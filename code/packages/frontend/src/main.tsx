@@ -95,16 +95,13 @@ window.addEventListener("vite:preloadError", (e) => {
 // hard boot error) all render through this so they look like one system (authentication.mdx §6).
 function BootStatus({ label, detail, onRetry }: { label: string; detail?: string; onRetry?: () => void }) {
   return (
-    <div className="grid h-full place-items-center bg-slate-50 text-center">
-      <div className="max-w-sm px-6">
-        <div className="text-sm font-medium text-black/60">{label}</div>
-        {detail && <div className="mt-1 text-xs text-black/40">{detail}</div>}
+    <div className="grid h-full place-items-center bg-[var(--lfb-surface-2)] p-6 text-center">
+      <div className="w-full max-w-sm rounded-xl border border-[var(--lfb-border)] bg-white px-6 py-7 shadow-[var(--lfb-shadow-sm)]">
+        <div className="text-base font-semibold tracking-tight text-[var(--lfb-primary)]">Large File Bridge</div>
+        <div className="mt-3 text-sm font-medium text-black/70">{label}</div>
+        {detail && <div className="mt-1.5 text-xs leading-relaxed text-black/45">{detail}</div>}
         {onRetry && (
-          <button
-            type="button"
-            onClick={onRetry}
-            className="mt-4 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white"
-          >
+          <button type="button" onClick={onRetry} className="mt-5 lfb-btn lfb-btn-primary lfb-btn-lg">
             Retry now
           </button>
         )}
@@ -268,7 +265,10 @@ try {
             position="bottom-left"
             richColors
             style={{ "--width": "440px", left: BAR_CLEAR_LEFT } as CSSProperties}
-            toastOptions={{ className: "text-base", style: { padding: "14px 16px" } }}
+            toastOptions={{
+              className: "text-base",
+              style: { padding: "14px 16px", borderRadius: "0.625rem", boxShadow: "var(--lfb-shadow-lg)" },
+            }}
           />
         </div>
       </QueryClientProvider>

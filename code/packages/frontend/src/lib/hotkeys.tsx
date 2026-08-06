@@ -185,19 +185,19 @@ function HotkeyHelpOverlay({ onClose }: { onClose: () => void }) {
 
   return createPortal(
     <div
-      className="fixed inset-0 z-[70] grid place-items-center bg-black/40 p-4"
+      className="lfb-scrim fixed inset-0 z-[70] grid place-items-center p-4"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
       aria-label="Keyboard shortcuts"
     >
       <div
-        className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-xl border border-[var(--lfb-border)] bg-white p-6 shadow-2xl"
+        className="lfb-modal max-h-[85vh] w-full max-w-2xl overflow-auto p-6"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between">
           <h2 className="text-lg font-semibold text-black">Keyboard shortcuts</h2>
-          <button onClick={onClose} className="rounded-md px-2 py-1 text-sm text-black/50 hover:bg-slate-100 hover:text-black">Esc</button>
+          <button onClick={onClose} className="lfb-btn lfb-btn-ghost lfb-btn-sm">Esc</button>
         </div>
         <p className="mb-4 text-xs text-black/50">
           Modifier on this computer: <KeyCap>{MODIFIER_LABEL}</KeyCap>. Press a shortcut with the modifier

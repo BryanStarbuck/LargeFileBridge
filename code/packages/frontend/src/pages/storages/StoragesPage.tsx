@@ -75,7 +75,7 @@ export function StoragesPage() {
           {s.initialized ? (
             <button className="text-sm text-[var(--lfb-primary)] hover:underline" onClick={() => navigate({ to: "/storages/$storageId", params: { storageId: s.id } })}>Open</button>
           ) : (
-            <button className="rounded-md border border-[var(--lfb-border)] px-2 py-1 text-xs hover:bg-slate-100" disabled={init.isPending} onClick={() => init.mutate(s.id)}>Initialize</button>
+            <button className="lfb-btn lfb-btn-secondary lfb-btn-sm" disabled={init.isPending} onClick={() => init.mutate(s.id)}>Initialize</button>
           )}
           {/* Gear → per-storage settings, sitting just left of the ⋮ kebab (storage_settings.mdx §1). */}
           <StorageGear storage={s} />
@@ -189,7 +189,7 @@ function OrganizationProposals() {
         </div>
         {proposals.length > 0 && (
           <button
-            className="shrink-0 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className="shrink-0 lfb-btn lfb-btn-primary"
             disabled={selected.length === 0 || create.isPending}
             onClick={() => create.mutate(selected)}
           >

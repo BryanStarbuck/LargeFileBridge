@@ -107,7 +107,7 @@ export function IpfsDashboardPage() {
         <h1 className="text-2xl font-bold">IPFS</h1>
         <button
           onClick={() => qc.invalidateQueries({ queryKey: ["ipfsNode"] })}
-          className="inline-flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100"
+          className="lfb-btn lfb-btn-secondary"
         >
           <RefreshCw className="h-4 w-4" /> Refresh
         </button>

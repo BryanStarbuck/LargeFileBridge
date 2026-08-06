@@ -27,9 +27,9 @@ export function TranscribeModelConsentProvider() {
   const enoughDisk = req.freeDiskBytes === 0 || req.freeDiskBytes > req.estimateBytes;
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-black/30 p-4" onClick={close}>
+    <div className="lfb-scrim fixed inset-0 z-40 grid place-items-center p-4" onClick={close}>
       <div
-        className="w-[34rem] max-w-full rounded-xl bg-white p-6 shadow-xl"
+        className="w-[34rem] max-w-full lfb-modal p-6 "
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -66,7 +66,7 @@ export function TranscribeModelConsentProvider() {
         <div className="mt-6 flex flex-wrap justify-end gap-2">
           <button
             onClick={close}
-            className="rounded-md border border-[var(--lfb-border)] px-4 py-2 text-sm text-black/70 hover:bg-black/5"
+            className="lfb-btn lfb-btn-secondary lfb-btn-lg"
           >
             Cancel
           </button>
@@ -75,7 +75,7 @@ export function TranscribeModelConsentProvider() {
               req.onUseFallback();
               close();
             }}
-            className="inline-flex items-center gap-2 rounded-md border border-[var(--lfb-border)] px-4 py-2 text-sm text-black/75 hover:bg-black/5"
+            className="lfb-btn lfb-btn-secondary lfb-btn-lg"
           >
             <Zap className="h-4 w-4" />
             Use Whisper now
@@ -86,7 +86,7 @@ export function TranscribeModelConsentProvider() {
               close();
             }}
             disabled={!enoughDisk}
-            className="inline-flex items-center gap-2 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-60"
+            className="lfb-btn lfb-btn-primary lfb-btn-lg"
           >
             <Download className="h-4 w-4" />
             Download &amp; install

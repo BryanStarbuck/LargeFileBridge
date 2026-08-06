@@ -2,9 +2,10 @@
 // language + at most one primary "fix" action. Fixed states stay quiet; Broken states are
 // unmistakable. This is the first thing on every page (except Home) — the answer to "am I OK?".
 import { type ReactNode } from "react";
-import { healthColor, healthBg, healthIcon, type Health } from "./health.js";
+import { healthColor, healthBg, healthBorder, healthIcon, type Health } from "./health.js";
 import { WarningArrowButton } from "./WarningArrowButton.js";
 import type { WarningDef } from "./warnings/registry.js";
+import { Button } from "./Button.js";
 
 export function StatusBanner({
   state,
@@ -31,12 +32,12 @@ export function StatusBanner({
   return (
     <div
       className="mb-4 flex items-start gap-3 rounded-lg border px-4 py-3"
-      style={{ background: healthBg(state), borderColor: state === "neutral" ? "var(--lfb-border)" : color }}
+      style={{ background: healthBg(state), borderColor: healthBorder(state) }}
     >
       <Icon className="mt-0.5 h-5 w-5 shrink-0" style={{ color }} />
       <div className="min-w-0 flex-1">
         <div className="text-sm font-semibold text-black">{headline}</div>
-        {sub && <div className="mt-0.5 text-sm text-black/60">{sub}</div>}
+        {sub && <div className="mt-0.5 text-sm leading-relaxed text-black/60">{sub}</div>}
       </div>
       {(action || secondary || warning?.popup) && (
         <div className="flex shrink-0 items-center gap-2">
@@ -61,15 +62,9 @@ export function FixButton({
   disabled?: boolean;
   children: ReactNode;
 }) {
-  const bg = state === "bad" ? "var(--lfb-bad)" : "var(--lfb-primary)";
   return (
-    <button
-      onClick={onClick}
-      disabled={disabled}
-      className="inline-flex items-center gap-1.5 rounded-md px-3 py-1.5 text-sm font-medium text-white disabled:opacity-50"
-      style={{ background: bg }}
-    >
+    <Button variant={state === "bad" ? "danger" : "primary"} size="sm" onClick={onClick} disabled={disabled}>
       {children}
-    </button>
+    </Button>
   );
 }

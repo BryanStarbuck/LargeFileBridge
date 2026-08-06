@@ -23,7 +23,7 @@ function CopyButton({ text }: { text: string }) {
           clientLog.warn("TranscribeSetupCard.copy", e);
         }
       }}
-      className="inline-flex items-center gap-1 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs text-black/60 hover:bg-black/5"
+      className="lfb-btn lfb-btn-secondary lfb-btn-sm"
       aria-label="Copy install command"
     >
       {copied ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
@@ -105,7 +105,7 @@ export function TranscribeSetupCard({
         <button
           onClick={onRecheck}
           disabled={rechecking}
-          className="inline-flex items-center gap-2 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-60"
+          className="lfb-btn lfb-btn-primary lfb-btn-lg"
         >
           <RefreshCw className={`h-4 w-4 ${rechecking ? "animate-spin" : ""}`} />
           {rechecking ? "Re-checking…" : "Re-check"}

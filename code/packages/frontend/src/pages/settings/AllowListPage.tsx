@@ -81,7 +81,7 @@ export function AllowListPage() {
         type="button"
         disabled={!valid || save.isPending}
         onClick={() => save.mutate()}
-        className="mt-4 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+        className="mt-4 lfb-btn lfb-btn-primary"
       >
         {save.isPending ? "Saving…" : "Save"}
       </button>

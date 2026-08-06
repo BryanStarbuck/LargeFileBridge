@@ -95,14 +95,14 @@ export function SettingsPage() {
       >
         <div className="flex items-center gap-2">
           <input type="number" value={value} onChange={(e) => setValue(Number(e.target.value))}
-            className="w-32 rounded border border-[var(--lfb-border)] px-2 py-1.5" />
+            className="lfb-input w-32 px-2 py-1.5" />
           <select value={unit} onChange={(e) => setUnit(e.target.value as SizeUnit)}
-            className="rounded border border-[var(--lfb-border)] px-2 py-1.5">
+            className="lfb-input px-2 py-1.5">
             {SIZE_UNITS.map((u) => <option key={u}>{u}</option>)}
           </select>
           <span className="text-xs text-black/50">= {toBytes(value, unit).toLocaleString()} bytes</span>
           <button onClick={() => save.mutate({ bigFile: { value, unit } })}
-            className="ml-auto rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save</button>
+            className="ml-auto lfb-btn lfb-btn-primary">Save</button>
         </div>
       </Section>
 
@@ -111,9 +111,9 @@ export function SettingsPage() {
         subtitle="Top-level directories the scan walks to discover repos (one per line)."
       >
         <textarea value={roots} onChange={(e) => setRoots(e.target.value)} rows={4}
-          className="w-full rounded border border-[var(--lfb-border)] px-2 py-1.5 font-mono text-xs" />
+          className="lfb-input w-full px-2 py-1.5 font-mono text-xs" />
         <button onClick={() => save.mutate({ scannerRoots: roots.split("\n").map((s) => s.trim()).filter(Boolean) })}
-          className="mt-2 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save roots</button>
+          className="mt-2 lfb-btn lfb-btn-primary">Save roots</button>
       </Section>
 
       <Section
@@ -122,9 +122,9 @@ export function SettingsPage() {
       >
         <textarea value={personalAccts} onChange={(e) => setPersonalAccts(e.target.value)} rows={4}
           placeholder={"github.com/BryanStarbuck\nmyusername"}
-          className="w-full rounded border border-[var(--lfb-border)] px-2 py-1.5 font-mono text-xs" />
+          className="lfb-input w-full px-2 py-1.5 font-mono text-xs" />
         <button onClick={() => save.mutate({ personalAccounts: parsePersonalAccounts(personalAccts) })}
-          className="mt-2 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save accounts</button>
+          className="mt-2 lfb-btn lfb-btn-primary">Save accounts</button>
       </Section>
 
       <Section
@@ -141,7 +141,7 @@ export function SettingsPage() {
             </span>
           )}
           <button onClick={() => save.mutate({ performance: { maxCoreFraction: corePct / 100 } })}
-            className="ml-auto rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white">Save</button>
+            className="ml-auto lfb-btn lfb-btn-primary">Save</button>
         </div>
         <p className="mt-2 text-xs text-black/50">
           Tunes background compression, fingerprinting & batch transcription (the mass-compute budget).
@@ -319,7 +319,7 @@ function PowerToolsSection() {
       <button
         onClick={() => run.mutate()}
         disabled={!target?.available || run.isPending}
-        className="mt-3 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+        className="mt-3 lfb-btn lfb-btn-primary"
       >
         {run.isPending ? "Exporting…" : "Export debug information"}
       </button>
@@ -350,7 +350,7 @@ function AiProvidersSection() {
       <label className="mb-3 flex items-center gap-2 text-sm">
         Default provider
         <select
-          className="rounded border border-[var(--lfb-border)] px-2 py-1"
+          className="lfb-input px-2 py-1"
           value={data.provider}
           onChange={(e) => save.mutate({ provider: e.target.value as typeof data.provider })}
         >
@@ -389,17 +389,17 @@ function AiProviderRow({ p, onSave }: { p: DescribeAiProviderConfig; onSave: (pa
           placeholder={p.hasConfigKey ? "•••••••• (stored — type to replace)" : "API key"}
           value={key}
           onChange={(e) => setKey(e.target.value)}
-          className="w-64 rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs"
+          className="lfb-input w-64 px-2 py-1 font-mono text-xs"
         />
         <input
           value={model}
           onChange={(e) => setModel(e.target.value)}
-          className="w-40 rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs"
+          className="lfb-input w-40 px-2 py-1 font-mono text-xs"
           title="Model id"
         />
         <button
           onClick={() => { onSave({ ...(key ? { apiKey: key } : {}), model }); setKey(""); }}
-          className="rounded-md bg-[var(--lfb-primary)] px-3 py-1 text-white"
+          className="lfb-btn lfb-btn-primary lfb-btn-sm"
         >
           Save
         </button>
@@ -468,7 +468,7 @@ function SizeFloorRow({ settings, onSave }: { settings: CompressionSettings; onS
       {label}
       <input
         type="number" min={0} max={95} step={1} value={pct(value)}
-        className="w-16 rounded border border-[var(--lfb-border)] px-1 py-0.5"
+        className="lfb-input w-16 px-1 py-0.5"
         onChange={(e) => onChange(Math.max(0, Math.min(95, Number(e.target.value))) / 100)}
       />
       %
@@ -537,7 +537,7 @@ function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; pre
         </label>
         <label className="flex items-center gap-1.5">
           Quality
-          <select className="rounded border border-[var(--lfb-border)] px-1 py-0.5" value={prefs.quality} onChange={(e) => onSave({ quality: e.target.value as CompressQuality })}>
+          <select className="lfb-input px-1 py-0.5" value={prefs.quality} onChange={(e) => onSave({ quality: e.target.value as CompressQuality })}>
             {QUALITIES.map((q) => <option key={q} value={q}>{q}</option>)}
           </select>
         </label>
@@ -575,7 +575,7 @@ function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; pre
           <label className="flex items-center gap-1.5" title="How hard the encoder searches. Slower presets produce smaller files at the same quality.">
             Encoder effort
             <select
-              className="rounded border border-[var(--lfb-border)] px-1 py-0.5"
+              className="lfb-input px-1 py-0.5"
               value={prefs.preset ?? "slow"}
               onChange={(e) => onSave({ preset: e.target.value })}
             >
@@ -587,13 +587,13 @@ function MediaPrefRow({ media, prefs, onSave }: { media: "images" | "video"; pre
       <div className="mt-2 flex flex-wrap gap-x-4 gap-y-2 text-sm">
         <label className="flex items-center gap-1.5">
           Prefer
-          <input className="w-48 rounded border border-[var(--lfb-border)] px-1 py-0.5" value={prefer}
+          <input className="lfb-input w-48 px-1 py-0.5" value={prefer}
             onChange={(e) => setPrefer(e.target.value)} onBlur={() => onSave({ prefer: parse(prefer) })}
             title="Ordered target codecs; first allowed + available wins" />
         </label>
         <label className="flex items-center gap-1.5">
           Deny
-          <input className="w-40 rounded border border-[var(--lfb-border)] px-1 py-0.5" value={deny}
+          <input className="lfb-input w-40 px-1 py-0.5" value={deny}
             onChange={(e) => setDeny(e.target.value)} onBlur={() => onSave({ deny: parse(deny) })}
             title="Codecs never chosen (e.g. jpeg2000, av1)" />
         </label>

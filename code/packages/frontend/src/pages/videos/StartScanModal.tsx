@@ -59,9 +59,9 @@ export function StartScanModal({
     : "Never scanned.";
 
   return (
-    <div className="fixed inset-0 z-40 grid place-items-center bg-black/40 p-4" onClick={onSkip}>
+    <div className="lfb-scrim fixed inset-0 z-40 grid place-items-center p-4" onClick={onSkip}>
       <div
-        className="w-[28rem] max-w-full rounded-xl bg-white p-5 shadow-xl"
+        className="w-[28rem] max-w-full lfb-modal p-5 "
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -89,7 +89,7 @@ export function StartScanModal({
           <button
             ref={startRef}
             onClick={onStart}
-            className="rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white hover:opacity-90"
+            className="lfb-btn lfb-btn-primary lfb-btn-lg"
           >
             Start scan ›
           </button>

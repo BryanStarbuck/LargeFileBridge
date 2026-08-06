@@ -166,7 +166,7 @@ export function ViewOneDirectoryPage() {
         <div className="flex shrink-0 items-center gap-2">
           <button
             onClick={() => navigate({ to: "/fs", search: { path: v.path } })}
-            className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white"
+            className="lfb-btn lfb-btn-primary"
           >
             <FolderOpen className="h-4 w-4" /> Open in File System
           </button>
@@ -218,7 +218,7 @@ function RowAction({ icon, label, onClick }: { icon: React.ReactNode; label: str
   return (
     <button
       onClick={onClick}
-      className="inline-flex items-center gap-1.5 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs hover:bg-slate-100"
+      className="lfb-btn lfb-btn-secondary lfb-btn-sm"
     >
       {icon}
       {label}

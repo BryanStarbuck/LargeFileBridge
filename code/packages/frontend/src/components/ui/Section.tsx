@@ -25,25 +25,28 @@ export function Section({
   const Icon = state ? healthIcon(state) : null;
   const HeaderTag = collapsible ? "button" : "div";
   return (
-    <section className="mb-4 rounded-lg border border-[var(--lfb-border)] bg-white">
+    <section className="mb-4 rounded-lg border border-[var(--lfb-border)] bg-white shadow-[var(--lfb-shadow-sm)]">
       <HeaderTag
         type={collapsible ? "button" : undefined}
         onClick={collapsible ? () => setOpen((o) => !o) : undefined}
-        className={`flex w-full items-center gap-2 px-4 py-3 text-left ${collapsible ? "hover:bg-slate-50" : ""}`}
+        aria-expanded={collapsible ? open : undefined}
+        className={`flex w-full items-center gap-2 rounded-lg px-4 py-3 text-left ${
+          collapsible ? "transition-colors duration-150 hover:bg-[var(--lfb-surface-2)]" : ""
+        } ${collapsible && open ? "rounded-b-none" : ""}`}
       >
         {collapsible && (
           <ChevronRight
-            className={`h-4 w-4 shrink-0 text-black/40 transition-transform ${open ? "rotate-90" : ""}`}
+            className={`h-4 w-4 shrink-0 text-black/40 transition-transform duration-150 ${open ? "rotate-90" : ""}`}
           />
         )}
         {Icon && <Icon className="h-4 w-4 shrink-0" style={{ color: healthColor(state!) }} />}
         <div className="min-w-0 flex-1">
           <h2 className="font-semibold text-black">{title}</h2>
-          {subtitle && <p className="mt-0.5 text-sm text-black/60">{subtitle}</p>}
+          {subtitle && <p className="mt-0.5 text-sm leading-relaxed text-black/60">{subtitle}</p>}
         </div>
         {right && <div className="shrink-0 text-sm">{right}</div>}
       </HeaderTag>
-      {open && <div className="border-t border-[var(--lfb-border)] px-4 py-3">{children}</div>}
+      {open && <div className="border-t border-[var(--lfb-border)] px-4 py-3.5">{children}</div>}
     </section>
   );
 }

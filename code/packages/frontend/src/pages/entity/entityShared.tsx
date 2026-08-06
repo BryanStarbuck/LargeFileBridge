@@ -111,7 +111,7 @@ export function EntityRemoteOnly({ view }: { view: EntityView }) {
           <button
             onClick={() => pull.mutate()}
             disabled={pull.isPending}
-            className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+            className="lfb-btn lfb-btn-primary"
           >
             <DownloadCloud className="h-4 w-4" /> {pull.isPending ? "Pulling…" : "Pull it down"}
           </button>

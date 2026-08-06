@@ -176,7 +176,7 @@ export function ProcessingBatchesTable({ batches, onStop }: { batches: Processin
             type="button"
             onClick={() => onStop(b.batchId)}
             title="Stop this batch — queued files are marked Not attempted and can be re-run for free"
-            className="rounded px-2 py-0.5 text-xs text-black/60 hover:bg-slate-100"
+            className="lfb-btn lfb-btn-ghost lfb-btn-sm"
           >
             Stop
           </button>

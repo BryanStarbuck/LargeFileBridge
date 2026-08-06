@@ -203,7 +203,7 @@ export function CompanyMappingReviewPage() {
         <button
           onClick={() => apply.mutate()}
           disabled={apply.isPending}
-          className="flex items-center gap-1 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm font-medium text-white disabled:opacity-50"
+          className="lfb-btn lfb-btn-primary lfb-btn-lg"
         >
           {apply.isPending ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
           Continue &amp; apply <ChevronRight className="h-4 w-4" />

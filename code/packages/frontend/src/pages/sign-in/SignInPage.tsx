@@ -13,12 +13,12 @@ export function SignInPage() {
   if (data && !data.oauthConfigured) {
     // Credentials missing on this computer — guide the user to create the file.
     return (
-      <div className="grid h-full place-items-center overflow-y-auto bg-slate-50 p-6">
-        <div className="w-full max-w-xl rounded-2xl border border-[var(--lfb-border)] bg-white p-8 shadow-sm">
-          <h1 className="text-center text-xl font-semibold" style={{ color: "var(--lfb-primary)" }}>
+      <div className="grid h-full place-items-center overflow-y-auto bg-[var(--lfb-surface-2)] p-6">
+        <div className="w-full max-w-xl rounded-2xl border border-[var(--lfb-border)] bg-white p-8 shadow-[var(--lfb-shadow-md)]">
+          <h1 className="text-center text-xl font-semibold tracking-tight" style={{ color: "var(--lfb-primary)" }}>
             Large File Bridge
           </h1>
-          <p className="mb-6 mt-1 text-center text-sm text-black/60">
+          <p className="mb-6 mt-1.5 text-center text-sm text-black/55">
             Pin your large files across your own computers.
           </p>
           <CredentialsSetupCard
@@ -33,12 +33,14 @@ export function SignInPage() {
   }
 
   return (
-    <div className="grid h-full place-items-center bg-slate-50">
-      <div className="w-96 rounded-2xl border border-[var(--lfb-border)] bg-white p-8 text-center shadow-sm">
-        <h1 className="text-xl font-semibold" style={{ color: "var(--lfb-primary)" }}>Large File Bridge</h1>
-        <p className="mb-6 mt-1 text-sm text-black/60">Pin your large files across your own computers.</p>
+    <div className="grid h-full place-items-center bg-[var(--lfb-surface-2)] p-6">
+      <div className="w-full max-w-sm rounded-2xl border border-[var(--lfb-border)] bg-white p-8 text-center shadow-[var(--lfb-shadow-md)]">
+        <h1 className="text-xl font-semibold tracking-tight" style={{ color: "var(--lfb-primary)" }}>
+          Large File Bridge
+        </h1>
+        <p className="mb-6 mt-1.5 text-sm text-black/55">Pin your large files across your own computers.</p>
         <button type="button" onClick={() => void startGoogleSignIn().catch((e) => clientLog.error("SignInPage.startGoogleSignIn", e))}
-          className="block w-full rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-white">
+          className="w-full lfb-btn lfb-btn-primary lfb-btn-lg">
           Sign in with Google
         </button>
       </div>

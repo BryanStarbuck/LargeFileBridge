@@ -241,7 +241,7 @@ function OwnedReposSection({ storageId }: { storageId: string }) {
             {r.path && <div className="truncate font-mono text-xs text-black/40">{r.path}</div>}
           </div>
           <select
-            className="shrink-0 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs"
+            className="lfb-input shrink-0 px-2 py-1 text-xs"
             value={r.owner.kind === "personal" ? "personal" : r.owner.companyId ?? storageId}
             disabled={reassign.isPending}
             onChange={(e) => {
@@ -306,7 +306,7 @@ function MappedDirsSection({ storageId }: { storageId: string }) {
               key={`label-${r.key}-${r.label}`}
               placeholder="Label"
               disabled={!v.editable}
-              className="w-40 rounded border border-[var(--lfb-border)] px-2 py-1 text-xs disabled:bg-slate-50 disabled:text-black/40"
+              className="lfb-input w-40 px-2 py-1 text-xs disabled:bg-slate-50 disabled:text-black/40"
               onBlur={(e) => {
                 if (e.target.value !== r.label) patch.mutate({ mapped: asMapped().map((m) => (m.key === r.key ? { ...m, label: e.target.value } : m)) });
               }}
@@ -318,7 +318,7 @@ function MappedDirsSection({ storageId }: { storageId: string }) {
               key={`path-${r.key}-${r.localPath ?? ""}`}
               placeholder="this computer's path for this directory"
               disabled={!v.editable}
-              className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs disabled:bg-slate-50 disabled:text-black/40"
+              className="lfb-input w-full px-2 py-1 font-mono text-xs disabled:bg-slate-50 disabled:text-black/40"
               onBlur={(e) => {
                 if (e.target.value !== (r.localPath ?? "")) patch.mutate({ graft: { [r.key]: e.target.value || null } });
               }}
@@ -327,7 +327,7 @@ function MappedDirsSection({ storageId }: { storageId: string }) {
             {v.editable && (
               <button
                 title="Remove this directory"
-                className="flex items-center rounded p-1 text-black/40 hover:bg-slate-100 hover:text-red-600"
+                className="lfb-icon-btn p-1 hover:text-[var(--lfb-bad)]"
                 onClick={() => patch.mutate({ mapped: asMapped().filter((m) => m.key !== r.key) })}
               >
                 <X className="h-3.5 w-3.5" />
@@ -338,7 +338,7 @@ function MappedDirsSection({ storageId }: { storageId: string }) {
       ))}
       {v.editable && (
         <button
-          className="mt-2 flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100"
+          className="mt-2 lfb-btn lfb-btn-secondary"
           onClick={() => patch.mutate({ mapped: [...asMapped(), { label: "New directory", canonical: null, recursive: true }] })}
         >
           <Plus className="h-4 w-4" /> Add directory
@@ -407,7 +407,7 @@ function PathField({
         key={value ?? ""}
         placeholder={placeholder}
         disabled={disabled}
-        className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs disabled:bg-slate-50 disabled:text-black/30"
+        className="lfb-input w-full px-2 py-1 font-mono text-xs disabled:bg-slate-50 disabled:text-black/30"
         onBlur={(e) => { if (e.target.value !== (value ?? "")) onCommit(e.target.value); }}
         onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); }}
       />

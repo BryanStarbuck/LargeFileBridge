@@ -66,14 +66,14 @@ function Rows({
             disabled={disabled}
             placeholder={placeholder}
             onChange={(e) => set(i, e.target.value)}
-            className="w-72 rounded border border-[var(--lfb-border)] px-2 py-1.5 font-mono text-sm"
+            className="lfb-input w-72 px-2 py-1.5 font-mono text-sm"
           />
           {list.length > 1 && (
             <button
               type="button"
               aria-label="Remove row"
               onClick={() => remove(i)}
-              className="rounded p-1 text-black/40 hover:bg-black/5 hover:text-black"
+              className="lfb-icon-btn p-1"
             >
               <Minus className="h-4 w-4" />
             </button>

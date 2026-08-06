@@ -105,7 +105,7 @@ function MoreButton({ actions }: { actions: Action[] }) {
           const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
           setPos({ x: r.right - 4, y: r.bottom + 4 });
         }}
-        className="ml-auto flex shrink-0 items-center gap-1 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm text-black/70 hover:bg-slate-100"
+        className="ml-auto shrink-0 lfb-btn lfb-btn-secondary"
       >
         <MoreHorizontal className="h-4 w-4" /> More
       </button>

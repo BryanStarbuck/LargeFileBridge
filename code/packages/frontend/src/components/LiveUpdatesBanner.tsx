@@ -41,7 +41,7 @@ export function LiveUpdatesBanner() {
       </span>
       <button
         onClick={() => void qc.invalidateQueries()}
-        className="shrink-0 rounded-md bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
+        className="shrink-0 lfb-btn lfb-btn-warn lfb-btn-sm"
       >
         Refresh now
       </button>

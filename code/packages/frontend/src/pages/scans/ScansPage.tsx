@@ -349,7 +349,7 @@ function RunNowButton({ worker, state }: { worker: WorkerKind; state: WorkerStat
           ? "A pass is already running — this button comes back when it finishes."
           : "Run this job right now, without waiting for its schedule."
       }
-      className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-40"
+      className="lfb-btn lfb-btn-primary"
     >
       {(state.running || run.isPending) && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
       {label}
@@ -459,7 +459,7 @@ function Btn({ children, onClick, primary }: { children: React.ReactNode; onClic
   return (
     <button
       onClick={onClick}
-      className={`rounded-md px-3 py-1.5 text-sm ${primary ? "bg-[var(--lfb-primary)] text-white" : "border border-[var(--lfb-border)] hover:bg-slate-100"}`}
+      className={`lfb-btn ${primary ? "lfb-btn-primary" : "lfb-btn-secondary"}`}
     >
       {children}
     </button>

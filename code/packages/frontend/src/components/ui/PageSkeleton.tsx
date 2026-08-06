@@ -4,9 +4,9 @@
 export function PageSkeleton({ blocks = 3 }: { blocks?: number }) {
   return (
     <div className="animate-pulse space-y-3" aria-busy="true" aria-label="Loading">
-      <div className="h-6 w-1/3 rounded bg-slate-100" />
+      <div className="h-6 w-1/3 rounded-md bg-[var(--lfb-surface-sunken)]" />
       {Array.from({ length: blocks }, (_, i) => (
-        <div key={i} className="h-20 rounded bg-slate-100" />
+        <div key={i} className="h-20 rounded-lg bg-[var(--lfb-surface-sunken)]" />
       ))}
     </div>
   );

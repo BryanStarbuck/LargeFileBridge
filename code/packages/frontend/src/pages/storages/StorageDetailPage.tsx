@@ -192,7 +192,7 @@ export function StorageDetailPage() {
               onClick={() => index.mutate()}
               disabled={index.isPending}
               title="Rebuild the fingerprint index"
-              className="flex items-center gap-1.5 rounded-md bg-[var(--lfb-primary)] px-3 py-1.5 text-sm text-white disabled:opacity-50"
+              className="lfb-btn lfb-btn-primary"
             >
               <RefreshCw className={`h-4 w-4 ${index.isPending ? "animate-spin" : ""}`} /> {index.isPending ? "Indexing…" : "Index files"}
             </button>
@@ -204,7 +204,7 @@ export function StorageDetailPage() {
                 to="/storages/$storageId/settings"
                 params={{ storageId: s.id }}
                 title="Storage settings"
-                className="flex items-center rounded-md border border-[var(--lfb-border)] p-1.5 text-black/60 hover:bg-slate-100"
+                className="lfb-btn lfb-btn-secondary p-1.5"
               >
                 <Settings className="h-4 w-4" />
               </Link>

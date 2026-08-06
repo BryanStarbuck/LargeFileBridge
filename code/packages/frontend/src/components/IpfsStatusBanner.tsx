@@ -73,7 +73,7 @@ export function IpfsStatusBanner() {
         <span className="flex-1">{msg}</span>
         <Link
           to="/ipfs/off"
-          className="shrink-0 rounded-md bg-amber-600 px-3 py-1 text-xs font-medium text-white hover:bg-amber-700"
+          className="shrink-0 lfb-btn lfb-btn-warn lfb-btn-sm"
         >
           {label}
         </Link>
@@ -101,11 +101,11 @@ export function IpfsStatusBanner() {
         <button
           onClick={() => enableAutostart.mutate()}
           disabled={enableAutostart.isPending}
-          className="shrink-0 rounded-md bg-[var(--lfb-primary)] px-3 py-1 text-xs font-medium text-white hover:opacity-90 disabled:opacity-50"
+          className="shrink-0 lfb-btn lfb-btn-primary lfb-btn-sm"
         >
           Turn on auto-start
         </button>
-        <button onClick={dismiss} title="Dismiss" className="shrink-0 rounded p-1 text-black/40 hover:bg-slate-200 hover:text-black/70">
+        <button onClick={dismiss} title="Dismiss" className="lfb-icon-btn shrink-0 p-1">
           <X className="h-3.5 w-3.5" />
         </button>
       </div>

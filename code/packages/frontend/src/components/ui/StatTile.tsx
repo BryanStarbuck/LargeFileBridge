@@ -3,6 +3,7 @@
 // in a responsive flex-wrap row.
 import { type ReactNode } from "react";
 import { healthColor, type Health } from "./health.js";
+import { cn } from "../../lib/cn.js";
 
 export function StatTileRow({ children }: { children: ReactNode }) {
   return <div className="mb-4 flex flex-wrap gap-3">{children}</div>;
@@ -25,21 +26,28 @@ export function StatTile({
 }) {
   const tinted = state !== "neutral";
   const color = healthColor(state);
-  const base =
-    "min-w-[8.5rem] flex-1 rounded-lg border border-[var(--lfb-border)] bg-white px-4 py-3 text-left";
+  // A clickable tile is a real <button>: it was a div with role="button" + tabIndex, so Enter/Space
+  // did nothing and the whole row was keyboard-dead.
+  const Tag = onClick ? "button" : "div";
   return (
-    <div
-      role={onClick ? "button" : undefined}
-      tabIndex={onClick ? 0 : undefined}
+    <Tag
+      type={onClick ? "button" : undefined}
       onClick={onClick}
       title={title}
-      className={`${base} ${onClick ? "cursor-pointer hover:border-[var(--lfb-primary)]" : ""}`}
+      className={cn(
+        "min-w-[8.5rem] flex-1 rounded-lg border border-[var(--lfb-border)] bg-white px-4 py-3 text-left shadow-[var(--lfb-shadow-sm)]",
+        onClick &&
+          "cursor-pointer transition-[border-color,box-shadow,transform] duration-150 hover:-translate-y-px hover:border-[var(--lfb-border-strong)] hover:shadow-[var(--lfb-shadow-md)] active:translate-y-0",
+      )}
     >
-      <div className="text-xs font-medium uppercase tracking-wide text-black/40">{label}</div>
-      <div className="mt-1 text-2xl font-bold tabular-nums" style={{ color: tinted ? color : "#000" }}>
+      <div className="lfb-eyebrow truncate">{label}</div>
+      <div
+        className="mt-1 text-2xl font-bold tabular-nums tracking-tight"
+        style={{ color: tinted ? color : "#000" }}
+      >
         {value}
       </div>
       {sub != null && <div className="mt-0.5 text-xs text-black/50">{sub}</div>}
-    </div>
+    </Tag>
   );
 }

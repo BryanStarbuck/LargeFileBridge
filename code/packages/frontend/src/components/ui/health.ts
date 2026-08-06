@@ -38,6 +38,22 @@ export function healthColor(h: Health): string {
   }
 }
 
+// Hairline border var for a state. Deliberately NOT the full-strength foreground color: a solid
+// green-600 / red-600 1px border around a pale tint reads as an alarm box on every state, including
+// the "you are fine" one. These are the -200 steps, so the tint keeps its shape without shouting.
+export function healthBorder(h: Health): string {
+  switch (h) {
+    case "ok":
+      return "var(--lfb-ok-border)";
+    case "warn":
+      return "var(--lfb-warn-border)";
+    case "bad":
+      return "var(--lfb-bad-border)";
+    default:
+      return "var(--lfb-border)";
+  }
+}
+
 // Tint background var for a state (used by banners / cards). Neutral = white.
 export function healthBg(h: Health): string {
   switch (h) {

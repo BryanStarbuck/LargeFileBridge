@@ -22,9 +22,9 @@ export function CredentialsMissingDialog({
     window.open("/ai-credentials", "_blank", "noopener");
   };
   return (
-    <div className="fixed inset-0 z-30 grid place-items-center bg-black/30 p-4" onClick={onClose}>
+    <div className="lfb-scrim fixed inset-0 z-30 grid place-items-center p-4" onClick={onClose}>
       <div
-        className="w-[28rem] max-w-full rounded-xl bg-white p-5 shadow-xl"
+        className="w-[28rem] max-w-full lfb-modal p-5 "
         onClick={(e) => e.stopPropagation()}
         role="dialog"
         aria-modal="true"
@@ -49,13 +49,13 @@ export function CredentialsMissingDialog({
         <div className="mt-5 flex justify-end gap-2">
           <button
             onClick={onClose}
-            className="rounded-md border border-[var(--lfb-border)] px-4 py-2 text-sm text-black/70 hover:bg-black/5"
+            className="lfb-btn lfb-btn-secondary lfb-btn-lg"
           >
             Close
           </button>
           <button
             onClick={openInstructions}
-            className="flex items-center gap-2 rounded-md bg-[var(--lfb-primary)] px-4 py-2 text-sm text-white hover:opacity-90"
+            className="lfb-btn lfb-btn-primary lfb-btn-lg"
           >
             <ExternalLink className="h-4 w-4" /> Instructions
           </button>

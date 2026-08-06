@@ -395,7 +395,7 @@ export function FullPathsPage() {
         <button
           onClick={() => home.data && setRoot(home.data.home)}
           title="Home directory"
-          className="inline-flex items-center gap-1 rounded px-2 py-1 text-sm text-black hover:bg-slate-100"
+          className="lfb-btn lfb-btn-ghost lfb-btn-sm"
         >
           <Home size={15} /> Home
         </button>
@@ -412,7 +412,7 @@ export function FullPathsPage() {
             onChange={(e) => setPathInput(e.target.value)}
             placeholder={root ?? "Absolute path to a folder…"}
             spellCheck={false}
-            className="w-full rounded border border-[var(--lfb-border)] px-2 py-1 font-mono text-xs text-black"
+            className="lfb-input w-full px-2 py-1 font-mono text-xs"
           />
         </form>
         <label className="flex items-center gap-1 text-xs text-black select-none">
@@ -431,7 +431,7 @@ export function FullPathsPage() {
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="search name or path…"
-            className="w-full rounded-md border border-[var(--lfb-border)] py-1.5 pl-8 pr-2 text-sm outline-none focus:border-[var(--lfb-primary)]"
+            className="lfb-input w-full py-1.5 pl-8 pr-2 text-sm focus:border-[var(--lfb-primary)]"
           />
         </div>
 
@@ -508,7 +508,7 @@ export function FullPathsPage() {
           <div className="flex items-center gap-2 px-3 py-1.5 text-sm">
             <span className="w-24 shrink-0 text-black/70">Min size (MB)</span>
             <input
-              className="flex-1 rounded border border-[var(--lfb-border)] px-1 py-0.5"
+              className="lfb-input flex-1 px-1 py-0.5"
               placeholder="≥ MB"
               value={minSizeMB}
               onChange={(e) => setMinSizeMB(e.target.value.replace(/[^0-9.]/g, ""))}
@@ -517,7 +517,7 @@ export function FullPathsPage() {
           <div className="flex items-center gap-2 px-3 py-1.5 text-sm">
             <span className="w-24 shrink-0 text-black/70">Path contains</span>
             <input
-              className="flex-1 rounded border border-[var(--lfb-border)] px-1 py-0.5"
+              className="lfb-input flex-1 px-1 py-0.5"
               placeholder="contains…"
               value={pathContains}
               onChange={(e) => setPathContains(e.target.value)}
@@ -544,7 +544,7 @@ export function FullPathsPage() {
       <div className="flex shrink-0 flex-wrap items-center gap-2 py-2">
         <button
           onClick={() => setSelected(new Set(filtered.map((f) => f.path)))}
-          className="flex items-center gap-1.5 rounded-md border border-[var(--lfb-border)] px-3 py-1.5 text-sm hover:bg-slate-100"
+          className="lfb-btn lfb-btn-secondary"
         >
           <CheckSquare className="h-4 w-4" /> Select all
         </button>
@@ -685,14 +685,14 @@ export function FullPathsPage() {
             </span>
             <div className="flex gap-1">
               <button
-                className="rounded border border-[var(--lfb-border)] px-2 py-0.5 disabled:opacity-40"
+                className="lfb-btn lfb-btn-secondary lfb-btn-sm"
                 disabled={!table.getCanPreviousPage()}
                 onClick={() => table.previousPage()}
               >
                 ‹
               </button>
               <button
-                className="rounded border border-[var(--lfb-border)] px-2 py-0.5 disabled:opacity-40"
+                className="lfb-btn lfb-btn-secondary lfb-btn-sm"
                 disabled={!table.getCanNextPage()}
                 onClick={() => table.nextPage()}
               >
@@ -700,7 +700,7 @@ export function FullPathsPage() {
               </button>
             </div>
             <select
-              className="rounded border border-[var(--lfb-border)] px-1 py-0.5"
+              className="lfb-input px-1 py-0.5"
               value={pageSize}
               onChange={(e) => { setPageSize(Number(e.target.value)); setPageIndex(0); }}
             >
@@ -739,7 +739,7 @@ function IconButton({
       title={title}
       onClick={onClick}
       data-popover-toggle
-      className={`rounded-md p-1.5 hover:bg-slate-100 ${active ? "text-[var(--lfb-primary)]" : "text-black/70"}`}
+      className={`lfb-icon-btn ${active ? "bg-[var(--lfb-primary-tint)] text-[var(--lfb-primary)]" : ""}`}
     >
       {children}
     </button>
