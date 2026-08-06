@@ -8,6 +8,8 @@ import { pipeline } from "node:stream/promises";
 import type { IpfsHealth, IpfsPinType } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { bumpTopicThrottled, IPFS_TOPIC } from "../events/state-events.service.js";
+// Leaf module (node:path only) — no cycle back into ipfs/pin from here.
+import { noteOwnWrite } from "../watcher/self-writes.js";
 import { log } from "../../shared/logging.js";
 
 function apiBase(): string {
@@ -330,6 +332,12 @@ export async function catToFile(
   opts: { resolved?: boolean; onBytes?: (bytes: number) => void } = {},
 ): Promise<string> {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
+  // Claim the destination BEFORE the bytes land (self-writes.ts). This is the one place in the product
+  // where a big media file appears in a working tree because WE put it there, and to the filesystem
+  // watcher that is indistinguishable from a user dropping a video in — so each pulled file kicked its own
+  // discovery rescan of every repo, concurrently with the transfers still running. Claimed here rather
+  // than at the two call sites so a future caller cannot forget.
+  noteOwnWrite(destPath);
   const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}.tmp`;
   let guard: StallGuard | undefined;
   try {

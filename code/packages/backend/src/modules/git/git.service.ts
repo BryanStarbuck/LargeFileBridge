@@ -24,7 +24,7 @@ import { expandHome } from "../fs/badges.js";
 import { isGitWorkingTree } from "../store-model/units.service.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { LFBRIDGE_DIR } from "../storage/storage-type.service.js";
-import { stableGitBin } from "./git-bin.js";
+import { stableGitBin, isSimpleGitSafeBinary, withGitOnPath } from "./git-bin.js";
 // The working-tree gate: no outside writer may dirty a working copy while git is mid-cycle in it
 // (worktree-gate.ts). A leaf module, so importing it here creates no cycle.
 import { withWorktreeBusy } from "./worktree-gate.js";
@@ -426,11 +426,19 @@ export function openRepo(workingDir: string): SimpleGit {
   // GIT_EDITOR / GIT_SEQUENCE_EDITOR): simple-git refuses to run with an editor set (a hang guard), and
   // our commits always carry a `-m` message so no editor is ever needed. GIT_TERMINAL_PROMPT=0 keeps a
   // URL remote from blocking on a password prompt (§5).
-  const env = { ...process.env };
+  //
+  // WINDOWS: simple-git REFUSES to construct when the custom `binary` path holds a character outside its
+  // allow-list — and `C:\Program Files\Git\cmd\git.exe` has a space, so every standard Git for Windows
+  // install threw here and took the whole backbone down with it (isSimpleGitSafeBinary, git-bin.ts).
+  // Where the path is not one simple-git will take, hand it the bare name and carry the resolved location
+  // on the child's PATH instead: same binary, same immunity to a thin background PATH, no rejection.
+  const bin = stableGitBin();
+  const binaryOk = isSimpleGitSafeBinary(bin);
+  const env = binaryOk ? { ...process.env } : withGitOnPath({ ...process.env });
   for (const k of ["EDITOR", "VISUAL", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR"]) delete env[k];
   return simpleGit({
     baseDir: workingDir,
-    binary: stableGitBin(), // absolute path — immune to a thin background PATH (git-bin.ts)
+    binary: binaryOk ? bin : "git", // absolute path — immune to a thin background PATH (git-bin.ts)
     maxConcurrentProcesses: 1,
     config: ["credential.interactive=false", `core.quotepath=${QUOTEPATH}`],
   }).env({ ...env, GIT_TERMINAL_PROMPT: "0" });

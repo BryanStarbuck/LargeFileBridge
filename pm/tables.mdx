@@ -1036,6 +1036,33 @@ Compress tab's own status column.
 
 ---
 
+## 4c-i. Row windowing — the scroll height must not depend on the scroll position (LOCKED, site-wide)
+
+**This is a product-wide table rule. Every other spec cites it; none restates it.**
+
+Long tables render only the rows that intersect the viewport, plus an overscan, with two spacer rows
+standing in for everything above and below ([performance.mdx](./performance.mdx) P-01). So the container's
+scroll height is `padTop + Σ(rendered rows) + padBottom`, and **only the middle term is real** — the two
+spacers are arithmetic over a per-row height.
+
+If that height is **assumed** (a constant that has to match the CSS) and the assumption is off by δ, the
+total moves by δ × (rows rendered) **every time the window slides**. The browser re-clamps `scrollTop`,
+which slides the window, which moves the total again. Near the top of a list there is slack to absorb it;
+**at the bottom `scrollTop` is pinned to the maximum and the loop has nowhere to settle**, so the rows
+jitter under the cursor for as long as you hold there — reported 2026-08-06 as *"the list is flickering
+when the scroll is to the bottom, may be height issue."* It was.
+
+**The rule is the invariant, not a number: the container's scroll height must be the same at every scroll
+position.** The row height is therefore **measured from a rendered row** (a `ResizeObserver`, so a browser
+zoom, a font that finished loading, or a column the responsive budget hid re-measures itself) and that
+measurement drives both spacers. Because it came off the DOM it agrees with the rows by construction, the
+total collapses to `count × height` regardless of where the window sits, and the loop cannot form. A
+declared row height survives only as the **first-paint estimate**, used before any row exists to measure —
+it is never the number the arithmetic trusts.
+
+The windowing and the measurement are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` and the `measureRow` ref it returns; attached to the first body row by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
+
 ## 4d. Modified-click on a row opens a new tab (LOCKED, site-wide)
 
 **This is a product-wide table rule. Every other spec cites it; none restates it.**

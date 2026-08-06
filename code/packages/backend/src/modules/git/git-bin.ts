@@ -71,6 +71,50 @@ export function stableGitBin(): string {
   return cached;
 }
 
+/**
+ * Would `simple-git` ACCEPT this path as its custom `binary`?
+ *
+ * simple-git validates the value against `/^([a-z]:)?([a-z0-9/.\\_~-]+)$/i` and THROWS out of the factory
+ * when it doesn't match — no spaces, no parentheses (`custom-binary.plugin.ts`, `isBadArgument`). That
+ * rejects the standard Git for Windows install, `C:\Program Files\Git\cmd\git.exe`, so on Windows EVERY
+ * `openRepo()` threw before running a single command and the entire git backbone — device registration,
+ * pull, commit, push — failed on every cycle with
+ *
+ *   [pin] device registration for storage c140b1a11690 failed: Invalid value supplied for custom binary,
+ *   restricted characters must be removed or supply the unsafe.allowUnsafeCustomBinary option
+ *
+ * (the 2026-08-06 Windows report). The direct `execFileSync(stableGitBin(), …)` callers were unaffected —
+ * Node's spawn takes a spaced path happily — which is why only the simple-git paths broke.
+ *
+ * Kept deliberately CONSERVATIVE and in step with simple-git's own rule: answering "no" costs nothing (the
+ * caller falls back to the bare name plus {@link withGitOnPath}, which resolves to the very same file),
+ * while answering "yes" wrongly is what throws. When in doubt this must say no.
+ */
+export function isSimpleGitSafeBinary(bin: string): boolean {
+  return /^([a-z]:)?([a-z0-9/\\._~-]+)$/i.test(bin);
+}
+
+/**
+ * Put the directory holding the resolved git binary at the FRONT of `env`'s PATH, so a bare `git` spawned
+ * with this environment finds the SAME file {@link stableGitBin} picked. That is this module's whole
+ * promise — immunity to a thin background PATH — delivered through a door simple-git will open.
+ *
+ * No-op when git was never resolved to an absolute path (`"git"`): `path.dirname("git")` is `"."`, and
+ * putting the working directory on a child's PATH is not something to do by accident.
+ *
+ * Windows spells the variable `Path`, and spreading `process.env` into a plain object keeps that spelling —
+ * so this UPDATES whichever key is already there instead of adding a second one the child would have to
+ * choose between.
+ */
+export function withGitOnPath(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const bin = stableGitBin();
+  if (!path.isAbsolute(bin)) return env;
+  const key = Object.keys(env).find((k) => k.toLowerCase() === "path") ?? "PATH";
+  const dir = path.dirname(bin);
+  const existing = env[key];
+  return { ...env, [key]: existing ? `${dir}${path.delimiter}${existing}` : dir };
+}
+
 /** TEST-ONLY: drop the memoized result so a spec can exercise resolution under a different environment. */
 export function resetGitBinCache(): void {
   cached = null;

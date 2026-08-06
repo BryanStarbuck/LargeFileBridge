@@ -1051,6 +1051,34 @@ This table opts in via the DataTable `hoverPreview` prop, wired in code:
 The detail stream and the reducer that folds it back into the page's existing query cache are in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/:repoId/detail/stream` handler; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoDetail()`
 
+* **A METRIC IS ALSO PROVISIONAL WHILE A BACKGROUND PASS IS RUNNING (performance.mdx P-38, LOCKED).** The
+  rule above covers the page's own fetch, which is over in seconds. It does not cover the work that lands
+  **after** it. `Pull down` is the tile that proved the gap: it counts files a **peer** computer holds and
+  this one does not, an answer that does not exist until the git backbone has pulled and the mirrored
+  manifests have been folded in — so it read **0, in the all-clear green**, and then read 6 some minutes
+  later. A user who believed it walked away from files that were never backed up here.
+  * A count is provisional while the detail is `partial` **or** while any census-moving pass is running or
+    **queued**: `scan`, `pin`, `import`, the four analysis kinds, and a `mixed` Apply fan-out.
+  * We do **not** try to work out which repo a running pass will touch. The bias is deliberate and belongs
+    on this side: a false *"still counting"* costs a moment's patience, a false *"all clear"* costs a file.
+  * **The cue is on the NUMBER, and there is only ONE spinner.** Each provisional count **pulses**; it does
+    not carry a glyph. A spinner per tile was tried and is wrong twice over — nine of them at once reads as
+    noise rather than information, and because a tile is `w-min` (sized to its widest word) the icon
+    competes with the label for that width and pushes "Add to IPFS" onto a third line. The number is the
+    thing that is provisional, so the number is what softens, at **zero layout cost**.
+  * **WHAT is running is said once**, in a single line under the strip: one spinner — the same glyph the
+    progress dock and the scan bar spin — plus the pass's name ("Pinning charlie-kirk — these counts are
+    still going up"). Naming the pass is the useful part: it tells the user roughly how long this will
+    last, which the generic sentence cannot. [repos.mdx §7](./repos.mdx) carries the same line above its
+    list for the same reason.
+  * **That line's row is ALWAYS reserved, never conditionally added.** A background pass can start long
+    after the page has settled, and a line that appeared then would shove the whole table down while the
+    user was reading it — the no-layout-shift rule above applies to a page that is already loaded, not
+    only to one that is loading.
+
+Whether a count is still being worked out is decided in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()` / `useCensusPending()`; rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`
+
 * **The ⊘ Git-ignore axis is THREE-VALUED — ignored / not ignored / NOT DETERMINED (LOCKED).**
   `git check-ignore` is the source of truth for this column, and there are two real situations where it has
   not given a verdict: it is still running (the axis is patched in when it answers — performance.mdx P-37),

@@ -331,6 +331,39 @@ Performing the automatic merge (ort strategy, `--no-edit`), writing the `merge=u
 
 ---
 
+### 4.9 Finding the git binary — and handing it to `simple-git` in a form it accepts (LOCKED)
+
+Every git spawn resolves the binary to an **absolute path** once, up front, rather than relying on a bare
+`git` and the caller's PATH. A background context — a launchd worker with no `EnvironmentVariables` block,
+a Windows scheduled task, any supervisor that starts the backend with a minimal environment — can have a
+PATH that omits the directory git lives in, and then every spawn fails with `spawnSync git ENOENT`.
+
+**The Windows trap (performance.mdx §6.3, fixed 2026-08-06).** `simple-git` validates the custom `binary`
+it is handed against `/^([a-z]:)?([a-z0-9/.\\_~-]+)$/i` and **throws out of its factory** when the value
+does not match — no spaces, no parentheses. Git for Windows installs at `C:\Program Files\Git\cmd\git.exe`.
+So `openRepo()` threw **before running a single command**, and with it every pull, commit, push, device
+registration and mirrored-manifest reconcile on the platform, logged every ten minutes for weeks as
+
+```
+[pin] device registration for storage <id> failed: Invalid value supplied for custom binary,
+restricted characters must be removed or supply the unsafe.allowUnsafeCustomBinary option
+```
+
+Nothing was wrong with the path. The direct `execFileSync(stableGitBin(), …)` callers had been using it
+all along without complaint — which is exactly why only the `simple-git` paths broke, and why the failure
+read as a storage problem rather than a path problem.
+
+The rule: **where the resolved path is not one `simple-git` will accept, hand it the bare name and put the
+resolved directory at the FRONT of the child's PATH instead.** Same binary, the same immunity to a thin
+background PATH, through a door `simple-git` will open. `unsafe.allowUnsafeCustomBinary` — what the message
+suggests — is *not* used: it only downgrades the throw to a `console.warn` on every construction and buys
+nothing. The PATH write updates whichever key is already present (**Windows spells it `Path`**, and
+spreading `process.env` keeps that spelling) rather than adding a second one the child would have to choose
+between.
+
+Binary resolution and the `simple-git` hand-off are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-bin.ts` — `stableGitBin()`, `isSimpleGitSafeBinary()`, `withGitOnPath()`; applied by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()`
+
 ## 5. Credentials for a URL remote — the OS git credential helper, never a prompt (LOCKED)
 
 A local-path remote needs no credentials — it is a local checkout whose `origin` the user already

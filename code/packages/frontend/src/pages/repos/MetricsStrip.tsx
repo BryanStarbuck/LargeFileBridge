@@ -16,7 +16,9 @@
 // and the wrapping it caused — is gone. The tiles never wrap: if they ever exceed the width, the row
 // scrolls horizontally rather than breaking onto a second line.
 import { useState } from "react";
+import { RefreshCw } from "lucide-react";
 import { healthBg, healthColor, type Health } from "../../components/ui/health.js";
+import { useCensusPending } from "../../lib/useCensusPending.js";
 import { setHoverInfo, useHoverDefault } from "./HoverInfoRegion.js";
 import { WarningPopup } from "../../components/ui/WarningPopup.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
@@ -35,12 +37,22 @@ export interface MetricView {
   onOpen: () => void;
 }
 
-function MetricPanel({ m, onClick, pending }: { m: MetricView; onClick: () => void; pending: boolean }) {
-  // THE ALL-CLEAR GREEN IS A CLAIM, AND IT IS ONLY EARNED BY A FINISHED COUNT (performance.mdx P-37).
-  // While the detail is still streaming, every number here is a rising SUBTOTAL — so a tile that happens
-  // to read 0 right now has not established that there is nothing to do, and painting it green would say
-  // exactly that. Pending tiles stay neutral until the walk finishes; the numbers themselves are real and
-  // climb as rows arrive.
+function MetricPanel({
+  m,
+  onClick,
+  pending,
+  why,
+}: {
+  m: MetricView;
+  onClick: () => void;
+  pending: boolean;
+  why: string;
+}) {
+  // THE ALL-CLEAR GREEN IS A CLAIM, AND IT IS ONLY EARNED BY A FINISHED COUNT (performance.mdx P-37/P-38).
+  // While the detail is still streaming — or while a background pass is recomputing the census — every
+  // number here is a rising SUBTOTAL, so a tile that happens to read 0 right now has not established that
+  // there is nothing to do, and painting it green would say exactly that. `Pull down` is the tile that made
+  // this concrete: it reads 0 until the backbone pull folds in the peers' manifests, and it read 0 IN GREEN.
   const clear = m.count === 0 && !pending;
   const style: React.CSSProperties = clear
     ? { background: "var(--lfb-ok-bg)", color: "var(--lfb-ok)", borderColor: "transparent" }
@@ -52,10 +64,13 @@ function MetricPanel({ m, onClick, pending }: { m: MetricView; onClick: () => vo
       type="button"
       data-metric-panel
       onClick={onClick}
-      onMouseEnter={() => setHoverInfo(m.hint)}
+      // Hovering a PENDING tile explains the number rather than the metric — "why does this say 0" is the
+      // question the user actually has at that moment.
+      onMouseEnter={() => setHoverInfo(pending ? why : m.hint)}
       onMouseLeave={() => setHoverInfo(null)}
-      onFocus={() => setHoverInfo(m.hint)}
+      onFocus={() => setHoverInfo(pending ? why : m.hint)}
       onBlur={() => setHoverInfo(null)}
+      title={pending ? why : undefined}
       style={style}
       // w-min → the box is only as wide as its widest word; a multi-word label ("Add to IPFS", "AI
       // Describable") wraps INSIDE the tile onto as many lines as it needs. The tile itself never wraps
@@ -67,7 +82,14 @@ function MetricPanel({ m, onClick, pending }: { m: MetricView; onClick: () => vo
           fight labels that carry meaningful casing ("Add to IPFS", "AI Describable", "OCRable"); the
           catalog stores the exact string to render. */}
       <span className="text-[11px] font-medium leading-tight">{m.label}</span>
-      <span className="text-2xl font-bold tabular-nums leading-none">{m.count}</span>
+      {/* THE PER-TILE CUE IS ON THE NUMBER, AND IT COSTS NO LAYOUT. A spinner in the label row read as
+          noise at nine tiles at once, and — because the tile is `w-min`, sized to its widest word — the
+          icon competed with the label for that width and pushed "Add to IPFS" onto a third line. The
+          number is the thing that is provisional, so the number is what softens: a slow pulse, no glyph,
+          no width. WHAT is still running is answered once, in the line under the strip. */}
+      <span className={`text-2xl font-bold tabular-nums leading-none ${pending ? "animate-pulse" : ""}`}>
+        {m.count}
+      </span>
     </button>
   );
 }
@@ -88,6 +110,17 @@ export function MetricsStrip({
   // The metric whose popup is open (null = none). Only one popup at a time.
   const [openWarning, setOpenWarning] = useState<WarningDef | null>(null);
 
+  // The OTHER reason a count is provisional: a background pass is recomputing the census right now. The
+  // page's own `pending` only covers its own fetch; this covers the scan/pin work that lands afterwards
+  // and is what makes `Pull down` jump from 0 to its real value minutes later (useCensusPending).
+  const census = useCensusPending();
+  const provisional = pending || census.active;
+  // Names the pass when there is one to name, because "Pinning charlie-kirk" tells the user how long this
+  // is likely to last and the generic sentence does not. Plural: the caveat is about the whole strip.
+  const why = census.label
+    ? `${census.label} — these counts are still going up.`
+    : "Still loading this repo — these counts are still going up.";
+
   // What the left-bar hover panel shows when nothing on this page is hovered — the active tab's hint
   // (one_repo.mdx §3.2). The panel itself is fed by the ONE global HoverInfoBridge in the app shell.
   useHoverDefault(defaultHint);
@@ -103,8 +136,21 @@ export function MetricsStrip({
           a second line; `overflow-x-auto` is the (rare) escape hatch on a very narrow window. */}
       <div className="flex w-full flex-nowrap items-stretch gap-2 overflow-x-auto">
         {metrics.map((m) => (
-          <MetricPanel key={m.id} m={m} onClick={() => handle(m)} pending={pending} />
+          <MetricPanel key={m.id} m={m} onClick={() => handle(m)} pending={provisional} why={why} />
         ))}
+      </div>
+      {/* ONE sentence, and the only spinner. The pulsing numbers say THAT the counts are moving; this says
+          WHAT is moving them, without a trip to the progress dock in the opposite corner.
+          The row is ALWAYS reserved (h-4), never conditionally added: a background pass can start long
+          after the page settled, and a line that appeared then would shove the whole table down 20px while
+          the user was reading it. */}
+      <div className="mt-1 flex h-4 items-center" aria-live="polite">
+        {provisional && (
+          <p className="flex items-center gap-1.5 text-xs text-black/45">
+            <RefreshCw className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
+            {why}
+          </p>
+        )}
       </div>
       {openWarning && (
         <WarningPopup

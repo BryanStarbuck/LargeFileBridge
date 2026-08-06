@@ -26,6 +26,7 @@ import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
 import { isDirAt } from "../../shared/fs-probe.js";
 import { makeWatchFilter, watchTreePruned, type WatchFilter } from "./watch-tree.js";
+import { isOwnRecentWrite } from "./self-writes.js";
 
 // Does the OS make "recursive" cost one watch per TREE, or one per DIRECTORY? macOS (FSEvents) and
 // Windows (ReadDirectoryChangesW) do it in the kernel — a single handle covers the whole subtree, and
@@ -202,6 +203,12 @@ function flushPending(): void {
  */
 function isQualifying(abs: string, threshold: number): boolean {
   const name = path.basename(abs);
+  // A file WE just wrote is not news (self-writes.ts). The pin pass places pulled-down media into the
+  // working tree, and every landing file looked exactly like a user dropping a video in — so a six-file
+  // pull kicked six discovery rescans, each walking every repo and recalculating the TO DO batches, all
+  // while the remaining transfers were still competing for the same disk. The pass already knows about
+  // these files; the walk would only rediscover what put them there.
+  if (isOwnRecentWrite(abs)) return false;
   // A downloader's in-flight temp file churns add/delete every few seconds while a download runs. Waking
   // on it kicks a rescan at exactly the moment the fragment exists, which is how a vanished yt-dlp
   // fragment became a permanent row (scan.mdx §4.3.1). The final merged file's own appearance still

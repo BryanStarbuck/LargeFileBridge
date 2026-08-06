@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 import path from "node:path";
@@ -7,6 +7,33 @@ import { resolveWebPort, DEFAULT_WEB_PORT } from "./scripts/web-port.mjs";
 // Grant read access up to the LargeFileBridge repo root so we can import pm/left_bar.yaml?raw
 // (left_bar.mdx §AC4 — the frontend renders the nav straight from the yaml, no code copy).
 const repoRoot = path.resolve(__dirname, "../../..");
+
+// `pnpm dev` starts Vite and the backend TOGETHER, and Vite is ready in ~550ms while the backend is still
+// booting — so the app's first calls (the live event stream among them) hit a closed port and Vite prints
+// a raw `AggregateError [ECONNREFUSED]` stack with an `internalConnectMultiple` trace under it. It is a
+// startup race, not a fault: the client reconnects on its own. Say that in one line for the first few
+// seconds, and keep the loud version for a refusal that is STILL happening once the backend has had time —
+// that one means the backend actually failed to start, which is worth a stack.
+const proxyConfigure: NonNullable<ProxyOptions["configure"]> = (proxy) => {
+  const startedAt = Date.now();
+  proxy.on("error", (err, req, res) => {
+    const code = (err as NodeJS.ErrnoException).code ?? "";
+    const refused = code === "ECONNREFUSED" || /ECONNREFUSED/.test(err.message ?? "");
+    if (refused && Date.now() - startedAt < 30_000) {
+      console.log(`[LFB] backend not up yet — ${req.url} will retry`);
+    } else {
+      console.error(`[LFB] proxy error on ${req.url}:`, err.message);
+    }
+    // Answer the request. An unhandled proxy error otherwise leaves the socket open until it times out,
+    // which the client reads as a hang rather than as a failure it can retry.
+    if ("writeHead" in res) {
+      if (!res.headersSent) res.writeHead(502, { "content-type": "application/json" });
+      res.end(JSON.stringify({ ok: false, error: "backend unavailable" }));
+    } else {
+      res.destroy();
+    }
+  });
+};
 
 export default defineConfig(async () => {
   // The web app that serves pages ALWAYS defaults to :2222 (code_plan.mdx §2). Before Vite binds we
@@ -43,7 +70,14 @@ export default defineConfig(async () => {
       strictPort: true, // the port is already resolved above — never let Vite silently pick another
       fs: { allow: [repoRoot] },
       proxy: {
-        "/api": { target: "http://localhost:8787", changeOrigin: true },
+        "/api": {
+          // 127.0.0.1, NOT "localhost" — the backend binds 127.0.0.1 in local mode (main.ts), and on a
+          // dual-stack box "localhost" resolves to ::1 first. Naming the family the backend actually
+          // listens on removes a whole class of "works on my machine" proxy failures.
+          target: "http://127.0.0.1:8787",
+          changeOrigin: true,
+          configure: proxyConfigure,
+        },
       },
     },
     resolve: {

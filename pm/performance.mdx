@@ -738,6 +738,158 @@ The three guards that keep streaming from drifting away from buffering are in co
 
 ---
 
+## Sixth pass (P-38) — telling the truth while work is still running · T3/T4
+
+P-37 made the repo screens answer progressively and taught them to withhold a claim they had not finished
+counting. Three reports on 2026-08-06 said the same thing from three directions: **work that is still
+running is invisible, and the UI keeps stating results as if it were not.** One of them was not a display
+problem at all — it was a whole platform's git backbone failing on every cycle, silently, for weeks.
+
+### 6.1 `Pull down 0` — the all-clear a background pass had not earned yet
+
+> *"when anything long running process is in progress in background, make sure there are visual cues in the
+> UI. one instance is when there is Pull Down 0 in ui and after some time it shows the true one."*
+
+`Pull down` counts files a **peer** computer holds and this one does not. That answer does not exist until
+the git backbone has pulled and the mirrored manifests have been folded in — work the pin pass does in its
+own time, minutes after the page has finished loading. Until then the tile read **0**, in
+`--lfb-ok-bg`, the light green this product reserves for **"there is nothing to do."** A user who believes
+it walks away from files that were never backed up here.
+
+P-37 had already made a tile neutral while the page's **own** fetch was streaming. That covers the first
+few seconds and nothing after. The missing half is the **background** pass:
+
+* A count is provisional while the page's own detail is `partial` **(P-37)**, **or** while a pass that
+  recomputes the census is running — `scan` (rebuilds the candidate list), `pin` (pulls the backbone, folds
+  in peer manifests, reconciles the pinset), the four analysis kinds, `import`, and a `mixed` Apply
+  fan-out. **Queued-but-not-started counts too**: the numbers are about to move, and a tile that goes green
+  in the gap before the first job starts is the same lie one beat earlier.
+* **Deliberately over-inclusive, and the asymmetry is the point.** We do not try to work out *which* repo a
+  running pass will touch — a scan is computer-wide, a pin pass can be either, and the job record carries a
+  display target, not an id. A false *"still counting"* costs a moment's patience; a false *"all clear"*
+  costs a file. Matching job targets against repo names by string would also be a drift waiting to happen.
+* **The cue is not a colour, and not nine spinners either.** Neutral-instead-of-green is a signal a user
+  has to be taught to read, so the first attempt put a small turning `RefreshCw` in every tile's label row.
+  Seen on a real repo that is wrong twice over: nine spinners at once reads as noise rather than
+  information, and because a tile is `w-min` — sized to its widest word — the icon competes with the label
+  for that width and pushes "Add to IPFS" onto a third line. **The number is the thing that is provisional,
+  so the number is what softens**: a slow pulse, no glyph, no width taken.
+* **WHAT is running is said once**, in a single line under the strip: one spinner — the same glyph the
+  progress dock and the scan bar already spin — plus the pass's name (*"Pinning charlie-kirk — these counts
+  are still going up"*). Naming the pass is the useful half; it tells the user roughly how long this lasts,
+  which a generic sentence cannot. The Repos list carries the same line for the same reason.
+* **That line's row is always RESERVED.** A pass can start long after the page settled, and a line that
+  appeared then would shove the table down 20px while the user was reading it — a layout shift on a loaded
+  page, which is the same defect as one on a loading page and easier to miss.
+* **No new requests.** It reads the job set the progress dock already polls and the scan job the scan bar
+  already owns — both shared react-query caches, neither given an interval here. The locked no-background-
+  polling rule (Aspect 6b) is untouched.
+
+The decision is in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()`
+(pure, so it is pinned without mounting the shell) and the `useCensusPending()` hook that feeds it;
+rendered by `frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel` and
+`frontend/src/pages/repos/ReposPage.tsx`.
+
+### 6.2 The list flickered at the bottom of a long scroll — a windowing height that was a guess
+
+> *"the list is flickering when the scroll is to the bottom, may be height issue"*
+
+It was. A windowed table's scroll height is `padTop + Σ(rendered rows) + padBottom`, and **only the middle
+term is real** — the two spacer rows are arithmetic over an *assumed* per-row height (`ROW_H = 41`, a
+constant that had to match the CSS and no longer did). When the assumption is wrong by δ, the total moves
+by δ × (rows rendered) **every time the window slides**. The browser re-clamps `scrollTop`, which slides
+the window, which moves the total again. Near the top of a list there is slack to absorb it; **at the
+bottom `scrollTop` is pinned to the maximum and the loop has nowhere to settle** — so the rows jitter under
+the cursor for as long as you hold there.
+
+The fix is not a better constant. It is the **invariant**: *the container's scroll height must not depend
+on the scroll position.* The hook now measures a real rendered row (a `ResizeObserver` on the first one, so
+a zoom, a font that finished loading, or a column the responsive budget hid re-measures itself) and uses
+that height for both spacers. Because it came off the DOM it agrees with the rows by construction, the
+total collapses to `count × height` regardless of `start`, and the feedback loop cannot form. `ROW_H`
+survives only as the first-paint estimate, used before any row exists to measure.
+
+Implemented in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` —
+`useWindowedRows()` and the `measureRow` ref it returns, attached to the first body row by
+`frontend/src/components/table/DataTable.tsx`. Pinned by
+`frontend/src/components/table/useWindowedRows.spec.ts`, which asserts the algebra rather than a pixel
+count: one scroll height across the whole range when the height is measured, many when it is assumed, and
+a bottom-clamp loop that settles on its first try instead of never.
+
+### 6.3 Windows: the git backbone had been dead on the platform
+
+> ```
+> [pin] device registration for storage c140b1a11690 failed: Invalid value supplied for custom binary,
+> restricted characters must be removed or supply the unsafe.allowUnsafeCustomBinary option
+> ```
+
+Not a performance defect — a **total loss of git sync on Windows**, logged every ten minutes with
+escalating backoff (73s → 106s → 196s → 575s → 896s) and never diagnosed because the message names an
+option nobody had heard of.
+
+`simple-git` validates the custom `binary` it is handed against `/^([a-z]:)?([a-z0-9/.\\_~-]+)$/i` and
+**throws out of its factory** when the value does not match — no spaces, no parentheses. Git for Windows
+installs at `C:\Program Files\Git\cmd\git.exe`. So `openRepo()` threw *before running a single command*,
+and with it every pull, commit, push, device registration and mirrored-manifest reconcile on the platform.
+Nothing was wrong with the path: the direct `execFileSync(stableGitBin(), …)` callers had been using it all
+along without complaint, which is exactly why only the `simple-git` paths broke and why the failure looked
+like a storage problem rather than a path problem.
+
+`unsafe.allowUnsafeCustomBinary` — what the message suggests — would `console.warn` on every construction
+and buy nothing. Instead: where the resolved path is not one `simple-git` will accept, hand it the **bare
+name** and put the resolved directory at the **front of the child's PATH**. Same binary, the same immunity
+to a thin background PATH that `stableGitBin()` exists to provide, through a door `simple-git` will open.
+The PATH write updates whichever key is already present (Windows spells it `Path`) rather than adding a
+second one the child would have to choose between.
+
+Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-bin.ts` —
+`isSimpleGitSafeBinary()` + `withGitOnPath()`, applied by
+`backend/src/modules/git/git.service.ts` — `openRepo()`. Guarded by
+`backend/src/modules/git/git-bin-windows.spec.ts`, which asserts our predicate agrees with `simple-git`'s
+own rule case by case — and the drift is safe in the one direction it can go: saying "no" where `simple-git`
+would have said "yes" costs a PATH prefix, nothing more.
+
+### 6.4 Our own writes were waking the watcher
+
+From the same Windows run: 619 MB pulled over IPFS in ~22 minutes, and **every fetched file kicked its own
+discovery rescan** — a walk of all repos plus a TO DO recalc, 60–105s apiece, running concurrently with the
+transfers still in flight and competing with them for the same disk.
+
+To the filesystem watcher a landing `.mp4` is indistinguishable from a user dropping a video in. The
+transient-download and database-working-file filters already existed; the case they missed is the
+**finished** file we placed on purpose. And the rescan learns nothing: the pin pass chose the file from the
+manifest, fetched it, pinned it, and records the arrival itself.
+
+A path is now **claimed** at the moment we write it and stays claimed for five minutes, then the claim
+expires on its own — nothing has to remember to release it, and a leaked claim cannot outlive the window
+even if a pass dies mid-flight. A window rather than a flag because the watcher's event can arrive well
+after the write returns (FSEvents coalesces; a network volume is slower still). Only the **rescan trigger**
+is suppressed, and only for the exact paths we wrote: a user's own drop during a pin pass still wakes the
+watcher, and the 4-hour full scan sees everything regardless. The window only decides whether the discovery
+walk happens *now*, in the middle of the transfer that created the file, or later when the disk is quiet.
+
+Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/self-writes.ts` —
+`noteOwnWrite()` / `isOwnRecentWrite()`; claimed at the single choke point where bytes reach a working tree,
+`backend/src/modules/ipfs/ipfs.service.ts` — `catToFile()` (rather than at the two pin call sites, so a
+future caller cannot forget); honoured by `backend/src/modules/watcher/watcher.service.ts` —
+`isQualifying()`. Pinned by `backend/src/modules/watcher/self-writes.spec.ts` — including that the claim
+**expires**, because a suppression that outlived its window would trade a noisy rescan for a missing one.
+
+### 6.5 The dev proxy's ECONNREFUSED stack
+
+`pnpm dev` starts Vite and the backend together; Vite is ready in ~550 ms while the backend is still
+booting, so the first calls — the live event stream among them — hit a closed port and Vite printed a raw
+`AggregateError [ECONNREFUSED]` with an `internalConnectMultiple` trace. A startup race, not a fault. It
+now reads as one line for the first 30 seconds and keeps the loud version after that, when a refusal means
+the backend genuinely failed to start. The proxy target also moved from `localhost:8787` to
+`127.0.0.1:8787` to match the address the backend actually binds in local mode — on a dual-stack box
+`localhost` resolves to `::1` first, which is a whole class of platform-dependent proxy failure nobody
+needs. `frontend/vite.config.ts` — `proxyConfigure`.
+
+---
+
 ## Part III — The architecture transformation (streaming background filesystem index)
 
 Everything above (P-01…P-21) is **client-side triage plus "make the walk yield."** It cut the
@@ -1108,6 +1260,7 @@ ScansPage's former constant 10s `["jobs"]` poll is **deleted** — its lifecycle
 | P-36 | **Sitewide shell-first + live pages (Aspect 6b)** — six pages that hard-blocked first paint (Settings, Repo Settings, Storage Settings, Tools, IPFS dashboard/off) now render their shell + `PageSkeleton` immediately; seven new topics (`jobs`/`scans`/`progress`/`todo`/`devices`/`settings`/`ipfs`) bumped at their write choke points with a trailing-edge coalesced bump; `useLiveRefresh` wired on every data page (was: One Repo only), `storages` finally emitted; idle polls deleted (ScansPage 10s, ProgressContext 3s idle, ScanProgressBar 15s idle) — running-state fast polls kept for determinate progress | `backend/modules/events/state-events.service.ts` (`bumpTopicThrottled`), `jobqueue.service.ts`, `batch settle in runTask`, `scan-job.ts`, `progress.registry.ts`, `decisions.service.ts`, `storage.service.ts`, `storage-settings.service.ts`, `todo-batches.store.ts`, `pin.service.ts`, `config.service.ts`, `ipfs.service.ts`, `ipfs-node.service.ts`; `frontend/components/ui/PageSkeleton.tsx`, `ScanProgressBar.tsx`, `progress/ProgressContext.tsx`, and every page under `frontend/src/pages/` |
 | P-35 | **Progressive, non-blocking consumption** (completes P-22; formerly numbered P-23, which the pin-pass entry owns) — fetch/NDJSON reader (Bearer-authed) + `useStreamedFlatListing` (ref accumulate + rAF-coalesced flush); Full Paths fills progressively, time-to-first-row ≈ tens of ms. Kept P-17's optimistic `⋯`-menu badge patch working after the page left React Query via a small pub/sub bridge | `frontend/src/lib/streamNdjson.ts`, `frontend/src/components/table/useStreamedFlatListing.ts`, `frontend/src/pages/fs/FullPathsPage.tsx`, `frontend/src/lib/flatListingPatch.ts`, `frontend/src/lib/patchEntityBadges.ts` |
 | P-37 | **The two repo screens go async + progressive** — row composition is async, yields every 200 rows and uses the non-blocking `check-ignore`, so the whole app stops freezing while a repo is composed (and every background consumer of the same composer inherits it); two NDJSON routes stream `head`/`files`/`totals`/`enrich`/`pins`/`extras` and `meta`/`batch`. **Nothing expensive gates a row**: the freshness triggers fire behind the `head`, and the ledger fold, the `git check-ignore` axis and the `ipfs pin ls` enumeration are all patched in afterwards — `head` 1,177 ms → 1 ms, first row 3,331 ms → 9 ms on a 1,875-candidate repo. The list's single-flight promise became a multicast feed; sticky flags snapshotted once per repo. Partial states are marked `partial`, deferred fields stay UNDETERMINED rather than defaulting (which fixed a live ⊘ bug — see the entry), and the UI withholds every claim it has not finished counting | `backend/store-model/units.service.ts`, `backend/repos/repos.router.ts`, `backend/git/git.service.ts`, `backend/store-model/config.service.ts`, `shared/src/types.ts`, `frontend/src/api/streamQueries.ts`, `frontend/src/pages/repos/{ReposPage,OneRepoPage,MetricsStrip}.tsx`; guards: `backend/store-model/repo-row-stats.spec.ts`, `backend/repos/repos-stream.spec.ts`, `frontend/src/api/streamQueries.spec.ts` |
+| P-38 | **Say that work is still running, and stop the UI stating results as if it were not** — metric tiles + the Repos list go provisional (spinner + a sentence naming the pass) while ANY census-moving job runs or is queued, not just while the page's own fetch streams, which is what let `Pull down` read **0 in all-clear green** until the backbone pull landed minutes later; the windowed-table scroll height is now MEASURED from a real row instead of assumed from a constant, killing the clamp/re-window feedback loop that made a long list jitter at the bottom; `simple-git` no longer receives a binary path it refuses, which had broken **every** git pull/commit/push/device-registration on Windows on every cycle; and the pin pass's own writes stop waking the watcher into a full discovery rescan per fetched file | `frontend/src/lib/useCensusPending.ts`, `frontend/src/pages/repos/{MetricsStrip,ReposPage}.tsx`, `frontend/src/components/table/useWindowedRows.ts` + `DataTable.tsx`, `frontend/vite.config.ts`; `backend/modules/git/git-bin.ts` + `git.service.ts`, `backend/modules/watcher/self-writes.ts` + `watcher.service.ts`, `backend/modules/ipfs/ipfs.service.ts`; guards: `backend/modules/git/git-bin-windows.spec.ts`, `backend/modules/watcher/self-writes.spec.ts`, `frontend/src/components/table/useWindowedRows.spec.ts`, `frontend/src/lib/useCensusPending.spec.ts` |
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop

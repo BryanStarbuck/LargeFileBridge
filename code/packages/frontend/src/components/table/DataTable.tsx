@@ -156,7 +156,12 @@ const FF_COVERED_COLUMN_BY_FIELD: Partial<Record<FileFilterFieldId, string>> = {
 };
 
 const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) footgun.
-const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
+// The body-row height, in px. Applied to each <tr> (a MINIMUM, per CSS) and handed to the windowing as its
+// first-paint estimate. It is no longer the number the spacer arithmetic trusts: a row whose real height
+// drifts from this — a taller control, a bigger font, a browser zoom — used to make the scroll height move
+// as the window slid, which is what made a long list jitter at the bottom. useWindowedRows measures the
+// rendered row and uses that instead (performance.mdx P-38).
+const ROW_H = 41;
 
 export function DataTable<T>({
   data,
@@ -995,11 +1000,16 @@ export function DataTable<T>({
                   <td colSpan={colSpan} />
                 </tr>
               )}
-              {visibleRows.map((row) => {
+              {visibleRows.map((row, i) => {
                 const id = getRowId(row.original);
                 return (
                   <tr
                     key={row.id}
+                    // The one row the windowing measures itself against (useWindowedRows). ROW_H below is
+                    // only the estimate for the first paint; from here on the spacer arithmetic uses the
+                    // height the rows ACTUALLY have, which is what stops the scrollHeight moving as the
+                    // window slides.
+                    ref={i === 0 ? win.measureRow : undefined}
                     // Standard browser modified-click behaviour (tables.mdx §4d). A row navigates via JS,
                     // not an <a href>, so ⌘-click / Ctrl-click / middle-click used to be SWALLOWED and
                     // navigate in place — the opposite of what every other link on the web does. When the

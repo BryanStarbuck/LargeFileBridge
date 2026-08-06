@@ -510,6 +510,18 @@ The streamed list endpoint (one shared walk, multicast to every reader) is in co
 The client reducer that folds the batches into the page's existing `["repos"]` cache is in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()`
 
+* **A BACKGROUND PASS MAKES EVERY NUMBER IN THIS TABLE PROVISIONAL (performance.mdx P-38, LOCKED).** The
+  per-repo counts here — peers, pinned, undecided — are recomputed by the same `scan` / `pin` passes that
+  feed the One-repo tiles, and a pass can land minutes after the list has finished loading. So while any
+  census-moving job is running **or queued**, a single line sits above the table — a turning spinner plus
+  the name of the pass — saying these counts are still going up. The row is always RESERVED, so a pass
+  starting long after the page settled does not resize the table under the user. Without the line a repo
+  reads a settled-looking number that quietly moves later, which is the same failure
+  [one_repo.mdx §5](./one_repo.mdx) documents for `Pull down`.
+
+Whether a count is still being worked out is decided in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()`; rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx`
+
 ---
 
 ## 8. Bookmark (favorite) — the leading ribbon toggle

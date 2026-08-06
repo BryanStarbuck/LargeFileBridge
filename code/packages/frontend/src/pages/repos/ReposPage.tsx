@@ -16,6 +16,7 @@ import type { Action } from "../../components/menu/EntityMenu.js";
 import { RepoStatusPill } from "../../components/Pill.js";
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
+import { useCensusPending } from "../../lib/useCensusPending.js";
 import { clientLog } from "../../lib/clientLog.js";
 
 const STATUS_OPTIONS: RepoStatus[] = [
@@ -45,6 +46,7 @@ export function ReposPage() {
   // this page mounted) without doubling the request rate.
   const { data: scan } = useQuery({ queryKey: ["scanStatus"], queryFn: api.scanStatus });
   const scanning = scan?.status === "running";
+  const census = useCensusPending();
 
   // Live refresh (performance.mdx Aspect 6b): a backbone reconcile or scan changes the list, an open
   // page learns without a reload.
@@ -187,6 +189,20 @@ export function ReposPage() {
       {/* Page action-links row, directly under the title (page_actions.mdx §3). */}
       <div className="mb-2 shrink-0">
         <PageActions actions={repoListActions} />
+      </div>
+
+      {/* Every per-repo number in the table below — peers, pinned, undecided — is recomputed by the same
+          background passes, so the list needs the same honesty the metric tiles got (useCensusPending).
+          Without it a repo reads a settled-looking count that quietly changes minutes later. */}
+      {/* The row is always reserved so a pass that starts long after the page settled does not resize the
+          table under the user — same rule as the metrics strip (MetricsStrip.tsx). */}
+      <div className="mb-2 flex h-4 shrink-0 items-center" aria-live="polite">
+        {census.active && (
+          <p className="flex items-center gap-1.5 text-xs text-black/45">
+            <RefreshCw className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
+            {census.label} — these counts are still going up.
+          </p>
+        )}
       </div>
 
       <DataTable

@@ -210,6 +210,31 @@ scratch files every few seconds and none of it is ever payload: in-flight **down
 temp** `<name>.lfb-fetch-<pid>-<ms>.tmp` — the full-size file `fetchToPath()` writes before renaming it
 into place, which otherwise made every file the pin process pulled down queue a whole-tree rescan.
 
+**Our own FINISHED writes are not news either (performance.mdx P-38, added 2026-08-06).** The temp-file
+rule above covers the file while it is being written; it does not cover the moment it is **renamed into
+place**, which is a perfectly ordinary add of a big media file as far as the watcher is concerned. So a
+pin pass that pulled six files down kicked **six** discovery rescans — a walk of every repo plus a TO DO
+recalc, 60–105 s apiece, running concurrently with the transfers still in flight and competing with them
+for the same disk (measured on the 2026-08-06 Windows run: 619 MB in ~22 minutes). The rescan also learns
+nothing: the pin pass chose the file from the manifest, fetched it, pinned it, and records the arrival
+itself — the walk is being asked to discover a file the caller just put there on purpose.
+
+A path is therefore **claimed** at the moment we write it and stays claimed for **five minutes**, after
+which the claim expires by itself. A window rather than a flag because the watcher's callback can arrive
+well after the write returns (FSEvents coalesces; a network volume is slower still), and because an
+expiring claim cannot leak if a pass dies mid-flight. The suppression is narrow on purpose:
+
+* only the **rescan trigger** is suppressed, and only for the **exact absolute paths we wrote** — a user's
+  own drop into the same directory during a pin pass still wakes the watcher;
+* nothing is hidden permanently. The 4-hour discovery pass (§2) and the pin pass's own tracking writes see
+  the file regardless. The window only decides whether the walk happens **now**, in the middle of the
+  transfer that created the file, or **later**, when the disk is quiet;
+* the claim set is bounded (20,000 paths, oldest released first) — losing a claim costs one extra rescan,
+  which is the safe direction to fail in.
+
+The claim and the watcher's use of it are in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/self-writes.ts` — `noteOwnWrite()` / `isOwnRecentWrite()`; claimed at the one place bytes reach a working tree, `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile()`; honoured by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `isQualifying()`
+
 **Debounce + coalesce.** Editors and tools emit **bursts** (a save writes a temp file, renames it,
 deletes the temp). The watcher collects raw events into a pending set and **debounces** (default
 ~1.5 s of quiet, `watcher.debounce_ms`, §5) before deciding. If, after a burst settles, **at least one**
