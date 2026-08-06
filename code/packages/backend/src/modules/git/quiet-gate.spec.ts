@@ -264,12 +264,31 @@ describe("the quiet gate — a repo's scan heartbeat never becomes a commit (§6
     expect(commitCount(dir)).toBe(before);
   });
 
-  it("DOES commit when the repo's real tracking state changes", async () => {
+  it("makes NO commit when only this computer's file COUNTS moved", async () => {
+    // `counts` is derived from THIS computer's file index (`refreshCounts` → `readStorageIndex`), so a
+    // computer that has not pulled a repo's big files down legitimately reports different numbers from one
+    // that has. Mirroring it verbatim meant the two overwrote each other every cycle — a commit per repo per
+    // cycle from a value that describes the machine, not the repo. `mirrorToSyncRepo` now scrubs it at the
+    // writer; this gate is what holds while a peer is still on an older build (same argument as `last_scan`).
     const dir = repoWithMirror();
     await settleSetup(dir);
     const before = commitCount(dir);
     await rescan(dir, (d) => {
       d.repo_storage.counts.videos = 4;
+      d.repo_storage.counts.large = 4;
+    });
+    expect(commitCount(dir)).toBe(before);
+  });
+
+  it("DOES commit when the repo's real SHARED state changes", async () => {
+    // `policy` and `name` are user-editable and mean the same thing on every computer — the fields the
+    // backbone exists to carry. Suppressing these would be the opposite failure: a quiet gate that eats the
+    // user's actual change.
+    const dir = repoWithMirror();
+    await settleSetup(dir);
+    const before = commitCount(dir);
+    await rescan(dir, (d) => {
+      d.repo_storage.policy.recommend_transcribe = true;
       d.repo_storage.last_scan.at = "2026-08-04T09:00:00.000Z"; // rides along, as it should
     });
     expect(commitCount(dir)).toBe(before + 1);
@@ -286,9 +305,13 @@ describe("volatileYamlPathsFor — what is allowed to move on its own", () => {
     expect(volatileYamlPathsFor(".lfbridge/devices/bryan-mac-pro.yaml")).toHaveLength(2);
   });
 
-  it("knows a repo's tracking state re-stamps its scan heartbeat", () => {
-    expect(volatileYamlPathsFor("repos/eb94a756b52e/repo_storage.yaml")).toEqual(["repo_storage.last_scan"]);
-    expect(volatileYamlPathsFor(".lfbridge/repo_storage.yaml")).toEqual(["repo_storage.last_scan"]);
+  it("knows a repo's tracking state re-stamps its scan heartbeat AND its machine-local counts", () => {
+    // `counts` is derived from THIS computer's file index (refreshCounts), so two computers holding
+    // different subsets of a repo's big files overwrite each other's number every cycle — a commit per repo
+    // per cycle from a value that describes the machine, not the repo. Same class as `last_scan`.
+    const volatile = ["repo_storage.last_scan", "repo_storage.counts"];
+    expect(volatileYamlPathsFor("repos/eb94a756b52e/repo_storage.yaml")).toEqual(volatile);
+    expect(volatileYamlPathsFor(".lfbridge/repo_storage.yaml")).toEqual(volatile);
   });
 
   it("gives every other LFB-owned YAML the timestamp-only surface", () => {

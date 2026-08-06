@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ManifestSchema, UnitStatusSchema, mediaKindForName, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
+import { ManifestSchema, mediaKindForName, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
 import { computerLabel } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -38,10 +38,19 @@ import {
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
 import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
-import { getStoragePinned, readMappedDirsForRoot, getGitBackboneRemote } from "../storage/storage-settings.service.js";
+import {
+  getStoragePinned,
+  readMappedDirsForRoot,
+  getGitBackboneRemote,
+  getStorageUnitStatus,
+  writeStorageUnitStatus,
+} from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
 import { stableGitBin } from "../git/git-bin.js";
 import { withStorageGitLock } from "../git/git-lock.js";
+// One pin pass at a time per repo unit — the equivalent of the per-storage git lock for the repo units,
+// which had none (unit-lock.ts).
+import { withUnitLock } from "./unit-lock.js";
 // The sync-repo mirror: send (mirrorToSyncRepo, via writeRepoTrackingManifest), receive (reconcile), and the
 // per-entry merge that keeps a peer's pin claim alive (storage_company.mdx §8.4.2/§8.4.3/§8.6).
 import {
@@ -57,7 +66,7 @@ import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
-import { joinRel, healWindowsPath } from "../../shared/rel-path.js";
+import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
 import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
@@ -497,7 +506,20 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
  * (pin_process.mdx §6). Because clicking Pin now is the user explicitly opting this repo in, a manual
  * run on an off repo also flips `pinned=true` so the every-15-min background pin pass keeps it fresh.
  */
-export async function pinRepoFolder(
+export function pinRepoFolder(
+  folder: string,
+  onlyPaths?: Set<string>,
+  opts: { manual?: boolean; report?: PinReport } = {},
+): Promise<PinCounts> {
+  // ONE pass at a time for this repo (unit-lock.ts). The decision-triggered pin, a manual Pin now and the
+  // background pass all land here for the same folder, and `runUnitPin` writes the unit manifest WHOLESALE
+  // from a snapshot taken at entry — so two overlapping runs drop each other's newly-added CIDs and re-upload
+  // those files on the next pass. Serialized rather than coalesced: a paths-scoped run carries the user's
+  // selection and must not be swallowed by a queued run with a different scope.
+  return withUnitLock(`repo:${folder}`, () => pinRepoFolderInner(folder, onlyPaths, opts));
+}
+
+async function pinRepoFolderInner(
   folder: string,
   onlyPaths?: Set<string>,
   opts: { manual?: boolean; report?: PinReport } = {},
@@ -537,10 +559,13 @@ export async function pinRepoFolder(
       label: computerLabel(),
       decisions: cfg.decisions,
       fetchMissing: cfg.pin.fetch_missing,
-      // joinRel, not path.join: a manifest key is POSIX (repo__list_syns.mdx §6.1), and this is the
+      // joinRelConfined, not path.join: a manifest key is POSIX (repo__list_syns.mdx §6.1), and this is the
       // function that decides WHERE a fetched file's bytes are written. `path.join(root, 'a\\b.mp4')` on
       // macOS/Linux writes one file literally named `a\b.mp4` at the repo root — the 2026-08-04 defect.
-      resolveAbs: (rel) => joinRel(repoPath, rel),
+      // CONFINED because the key is not ours: it arrives through a git-merged manifest from another
+      // computer (or a teammate), and null here reads as "not placeable on this computer", the same
+      // known-but-absent answer an ungrafted mapped dir gives — so a bad key is skipped, never written.
+      resolveAbs: (rel) => joinRelConfined(repoPath, rel),
       manifest: unitManifest,
       status: getRepoStatus(folder),
       writeManifest: (m) => writeRepoManifest(folder, m),
@@ -612,7 +637,9 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
     // A mapped hierarchy: the graft decides where (or whether) it lives here.
     return resolveGraftedPath(root, key.slice(0, cut), key.slice(cut + 1));
   }
-  return joinRel(root, key); // pre-mapped-dir model: the file lives under the SDL root
+  // CONFINED to the SDL root — the key came off a shared manifest, so `..` must resolve to "not placeable
+  // here" rather than to a write outside the storage (joinRelConfined).
+  return joinRelConfined(root, key); // pre-mapped-dir model: the file lives under the SDL root
 }
 
 // Serialize all Git-cycle work PER STORAGE. The every-10-min device worker, the every-15-min pin pass, a
@@ -734,11 +761,15 @@ async function pinStorageUnitInner(id: string): Promise<void> {
       fetchMissing: true,
       resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
       manifest: readCommittedManifest(root), // <root>/manifest.yaml — an SDL has no .lfbridge/ (§0.4)
-      status: UnitStatusSchema.parse({}),
+      // A REAL, PERSISTED status (pin/s/<id>/status.yaml, machine-local). This used to be a throwaway
+      // `UnitStatusSchema.parse({})` with a no-op writer, which silently disabled the deleted-file rule for
+      // every SDL: `classifyAbsent` carries the grace period in `status.orphans`, so with nothing persisted
+      // each pass re-stamped a deleted file as "first seen absent just now". The 24h grace could never
+      // lapse (decisions.mdx §12), the decision never returned to Undecided, and this computer went on
+      // pinning bytes for a file the user had deleted. `markUnitError` wrote nowhere for the same reason.
+      status: getStorageUnitStatus(id),
       writeManifest: (m) => writeCommittedManifest(root, m),
-      // Storage units have no status.yaml store yet — status is a no-op (the manifest + pins are still
-      // written and reconciled). A persisted per-storage status is a later follow-up.
-      writeStatus: () => {},
+      writeStatus: (s) => writeStorageUnitStatus(id, s),
     });
   } else {
     log.info("pin", `Storage ${id}: pinned=false — device info kept current, no byte work.`);
@@ -1087,7 +1118,13 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
   const out: MissingPinnedFile[] = [];
   for (const entry of manifest.files) {
     if (!entry.cid) continue; // no CID → nothing to pull
-    const abs = path.join(repoRoot, entry.path);
+    // Confined: this list is what the pull-down popup ACTS on, so a key that does not land inside the repo
+    // must never become an offer. Dropping it here is also what keeps it out of `pullMissing` below.
+    const abs = joinRelConfined(repoRoot, entry.path);
+    if (abs === null) {
+      log.warn("pin", `missingPinnedFromPeers: ${repoRoot}: manifest entry "${entry.path}" is not inside the repo — ignored`);
+      continue;
+    }
     if (fs.existsSync(abs)) continue; // already on disk here → not missing
     if (pinset.has(ipfs.canonicalCid(entry.cid))) continue; // already pinned on this node → bytes are here
     out.push({
@@ -1148,7 +1185,17 @@ export async function pullMissing(
           log.warn("pin", `pullMissing: no manifest CID for ${rel} in ${repoRoot} — skipping`);
           return;
         }
-        const abs = path.join(repoRoot, entry.path);
+        // Confined — this is the call that WRITES the bytes (`catToFile` mkdir -p's and streams to disk), and
+        // `entry.path` came off a shared, git-merged manifest. `checkedPaths` normally arrives from
+        // `missingPinnedFromPeers` (already confined), but the route accepts a caller-supplied list, so the
+        // check belongs where the write happens rather than only where the offer was built.
+        const abs = joinRelConfined(repoRoot, entry.path);
+        if (abs === null) {
+          failed++;
+          if (errors.length < 3) errors.push(`${rel}: not inside this repo`);
+          log.warn("pin", `pullMissing: refusing ${rel} in ${repoRoot} — the manifest key does not resolve inside the repo`);
+          return;
+        }
         try {
           // Same wrapper-directory self-heal as the pin pass's fetch-missing: unwrap a legacy directory CID
           // to the file inside it BEFORE pinning or cat-ing, and record the corrected CID (written back to

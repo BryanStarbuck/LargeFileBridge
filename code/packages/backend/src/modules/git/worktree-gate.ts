@@ -19,8 +19,33 @@
 import { log } from "../../shared/logging.js";
 import path from "node:path";
 
-/** Working-copy roots with a git cycle in flight → re-entrancy depth. */
-const busy = new Map<string, number>();
+/**
+ * A git cycle in flight over one working copy.
+ *
+ * THIS IS A MUTEX, NOT JUST A FLAG — and the difference is load-bearing. The gate began as a re-entrancy
+ * COUNTER, which made outside writers defer but did nothing to stop a SECOND cycle running git in the same
+ * directory at the same time. That is reachable in ordinary configuration: `withStorageGitLock` keys on the
+ * STORAGE id, while two storages can resolve to ONE working copy (an explicit `backing.dedicated_repo`
+ * pointing at a root another SDL auto-adopts, or two storages configured to the same path). The device pass
+ * runs storages through `runPool(ids, cores − 2, …)`, so both cycles ran `add`/`commit`/`push` in one
+ * directory concurrently — an index race. `warnOnDuplicateBackbones` names that arrangement but only warns
+ * about the PUSH races; the local index race had nothing guarding it, and git-lock.ts's own header claimed
+ * a guarantee ("at most one pass touches a given storage's repo at a time") it could not give.
+ *
+ * `owner` is what keeps it re-entrant WITHOUT deadlocking the one legitimate nesting: `commitAndPushInner`
+ * calls `pull()` on its non-fast-forward retry, and both take this gate on the same `GitBackbone`. Same
+ * owner ⇒ pass straight through; a different owner ⇒ wait for the holder to finish.
+ */
+interface BusyState {
+  /** The logical cycle holding this working copy — a `GitBackbone` instance, in practice. */
+  owner: unknown;
+  /** Nesting depth for THIS owner; the root is released when it returns to zero. */
+  depth: number;
+  /** Resolves when the holder releases — what a waiting cycle awaits. */
+  done: Promise<void>;
+  release: () => void;
+}
+const busy = new Map<string, BusyState>();
 
 interface DeferredJob {
   /** Absolute path the job wants to write — it waits while any busy root contains it. */
@@ -62,19 +87,46 @@ export function busyRootFor(abs: string): string | null {
 }
 
 /**
- * Run `fn` with `dir` marked as mid-cycle. Every git step that MUTATES a working copy (fetch+merge,
- * add/commit/push) must run inside this, so an outside writer defers instead of dirtying the tree under git's
- * feet. Re-entrant (a nested span just bumps the depth); deferred jobs drain once the outermost span ends.
+ * Run `fn` with EXCLUSIVE use of `dir`. Every git step that MUTATES a working copy (fetch+merge,
+ * add/commit/push) must run inside this, so (a) an outside writer defers instead of dirtying the tree under
+ * git's feet, and (b) a second cycle over the same working copy WAITS rather than racing it in the index.
+ *
+ * `owner` marks the logical cycle. Re-entering with the same owner passes through (depth++); a different
+ * owner queues behind the holder. Callers that pass nothing get a fresh identity, i.e. full exclusion.
+ *
+ * Holds are bounded on purpose: the unbounded IPFS work of a pin pass happens BETWEEN the pull and the
+ * commit, outside this span, so waiting here is always waiting on git alone. Deferred outside writes drain
+ * once the outermost span ends.
  */
-export async function withWorktreeBusy<T>(dir: string, fn: () => Promise<T>): Promise<T> {
+export async function withWorktreeBusy<T>(dir: string, fn: () => Promise<T>, owner: unknown = {}): Promise<T> {
   const root = norm(dir);
-  busy.set(root, (busy.get(root) ?? 0) + 1);
+  for (;;) {
+    const held = busy.get(root);
+    if (!held) break;
+    if (held.owner === owner) {
+      // The legitimate nesting (commitAndPush → pull on a non-fast-forward retry). Re-enter; the OUTERMOST
+      // span owns the release and the drain.
+      held.depth++;
+      try {
+        return await fn();
+      } finally {
+        held.depth--;
+      }
+    }
+    // Another cycle owns this working copy. Wait for it — never run git beside it.
+    await held.done;
+  }
+  let release!: () => void;
+  const done = new Promise<void>((resolve) => (release = resolve));
+  const state: BusyState = { owner, depth: 1, done, release };
+  busy.set(root, state);
   try {
     return await fn();
   } finally {
-    const depth = (busy.get(root) ?? 1) - 1;
-    if (depth <= 0) busy.delete(root);
-    else busy.set(root, depth);
+    state.depth--;
+    if (state.depth <= 0 && busy.get(root) === state) busy.delete(root);
+    // Wake every waiter BEFORE draining, so a queued cycle is not stuck behind an outside writer's work.
+    release();
     drain();
   }
 }

@@ -26,6 +26,9 @@ import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { isStrayPathName, copyHealed } from "./sidecar-heal.js";
+// The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
+// logs. Both directions route through it, so neither leg can stamp over the other side's events.
+import { copyTrackedFile } from "./tracked-file-merge.js";
 // The working-tree gate — a LEAF module (logging + path only), so no cycle with the git service.
 import { deferWhileBusy } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
@@ -102,8 +105,15 @@ export function ensureSyncRepoMarker(
   return target;
 }
 
-/** Recursively copy `src` → `dst`, skipping the machine-local files at the top level. Best-effort. */
-function copyTree(src: string, dst: string, top = true): void {
+/**
+ * Recursively copy `src` → `dst`, skipping the machine-local files at the top level. Best-effort.
+ *
+ * `rel` is the path SO FAR from the per-repo state-dir root, and it is the whole reason this signature is
+ * not just `(src, dst)`: it is what lets `copyTrackedFile` recognise a `files/<rel>.yaml` sidecar or a
+ * `history/<device>.txt` log and MERGE it instead of stamping over it (tracked-file-merge.ts). Every other
+ * shape still gets the plain copy it always got.
+ */
+function copyTree(src: string, dst: string, rel = ""): void {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(src, { withFileTypes: true });
@@ -112,9 +122,10 @@ function copyTree(src: string, dst: string, top = true): void {
   }
   fs.mkdirSync(dst, { recursive: true });
   for (const e of entries) {
-    if (top && LOCAL_ONLY.has(e.name)) continue;
+    if (rel === "" && LOCAL_ONLY.has(e.name)) continue;
     const s = path.join(src, e.name);
     const d = path.join(dst, e.name);
+    const childRel = rel === "" ? e.name : `${rel}/${e.name}`;
     try {
       // A `\` in the NAME is a whole relative path that lost its separators (§6.1b). Copying it verbatim
       // is what makes the bad spelling travel — and a `\` filename cannot be checked out on Windows at
@@ -123,8 +134,8 @@ function copyTree(src: string, dst: string, top = true): void {
         copyHealed(s, dst, e.name);
         continue;
       }
-      if (e.isDirectory()) copyTree(s, d, false);
-      else if (e.isFile()) fs.copyFileSync(s, d);
+      if (e.isDirectory()) copyTree(s, d, childRel);
+      else if (e.isFile()) copyTrackedFile(s, d, childRel);
     } catch (err) {
       // Skip an unreadable/unwritable leaf; never fail the whole mirror — BUT make it observable. A file
       // that silently stops copying between the user's computers is the exact failure this module exists to
@@ -193,12 +204,15 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     // "it eventually shows up" is indistinguishable from "it is broken" while you are staring at the screen.
     // The trigger resolves the SDL by root prefix, and `dst` IS inside the SDL, so it lands correctly here
     // (the case it cannot resolve is a path inside a working repo — not this one).
-    // Scrub the machine-local scan heartbeat from the MIRRORED repo_storage.yaml. `last_scan.at` re-stamps
-    // on EVERY scan, and every backbone pull triggers scans — so mirroring it verbatim made each storage's
+    // Scrub the MACHINE-LOCAL fields from the MIRRORED repo_storage.yaml. `last_scan.at` re-stamps on EVERY
+    // scan, and every backbone pull triggers scans — so mirroring it verbatim made each storage's
     // auto-commit re-dirty the other storage's sync repo in an endless last_scan ping-pong (the 2026-08-04
     // "two sync repos fighting" defect; same churn shape as backbone_resilience.mdx's device-file fix).
-    // With last_scan held at its schema default here, the mirror's bytes change only when REAL state
-    // (counts, name, policy) changes, so a pure-heartbeat scan produces zero commits.
+    // `counts:` is the SAME KIND OF FIELD and was missed: `refreshCounts` derives it from THIS computer's
+    // file index, so two computers holding different subsets of a repo's big files each overwrote the
+    // other's number on every cycle — a commit per repo per cycle, forever, from a value that was never
+    // shared state to begin with. With both held at their schema defaults here, the mirror's bytes change
+    // only when genuinely shared state (name, policy, enlist provenance) does.
     scrubVolatileRepoStorage(path.join(dst, "repo_storage.yaml"));
     noteArtifactWritten(dst, "tracking-state");
     return true;
@@ -208,14 +222,25 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
   }
 }
 
-/** Rewrite a MIRROR copy of repo_storage.yaml with `last_scan` reset to its schema default, serialized
- *  exactly like writeRepoStorage (deterministic key order) so an otherwise-unchanged doc is byte-stable
- *  across mirrors. Best-effort: an unparseable file is left as copied. */
+/**
+ * The `repo_storage.yaml` fields that describe THIS COMPUTER rather than the repo. They are reset to their
+ * schema defaults in the mirror copy (so they never travel) and preserved from the local copy on reconcile
+ * (so an arriving copy never blanks them here). Anything shared — `name`, `policy`, `enlisted` — is absent
+ * from this list and travels normally.
+ */
+const MACHINE_LOCAL_REPO_STORAGE = ["last_scan", "counts"] as const;
+
+/** Rewrite a MIRROR copy of repo_storage.yaml with every {@link MACHINE_LOCAL_REPO_STORAGE} field reset to
+ *  its schema default, serialized exactly like writeRepoStorage (deterministic key order) so an
+ *  otherwise-unchanged doc is byte-stable across mirrors. Best-effort: an unparseable file is left as copied. */
 function scrubVolatileRepoStorage(file: string): void {
   try {
     const parsed = RepoStorageDocSchema.safeParse(YAML.parse(fs.readFileSync(file, "utf8")) ?? {});
     if (!parsed.success) return;
-    parsed.data.repo_storage.last_scan = RepoStorageDocSchema.parse({ repo_storage: {} }).repo_storage.last_scan;
+    const defaults = RepoStorageDocSchema.parse({ repo_storage: {} }).repo_storage;
+    for (const key of MACHINE_LOCAL_REPO_STORAGE) {
+      (parsed.data.repo_storage as Record<string, unknown>)[key] = (defaults as Record<string, unknown>)[key];
+    }
     fs.writeFileSync(file, YAML.stringify(parsed.data, { sortMapEntries: true }), "utf8");
   } catch {
     /* missing/unreadable mirror copy — nothing to scrub */
@@ -254,9 +279,15 @@ function readManifestBestEffort(file: string, unit: Manifest["unit"]): Manifest 
 
 /**
  * Reconcile a pulled sync-repo subtree back into Local Storage (artifact_placement_policy.mdx §5,
- * storage_company.mdx §8.4.3). `manifest.yaml` is MERGED per entry (`mergeManifests`); everything else
- * (append-only sidecars, history, the union-folded decisions ledger) is copied, which is safe for those
- * shapes. Best-effort; no-op when no sync repo is configured for this repo.
+ * storage_company.mdx §8.4.3). `manifest.yaml` is MERGED per entry (`mergeManifests`), `decisions.yaml` by
+ * event union, `repo_storage.yaml` field-wise; the per-file sidecars and per-device history logs are
+ * MERGED by `copyTrackedFile` (tracked-file-merge.ts). Only shapes with no shared state left — anything
+ * neither side appends to concurrently — are still a plain copy. Best-effort; no-op when no sync repo is
+ * configured for this repo.
+ *
+ * "Append-only" was long treated as licence to copy. It is not: two computers appending to one list
+ * produce two supersets of a common prefix, and a copy in either direction keeps one and deletes the
+ * other's tail — which is how sidecar events written between mirrors were being lost.
  *
  * This used to be a wholesale `copyTree` — and had ZERO callers, so a mirrored manifest that did arrive was
  * never folded in at all. Both halves of that are fixed: the merge is real, and the pin pass calls it on
@@ -296,10 +327,11 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
       fs.mkdirSync(dst, { recursive: true });
       fs.writeFileSync(localLedger, serializeLedger(merged), "utf8");
     }
-    // 2b. repo_storage.yaml — a MERGE that PRESERVES the local `last_scan` stamp. The mirror's copy is
-    // scrubbed of last_scan on purpose (see mirrorToSyncRepo); a wholesale copy would blank this machine's
-    // stamp on every pull, making the stale-scan trigger re-scan constantly — which re-stamps and re-mirrors,
-    // i.e. the exact churn loop the scrub exists to break.
+    // 2b. repo_storage.yaml — a MERGE that PRESERVES this computer's own {@link MACHINE_LOCAL_REPO_STORAGE}
+    // fields. The mirror's copy is scrubbed of them on purpose (see mirrorToSyncRepo); a wholesale copy
+    // would blank this machine's `last_scan` stamp on every pull, making the stale-scan trigger re-scan
+    // constantly — which re-stamps and re-mirrors, i.e. the exact churn loop the scrub exists to break —
+    // and would replace this machine's `counts` with a peer's view of a different set of files on disk.
     const incomingStorage = path.join(src, "repo_storage.yaml");
     if (fs.existsSync(incomingStorage)) {
       try {
@@ -307,7 +339,13 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         if (incoming.success) {
           const localFile = path.join(dst, "repo_storage.yaml");
           const local = RepoStorageDocSchema.safeParse(YAML.parse(readFileOrNull(localFile) ?? "") ?? {});
-          if (local.success) incoming.data.repo_storage.last_scan = local.data.repo_storage.last_scan;
+          if (local.success) {
+            for (const key of MACHINE_LOCAL_REPO_STORAGE) {
+              (incoming.data.repo_storage as Record<string, unknown>)[key] = (
+                local.data.repo_storage as Record<string, unknown>
+              )[key];
+            }
+          }
           fs.mkdirSync(dst, { recursive: true });
           fs.writeFileSync(localFile, YAML.stringify(incoming.data, { sortMapEntries: true }), "utf8");
         }
@@ -315,7 +353,8 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         log.warn("storage", `reconcile: repo_storage fold failed for ${dst}: ${(e as Error).message}`);
       }
     }
-    // 3. everything else — append-only / union-folded shapes tolerate a copy
+    // 3. everything else — the per-file sidecars and per-device history logs are MERGED inside
+    //    `copyTrackedFile`; only shapes with nothing shared to lose are still copied outright.
     copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"]));
     return true;
   } catch (e) {
@@ -418,8 +457,10 @@ function copyTreeExcept(src: string, dst: string, skip: Set<string>): void {
         copyHealed(s, dst, e.name);
         continue;
       }
-      if (e.isDirectory()) copyTree(s, d, false);
-      else if (e.isFile()) fs.copyFileSync(s, d);
+      // `e.name` IS the state-dir-relative path at this level, so the sidecar/history merge sees the
+      // `files/` and `history/` prefixes it keys on.
+      if (e.isDirectory()) copyTree(s, d, e.name);
+      else if (e.isFile()) copyTrackedFile(s, d, e.name);
     } catch (err) {
       log.warn("storage", `reconcile: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
     }

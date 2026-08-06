@@ -7,10 +7,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { StorageUnitConfigSchema, MappedDirsSchema, type StorageUnitConfig } from "@lfb/shared";
+import { StorageUnitConfigSchema, MappedDirsSchema, UnitStatusSchema, type StorageUnitConfig, type UnitStatus } from "@lfb/shared";
 import type { StorageSettings, StorageBackingLocation, StorageSettingsPatch, StorageRow, MappedDir, MappedDirList, MappedDirsView, MappedDirRow, OwnedRepoRow, RepoOwner } from "@lfb/shared";
 import { readYaml, writeYaml, updateYaml } from "../../shared/store/yaml-store.js";
-import { storageUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
+import { storageUnitDir, unitConfigPath, unitStatusPath } from "../../shared/store/scopes.js";
 import { expandHome } from "../fs/badges.js";
 import { trackingBaseDir, legacyTrackingBaseDir, RESERVED_SDL_ROOT_NAMES, usesLfbridgeDir, resolveStorageType } from "./storage-type.service.js";
 // storage.service <-> storage-settings.service form a lazy import cycle (used only inside functions,
@@ -277,6 +277,33 @@ export function getStoragePinned(storageId: string): boolean {
   } catch {
     return false;
   }
+}
+
+// ── the per-storage unit STATUS (pin/s/<id>/status.yaml) ─────────────────────
+// Machine-local, alongside this storage's `config.yaml`, and never committed — the same shape repo and
+// computer units have always had (`unitStatusPath`).
+//
+// It exists because the storage pin pass ran with `status: UnitStatusSchema.parse({})` and a no-op
+// `writeStatus`, which quietly disabled the deleted-file rule for every SDL. `classifyAbsent` carries the
+// grace period in `status.orphans`, so with nothing persisted every pass re-stamped a deleted file as
+// "first seen absent just now": the 24h grace could never lapse, the decision never returned to Undecided,
+// and this computer kept pinning bytes for a file the user deleted — indefinitely. `markUnitError` wrote
+// nowhere for the same reason.
+
+/** This storage's machine-local unit status file. */
+function storageStatusPath(storageId: string): string {
+  return unitStatusPath(storageUnitDir(storageId));
+}
+
+/** Read a storage's unit status (defaults-on-absence, like every other unit). */
+export function getStorageUnitStatus(storageId: string): UnitStatus {
+  return readYaml(storageStatusPath(storageId), UnitStatusSchema);
+}
+
+/** Write a storage's unit status. Deliberately does NOT bump a UI topic: the pin pass rewrites this every
+ *  cycle and it drives no rendered surface today, so a bump would be pure refresh churn. */
+export function writeStorageUnitStatus(storageId: string, status: UnitStatus): void {
+  writeYaml(storageStatusPath(storageId), { ...status });
 }
 
 /**

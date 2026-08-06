@@ -26,7 +26,7 @@ import { readMappedDirsForRoot } from "./storage-settings.service.js";
 import { trackingBaseDir, legacyTrackingBaseDir } from "./storage-type.service.js";
 import { freshVolatileHardware } from "./hardware.service.js";
 import { expandHome } from "../fs/badges.js";
-import { joinRel } from "../../shared/rel-path.js";
+import { joinRelConfined } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
 const DEVICES_DIR = "devices";
@@ -238,7 +238,7 @@ let labelIndexCache: { at: number; key: string; map: Map<string, string> } | nul
  * Memoized for {@link LABEL_INDEX_TTL_MS} so callers may treat it as cheap.
  */
 export function deviceLabelIndex(storageRoots: string[]): Map<string, string> {
-  const key = [...storageRoots].sort().join(" ");
+  const key = [...storageRoots].sort().join("\0");
   const now = Date.now();
   if (labelIndexCache && labelIndexCache.key === key && now - labelIndexCache.at < LABEL_INDEX_TTL_MS) {
     return labelIndexCache.map;
@@ -347,9 +347,12 @@ export function resolveGraftedPath(storageRoot: string, mappedKey: string, relPa
   }
   const g = doc.graft[mappedKey];
   if (!g || !g.wanted || !g.local_path) return null;
-  // `relPath` is a POSIX key (repo__list_syns.mdx §6.1) — joinRel splits it on `/` so it lands as real
-  // directories on this computer, whatever separator this OS uses.
-  return joinRel(expandHome(g.local_path), relPath);
+  // `relPath` is a POSIX key (repo__list_syns.mdx §6.1) — joinRelConfined splits it on `/` so it lands as
+  // real directories on this computer, whatever separator this OS uses, and returns null when the key would
+  // escape the grafted directory. The key arrives on a SHARED manifest from another computer, and this is
+  // the function that decides where its bytes are written, so "outside the graft" must read as
+  // known-but-absent — the same null every other unplaceable path here returns.
+  return joinRelConfined(expandHome(g.local_path), relPath);
 }
 
 // A mutable accumulator row before disambiguation (devices.mdx §6).

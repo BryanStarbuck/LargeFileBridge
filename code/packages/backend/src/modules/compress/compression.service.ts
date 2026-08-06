@@ -1382,7 +1382,9 @@ async function findReferences(abs: string, oldBasename: string): Promise<string[
     if (top.code !== 0 || !repo) return [];
     const r = await runAsync(
       stableGitBin(),
-      ["-C", repo, "grep", "-l", "--fixed-strings", "-I", "--", oldBasename],
+      // `core.quotepath=false` — git octal-escapes any non-ASCII path it PRINTS, so without this the
+      // warning below names `"caf\303\251.md"` instead of the file the user would recognise.
+      ["-c", "core.quotepath=false", "-C", repo, "grep", "-l", "--fixed-strings", "-I", "--", oldBasename],
       30_000,
       { captureStdout: true },
     );

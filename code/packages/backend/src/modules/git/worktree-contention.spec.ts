@@ -94,6 +94,71 @@ describe("worktree gate — nobody writes into a working copy mid-cycle", () => 
     expect(deferWhileBusy(target, "mirror:x", () => ran++)).toBe(false);
     expect(ran).toBe(1);
   });
+
+  // THE GATE IS A MUTEX, NOT ONLY A FLAG. `withStorageGitLock` keys on the STORAGE id, but two storages can
+  // resolve to ONE working copy (an explicit dedicated_repo pointing at a root another SDL auto-adopts, or
+  // two storages pointed at the same path — the arrangement `warnOnDuplicateBackbones` already detects). The
+  // device pass runs storages concurrently, so both cycles used to run add/commit/push in one directory at
+  // once and race the index.
+  it("EXCLUDES a second cycle from the same working copy", async () => {
+    const root = path.join(os.tmpdir(), "lfb-gate-excl");
+    const order: string[] = [];
+    const settle = (): Promise<void> => new Promise((r) => setTimeout(r, 5));
+
+    const first = withWorktreeBusy(
+      root,
+      async () => {
+        order.push("A:enter");
+        await settle();
+        order.push("A:exit");
+      },
+      { storage: "a" },
+    );
+    // Starts while A is still inside — a plain depth counter let this interleave.
+    const second = withWorktreeBusy(
+      root,
+      async () => {
+        order.push("B:enter");
+        await settle();
+        order.push("B:exit");
+      },
+      { storage: "b" },
+    );
+    await Promise.all([first, second]);
+    expect(order).toEqual(["A:enter", "A:exit", "B:enter", "B:exit"]);
+  });
+
+  it("still RE-ENTERS for the same owner — commitAndPush → pull must not deadlock", async () => {
+    // The one legitimate nesting: the non-fast-forward retry inside commitAndPushInner calls pull() on the
+    // SAME GitBackbone. A naive mutex deadlocks here, which is why the gate was a counter to begin with.
+    const root = path.join(os.tmpdir(), "lfb-gate-reentry");
+    const backbone = { id: "one-and-the-same" };
+    const seen: string[] = [];
+    await withWorktreeBusy(
+      root,
+      async () => {
+        seen.push("outer");
+        await withWorktreeBusy(root, async () => void seen.push("inner"), backbone);
+        seen.push("outer-after");
+      },
+      backbone,
+    );
+    expect(seen).toEqual(["outer", "inner", "outer-after"]);
+    // Released at the end of the OUTERMOST span, not the inner one.
+    expect(deferWhileBusy(path.join(root, "x.yaml"), "k", () => {})).toBe(false);
+  });
+
+  it("releases the working copy when a cycle throws, so the next one is not stranded", async () => {
+    const root = path.join(os.tmpdir(), "lfb-gate-throw");
+    await expect(
+      withWorktreeBusy(root, async () => {
+        throw new Error("fetch exploded");
+      }, { storage: "a" }),
+    ).rejects.toThrow("fetch exploded");
+    let ran = false;
+    await withWorktreeBusy(root, async () => void (ran = true), { storage: "b" });
+    expect(ran).toBe(true);
+  });
 });
 
 // ── real-git integration ────────────────────────────────────────────────────────

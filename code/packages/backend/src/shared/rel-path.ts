@@ -33,6 +33,30 @@ export function joinRel(root: string, rel: string): string {
   return path.join(root, ...rel.split("/"));
 }
 
+/**
+ * CONSUME **with confinement**: {@link joinRel}, but **null** when the key does not land inside `root`.
+ *
+ * Manifest keys are not this computer's own data. They arrive from the user's other computers — and, on a
+ * company storage, from teammates — through a file that is merged by git and folded by us, so a `..`
+ * segment, an absolute path or a drive letter can reach us from a corrupted merge as easily as from anyone
+ * acting badly. The byte-placement path (`pin.service` fetch-missing / `pullMissing` → `ipfs.catToFile`)
+ * does `mkdirSync(dirname)` and then writes, so an unconfined key writes anywhere the app can reach.
+ *
+ * Every request-facing filesystem route is already confined (`assertAllowedPath`, fs/allow-root.ts). This is
+ * the same guarantee for the path that actually materializes bytes, and it belongs in this leaf because it
+ * is the same "consume a stored key" operation `joinRel` performs — just with the check that makes it safe.
+ *
+ * NOT for the COMPUTER unit, whose keys are absolute BY DESIGN (`resolveAbs` is home-expand identity).
+ */
+export function joinRelConfined(root: string, rel: string): string | null {
+  // An absolute key can never be unit-relative — POSIX (`/x`), UNC (`\\host\share`) or a drive (`C:\x`).
+  if (path.isAbsolute(rel) || /^[A-Za-z]:[\\/]/.test(rel) || rel.startsWith("\\\\")) return null;
+  const base = path.resolve(root);
+  const abs = path.resolve(joinRel(base, rel));
+  if (abs === base) return null; // the root itself is not a file inside it
+  return abs.startsWith(base.endsWith(path.sep) ? base : base + path.sep) ? abs : null;
+}
+
 /** REPAIR: a `\`-spelled key from a Windows peer or an older build. Character-blind — read path only. */
 export function healWindowsPath(p: string): string {
   return p.includes("\\") ? p.replace(/\\/g, "/") : p;

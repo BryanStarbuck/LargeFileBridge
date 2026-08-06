@@ -34,7 +34,7 @@ import { recordPushSuccess, recordPushFailure, armUnpushedRetry } from "./push-h
 import { resolveStateDir } from "../../config/state-dir.js";
 // The remote parser lives in a LEAF module so tracking-root.service.ts can derive a repo's shared identity
 // (repoUid) without importing this heavy module — one parser, no cycle (storage_company.mdx §8.4.1).
-import { parseRemoteOwner } from "../storage/repo-identity.js";
+import { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { healWindowsPath } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
@@ -382,6 +382,32 @@ export function resolveRepoOwner(
 }
 
 /**
+ * `core.quotepath` MUST be off for every git process this app runs.
+ *
+ * With git's default (`true`), any path containing a byte outside ASCII comes back C-quoted and
+ * octal-escaped — `devices/café.yaml` prints as `"devices/caf\303\251.yaml"` — while `git status`, which
+ * simple-git invokes with `--null`, prints it RAW. Two spellings of one path, and every place that joins
+ * one command's output to another's silently stopped matching:
+ *
+ *   • `stagedOwnPaths()` compares `status` names against `diff --cached --name-only` output, so a
+ *     non-ASCII file was never seen as staged. `checkpointOwnWrites` then committed nothing, logged
+ *     "nothing but volatile-only churn", and the merge it exists to unblock was refused by that very
+ *     file — after which `clearBlockingOwnFiles` DISCARDED this computer's copy. Every cycle, forever.
+ *     A sidecar is named after its media file (`files/café.mp4.yaml`), so this is the ordinary case for
+ *     the media this product syncs, not an edge one — and macOS hands us decomposed accents by default.
+ *   • `checkIgnoreDetailed()` promises "the returned Set holds the same absolute strings the caller
+ *     passed". Quoted, it holds none of them, so an ignored file read as NOT ignored — the fold-into-
+ *     `false` the three-valued `unknown` contract (see {@link CheckIgnoreResult}) exists to forbid.
+ *
+ * Set here rather than at each call site so a command added later inherits it (git_ignore.mdx §5.4).
+ */
+const QUOTEPATH = "false";
+
+/** `-c core.quotepath=false`, for the two `check-ignore` paths that exec the git binary DIRECTLY (batched
+ *  `--stdin` + EPIPE handling) instead of going through {@link openRepo}. */
+const QUOTEPATH_ARGS = ["-c", `core.quotepath=${QUOTEPATH}`];
+
+/**
  * A `simple-git` handle on a working directory, configured NON-INTERACTIVE so a URL remote authenticates
  * through the OS git credential helper and NEVER hangs on a password prompt (git_backbone.mdx §5).
  */
@@ -396,8 +422,76 @@ export function openRepo(workingDir: string): SimpleGit {
     baseDir: workingDir,
     binary: stableGitBin(), // absolute path — immune to a thin background PATH (git-bin.ts)
     maxConcurrentProcesses: 1,
-    config: ["credential.interactive=false"],
+    config: ["credential.interactive=false", `core.quotepath=${QUOTEPATH}`],
   }).env({ ...env, GIT_TERMINAL_PROMPT: "0" });
+}
+
+/**
+ * Last-resort "is this the same repo?" for remotes {@link parseRemoteOwner} cannot reduce to host/owner/repo
+ * — a `file://` URL, a self-hosted shape it does not recognise. Compares the raw strings with only the
+ * COSMETIC differences removed (trailing slashes, a `.git` suffix, case), so a spelling change costs a
+ * cheap `remote set-url` rather than a full re-clone. Two genuinely different paths still differ.
+ */
+function sameRawRemote(a: string, b: string): boolean {
+  const norm = (s: string): string => s.trim().replace(/\/+$/, "").replace(/\.git$/i, "").toLowerCase();
+  return norm(a) === norm(b);
+}
+
+/**
+ * Make the machine-local cache clone's `origin` agree with the remote the storage is configured with NOW.
+ *
+ *   • "ok"       — origin already matches, or it named the SAME repo through a different transport
+ *                  (https ⇄ ssh, a `.git` suffix gained or lost) and was re-pointed in place. The cached
+ *                  history is still the right history, so nothing is thrown away.
+ *   • "re-clone" — origin names a DIFFERENT repo (or one side is unparseable and the strings differ). The
+ *                  caller discards the cache; re-pointing alone would leave unrelated histories behind.
+ *   • "failed"   — git would not answer or would not take the change; skip the cycle rather than drive a
+ *                  working copy we cannot vouch for.
+ *
+ * ONLY ever applied to the cache LFB itself created under the state root. A LOCAL-PATH remote is the user's
+ * own checkout, used in place, and its `origin` is never ours to rewrite (git_backbone.mdx §7).
+ */
+async function reconcileCacheOrigin(
+  storageId: string,
+  cache: string,
+  remote: string,
+): Promise<"ok" | "re-clone" | "failed"> {
+  const want = remote.trim();
+  let have: string | null;
+  try {
+    const origin = (await openRepo(cache).getRemotes(true)).find((r) => r.name === "origin");
+    have = origin?.refs?.fetch?.trim() || null;
+  } catch (e) {
+    log.warn("git", `storage ${storageId}: could not read the cached clone's origin at ${cache}: ${(e as Error).message}`);
+    return "failed";
+  }
+  if (have === want) return "ok";
+  // A cache with no origin at all cannot fetch or push; adopting the configured remote is the repair.
+  const haveKey = normalizeRemoteKey(have);
+  const wantKey = normalizeRemoteKey(want);
+  const sameRepo =
+    have === null
+      ? true
+      : haveKey && wantKey
+        ? sameRemoteKey(haveKey, wantKey) // a forge remote: https ⇄ ssh ⇄ case all reduce to one identity
+        : sameRawRemote(have, want); // anything parseRemoteOwner cannot reduce — compare the strings
+  if (!sameRepo) {
+    log.warn(
+      "git",
+      `storage ${storageId}: its git remote changed from ${have} to ${want} — these are different repos, so ` +
+        `the cached clone at ${cache} is discarded and re-cloned. Nothing is lost: the cache is rebuilt from ` +
+        `the remote, and this computer's own state lives in the storage, not in the cache.`,
+    );
+    return "re-clone";
+  }
+  try {
+    await openRepo(cache).raw(["remote", "set-url", "origin", want]);
+    log.info("git", `storage ${storageId}: re-pointed the cached clone's origin ${have ?? "(none)"} -> ${want}`);
+    return "ok";
+  } catch (e) {
+    log.warn("git", `storage ${storageId}: could not re-point the cached clone's origin to ${want}: ${(e as Error).message}`);
+    return "failed";
+  }
 }
 
 /**
@@ -417,7 +511,25 @@ export async function resolveWorkingCopy(storageId: string, remote: string): Pro
   }
   // URL: a machine-local cache clone LFB manages (git_backbone.mdx §3.2).
   const cache = path.join(storageUnitDir(storageId), "git");
-  if (fs.existsSync(path.join(cache, ".git"))) return cache;
+  if (fs.existsSync(path.join(cache, ".git"))) {
+    // THE CONFIGURED REMOTE CAN CHANGE, AND THE CACHE DOES NOT NOTICE ON ITS OWN. This used to return the
+    // directory the moment `.git` existed, so editing a storage's dedicated-repo URL in Settings left every
+    // later cycle fetching, committing and PUSHING to the OLD remote — reporting healthy pushes the whole
+    // time while the UI showed the new value. Silent, indefinite, and the wrong repo receives the user's
+    // state. Reconcile the cache against what is configured NOW instead.
+    const reconciled = await reconcileCacheOrigin(storageId, cache, remote);
+    if (reconciled === "ok") return cache;
+    if (reconciled === "failed") return null;
+    // "re-clone" — a DIFFERENT repo is configured now, so the cached history is for the wrong one
+    // (fetch+merge would hit "refusing to merge unrelated histories" every cycle). The cache is
+    // machine-local and rebuildable by definition; drop it and fall through to the clone below.
+    try {
+      fs.rmSync(cache, { recursive: true, force: true });
+    } catch (e) {
+      log.warn("git", `storage ${storageId}: could not clear the stale clone at ${cache}: ${(e as Error).message}`);
+      return null;
+    }
+  }
   // A HALF-FINISHED CLONE WEDGES THIS FOREVER. `cache` exists but has no `.git` when a previous clone died
   // partway (network drop, disk full, the process killed) — and `git clone` refuses a non-empty target, so
   // every later cycle failed on the same directory and the storage never got a backbone again. The cache is
@@ -552,7 +664,10 @@ export class GitBackbone {
    */
   async pull(result: GitCycleResult): Promise<void> {
     if (!(await this.hasOrigin())) return;
-    return withWorktreeBusy(this.dir, () => this.pullInner(result));
+    // `this` is the cycle's identity: the one legitimate nesting (commitAndPush → pull on a non-fast-forward
+    // retry) is the SAME backbone and passes straight through, while a second storage that resolved to this
+    // same working copy is a different backbone and waits (worktree-gate.ts).
+    return withWorktreeBusy(this.dir, () => this.pullInner(result), this);
   }
 
   private async pullInner(result: GitCycleResult): Promise<void> {
@@ -1058,7 +1173,7 @@ export class GitBackbone {
       log.info("git", `${this.dir}: auto-commit is disabled in settings — nothing committed or pushed`);
       return;
     }
-    return withWorktreeBusy(this.dir, () => this.commitAndPushInner(result));
+    return withWorktreeBusy(this.dir, () => this.commitAndPushInner(result), this);
   }
 
   private async commitAndPushInner(result: GitCycleResult): Promise<void> {
@@ -1269,7 +1384,13 @@ export function volatileYamlPathsFor(relPath: string): string[] | null {
   // cycle forever. Measured on the live company repo: whole "LFB: tracking" commits whose entire diff is
   // this block across a handful of repos. The whole subtree is listed, not just `at` — suppressing the
   // timestamp while `on_device` still voted would leave the churn exactly as it was.
-  if (isRepoStorageYamlPath(p)) return ["repo_storage.last_scan"];
+  //
+  // `counts` belongs here for exactly the same reason, and was missed. `refreshCounts` derives it from THIS
+  // computer's file index, so two computers holding different subsets of a repo's big files each overwrote
+  // the other's number every cycle — a commit per repo per cycle from a value that describes the machine,
+  // not the repo. `mirrorToSyncRepo` now scrubs it at the writer too, but a writer-side fix only holds for
+  // a machine on THIS build: a peer on an older one re-stamps its own count and the two ping-pong again.
+  if (isRepoStorageYamlPath(p)) return ["repo_storage.last_scan", "repo_storage.counts"];
   // Every other LFB-owned YAML: `updated_at` alone is the whole volatile surface.
   if (isLfbOwnedSdlPath(p)) return [];
   return null;
@@ -1536,7 +1657,7 @@ function runCheckIgnoreBatch(
   budget: { bisects: number },
 ): CheckIgnoreOutcome {
   if (absPaths.length === 0) return { out: "", unknown: [] };
-  const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
+  const args = [...QUOTEPATH_ARGS, "check-ignore", ...(verbose ? ["-v"] : []), "--stdin"];
   try {
     const out = execFileSync(stableGitBin(), args, {
       cwd: repoRoot,
@@ -1623,7 +1744,7 @@ async function runCheckIgnoreAsyncBatch(
   budget: { bisects: number },
 ): Promise<CheckIgnoreOutcome> {
   if (absPaths.length === 0) return { out: "", unknown: [] };
-  const args = verbose ? ["check-ignore", "-v", "--stdin"] : ["check-ignore", "--stdin"];
+  const args = [...QUOTEPATH_ARGS, "check-ignore", ...(verbose ? ["-v"] : []), "--stdin"];
   const res = await new Promise<{ err: Error | null; stdout: string; stderr: string }>((resolve) => {
     const child = execFile(
       stableGitBin(),

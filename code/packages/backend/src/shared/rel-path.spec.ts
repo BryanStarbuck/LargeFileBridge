@@ -4,7 +4,7 @@
 // relative path is its name.
 import { describe, it, expect } from "vitest";
 import path from "node:path";
-import { relPosix, toPosixRel, joinRel, healWindowsPath, hasWindowsSeparator, healPathKeyedMap } from "./rel-path.js";
+import { relPosix, toPosixRel, joinRel, joinRelConfined, healWindowsPath, hasWindowsSeparator, healPathKeyedMap } from "./rel-path.js";
 
 describe("relPosix / toPosixRel — producing a stored key", () => {
   it("produces `/`-separated keys from this OS's own paths", () => {
@@ -35,6 +35,43 @@ describe("joinRel — consuming a stored key", () => {
   it("an empty key resolves to the root itself", () => {
     const root = path.resolve("/tmp/repo");
     expect(joinRel(root, "")).toBe(root);
+  });
+});
+
+// A manifest key is not this computer's own data: it arrives from the user's other computers (and, on a
+// company storage, from teammates) through a file git merges and we fold. The byte-placement path
+// (`catToFile`) mkdir -p's the parent and streams to disk, so an unconfined key writes wherever it points.
+describe("joinRelConfined — consuming a key that came off the wire", () => {
+  const root = path.resolve("/tmp/repo");
+
+  it("behaves exactly like joinRel for an ordinary key", () => {
+    expect(joinRelConfined(root, "jfk/videos/clip.mp4")).toBe(joinRel(root, "jfk/videos/clip.mp4"));
+  });
+
+  it("refuses a key that climbs out of the unit", () => {
+    expect(joinRelConfined(root, "../../etc/passwd")).toBeNull();
+    expect(joinRelConfined(root, "jfk/../../../secrets.env")).toBeNull();
+  });
+
+  it("allows a `..` that stays inside", () => {
+    // Confinement is about the DESTINATION, not the spelling — a key that walks up and back down is fine.
+    expect(joinRelConfined(root, "jfk/../videos/clip.mp4")).toBe(path.join(root, "videos", "clip.mp4"));
+  });
+
+  it("refuses an absolute key in every shape a peer could send", () => {
+    expect(joinRelConfined(root, "/etc/passwd")).toBeNull();
+    expect(joinRelConfined(root, String.raw`C:\Windows\system32\drivers\etc\hosts`)).toBeNull();
+    expect(joinRelConfined(root, String.raw`\\evil-host\share\payload.mp4`)).toBeNull();
+  });
+
+  it("refuses the root itself — a unit is not a file inside itself", () => {
+    expect(joinRelConfined(root, "")).toBeNull();
+    expect(joinRelConfined(root, ".")).toBeNull();
+  });
+
+  it("is not fooled by a sibling directory sharing the root's prefix", () => {
+    // `/tmp/repo-evil` starts with `/tmp/repo` as a STRING but is a different directory.
+    expect(joinRelConfined(path.resolve("/tmp/repo"), "../repo-evil/x.mp4")).toBeNull();
   });
 });
 

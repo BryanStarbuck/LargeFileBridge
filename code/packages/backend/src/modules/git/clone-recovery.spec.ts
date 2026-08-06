@@ -100,3 +100,55 @@ describe("resolveWorkingCopy — recovering the URL-remote cache clone", () => {
     expect(fs.existsSync(cache)).toBe(false);
   });
 });
+
+// ── the cache must follow the CONFIGURED remote, not the one it was cloned from ──────────────────────
+//
+// The resolver returned the cache directory the moment `.git` existed and never asked whether `origin` still
+// matched the storage's configured remote. So editing a storage's dedicated-repo URL in Settings left every
+// later cycle fetching, committing and PUSHING to the OLD remote — reporting healthy pushes the whole time
+// while the UI showed the new value. Silent, indefinite, and the wrong repo receives the user's state.
+describe("resolveWorkingCopy — the cache clone follows a changed remote", () => {
+  const originUrl = (dir: string): string =>
+    git(dir, "config", "--get", "remote.origin.url").trim();
+
+  it("re-points origin when the SAME repo is reached a different way", async () => {
+    const id = "storage-repoint";
+    const origin = originWithCommit();
+    const first = await resolveWorkingCopy(id, asUrl(origin));
+    fs.writeFileSync(path.join(first!, "local-marker.txt"), "keep me\n");
+
+    // Same repo, different spelling — the cached history is still the right history, so it is KEPT.
+    const again = asUrl(origin) + "/";
+    const second = await resolveWorkingCopy(id, again);
+
+    expect(second).toBe(first);
+    expect(originUrl(second!)).toBe(again);
+    expect(fs.existsSync(path.join(second!, "local-marker.txt"))).toBe(true); // not re-cloned
+  });
+
+  it("DISCARDS and re-clones the cache when the remote names a DIFFERENT repo", async () => {
+    const id = "storage-newrepo";
+    const first = await resolveWorkingCopy(id, asUrl(originWithCommit()));
+    fs.writeFileSync(path.join(first!, "local-marker.txt"), "stale\n");
+
+    // A different repo entirely: keeping the old history and just re-pointing would make every later
+    // fetch+merge hit "refusing to merge unrelated histories" forever.
+    const other = originWithCommit();
+    const second = await resolveWorkingCopy(id, asUrl(other));
+
+    expect(second).toBe(first); // same cache PATH…
+    expect(originUrl(second!)).toBe(asUrl(other));
+    expect(fs.existsSync(path.join(second!, "local-marker.txt"))).toBe(false); // …but a fresh clone
+  });
+
+  it("leaves an unchanged remote completely alone", async () => {
+    const id = "storage-unchanged";
+    const remote = asUrl(originWithCommit());
+    const first = await resolveWorkingCopy(id, remote);
+    const head = git(first!, "rev-parse", "HEAD").trim();
+    const second = await resolveWorkingCopy(id, remote);
+    expect(second).toBe(first);
+    expect(git(second!, "rev-parse", "HEAD").trim()).toBe(head);
+    expect(originUrl(second!)).toBe(remote);
+  });
+});
