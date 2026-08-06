@@ -195,8 +195,14 @@ export async function peerId(): Promise<string | null> {
   }
 }
 
-/** Add a file and pin it recursively; returns its root CID (ipfs.mdx §3). */
-export async function addFile(absPath: string): Promise<string> {
+/**
+ * Add a file and pin it recursively; returns its root CID (ipfs.mdx §3).
+ *
+ * `onBytes` turns on Kubo's `progress=true` stream, which reports the number of bytes of THIS file it has
+ * ingested so far — a true byte count, not an estimate. It is what lets the dock card say "310 MB of
+ * 734 MB" while a big video uploads instead of sitting on a bare spinner for minutes (webapp.mdx §11).
+ */
+export async function addFile(absPath: string, opts: { onBytes?: (bytes: number) => void } = {}): Promise<string> {
   try {
     // fs.openAsBlob streams the file rather than buffering it whole into memory.
     const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
@@ -210,13 +216,26 @@ export async function addFile(absPath: string): Promise<string> {
     // `add` uploads the whole file; its duration scales with file size (a 1.4 GB video far exceeds the
     // 15s control-call cap). Disable the wall-clock timeout (timeoutMs: 0) so large media can finish —
     // the pin limiter bounds concurrency, so this can't stampede the daemon.
-    const res = await rpc("add", { query: { pin: "true", "cid-version": "1" }, body: form, timeoutMs: 0 });
-    const text = await res.text();
-    // add streams NDJSON; the final line has the root entry.
-    const lines = text.trim().split("\n").filter(Boolean);
-    const last = JSON.parse(lines[lines.length - 1]) as { Hash?: string };
-    if (!last.Hash) throw new Error("ipfs add returned no CID");
-    return last.Hash;
+    const res = await rpc("add", {
+      query: { pin: "true", "cid-version": "1", ...(opts.onBytes ? { progress: "true" } : {}) },
+      body: form,
+      timeoutMs: 0,
+    });
+    // add streams NDJSON. With `progress=true` the stream is mostly {"Name":…,"Bytes":N} ticks, so the
+    // CID must be taken from the LAST record that actually carries a Hash — never from the last LINE.
+    let hash: string | null = null;
+    for await (const line of ndjsonLines(res, INERT_GUARD)) {
+      let rec: { Hash?: string; Bytes?: number };
+      try {
+        rec = JSON.parse(line) as typeof rec;
+      } catch {
+        continue; // a partial/garbage line is not evidence either way
+      }
+      if (typeof rec.Bytes === "number") opts.onBytes?.(rec.Bytes);
+      if (rec.Hash) hash = rec.Hash;
+    }
+    if (!hash) throw new Error("ipfs add returned no CID");
+    return hash;
   } catch (e) {
     // A failed add/pin is a real fault (file gone, bad JSON, daemon error) — record it, then rethrow
     // so the caller still sees the failure.
@@ -306,8 +325,9 @@ export async function catToFile(
   destPath: string,
   /** `resolved: true` = the caller ALREADY ran `resolveFileCid` on this CID (the pin pass and the
    *  pull-down both do, to heal the manifest before pinning). Re-resolving costs a `files/stat` per file
-   *  — and a second one per wrapper level — purely to re-derive a CID we were just handed. */
-  opts: { resolved?: boolean } = {},
+   *  — and a second one per wrapper level — purely to re-derive a CID we were just handed.
+   *  `onBytes` receives the RUNNING TOTAL written to disk so far, for the dock's per-file detail. */
+  opts: { resolved?: boolean; onBytes?: (bytes: number) => void } = {},
 ): Promise<string> {
   fs.mkdirSync(path.dirname(destPath), { recursive: true });
   const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}.tmp`;
@@ -327,10 +347,15 @@ export async function catToFile(
       throw new Error(`ipfs cat ${fileCid} -> ${res.status} ${res.ok ? "empty body" : await res.text()}`);
     }
     // res.body is a WHATWG ReadableStream; adapt it to a Node stream and pipe to disk without buffering.
-    // The pass-through in the middle exists only to feed the stall guard on every chunk that lands.
+    // The pass-through in the middle exists only to feed the stall guard — and now the caller's byte
+    // counter — on every chunk that lands.
+    let written = 0;
+    const onBytes = opts.onBytes;
     const ticker = new Transform({
       transform(chunk, _enc, cb) {
         guard?.touch();
+        written += (chunk as Buffer).length;
+        onBytes?.(written);
         cb(null, chunk);
       },
     });
@@ -383,6 +408,7 @@ async function pinAddOnce(
   cid: string,
   stallMs: number = PIN_ADD_STALL_MS,
   discoveryMs: number = PIN_ADD_DISCOVERY_MS,
+  onNodes?: (nodes: number) => void,
 ): Promise<void> {
   const guard = stallGuard(stallMs, discoveryMs);
   guard.touch();
@@ -414,6 +440,7 @@ async function pinAddOnce(
       if (typeof rec.Progress === "number" && rec.Progress > lastProgress) {
         lastProgress = rec.Progress;
         guard.touch(); // real progress — more nodes fetched since the last record
+        onNodes?.(lastProgress); // …and the same evidence drives the dock's per-file detail
       }
       if (Array.isArray(rec.Pins) && rec.Pins.length > 0) confirmed = true;
     }
@@ -433,7 +460,9 @@ async function pinAddOnce(
  */
 export async function pinAdd(
   cid: string,
-  opts: { stallMs?: number; discoveryMs?: number; attempts?: number } = {},
+  /** `onNodes` receives Kubo's running DAG-node count for this pin — the only live signal a FETCHING pin
+   *  emits. See `approxFetchedBytes` for how a node count becomes the card's byte reading. */
+  opts: { stallMs?: number; discoveryMs?: number; attempts?: number; onNodes?: (nodes: number) => void } = {},
 ): Promise<void> {
   // Interactive callers (the pull-down popup) pass a TIGHTER stall budget — a user is watching, and bytes
   // that ARE flowing keep resetting the guard, so a short idle deadline only fails genuinely-dead peers
@@ -445,7 +474,7 @@ export async function pinAdd(
   const attempts = opts.attempts ?? PIN_ADD_ATTEMPTS;
   for (let attempt = 1; ; attempt++) {
     try {
-      await pinAddOnce(cid, stallMs, discoveryMs);
+      await pinAddOnce(cid, stallMs, discoveryMs, opts.onNodes);
       bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
       return;
     } catch (e) {
@@ -463,6 +492,22 @@ export async function pinAdd(
       throw e;
     }
   }
+}
+
+/** Kubo's default UnixFS chunk size (`size-262144`) — one leaf block per 256 KiB of file. */
+export const DAG_CHUNK_BYTES = 262_144;
+
+/**
+ * Turn a fetching pin's DAG-NODE count into an APPROXIMATE byte reading for the progress card.
+ *
+ * `pin/add?progress=true` is the only live signal a fetch emits, and it counts NODES, not bytes. Almost
+ * every node is a 256 KiB leaf (the interior nodes are ~1 per 174 leaves), so nodes × 256 KiB tracks the
+ * transfer closely — but it IS an estimate, so callers must render it as one ("≈") and clamp it to the
+ * size the manifest already knows, or a card would claim to have fetched more than the file contains.
+ */
+export function approxFetchedBytes(nodes: number, totalBytes?: number): number {
+  const est = nodes * DAG_CHUNK_BYTES;
+  return totalBytes && totalBytes > 0 ? Math.min(est, totalBytes) : est;
 }
 
 /**

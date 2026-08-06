@@ -2386,6 +2386,31 @@ heartbeat every second even when zero blocks are arriving**, and resetting the g
 chunk defeated the watchdog completely (the eternal-hang defect) — the guard now resets **only when the
 Progress value increases** (`pinAddOnce()`).
 
+**(C.1a) A pull must SHOW ITS WORK (added 2026-08-06, LOCKED).** A pull is the longest-running thing a
+user ever sits and watches, and it had **no progress registration at all**: the popup showed only the
+browser's optimistic card — a spinner, no counts, no phase — and the **three background entry points**
+(hourly auto-sync-in, the 3-hourly pull-retry, and the To-Do apply) showed **nothing whatsoever** while
+bytes moved for minutes. So `pullMissing` registers its own job, whichever entry point started it:
+
+* a determinate **`n / N files`** bar from the first paint (every file ticks exactly once — landed or
+  failed), and
+* a per-file **phase line** ([webapp.mdx §12a](./webapp.mdx)) that names the file and the step it is on:
+  `pulling clip.mp4 · looking for a computer that has it` → `· ≈310 MB of 734 MB (42%)` →
+  `· writing to disk · 512 MB of 734 MB (70%)`.
+
+The byte reading during the **fetch** is derived from the DAG-node count Kubo streams on
+`pin/add?progress=true` — the only live signal a fetching pin emits — so it is marked **≈** and clamped to
+the size the manifest already knows. The **write-to-disk** reading is a true byte count from the `cat`
+stream. This is the same `{"Progress": n}` stream the stall guard reads (C.1); it now feeds the card as
+well as the watchdog.
+
+The interactive pull registers under the **repo name**, which is exactly what the browser's optimistic card
+says — so the click produces **one** card that gains counts and a phase line, not two
+([webapp.mdx §12a.2](./webapp.mdx)). *Progress in:* `pin.service.ts` — `pullMissing()` (the `track("pin", …)`
+wrapper) → `pullMissingInner()`, composing its line with `WorkNote`
+(`code/packages/backend/src/modules/progress/work-note.ts`); *byte signal in:* `ipfs.service.ts` —
+`pinAdd({ onNodes })` + `approxFetchedBytes()` and `catToFile({ onBytes })`.
+
 **(C.2) The click IS the decision — a failed pull auto-retries (added 2026-08-04).** Clicking **Add to
 IPFS (pin)** in this popup records a **`sync` decision** (`ipfs: true`, existing git-ignore axis
 preserved) for every checked file **before** the transfer is attempted, so the intent survives a failed

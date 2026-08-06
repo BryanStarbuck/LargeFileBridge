@@ -1012,6 +1012,15 @@ export interface ProgressJob {
   done?: number; // determinate progress numerator
   total?: number; // determinate progress denominator
   unit?: string; // "MB" | "files" | "%" | …
+  // WHAT IS HAPPENING RIGHT NOW — one short human phrase ("reading this computer's pin list",
+  // "fetching clip.mp4 · 310 MB of 734 MB", "git: merging your other computers' changes").
+  //
+  // `done/total` alone cannot answer the question a watching user actually has. A pin pass spends minutes
+  // in a prelude that moves no files at all (reconciling a six-figure-line ledger, enumerating the pinset,
+  // running a git fetch+merge), and a pull spends its whole life inside ONE file — both rendered as a bare
+  // spinner labelled "working", which is indistinguishable from a hung job (the 2026-08-06 report). The
+  // note is that missing sentence; absent means the job genuinely has nothing more specific to say.
+  note?: string;
   // The join to the batches table (processing.mdx §5 / AC5). A RUNNING item needs it as much as a queued
   // one: narrowing to a batch must not make its in-flight files disappear from the items table.
   batchId?: string;

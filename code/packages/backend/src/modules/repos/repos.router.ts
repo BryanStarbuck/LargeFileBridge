@@ -824,7 +824,14 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
     } catch (e) {
       log.warn("repos", `${folder}: could not record pull-down pin decisions: ${(e as Error).message}`);
     }
-    const counts = await pullMissing(repoRoot, body.data.paths, { compress: !!body.data.compress, by });
+    // `label` is the repo NAME on purpose: it is exactly what the browser's optimistic card says, so the
+    // dock shows ONE card for this pull that gains real counts + a phase line the moment the server's job
+    // registers, instead of two cards for one click (webapp.mdx §12).
+    const counts = await pullMissing(repoRoot, body.data.paths, {
+      compress: !!body.data.compress,
+      by,
+      label: getRepoConfig(folder).repo.name || folder,
+    });
     log.info(
       "repos",
       `${folder}: pulled ${counts.pulled} file(s), ${counts.failed} failed (compress=${!!body.data.compress}) by ${by ?? "?"}`,

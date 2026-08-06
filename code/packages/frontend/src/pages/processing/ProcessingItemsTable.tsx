@@ -45,6 +45,7 @@ interface ProcessingItem {
   done?: number;
   total?: number;
   unit?: string;
+  note?: string; // running: the "what is happening right now" line (ProgressJob.note)
   startedAt?: string; // running: when it started
   at?: string; // failed: when it failed
 }
@@ -103,6 +104,7 @@ function buildRows(
       done: j.done,
       total: j.total,
       unit: j.unit,
+      note: j.note,
       startedAt: j.startedAt,
     });
   }
@@ -235,7 +237,8 @@ export function ProcessingItemsTable({
       header: "Progress",
       kind: "int",
       priority: 3,
-      minWidth: 120,
+      // Wider than the bare "47%" needed, because the cell now also carries the phase line below the bar.
+      minWidth: 190,
       // Sort key: running % (0–100); pending/failed sort below running.
       accessor: (it) => jobPct(it) ?? -1,
       sortable: true,
@@ -246,20 +249,30 @@ export function ProcessingItemsTable({
         if (it.state === "halted") return <span className="text-[var(--lfb-warn)]">not started</span>;
         if (it.state === "pending") return <span className="text-black/20">—</span>;
         const pct = jobPct(it);
+        // THE PHASE LINE (processing.mdx §4.3.2). A bare "working" is the same word for "reading a 200k-line
+        // ledger", "fetching 700 MB from a laptop over a relay" and "hung" — the note is what tells them
+        // apart, so it rides under the bar (and REPLACES the "working" text when there is no bar at all).
         if (pct === null) {
           return (
-            <span className="inline-flex items-center gap-1 text-xs text-black/50">
-              <Loader2 className="h-3 w-3 animate-spin" aria-hidden />
-              working
+            <span className="flex min-w-0 items-center gap-1 text-xs text-black/50" title={it.note}>
+              <Loader2 className="h-3 w-3 shrink-0 animate-spin" aria-hidden />
+              <span className="truncate">{it.note ?? "working"}</span>
             </span>
           );
         }
         return (
-          <span className="flex items-center gap-2">
-            <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-slate-100">
-              <span className="block h-full rounded-full bg-[var(--lfb-primary)]" style={{ width: `${pct}%` }} />
+          <span className="flex min-w-0 flex-col gap-0.5">
+            <span className="flex items-center gap-2">
+              <span className="h-1 w-16 shrink-0 overflow-hidden rounded-full bg-slate-100">
+                <span className="block h-full rounded-full bg-[var(--lfb-primary)]" style={{ width: `${pct}%` }} />
+              </span>
+              <span className="shrink-0 text-xs tabular-nums text-black/50">{pct}%</span>
             </span>
-            <span className="shrink-0 text-xs tabular-nums text-black/50">{pct}%</span>
+            {it.note && (
+              <span className="block truncate text-xs text-black/40" title={it.note}>
+                {it.note}
+              </span>
+            )}
           </span>
         );
       },

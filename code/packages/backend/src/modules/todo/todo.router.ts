@@ -161,8 +161,9 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
           // Fire-and-forget: Apply must return immediately and never run the fetch inline in the request
           // (job_queue.mdx §4b / processing.mdx §4.2) — a large-file pull can take minutes. The pull runs
           // in the background; failures are logged. result.pins counts the QUEUED pulls (the async
-          // hand-off), not the settled count.
-          void pullMissing(root, pullDown, { compress: false, by }).catch((e) =>
+          // hand-off), not the settled count. The pull registers its own progress card, which is the ONLY
+          // feedback this path has: Apply has already returned by the time a single byte moves.
+          void pullMissing(root, pullDown, { compress: false, by, label: folder }).catch((e) =>
             log.error("todo", `pull-down for ${req.params.id} failed: ${(e as Error).message}`),
           );
           result.pins += pullDown.length;

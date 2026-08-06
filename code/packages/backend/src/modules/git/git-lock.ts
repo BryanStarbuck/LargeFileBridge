@@ -14,6 +14,12 @@ interface GitLockState {
 }
 const storageGitLocks = new Map<string, GitLockState>();
 
+/** True when this storage's lock is held — i.e. a new caller will WAIT (or collapse into a queued pass).
+ *  Exists so a waiting job can SAY so on its progress card rather than spinning with no explanation. */
+export function storageGitLockBusy(id: string): boolean {
+  return storageGitLocks.has(id);
+}
+
 export function withStorageGitLock<T>(id: string, fn: () => Promise<T>): Promise<T | undefined> {
   const state = storageGitLocks.get(id);
 

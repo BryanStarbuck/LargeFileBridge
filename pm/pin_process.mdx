@@ -281,6 +281,15 @@ The rules this locks in:
   bar rather than a bare spinner. A pass moving bytes for minutes while the app looks idle is
   indistinguishable, from the user's chair, from a sync that has stopped. A repo-scoped card also names its
   SCOPE ("`<repo>` (3 selected)"), because a selective pin and a whole-repo pin are different work.
+* **A COUNT IS NOT ENOUGH — the pass must also name the STEP it is on** ([webapp.mdx §12a](./webapp.mdx)).
+  Counts only move when a *file* settles, and the longest stretches of a pass settle no files at all: the
+  sync-repo reconcile re-parses and rewrites the ledger, the pinset read enumerates every pin on the
+  computer, a storage's git cycle fetches and merges over the network, and a single 4 GB video occupies one
+  slot for minutes. Every one of those rendered as `working` with a still bar — which is also what a wedged
+  pass looks like. So each step reports a `note` in the user's language, a big file reports its **bytes**
+  inside that line, and a run **queued behind another pass on the same repo says it is waiting** rather
+  than spinning silently. Reported before the step, and — where the step is synchronous — with a
+  `yieldToLoop()` so the progress poll is actually served while it runs.
 
 This is a **design smell to hunt for everywhere**: any action whose success UI is decoupled from
 whether it did anything. Flag and fix such silent no-ops on sight.
@@ -290,7 +299,13 @@ Reporting the honest per-cause tally is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `pinSummary()`.
 
 Streaming live progress into the dock is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — the `PinReport` callback threaded through `pinRepoFolder()` → `runUnitPin()`, and `pinAll()`'s own per-unit `track("pin", "all units", …)` registration.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — the `PinReport` callback threaded through `pinRepoFolder()` → `runUnitPin()`, and `pinAll()`'s own per-unit `track("pin", "every repo and storage on this computer", …)` registration.
+
+Composing the step line each phase reports is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts` — class `WorkNote`, methods `phase()` / `start()` / `detail()` / `detailLazy()` / `finish()`, plus `yieldToLoop()`.
+
+Turning a fetching pin's DAG-node stream into the byte reading that line shows is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()`'s `onNodes` callback and `approxFetchedBytes()`; the true byte counts come from `addFile()`'s `onBytes` (Kubo `add?progress=true`) and `catToFile()`'s `onBytes`.
 
 ---
 

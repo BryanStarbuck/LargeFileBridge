@@ -17,6 +17,8 @@ import { missingPinnedFromPeers, pullMissing } from "./pin.service.js";
 import { resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { readDevices } from "../storage/devices.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { track } from "../progress/progress.registry.js";
+import { WorkNote } from "../progress/work-note.js";
 import { log } from "../../shared/logging.js";
 import { resolveHome } from "../../shared/home-path.js";
 
@@ -69,47 +71,67 @@ export async function runPullRetry(): Promise<{ pending: number; pulled: number 
       stillPending = 1; // unknown, assume pending so the timer re-arms
       return { pending: stillPending, pulled: 0 };
     }
-    for (const folder of listRepoFolders()) {
-      let repoRoot: string;
-      let pending: string[];
-      let missing: Awaited<ReturnType<typeof missingPinnedFromPeers>>;
-      try {
-        repoRoot = repoRootFor(folder);
-        missing = await missingPinnedFromPeers(repoRoot);
-        pending = pendingFor(folder, missing.map((m) => m.path));
-      } catch (e) {
-        log.warn("pin", `pull-retry: skipped ${folder}: ${(e as Error).message}`);
-        continue;
-      }
-      if (pending.length === 0) continue;
-
-      // The nudge: dial each distinct holder device's IPFS peer directly. Peer ids come from the
-      // travelling device registry in the owning sync repo (devices/<name>.yaml → device.ipfs_peer_id).
-      const holders = new Set(
-        missing.filter((m) => pending.includes(m.path)).map((m) => m.addedByDevice).filter((d): d is string => !!d),
-      );
-      const syncRepo = resolveStateSyncRepo(repoRoot);
-      if (syncRepo && holders.size > 0) {
+    // ONE card for the retry sweep (webapp.mdx §12 source B). It runs on a 3-hour timer, dials peers, and
+    // can move a lot of bytes — and it showed nothing at all, which is exactly why "the files never arrive"
+    // reads as "nothing is happening" rather than "we are still trying".
+    const folders = listRepoFolders();
+    await track("pin", "files still waiting from another computer", async (report) => {
+      const note = new WorkNote(report);
+      let doneRepos = 0;
+      report({ done: 0, total: folders.length, unit: "repos" });
+      for (const folder of folders) {
+        note.start(folder, folder);
         try {
-          for (const dev of readDevices(syncRepo)) {
-            if (holders.has(dev.device.name) && dev.device.ipfsPeerId) {
-              const ok = await ipfs.swarmConnect(dev.device.ipfsPeerId);
-              log.info("pin", `pull-retry: dial ${dev.device.name} (${dev.device.ipfsPeerId}) -> ${ok ? "connected" : "unreachable"}`);
+          let repoRoot: string;
+          let pending: string[];
+          let missing: Awaited<ReturnType<typeof missingPinnedFromPeers>>;
+          try {
+            note.detail(folder, "checking what is still missing");
+            repoRoot = repoRootFor(folder);
+            missing = await missingPinnedFromPeers(repoRoot);
+            pending = pendingFor(folder, missing.map((m) => m.path));
+          } catch (e) {
+            log.warn("pin", `pull-retry: skipped ${folder}: ${(e as Error).message}`);
+            continue;
+          }
+          if (pending.length === 0) continue;
+
+          // The nudge: dial each distinct holder device's IPFS peer directly. Peer ids come from the
+          // travelling device registry in the owning sync repo (devices/<name>.yaml → device.ipfs_peer_id).
+          const holders = new Set(
+            missing.filter((m) => pending.includes(m.path)).map((m) => m.addedByDevice).filter((d): d is string => !!d),
+          );
+          const syncRepo = resolveStateSyncRepo(repoRoot);
+          if (syncRepo && holders.size > 0) {
+            try {
+              for (const dev of readDevices(syncRepo)) {
+                if (holders.has(dev.device.name) && dev.device.ipfsPeerId) {
+                  // Each dial has its own 20s budget and there can be several — say WHICH computer we are
+                  // calling, so a long wait is legible as "reaching your laptop", not as a hang.
+                  note.detail(folder, `calling ${dev.device.name}`);
+                  const ok = await ipfs.swarmConnect(dev.device.ipfsPeerId);
+                  log.info("pin", `pull-retry: dial ${dev.device.name} (${dev.device.ipfsPeerId}) -> ${ok ? "connected" : "unreachable"}`);
+                }
+              }
+            } catch (e) {
+              log.warn("pin", `pull-retry: device dial skipped for ${folder}: ${(e as Error).message}`);
             }
           }
-        } catch (e) {
-          log.warn("pin", `pull-retry: device dial skipped for ${folder}: ${(e as Error).message}`);
+
+          note.detail(folder, `retrying ${pending.length} file${pending.length === 1 ? "" : "s"}`);
+          const counts = await pullMissing(repoRoot, pending, { compress: false, by: "pull-retry", label: folder });
+          totalPulled += counts.pulled;
+          stillPending += counts.failed;
+          log.info(
+            "pin",
+            `pull-retry: ${folder} — ${counts.pulled} pulled, ${counts.failed} still waiting (of ${pending.length} decided)`,
+          );
+        } finally {
+          note.finish(folder);
+          report({ done: ++doneRepos, total: folders.length, unit: "repos" });
         }
       }
-
-      const counts = await pullMissing(repoRoot, pending, { compress: false, by: "pull-retry" });
-      totalPulled += counts.pulled;
-      stillPending += counts.failed;
-      log.info(
-        "pin",
-        `pull-retry: ${folder} — ${counts.pulled} pulled, ${counts.failed} still waiting (of ${pending.length} decided)`,
-      );
-    }
+    });
   } finally {
     running = false;
     if (stillPending > 0) {

@@ -61,6 +61,10 @@ function Card({ job }: { job: ProgressJob }) {
           />
         </div>
       )}
+      {/* THE PHASE LINE (webapp.mdx §10.2). "Pinning all" + a spinner cannot tell a pass that is reconciling
+          a ledger from one that has wedged; this line says which step is running and, inside a big file, how
+          far its bytes have got. Truncated to one line so the card keeps its short shape. */}
+      {job.note && <div className="mt-1 truncate text-xs text-black/45">{job.note}</div>}
     </div>
   );
 }

@@ -408,6 +408,10 @@ One card per **active job**:
 * **Progress detail (optional).** When the job reports a fraction, a **thin determinate bar** under the
   label plus a small right-aligned detail (`412 / 734 MB`, `47%`, `1,240 files`). When it doesn't, **no
   bar** — the spinner alone signals indeterminate work.
+* **Phase line (optional).** A third, muted line under the bar carrying the job's **`note`** — the step it
+  is on right now, and inside a big file its byte reading (`fetching clip.mp4 · ≈310 MB of 734 MB (42%)`).
+  Truncated to one line so the card keeps its short shape. See **§12a**: a spinner with no phase line is
+  indistinguishable from a hung job, which is the defect that made this field LOCKED.
 * **Shape** — **short** (label line + optional bar, `py-2`) and **somewhat wide**
   (`min-w-[260px]`, `max-w-[360px]`). Near-white card, subtle border (`--lfb-border`) and shadow,
   rounded. Each card is an isolated element so it can leave independently.
@@ -445,7 +449,7 @@ one small, shared card type; the **verb** and any progress detail come from the 
 | `kind` | Card verb | Target | Progress detail (when available) | Where it starts |
 | --- | --- | --- | --- | --- |
 | `scan` | **Scanning** | repo / root name | files walked (`1,240 files`) | `POST /api/repos/rescan` (`scanAll`); the scan worker |
-| `pin` | **Pinning** | file / repo name / CID | bytes added (`412 / 734 MB`) | `POST /api/repos/:repoId/pin`; the pin worker |
+| `pin` | **Pinning** | file / repo name / CID | files settled (`4 / 12 files`) + the §12a phase line, which carries the current file's bytes (`≈310 MB of 734 MB`) | `POST /api/repos/:repoId/pin`, `POST /api/repos/:repoId/pull`; the pin worker, auto-sync-in, pull-retry |
 | `publish` | **Publishing** | backbone / IPNS | indeterminate | inside a pin job |
 | `compress` | **Compressing** | file basename | `ffmpeg` percent (`47%`) | a user-invoked compress action (charter: video 1st, image 2nd) |
 | `hash` | **Hashing** | file basename | bytes hashed | tracking a file (per-file fingerprint / compressed+uncompressed hashes) |
@@ -478,7 +482,7 @@ show work **this tab did not start**. A new backend **job registry** tracks ever
 
 ```
 GET /api/progress   →  { ok: true, data: { jobs: Job[] } }
-Job = { id, kind, target, startedAt, done?, total?, unit? }   // done/total present iff determinate
+Job = { id, kind, target, startedAt, done?, total?, unit?, note? }  // done/total iff determinate; note = §12a
 ```
 
 The frontend learns about server jobs two ways: while jobs are **visible** it polls at a fast cadence
@@ -493,6 +497,71 @@ doubled when the same job comes back on the poll.
 > This keeps the "background process transparency" promise of the app whole: the **Scans page** already
 > shows whether each worker is **installed** and **on/off** ([scan.mdx §7](./scan.mdx), ScansPage); the
 > dock now shows, live, **when a worker is actually running right now**.
+
+---
+
+## 12a. The phase line — what the job is doing RIGHT NOW (LOCKED, learned from a defect)
+
+A count is only half of "what is happening". `done/total` says how far a job has got; it never says what
+the job is *doing*, and for the longest work LFBridge runs there is no fraction to show at all. Both gaps
+render as the same thing — a spinner labelled **working** — which is also exactly what a **hung** job
+looks like.
+
+**The 2026-08-06 report.** A pin of the repo `all` sat at **Running · working** for six minutes with no
+bar and no explanation, while a pull-down of a peer's files showed nothing at all. Neither job was stuck.
+The pin was reconciling a six-figure-line ledger and enumerating the pinset — minutes of real work that
+moves no files, so nothing ticked — and the pull had **no progress registration whatsoever**.
+
+So every `ProgressJob` carries an optional **`note`**: one short human phrase for the current step.
+
+* It is **independent** of `done/total`. A job may have a bar and a note, a note alone, or neither. A
+  count tick never clears the line and a note never invents a fraction.
+* It **names the step in the user's language** — "reading this computer's pin list", "merging the file
+  lists", "git: fetching your other computers' changes" — not the function that is running.
+* Inside a single long file it carries the **byte reading**: `fetching clip.mp4 · ≈310 MB of 734 MB (42%)`.
+  A reading derived from Kubo's DAG-node count is marked **≈** and clamped to the size the manifest
+  already knows — a card must never claim to have fetched more of a file than the file contains.
+* When several files are in flight (the pass fans out over the limiter) the line follows the **oldest**
+  in-flight item and appends **`(+N more)`**, so it never jitters between workers.
+* **A WAIT IS A STEP.** A run queued behind another pass on the same repo/storage says so
+  ("waiting for the sync pass already running on this repo") instead of spinning with no explanation.
+* It **clears** when its step ends. A stale phrase is worse than none.
+
+**Reporting a phase before a synchronous block must YIELD.** The slowest parts of a pin pass hold the
+event loop, so a note set immediately before one of them cannot be *served* until the work it describes is
+already over. Those call sites hop one macrotask (`yieldToLoop()`) after reporting.
+
+Composed by `WorkNote` (phase + in-flight items + per-item detail → one line, with a ~250 ms floor on
+byte ticks) in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts`, class
+`WorkNote`, method `compose()`; stored by `report()` in `modules/progress/progress.registry.ts`; rendered
+by `Card` in `frontend/src/components/ProgressDock.tsx` and by the Progress column in
+`frontend/src/pages/processing/ProcessingItemsTable.tsx`.
+
+### 12a.1 What each long job says
+
+| Job | Where it is instrumented | The line the user sees |
+| --- | --- | --- |
+| Pin one repo (`Pin now`, a decision click) | `pin.service.ts` `pinRepoFolderInner` / `runUnitPin` | "reading what your other computers changed" → "merging the file lists" → "reading this computer's pin list" → "adding clip.mp4 · 310 MB of 734 MB (42%)" → "saving this unit's file list" |
+| The full pass (every 15 min, and after a manual pin) | `pin.service.ts` `pinAll` | the **unit** it is on — "act3ai-appsrv (+3 more)" — plus that storage's git step |
+| Pull peer-pinned files down | `pin.service.ts` `pullMissingInner` | "pulling clip.mp4 · looking for a computer that has it" → "· ≈310 MB of 734 MB" → "· writing to disk" |
+| A storage's git cycle | `git.service.ts` `GitBackbone.pull` / `commitAndPush` | "git: fetching your other computers' changes" → "git: merging them in" → "git: pushing" |
+| Auto-sync-in (hourly, company) | `auto-sync-in.service.ts` `runAutoSyncIn` | the company, then "pulling 4 files into act3ai-appclient" |
+| Pull-retry (3-hourly) | `pull-retry.service.ts` `runPullRetry` | "calling MacBook-Pro" → "retrying 7 files" |
+
+### 12a.2 One click is ONE card
+
+An instrumented endpoint produces **two** records of one piece of work: the browser's optimistic card
+(instant, blind) and the server's registry job (one poll later, and the only one that knows the counts and
+the phase). Rendering both is not extra information — it is the same job listed twice, with the useful copy
+on the row the user is less likely to read. So an optimistic card is **hidden while a server job with the
+same `kind` + `target` is running**; it still covers the window before the server's job registers, and an
+endpoint with no registry job keeps exactly the card it always had. This is why
+`POST /api/repos/:repoId/pull` registers its job under the **repo name** — the same target the browser's
+card uses.
+
+Decided by `mergeJobs()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/merge-jobs.ts`.
 
 ---
 
@@ -549,7 +618,10 @@ doubled when the same job comes back on the poll.
 
 * `shared/concurrency.ts` — **new.** Same `mapLimit`.
 * `modules/progress/progress.registry.ts` — **new.** In-process job registry:
-  `begin(kind, target) → id`, `report(id, {done,total,unit})`, `end(id)`, `list()`.
+  `begin(kind, target) → id`, `report(id, {done,total,unit,note})`, `end(id)`, `list()`.
+* `modules/progress/work-note.ts` — **new.** `WorkNote` composes the §12a phase line (phase + in-flight
+  items + per-item byte detail → one throttled line); `yieldToLoop()` hands the progress poll its turn
+  before a synchronous block.
 * `modules/progress/progress.router.ts` — **new.** `GET /api/progress` → `{ jobs }` (allow-listed).
 * `modules/scanner/scanner.service.ts`, `modules/pin/pin.service.ts` — register a job at start,
   `report()` progress as they walk/add bytes, `end()` on finish; run their per-item work through
@@ -573,7 +645,15 @@ doubled when the same job comes back on the poll.
 5. Jobs that report a fraction show a **determinate bar + detail** (`412 / 734 MB`, `47%`,
    `1,240 files`); jobs that can't show the **spinner only**.
 6. A job started **server-side** (a `launchd` scan/pin run) or in **another tab** appears in the dock
-   via `GET /api/progress`; optimistic and polled cards are **de-duplicated by id** (no doubles).
+   via `GET /api/progress`; optimistic and polled cards are **de-duplicated by id** (no doubles), and an
+   optimistic card is **superseded** by a running server job with the same `kind` + `target` (§12a.2), so
+   one click is one card.
+11. **No job renders as a bare "working".** Every long job carries a **`note`** naming its current step
+    (§12a) — including the ones that move no files (ledger reconcile, pinset read, `git fetch`/`merge`/
+    `push`) and the ones that spend minutes inside a single file, which show that file's byte reading.
+12. **Every pull is visible.** A pull-down registers a progress job whichever entry point started it —
+    the popup, the To-Do apply, hourly auto-sync-in, or the 3-hourly pull-retry — with `N / M files` and
+    the per-file phase line. (Before this, three of those four showed nothing at all.)
 7. The blocking handlers (`/rescan`, `/:repoId/pin`) **register jobs and report progress**; concurrent
    jobs **never lose a result** to a competing state write (serialized persist).
 8. The concurrency limiter is a **small dependency-free `mapLimit`** shared in both packages; **no**

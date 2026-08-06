@@ -38,7 +38,9 @@ export interface JobSpec {
   target: string;
   total?: number;
   unit?: string;
-  task: (report: (p: { done?: number; total?: number; unit?: string }) => void) => Promise<unknown>;
+  // `note` is the "what is happening right now" line (ProgressJob.note) — a browser-driven job can set it
+  // too (e.g. "uploading 3 of 12"), not just the server-side registry.
+  task: (report: (p: { done?: number; total?: number; unit?: string; note?: string }) => void) => Promise<unknown>;
 }
 
 export interface ProgressCtx {

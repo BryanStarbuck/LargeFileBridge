@@ -22,6 +22,12 @@
 // Chains are dropped once drained, so an idle repo costs nothing.
 const chains = new Map<string, Promise<void>>();
 
+/** True when a pass is already running or queued for `key` — i.e. a new caller will have to WAIT. Exists so
+ *  a waiting job can SAY it is waiting (webapp.mdx §12a) instead of showing a spinner that looks like work. */
+export function unitLockBusy(key: string): boolean {
+  return chains.has(key);
+}
+
 /** Run `fn` after every earlier caller for `key` has settled. Each caller gets its own result. */
 export function withUnitLock<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const prev = chains.get(key) ?? Promise.resolve();

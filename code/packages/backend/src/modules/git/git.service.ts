@@ -263,6 +263,16 @@ export interface GitCycleResult {
 }
 
 /**
+ * "What step is this git cycle on" — pushed to the caller's progress card (webapp.mdx §12a).
+ *
+ * A fetch or a push over a slow link is minutes of complete silence: nothing is written locally, no log line
+ * lands until it returns, and the pin pass that is waiting on it renders as a bare spinner. This is the hook
+ * that lets the cycle SAY "git: fetching your other computers' changes" while it happens. Optional
+ * everywhere — a caller with no card passes nothing and the cycle behaves exactly as before.
+ */
+export type GitPhaseNote = (text: string) => void;
+
+/**
  * Classify a configured remote: a URL (http/https/ssh/git/file) vs. a local filesystem path
  * (git_backbone.mdx §3).
  *
@@ -662,19 +672,19 @@ export class GitBackbone {
    * ort strategy (`--no-edit`). On a genuine conflict git cannot resolve, ABORTS the merge (leaving the
    * tree clean) and returns the conflicted paths to surface — never a clobber (git_backbone.mdx §4.3).
    */
-  async pull(result: GitCycleResult): Promise<void> {
+  async pull(result: GitCycleResult, onPhase?: GitPhaseNote): Promise<void> {
     if (!(await this.hasOrigin())) return;
     // `this` is the cycle's identity: the one legitimate nesting (commitAndPush → pull on a non-fast-forward
     // retry) is the SAME backbone and passes straight through, while a second storage that resolved to this
     // same working copy is a different backbone and waits (worktree-gate.ts).
-    return withWorktreeBusy(this.dir, () => this.pullInner(result), this);
+    return withWorktreeBusy(this.dir, () => this.pullInner(result, onPhase), this);
   }
 
-  private async pullInner(result: GitCycleResult): Promise<void> {
+  private async pullInner(result: GitCycleResult, onPhase?: GitPhaseNote): Promise<void> {
     // AUTO-COMMIT OFF ⇒ READ-ONLY PULL. The normal path below writes the tree (heals) and creates commits
     // (checkpoint, merge, conflict resolution) — none of which this computer may do when the user has
     // switched the backbone's writes off. Fetch + fast-forward keeps incoming edits landing here.
-    if (!gitAutoCommitEnabled()) return this.pullReadOnly(result);
+    if (!gitAutoCommitEnabled()) return this.pullReadOnly(result, onPhase);
     // Write the union-merge `.gitattributes` BEFORE the merge (not only in commitAndPush, which runs
     // after): git reads `.gitattributes` from the working tree at merge time, so the shared SDL lists
     // (SyncList, manifest, decisions ledger) only fold conflict-free once this file is present. On a fresh
@@ -692,6 +702,9 @@ export class GitBackbone {
     await this.checkpointOwnWrites();
     const branch = await this.branch();
     try {
+      // A `git fetch` over a slow link is minutes of total silence with no local sign of life. Naming it is
+      // the difference between "it is pulling your other computers' changes" and an unexplained stall.
+      onPhase?.("git: fetching your other computers' changes");
       await this.git.fetch("origin", branch);
       result.fetched = true;
     } catch (e) {
@@ -702,6 +715,7 @@ export class GitBackbone {
       if (failure.kind === "offline") result.offline = true;
       return;
     }
+    onPhase?.("git: merging them in");
     let attempt = await this.tryMerge(branch);
     if (attempt.error) {
       // The merge was REFUSED BEFORE IT STARTED — git named the working-tree paths in its way ("local
@@ -741,6 +755,7 @@ export class GitBackbone {
       // it. The mirrored `repos/<repoUid>/` payload made that the common case rather than the rare one.
       const conflicts = await this.conflictedPaths();
       if (conflicts.length > 0) {
+        onPhase?.(`git: resolving ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`);
         const { resolved, unresolved } = await this.resolveConflicts(conflicts);
         if (unresolved.length === 0) {
           try {
@@ -796,9 +811,10 @@ export class GitBackbone {
    * tree only, no commit, and never a file LFB does not own. The peer's copy lands; this computer's
    * regenerable cache steps aside and is rebuilt on the next pass.
    */
-  private async pullReadOnly(result: GitCycleResult): Promise<void> {
+  private async pullReadOnly(result: GitCycleResult, onPhase?: GitPhaseNote): Promise<void> {
     const branch = await this.branch();
     try {
+      onPhase?.("git: fetching your other computers' changes (read-only)");
       await this.git.fetch("origin", branch);
       result.fetched = true;
     } catch (e) {
@@ -807,6 +823,7 @@ export class GitBackbone {
       if (failure.kind === "offline") result.offline = true;
       return;
     }
+    onPhase?.("git: fast-forwarding");
     let attempt = await this.tryFastForward(branch);
     if (attempt.error) {
       const blocked = parseBlockedPaths(attempt.error.message);
@@ -1166,20 +1183,21 @@ export class GitBackbone {
    * (a machine-wide auto-commit that committed into this repo, or a prior failed push) so it never reached
    * the other computers. We now push whenever we committed OR the ahead-count is non-zero.
    */
-  async commitAndPush(result: GitCycleResult): Promise<void> {
+  async commitAndPush(result: GitCycleResult, onPhase?: GitPhaseNote): Promise<void> {
     if (result.conflicts?.length) return; // don't commit on top of an unresolved conflict
     if (!gitAutoCommitEnabled()) {
       // The user's switch, not a fault — the skip is still SAID (no silent no-ops), once per cycle.
       log.info("git", `${this.dir}: auto-commit is disabled in settings — nothing committed or pushed`);
       return;
     }
-    return withWorktreeBusy(this.dir, () => this.commitAndPushInner(result), this);
+    return withWorktreeBusy(this.dir, () => this.commitAndPushInner(result, onPhase), this);
   }
 
-  private async commitAndPushInner(result: GitCycleResult): Promise<void> {
+  private async commitAndPushInner(result: GitCycleResult, onPhase?: GitPhaseNote): Promise<void> {
     this.ensureSdlCommittable(); // the SDL text is the payload for a Git backbone — never let .gitignore hide it
     this.ensureMergeAttributes();
     try {
+      onPhase?.("git: staging this computer's changes");
       await this.git.add(["-A"]); // .gitignore keeps the big bytes out; only SDL text is staged
       await this.dropVolatileOnlyChanges(); // QUIET GATE (§6.6) — a heartbeat must never become a commit
       const staged = await this.git.status();
@@ -1237,8 +1255,12 @@ export class GitBackbone {
     const ATTEMPTS = 3;
     for (let attempt = 0; attempt < ATTEMPTS; attempt++) {
       const wait = attempt === 0 ? 0 : pushRetryDelayMs(attempt);
-      if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+      if (wait > 0) {
+        onPhase?.(`git: waiting ${Math.round(wait / 1000)}s before push attempt ${attempt + 1} of ${ATTEMPTS}`);
+        await new Promise((r) => setTimeout(r, wait));
+      }
       try {
+        onPhase?.(attempt === 0 ? "git: pushing" : `git: pushing (attempt ${attempt + 1} of ${ATTEMPTS})`);
         await this.git.push("origin", branch);
         result.pushed = true;
         result.problem = undefined; // a later success clears an earlier attempt's complaint
@@ -1290,7 +1312,7 @@ export class GitBackbone {
         // Re-pull before the next attempt. A conflict here is already auto-resolved per file by pull();
         // if something truly unresolvable remains, stop and surface it rather than pushing blindly.
         const retry: GitCycleResult = { ran: true };
-        await this.pull(retry);
+        await this.pull(retry, onPhase);
         if (retry.offline) {
           // The network dropped between the push and the re-pull — postponed, not failed.
           result.problem = retry.problem;

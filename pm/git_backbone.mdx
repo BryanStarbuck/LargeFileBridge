@@ -395,6 +395,31 @@ working copy at once (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/sr
 Driving this ordered cycle for each Git-backed storage inside the full pass — fetch/merge before reconcile, commit/push after, with the non-fast-forward retry — is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitPin(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest pin over IPFS alone.
 
+### 6.0 The cycle must SAY which step it is on (added 2026-08-06)
+
+A `git fetch` or `git push` over a slow link is minutes of complete silence: nothing is written locally and
+no log line lands until it returns. The pin pass waiting on it showed a spinner, so "pulling your other
+computers' changes" and "wedged" looked identical from the user's chair — the 2026-08-06 report.
+
+Each step of the cycle therefore reports a **phase line** ([webapp.mdx §12a](./webapp.mdx)) onto whichever
+progress card is driving it: `git: fetching your other computers' changes` → `git: merging them in` →
+`git: resolving 3 conflicts` → `git: staging this computer's changes` → `git: pushing (attempt 2 of 3)`.
+The §6.3 backoff **waits** are named too (`git: waiting 4s before push attempt 2 of 3`) — a deliberate
+pause the user can see is not a hang. A cycle **queued behind another on the same storage's lock** says so
+rather than spinning.
+
+The hook is **optional at every call site**: a caller with no card passes nothing and the cycle behaves
+exactly as before — no cycle ever depends on being watched.
+
+*Reported in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+the `GitPhaseNote` callback threaded through `GitBackbone.pull()` / `pullInner()` / `pullReadOnly()` /
+`commitAndPush()` / `commitAndPushInner()`; *supplied by:*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+`pinStorageUnit(id, onPhase)` / `syncStorageText(id, onPhase)`, whose `onPhase` writes into that storage's
+per-unit detail on the pass card (`pinAll()`), with `storageGitLockBusy(id)` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` supplying the
+"waiting for the git cycle already running on this storage" line.
+
 ### 6.1 Always push when the branch is ahead — deliver stranded / foreign commits (LOCKED, learned from a defect)
 
 Step 6's push must fire whenever the local branch is **ahead of the remote — for ANY reason** — not only

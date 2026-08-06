@@ -533,7 +533,7 @@ Columns, highest priority (never dropped) → lowest (dropped first as the page 
 | --- | --- | --- |
 | **1 (kept)** | **Status** | The state chip (§4.3.1) — Running / Queued / Rejected / Not attempted / Failed / Done. |
 | **2 (kept)** | **File** | Name (+ muted relative path); the item being processed. |
-| **3** | **Progress** | The determinate **% bar** (Running), or `—` (any settled or pending state). |
+| **3** | **Progress** | The determinate **% bar** (Running) with the job's **phase line** beneath it, or `—` (any settled or pending state). A running job with **no** fraction shows the phase line beside the spinner **in place of** the word *working* — see the note below. |
 | **4** | **Batch** | The [batch label](./processing_batches.mdx#3-the-label--what-the-user-recognizes-it-by-locked)'s **verb only** (*AI descriptions*), or **Ad hoc** (§4.3.1b). The **full** label is the hover-info. It sits at priority 4 — above Kind — because with the bottom table holding **every batch together** (§4.2), *"which run is this from?"* outranks *"what kind of file is it?"*. **It drops when the Batch facet is narrowed to a single batch**: the rail already says so, and a column repeating one value down every row is width spent to say nothing. |
 | **5** | **Kind** | audio / video / image (for transcribe / describe) — or the op's analog. |
 | **6** | **Size** | File size. |
@@ -542,6 +542,13 @@ Columns, highest priority (never dropped) → lowest (dropped first as the page 
 | **9** | **Elapsed / Started** | How long this item has been running / when it started. |
 | **10 (drops first)** | **Reason** | The failure **or refusal** reason — **auto-shown** whenever any row is `Failed`, `Rejected`, or `Not attempted`, regardless of width (a reason is never hidden), and otherwise the first to drop. |
 
+* **"working" IS NOT A STATUS (LOCKED, learned from a defect).** An indeterminate Running row used to read
+  `⟳ working`, and that one word covered "reading a 200,000-line ledger", "fetching 700 MB from a laptop
+  over a relay", "waiting behind another pass" **and** "hung". On 2026-08-06 a pin of the repo `all` sat on
+  it for six minutes and nothing on the page could say which. So the cell renders the job's **`note`**
+  ([webapp.mdx §12a](./webapp.mdx)) — the step it is on, and inside a big file its byte reading — falling
+  back to *working* only when the job genuinely reports no phase. The column is widened to fit it and the
+  line truncates with the full text as hover-info; the row still never wraps.
 * **No wrapping, ever.** As the window narrows, columns drop from priority 10 upward; the row stays a single
   line. Widen the window and they come back, most-important-first.
 * **General, not transcribe-only.** The same table serves `describe` / `compress` / `ocr` / `pin`

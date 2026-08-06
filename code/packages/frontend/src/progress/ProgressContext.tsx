@@ -21,6 +21,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { ProgressJob, ProcessingBatch, QueuedItemView, FailedItemView, SessionView } from "@lfb/shared";
 import { ProgressReactContext, verb, type ProgressCtx } from "./progress-context.js";
+import { mergeJobs } from "./merge-jobs.js";
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
 import { useLiveRefresh } from "../lib/useLiveRefresh.js";
@@ -64,16 +65,13 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
   });
   useLiveRefresh(["progress", "jobs"], [["progress"]]);
 
-  // Merge A ∪ B, de-duped by id (an optimistic card takes precedence over the same server job so it
-  // never doubles). THIS TAB'S OWN work goes FIRST: the dock caps itself at MAX_DOCK_CARDS live cards,
-  // and with server jobs leading, a click made while a mass transcode was running dropped straight into
-  // the "+ N more running" summary — the one card the user is waiting for is the one that never appeared.
-  const jobs = useMemo<ProgressJob[]>(() => {
-    const byId = new Map<string, ProgressJob>();
-    for (const j of optimisticJobs) byId.set(j.id, j);
-    for (const j of server?.jobs ?? []) if (!byId.has(j.id)) byId.set(j.id, j);
-    return [...byId.values()];
-  }, [server, optimisticJobs]);
+  // Merge A and B. The rules — de-dupe by id, this tab's own work first (the dock caps its live cards), and
+  // the supersede rule that stops one click rendering as two cards — live in ./merge-jobs.ts so they can be
+  // tested without mounting this provider.
+  const jobs = useMemo<ProgressJob[]>(
+    () => mergeJobs(optimisticJobs, server?.jobs ?? []),
+    [server, optimisticJobs],
+  );
 
   const run = useCallback<ProgressCtx["run"]>(
     async (specs, opts) => {

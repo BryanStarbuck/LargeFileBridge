@@ -18,15 +18,35 @@ export function begin(kind: ProgressKind, target: string): string {
   return id;
 }
 
-/** Update a job's determinate progress (bytes added, ffmpeg %, files walked). No-op if it ended. */
-export function report(id: string, p: { done?: number; total?: number; unit?: string }): void {
+/**
+ * Update a job's progress. Two independent axes, and a call may carry either or both:
+ *   • `done`/`total`/`unit` — the determinate fraction that draws the bar;
+ *   • `note` — the one-line "what is happening right now" (ProgressJob.note).
+ * No-op if the job already ended. Passing `note: ""` CLEARS the line rather than leaving a stale phrase up.
+ */
+export function report(id: string, p: ProgressReport): void {
   const j = jobs.get(id);
   if (!j) return;
   if (p.done !== undefined) j.done = p.done;
   if (p.total !== undefined) j.total = p.total;
   if (p.unit !== undefined) j.unit = p.unit;
+  if (p.note !== undefined) {
+    if (p.note) j.note = p.note;
+    else delete j.note;
+  }
   bumpTopicThrottled(PROGRESS_TOPIC); // ticks arrive many times a second — coalesce them
 }
+
+/** What a tracked body may say about itself. `note` is the phase line; the rest is the determinate bar. */
+export interface ProgressReport {
+  done?: number;
+  total?: number;
+  unit?: string;
+  note?: string;
+}
+
+/** The callback shape `track()` hands its body — one reporter, both axes. */
+export type Reporter = (p: ProgressReport) => void;
 
 /** Remove a job (it finished — success OR error). Idempotent. */
 export function end(id: string): void {
@@ -46,7 +66,7 @@ export function list(): ProgressJob[] {
 export async function track<R>(
   kind: ProgressKind,
   target: string,
-  body: (report: (p: { done?: number; total?: number; unit?: string }) => void) => Promise<R>,
+  body: (report: Reporter) => Promise<R>,
 ): Promise<R> {
   const id = begin(kind, target);
   try {

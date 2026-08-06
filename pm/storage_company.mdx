@@ -1219,9 +1219,19 @@ More rules the pass obeys:
   loud" applies).
 * **This changes no defaults elsewhere.** With the setting Off, behavior is exactly today's: reconcile
   still runs, rows still appear, recommendations still count — only the automatic download is gated.
+* **The run is VISIBLE while it happens (added 2026-08-06).** "Quiet in the log means success" is a rule
+  about the *log*, not about the app: this pass runs a git cycle per company and can then pull gigabytes,
+  and it used to show **nothing at all** in the progress dock — bytes moved for minutes while the app
+  looked idle, which from the user's chair is indistinguishable from a sync that has stopped. It now
+  registers **one card** for the run ("Pinning changes from your team", `n / N companies`) whose phase line
+  ([webapp.mdx §12a](./webapp.mdx)) names the company and its current step — the git steps come straight
+  from the cycle ([git_backbone.mdx §6.0](./git_backbone.mdx)), then "pulling 4 files into
+  `<repo>`". Each repo's `pullMissing()` registers its **own** card underneath with per-file byte progress
+  ([warnings.mdx §10.8.12 C.1a](./warnings.mdx)). The manual trigger (§14.3a) gets this for free — same
+  code path.
 
 The hourly pass is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/auto-sync-in.service.ts` — `startAutoSyncIn()` (the hourly self-arming timer) and `runAutoSyncIn()` (steps 2–5), armed at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/auto-sync-in.service.ts` — `startAutoSyncIn()` (the hourly self-arming timer) and `runAutoSyncIn()` (steps 2–5, wrapped in its own `track("pin", "changes from your team", …)` and composing its phase line with `WorkNote`), armed at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
 
 ### 14.3a Manual trigger — the storage-detail ⋮ menu (power-user)
 

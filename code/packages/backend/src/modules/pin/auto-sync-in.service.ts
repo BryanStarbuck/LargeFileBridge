@@ -22,6 +22,8 @@ import { getRepoConfig } from "../store-model/units.service.js";
 import { missingPinnedFromPeers, pullMissing, syncStorageText } from "./pin.service.js";
 import { schedulePullRetry } from "./pull-retry.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { track } from "../progress/progress.registry.js";
+import { WorkNote } from "../progress/work-note.js";
 import { log } from "../../shared/logging.js";
 
 /** 1 hour (storage_company.mdx §14.3); `LFB_AUTO_SYNC_IN_MS` shrinks it for tests only. */
@@ -94,64 +96,85 @@ export async function runAutoSyncIn(
       return { companies: 0, pulled: 0, failed: 0 };
     }
 
-    for (const storageId of enabled) {
-      companies++;
-      try {
-        // Step 2: refresh the company repo — fetch → merge → reconcile teammates' manifests/decisions →
-        // push. syncStorageText holds the per-storage git lock (§11.3) and is single-flighted.
-        await syncStorageText(storageId);
+    // ONE card for the whole run (webapp.mdx §12 source B). This pass runs a git cycle per company and then
+    // pulls teammates' files down over IPFS — minutes of real work, on the hour, that showed NOTHING in the
+    // app. The per-file detail comes from the pullMissing job each repo registers underneath.
+    return await track("pin", "changes from your team", async (report) => {
+      const note = new WorkNote(report);
+      let doneCompanies = 0;
+      report({ done: 0, total: enabled.length, unit: "companies" });
+      for (const storageId of enabled) {
+        companies++;
+        try {
+          // Step 2: refresh the company repo — fetch → merge → reconcile teammates' manifests/decisions →
+          // push. syncStorageText holds the per-storage git lock (§11.3) and is single-flighted.
+          note.start(storageId, storageId);
+          await syncStorageText(storageId, (t) => note.detail(storageId, t));
 
-        // Step 3: "did anything change since I last ran?"
-        const head = await backboneHead(storageId);
-        if (!head) {
-          log.warn("pin", `auto-sync-in: ${storageId} — no resolvable git backbone; skipping`);
-          continue;
-        }
-        const cursor = readAutoSyncCursor(storageId);
-        if (head === cursor) {
-          await writeAutoSyncCursor(storageId, null); // stamp last_run_at only; nothing to do
-          continue;
-        }
-
-        // Step 4: teammates checked something in — pull the qualifying set per owned repo.
-        let failedHere = 0;
-        let pulledHere = 0;
-        for (const { folder, repoRoot } of getOwnedRepoFolders(storageId)) {
-          try {
-            const missing = await missingPinnedFromPeers(repoRoot);
-            const pending = decidedSync(folder, missing.map((m) => m.path));
-            if (pending.length === 0) continue;
-            const counts = await pullMissing(repoRoot, pending, { compress: false, by: "auto-sync-in" });
-            pulledHere += counts.pulled;
-            failedHere += counts.failed;
-            log.info(
-              "pin",
-              `auto-sync-in: ${folder} — ${counts.pulled} pulled, ${counts.failed} failed (of ${pending.length} decided)`,
-            );
-          } catch (e) {
-            failedHere++;
-            log.warn("pin", `auto-sync-in: ${folder} skipped: ${(e as Error).message}`);
+          // Step 3: "did anything change since I last ran?"
+          note.detail(storageId, "checking whether anything changed");
+          const head = await backboneHead(storageId);
+          if (!head) {
+            log.warn("pin", `auto-sync-in: ${storageId} — no resolvable git backbone; skipping`);
+            continue;
           }
-        }
+          const cursor = readAutoSyncCursor(storageId);
+          if (head === cursor) {
+            await writeAutoSyncCursor(storageId, null); // stamp last_run_at only; nothing to do
+            continue;
+          }
 
-        // Step 5: advance the cursor ONLY on a clean run; a failure leaves it and arms pull-retry.
-        totalPulled += pulledHere;
-        totalFailed += failedHere;
-        if (failedHere === 0) {
-          await writeAutoSyncCursor(storageId, head);
-        } else {
-          await writeAutoSyncCursor(storageId, null);
-          schedulePullRetry(`auto-sync-in: ${failedHere} file(s) did not land for company ${storageId}`);
+          // Step 4: teammates checked something in — pull the qualifying set per owned repo.
+          let failedHere = 0;
+          let pulledHere = 0;
+          for (const { folder, repoRoot } of getOwnedRepoFolders(storageId)) {
+            try {
+              note.detail(storageId, `checking ${folder} for files to pull`);
+              const missing = await missingPinnedFromPeers(repoRoot);
+              const pending = decidedSync(folder, missing.map((m) => m.path));
+              if (pending.length === 0) continue;
+              // The pull registers its OWN card (repo name, files done/total, per-file bytes) — this line
+              // only has to say which repo the company pass is on.
+              note.detail(storageId, `pulling ${pending.length} file${pending.length === 1 ? "" : "s"} into ${folder}`);
+              const counts = await pullMissing(repoRoot, pending, {
+                compress: false,
+                by: "auto-sync-in",
+                label: folder,
+              });
+              pulledHere += counts.pulled;
+              failedHere += counts.failed;
+              log.info(
+                "pin",
+                `auto-sync-in: ${folder} — ${counts.pulled} pulled, ${counts.failed} failed (of ${pending.length} decided)`,
+              );
+            } catch (e) {
+              failedHere++;
+              log.warn("pin", `auto-sync-in: ${folder} skipped: ${(e as Error).message}`);
+            }
+          }
+
+          // Step 5: advance the cursor ONLY on a clean run; a failure leaves it and arms pull-retry.
+          totalPulled += pulledHere;
+          totalFailed += failedHere;
+          if (failedHere === 0) {
+            await writeAutoSyncCursor(storageId, head);
+          } else {
+            await writeAutoSyncCursor(storageId, null);
+            schedulePullRetry(`auto-sync-in: ${failedHere} file(s) did not land for company ${storageId}`);
+          }
+        } catch (e) {
+          log.warn("pin", `auto-sync-in: company ${storageId} failed: ${(e as Error).message}`);
+        } finally {
+          note.finish(storageId);
+          report({ done: ++doneCompanies, total: enabled.length, unit: "companies" });
         }
-      } catch (e) {
-        log.warn("pin", `auto-sync-in: company ${storageId} failed: ${(e as Error).message}`);
       }
-    }
-    if (totalPulled + totalFailed > 0) {
-      log.info("pin", `auto-sync-in: run done — ${totalPulled} pulled, ${totalFailed} failed across ${companies} company(ies)`);
-    }
+      if (totalPulled + totalFailed > 0) {
+        log.info("pin", `auto-sync-in: run done — ${totalPulled} pulled, ${totalFailed} failed across ${companies} company(ies)`);
+      }
+      return { companies, pulled: totalPulled, failed: totalFailed };
+    });
   } finally {
     running = false;
   }
-  return { companies, pulled: totalPulled, failed: totalFailed };
 }

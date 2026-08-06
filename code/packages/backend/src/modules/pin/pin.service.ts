@@ -12,7 +12,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { ManifestSchema, mediaKindForName, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
+import { ManifestSchema, mediaKindForName, formatBytes, type Manifest, type ManifestFile, type UnitStatus, type Decision, type PinCounts, type MissingPinnedFile } from "@lfb/shared";
 import { computerLabel } from "../store-model/config.service.js";
 import {
   listRepoFolders,
@@ -47,10 +47,10 @@ import {
 } from "../storage/storage-settings.service.js";
 import { GitBackbone, type GitCycleResult } from "../git/git.service.js";
 import { stableGitBin } from "../git/git-bin.js";
-import { withStorageGitLock } from "../git/git-lock.js";
+import { withStorageGitLock, storageGitLockBusy } from "../git/git-lock.js";
 // One pin pass at a time per repo unit — the equivalent of the per-storage git lock for the repo units,
 // which had none (unit-lock.ts).
-import { withUnitLock } from "./unit-lock.js";
+import { withUnitLock, unitLockBusy } from "./unit-lock.js";
 // The sync-repo mirror: send (mirrorToSyncRepo, via writeRepoTrackingManifest), receive (reconcile), and the
 // per-entry merge that keeps a peer's pin claim alive (storage_company.mdx §8.4.2/§8.4.3/§8.6).
 import {
@@ -65,6 +65,9 @@ import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js
 import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
 import { track } from "../progress/progress.registry.js";
+// The dock's "what is happening right now" line (webapp.mdx §12a). A pin pass and a pull both fan out over
+// the limiter, so the note is COMPOSED from a phase + the in-flight files rather than written by hand.
+import { WorkNote, yieldToLoop } from "../progress/work-note.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
@@ -113,8 +116,19 @@ function zeroCounts(): PinCounts {
   return { eligible: 0, added: 0, pinned: 0, fetched: 0, skipped: 0, failed: 0, missing: 0, orphaned: 0, staled: 0 };
 }
 
-/** How a tracked pin run reports what it is doing, so the dock shows real counts, not a bare spinner. */
-export type PinReport = (p: { done?: number; total?: number; unit?: string }) => void;
+/**
+ * How a tracked pin run reports what it is doing, so the dock shows real counts, not a bare spinner.
+ * `note` is the phase line (ProgressJob.note) — the half of the answer counts alone cannot give.
+ */
+export type PinReport = (p: { done?: number; total?: number; unit?: string; note?: string }) => void;
+
+/** "310 MB of 734 MB" — the per-file detail line. `approx` marks a reading derived from Kubo's node count. */
+function bytesDetail(done: number, total: number | undefined, approx = false): string {
+  const tilde = approx ? "≈" : "";
+  if (!total || total <= 0) return `${tilde}${formatBytes(done)}`;
+  const pct = Math.min(100, Math.round((done / total) * 100));
+  return `${tilde}${formatBytes(done)} of ${formatBytes(total)} (${pct}%)`;
+}
 
 /**
  * How long a decided file's bytes may be absent from a computer that HELD them before the record is staled
@@ -168,6 +182,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   // string (pin_process.mdx §6). Incremented inside the parallel closures below — safe because JS runs
   // each synchronous span between awaits atomically, so counter bumps never interleave.
   const counts = zeroCounts();
+  // The phase line for this unit. Every long step below names itself here, so a pass that is between files
+  // — or inside one big one — says what it is doing instead of rendering as a bare spinner.
+  const note = new WorkNote(report);
   const missing = t.preflightError?.();
   if (missing) {
     markUnitError(t, missing);
@@ -177,6 +194,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     counts.error = missing;
     return counts;
   }
+  note.phase("checking the IPFS node");
   const health = await ipfs.health();
   if (health !== "ok") {
     markUnitError(t, "IPFS node unreachable");
@@ -188,6 +206,8 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   // FOLD, don't just key: a `merge=union` manifest legitimately carries the same path twice, and keying the
   // raw list is last-wins — the twin holding the CID or a peer's pin claim would vanish from the manifest
   // this pass rewrites wholesale below (§8.4.3: absence is never a delete).
+  note.phase("reading this unit's file list");
+  await yieldToLoop(); // the fold below is synchronous over the whole manifest — let the poll see the note
   const byPath = new Map(foldManifestFiles(t.manifest.files, t.kind).map((f) => [f.path, f]));
 
   // Learn from the filesystem which CIDs are REALLY pinned right now. The local IPFS pinset is the
@@ -200,6 +220,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   // `pinset.has(ipfs.canonicalCid(cid))`.
   let pinset: Set<string>;
   try {
+    // On a large pinset this single call runs for a long time and moves no files — the exact interval that
+    // used to read as a hang. Name it.
+    note.phase("reading this computer's pin list");
     pinset = new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
   } catch (e) {
     // A failed/timed-out `pin ls` must NEVER be read as "nothing is pinned" — an empty pinset here makes
@@ -226,6 +249,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   let total = toAdd.length;
   const tick = (): void => report?.({ done: ++done, total, unit: "files" });
   report?.({ done: 0, total, unit: "files" });
+  // The per-file fan-out carries its VERB in the item label ("checking x", "adding x"), not in the phase:
+  // several files are in flight at once and they are not all at the same step, so one shared phase word
+  // would be wrong for most of them.
+  note.phase("");
 
   // Decided files with NO bytes here, gathered during the add phase and classified after it (below): either
   // never-here (a second computer's pull-down offer) or gone-from-a-computer-that-held-them (a delete).
@@ -234,6 +261,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   await Promise.all(
     toAdd.map(([rel]) =>
       ipfsLimiter.run(async () => {
+        note.start(rel, `checking ${path.basename(rel)}`);
         const abs = t.resolveAbs(rel);
         if (abs === null) return; // not placeable here (ungrafted mapped dir) — known-but-absent
         // Non-throwing (shared/fs-probe): runs per pinned file, and decided-but-absent is a NORMAL
@@ -288,7 +316,13 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
           }
         }
         try {
-          const cid = await ipfs.addFile(abs); // add streams the bytes and pins recursively (pin=true)
+          // `add` uploads the whole file into the blockstore, so a multi-GB video sits here for minutes.
+          // Kubo's own byte count drives the card's detail — a true reading, not an estimate.
+          note.start(rel, `adding ${path.basename(rel)}`);
+          note.detail(rel, bytesDetail(0, st.size));
+          const cid = await ipfs.addFile(abs, {
+            onBytes: (b) => note.detailLazy(rel, () => bytesDetail(b, st.size)),
+          }); // add streams the bytes and pins recursively (pin=true)
           pinset.add(ipfs.canonicalCid(cid));
           byPath.set(rel, {
             path: rel,
@@ -305,7 +339,10 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
           counts.failed++;
           log.error("pin", `add failed for ${rel}: ${(e as Error).message}`);
         }
-      }).finally(tick), // every exit path counts, so the bar reaches its total even on an all-no-op pass
+      }).finally(() => {
+        note.finish(rel); // the line must never keep naming a file that already settled
+        tick(); // every exit path counts, so the bar reaches its total even on an all-no-op pass
+      }),
     ),
   );
 
@@ -329,6 +366,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   // ── REALITY vs. RECORD for the decided files with no bytes here (decisions.mdx §12) ──────────────────
   // Never-here (a pull-down offer) vs. gone-from-here (a deletion), plus the grace period — the whole rule
   // lives in orphans.service.ts so it is testable without a daemon. What is done ABOUT each answer is here.
+  note.phase("working out what is missing on this computer");
   const { missing: neverHere, orphans, stale } = classifyAbsent({
     absent: absentHere,
     entryFor: (rel) => byPath.get(rel),
@@ -415,12 +453,14 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     });
     total += fetchTargets.length;
     report?.({ done, total, unit: "files" });
+    note.phase("");
     await Promise.all(
       fetchTargets.map((entry) =>
         ipfsLimiter.run(async () => {
           if (!entry.cid) return;
           const abs = t.resolveAbs(entry.path);
           if (abs === null) return;
+          note.start(entry.path, `fetching ${path.basename(entry.path)}`);
           try {
             // SELF-HEAL a wrapper-directory CID before we pin OR cat it. A manifest written before the
             // basename fix in `ipfs.addFile` can hold the CID of the WRAPPER DIRECTORY Kubo builds for a
@@ -436,25 +476,40 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
               // Same fast availability probe as the interactive pull (warnings.mdx §10.8.12 C.1): when the
               // only holder is offline, fail this file in seconds instead of spending the full pin-add
               // stall budget on it EVERY 15-minute pass. Inconclusive (null) proceeds.
+              note.detail(entry.path, "looking for a computer that has it");
               if ((await ipfs.hasProvider(entry.cid)) === false) {
                 counts.failed++;
                 log.warn("pin", `fetch skipped for ${entry.path}: no computer is currently providing it (holder offline?)`);
                 return;
               }
-              await ipfs.pinAdd(entry.cid); // hold a local copy first…
+              // hold a local copy first… — and say how far the transfer has got while it runs
+              await ipfs.pinAdd(entry.cid, {
+                onNodes: (n) =>
+                  note.detailLazy(entry.path, () =>
+                    bytesDetail(ipfs.approxFetchedBytes(n, entry.size), entry.size, true),
+                  ),
+              });
               pinset.add(ipfs.canonicalCid(entry.cid));
               counts.pinned++;
             }
+            note.detail(entry.path, "writing it to disk");
             // `resolved: true` — `resolveFileCid` ran a few lines up; re-running it costs a `files/stat`
             // per file (more per wrapper level) to re-derive the CID we are already holding.
-            await ipfs.catToFile(entry.cid, abs, { resolved: true }); // …then write the bytes locally
+            await ipfs.catToFile(entry.cid, abs, {
+              resolved: true,
+              onBytes: (b) =>
+                note.detailLazy(entry.path, () => `writing to disk · ${bytesDetail(b, entry.size)}`),
+            }); // …then write the bytes locally
             counts.fetched++;
             log.info("pin", `Fetched ${entry.path} -> ${abs} (${entry.cid})`);
           } catch (e) {
             counts.failed++;
             log.warn("pin", `fetch failed for ${entry.path}: ${(e as Error).message}`);
           }
-        }).finally(tick),
+        }).finally(() => {
+          note.finish(entry.path);
+          tick();
+        }),
       ),
     );
   }
@@ -469,6 +524,8 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     setPinClaim(entry, t.label, pinsetHasContent(pinset, entry.cid));
   }
 
+  note.phase("saving this unit's file list");
+  await yieldToLoop(); // the parse + write below are synchronous over every file in the unit
   const next: Manifest = ManifestSchema.parse({
     unit: t.kind,
     generated_at: new Date().toISOString(),
@@ -478,6 +535,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
 
   if (t.publish) {
     try {
+      note.phase("sharing the file list with your other computers");
       t.publish(next);
     } catch (e) {
       log.warn("pin", `publish manifest failed for ${t.name}: ${(e as Error).message}`);
@@ -516,7 +574,13 @@ export function pinRepoFolder(
   // from a snapshot taken at entry — so two overlapping runs drop each other's newly-added CIDs and re-upload
   // those files on the next pass. Serialized rather than coalesced: a paths-scoped run carries the user's
   // selection and must not be swallowed by a queued run with a different scope.
-  return withUnitLock(`repo:${folder}`, () => pinRepoFolderInner(folder, onlyPaths, opts));
+  //
+  // A QUEUED run is the most confusing state this pass has: the card is up, nothing is moving, and nothing
+  // anywhere says why. Say it — the wait IS the honest answer, and the phase is overwritten the moment this
+  // caller's turn actually starts.
+  const key = `repo:${folder}`;
+  if (unitLockBusy(key)) opts.report?.({ note: "waiting for the sync pass already running on this repo" });
+  return withUnitLock(key, () => pinRepoFolderInner(folder, onlyPaths, opts));
 }
 
 async function pinRepoFolderInner(
@@ -546,11 +610,19 @@ async function pinRepoFolderInner(
   // storage's sync repo and this repo's shared `repoUid`, then fold in whatever a peer computer pushed
   // there. Both are best-effort — a repo that cannot mirror (no remote, no owning storage) simply pins
   // locally, exactly as before.
+  //
+  // THIS PRELUDE IS THE SLOW PART on a big repo and it moves no bytes at all: the reconcile re-parses and
+  // rewrites the ledger, and the merge folds two whole manifests. Reported (and yielded to, so the poll is
+  // actually served) because minutes of silence here is what made a working pass look wedged.
+  opts.report?.({ note: "reading what your other computers changed" });
+  await yieldToLoop();
   ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
   reconcileFromSyncRepo(repoPath);
   // §8.6 — the two manifests must not disagree. The reconcile lands in Local Storage; the One-Repo file rows
   // read the UNIT manifest, so fold the peer's entries across before the pass rather than leaving a
   // Pull-down count that no row can explain.
+  opts.report?.({ note: "merging the file lists" });
+  await yieldToLoop();
   const unitManifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath));
   return runUnitPin(
     {
@@ -667,9 +739,13 @@ function resolveStorageAbs(root: string, rel: string, mappedKeys: Set<string>): 
  * fetched. Its file list is the tracking index; its manifest is the SDL's root `manifest.yaml`.
  * The whole unit runs under the per-storage Git lock so it never races the device worker on the same repo.
  */
-export function pinStorageUnit(id: string): Promise<void> {
-  return withStorageGitLock(id, () => pinStorageUnitInner(id));
+export function pinStorageUnit(id: string, onPhase?: PhaseNote): Promise<void> {
+  if (storageGitLockBusy(id)) onPhase?.("waiting for the git cycle already running on this storage");
+  return withStorageGitLock(id, () => pinStorageUnitInner(id, onPhase));
 }
+
+/** One line of "what step is this storage on" — fed to the pass card's per-unit detail (webapp.mdx §12a). */
+export type PhaseNote = (text: string) => void;
 
 /**
  * Report ONE git cycle's problem at the RIGHT severity, and never lose the cycle to a network blip (bug #15).
@@ -694,10 +770,11 @@ function reportGitProblem(prefix: string, id: string, remote: string | null, r: 
   log.warn("pin", `${prefix}storage ${id} git: ${r.problem}`);
 }
 
-async function pinStorageUnitInner(id: string): Promise<void> {
+async function pinStorageUnitInner(id: string, onPhase?: PhaseNote): Promise<void> {
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return;
   const root = expandHome(row.root);
+  onPhase?.("opening its git backbone");
 
   // Git backbone (git_backbone.mdx §6): if this storage's dedicated Git repo is ON, FETCH + auto-MERGE the
   // user's other computers' SDL edits BEFORE we touch anything, so the incoming devices/manifest/analysis
@@ -719,7 +796,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
     );
   }
   if (gitBackbone) {
-    await gitBackbone.pull(gitResult).catch((e) => {
+    await gitBackbone.pull(gitResult, onPhase).catch((e) => {
       gitResult.problem = `Git pull failed: ${(e as Error).message}`;
     });
     reportGitProblem("", id, gitRemote?.remote ?? null, gitResult);
@@ -727,6 +804,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
     // not just the git-only cycle). Without this a full pin pass fetches the SDL's text and drops the
     // `repos/<repoUid>/` subtrees on the floor for that cycle — the peer's file stays invisible until some
     // later pass happens to be the other kind.
+    onPhase?.("folding in what your other computers pushed");
     await reconcileMirroredRepos(root).catch((e) =>
       log.warn("pin", `storage ${id}: reconciling mirrored repos failed: ${(e as Error).message}`),
     );
@@ -746,6 +824,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
   // a not-opted-in storage is still visited, its device info written & pushed, but no bytes are added/
   // pinned/fetched. When opted in, reconcile every indexed large file through this computer's graft.
   if (getStoragePinned(id)) {
+    onPhase?.("reading its tracked-file index");
     const decisions: Record<string, Decision> = {};
     for (const f of readStorageIndex(root)) decisions[f.path] = "sync";
 
@@ -753,24 +832,34 @@ async function pinStorageUnitInner(id: string): Promise<void> {
     // a grafted hierarchy vs. a plain SDL-relative path.
     const mappedKeys = new Set(readMappedDirsForRoot(root).mapped.map((m) => m.key));
 
-    await runUnitPin({
-      kind: "storage",
-      name: `storage:${id}`,
-      label: computerLabel(),
-      decisions,
-      fetchMissing: true,
-      resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
-      manifest: readCommittedManifest(root), // <root>/manifest.yaml — an SDL has no .lfbridge/ (§0.4)
-      // A REAL, PERSISTED status (pin/s/<id>/status.yaml, machine-local). This used to be a throwaway
-      // `UnitStatusSchema.parse({})` with a no-op writer, which silently disabled the deleted-file rule for
-      // every SDL: `classifyAbsent` carries the grace period in `status.orphans`, so with nothing persisted
-      // each pass re-stamped a deleted file as "first seen absent just now". The 24h grace could never
-      // lapse (decisions.mdx §12), the decision never returned to Undecided, and this computer went on
-      // pinning bytes for a file the user had deleted. `markUnitError` wrote nowhere for the same reason.
-      status: getStorageUnitStatus(id),
-      writeManifest: (m) => writeCommittedManifest(root, m),
-      writeStatus: (s) => writeStorageUnitStatus(id, s),
-    });
+    await runUnitPin(
+      {
+        kind: "storage",
+        name: `storage:${id}`,
+        label: computerLabel(),
+        decisions,
+        fetchMissing: true,
+        resolveAbs: (rel) => resolveStorageAbs(root, rel, mappedKeys),
+        manifest: readCommittedManifest(root), // <root>/manifest.yaml — an SDL has no .lfbridge/ (§0.4)
+        // A REAL, PERSISTED status (pin/s/<id>/status.yaml, machine-local). This used to be a throwaway
+        // `UnitStatusSchema.parse({})` with a no-op writer, which silently disabled the deleted-file rule for
+        // every SDL: `classifyAbsent` carries the grace period in `status.orphans`, so with nothing persisted
+        // each pass re-stamped a deleted file as "first seen absent just now". The 24h grace could never
+        // lapse (decisions.mdx §12), the decision never returned to Undecided, and this computer went on
+        // pinning bytes for a file the user had deleted. `markUnitError` wrote nowhere for the same reason.
+        status: getStorageUnitStatus(id),
+        writeManifest: (m) => writeCommittedManifest(root, m),
+        writeStatus: (s) => writeStorageUnitStatus(id, s),
+      },
+      undefined,
+      // A storage's byte work is a full unit pin — route its phase line into the SAME per-unit detail slot
+      // the git steps above use, so the pass card keeps naming the real current step.
+      onPhase
+        ? (pr) => {
+            if (pr.note !== undefined) onPhase(pr.note);
+          }
+        : undefined,
+    );
   } else {
     log.info("pin", `Storage ${id}: pinned=false — device info kept current, no byte work.`);
   }
@@ -780,7 +869,7 @@ async function pinStorageUnitInner(id: string): Promise<void> {
   // fetch-merge-push retry on a non-fast-forward reject. Big bytes are git-ignored, so only the small
   // text is ever committed. A push/auth problem is surfaced (logged) and never blocks the IPFS work.
   if (gitBackbone) {
-    await gitBackbone.commitAndPush(gitResult).catch((e) => {
+    await gitBackbone.commitAndPush(gitResult, onPhase).catch((e) => {
       gitResult.problem = `Git push failed: ${(e as Error).message}`;
     });
     if (gitResult.problem) reportGitProblem("", id, gitRemote?.remote ?? null, gitResult);
@@ -829,14 +918,15 @@ export function ensureDeviceRegistered(id: string): Promise<GitCycleResult> {
  * (§18.5.1). Artifacts must never again depend on the device worker: AC-30's test is that deleting the
  * device worker tomorrow leaves artifact delivery intact.
  */
-export function syncStorageText(id: string): Promise<GitCycleResult> {
+export function syncStorageText(id: string, onPhase?: PhaseNote): Promise<GitCycleResult> {
   // `undefined` = collapsed into an already-queued pass on this storage's lock (git-lock.ts) — that pass
   // runs the same pull→reconcile→commit→push cycle and reports its own problems. Callers read `.problem`
   // off this result (backbone-freshness, sync-trigger), so never let the collapse hand them undefined.
-  return withStorageGitLock(id, () => syncStorageTextInner(id, "sync")).then((r) => r ?? { ran: true });
+  if (storageGitLockBusy(id)) onPhase?.("waiting for the git cycle already running on this storage");
+  return withStorageGitLock(id, () => syncStorageTextInner(id, "sync", onPhase)).then((r) => r ?? { ran: true });
 }
 
-async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleResult> {
+async function syncStorageTextInner(id: string, tag: string, onPhase?: PhaseNote): Promise<GitCycleResult> {
   const result: GitCycleResult = { ran: false };
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return result;
@@ -862,7 +952,7 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
 
   // 1. PULL first — fetch + auto-merge before we modify anything (never on a storage without a backbone).
   if (gitBackbone) {
-    await gitBackbone.pull(result).catch((e) => {
+    await gitBackbone.pull(result, onPhase).catch((e) => {
       result.problem = `Git pull failed: ${(e as Error).message}`;
     });
     reportGitProblem(`${tag} `, id, gitRemote?.remote ?? null, result);
@@ -870,6 +960,7 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
     //     another of the user's computers pushed is merged into this machine's Local Storage — which is what
     //     turns "the Tower pinned a file" into a row, a metric, and a To-Do item over here. Runs on EVERY
     //     pull, never on demand; best-effort, so a bad subtree can never fail the git cycle.
+    onPhase?.("folding in what your other computers pushed");
     await reconcileMirroredRepos(root).catch((e) =>
       log.warn("pin", `${tag} storage ${id}: reconciling mirrored repos failed: ${(e as Error).message}`),
     );
@@ -885,7 +976,7 @@ async function syncStorageTextInner(id: string, tag: string): Promise<GitCycleRe
 
   // 3. COMMIT + PUSH this device's own SDL text (skips an empty commit; non-fast-forward retry inside).
   if (gitBackbone) {
-    await gitBackbone.commitAndPush(result).catch((e) => {
+    await gitBackbone.commitAndPush(result, onPhase).catch((e) => {
       result.problem = `Git push failed: ${(e as Error).message}`;
     });
     if (result.problem) reportGitProblem(`${tag} `, id, gitRemote?.remote ?? null, result);
@@ -974,8 +1065,8 @@ function readGitRemoteUrl(dir: string): string | null {
 }
 
 /** Pin one storage without letting a per-storage fault throw the pass. */
-function pinStorageSafe(id: string): Promise<void> {
-  return pinStorageUnit(id).catch((e) =>
+function pinStorageSafe(id: string, onPhase?: PhaseNote): Promise<void> {
+  return pinStorageUnit(id, onPhase).catch((e) =>
     log.error("pin", `pin storage ${id} failed: ${(e as Error).message}`),
   );
 }
@@ -1028,18 +1119,40 @@ export async function pinAll(opts: { priorityDone?: string } = {}): Promise<void
       const total = repos.length + 1 + storageIds.length; // repos + the computer unit + directory storages
       const tick = (): void => report({ done: ++done, total, unit: "units" });
       report({ done, total, unit: "units" });
-      await runPool(repos, PIN_CONCURRENCY, (f) => pinRepoSafe(f).finally(tick));
+      // "3 / 12 units" says how far the pass is, never WHICH unit is holding it up — and on a pass that
+      // takes minutes per repo that is the only question worth asking. The note names the units in flight.
+      const note = new WorkNote(report);
+      // A THUNK, not a promise: a unit's own first phase line ("waiting for the git cycle already running
+      // on this storage") is reported SYNCHRONOUSLY as it starts, so the item has to be on the line before
+      // the work is called — an argument would evaluate the other way round and drop that first line.
+      const unit = <T,>(key: string, label: string, work: () => Promise<T>): Promise<T> => {
+        note.start(key, label);
+        return work().finally(() => {
+          note.finish(key);
+          tick();
+        });
+      };
+      await runPool(repos, PIN_CONCURRENCY, (f) => unit(`repo:${f}`, f, () => pinRepoSafe(f)));
       // The computer unit is part of the full pass too (storage.mdx §8).
-      await pinComputerUnit()
-        .catch((e) => log.error("pin", `pin computer unit failed: ${(e as Error).message}`))
-        .finally(tick);
+      await unit("computer", "files outside any repo", () =>
+        pinComputerUnit().catch((e) => log.error("pin", `pin computer unit failed: ${(e as Error).message}`)),
+      );
       // Directory-based storages (personal/company/community) are units too: pin each through this
       // computer's device graft (devices.mdx §4) so its mapped-dir files resolve to the right local paths.
       // Bounded by the same limiter; per-storage failure is contained.
-      await runPool(storageIds, PIN_CONCURRENCY, (id) => pinStorageSafe(id).finally(tick));
+      await runPool(storageIds, PIN_CONCURRENCY, (id) =>
+        unit(
+          `storage:${id}`,
+          `storage ${id}`,
+          // The git half of a storage pass (fetch → merge → commit → push) IS "pulling changes down", and it
+          // is where a slow pass usually sits. Its steps land as this unit's detail.
+          () => pinStorageSafe(id, (t) => note.detail(`storage:${id}`, t)),
+        ),
+      );
       // Materialize each storage's ENABLED backing locations (storage_settings.mdx §6) — create-if-missing
       // + ensure .lfbridge/. Bounded by the same limiter as units; per-storage failure is contained so it
       // never throws the pass. Not a unit, so it does not tick.
+      note.phase("checking each storage's backing locations");
       await runPool(storageIds, PIN_CONCURRENCY, ensureBackingSafe);
     });
   } finally {
@@ -1156,8 +1269,31 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
 export async function pullMissing(
   repoRoot: string,
   checkedPaths: string[],
-  opts: { compress?: boolean; by?: string | null } = {},
+  opts: { compress?: boolean; by?: string | null; label?: string } = {},
 ): Promise<{ pulled: number; failed: number; errors: string[] }> {
+  // A PULL IS THE LONGEST-RUNNING THING A USER EVER WATCHES, and it had NO progress registration at all.
+  // The interactive pull showed only the browser's optimistic card (a spinner, no counts, no phase) and the
+  // three BACKGROUND callers — auto-sync-in, pull-retry, and the To Do apply — showed literally nothing:
+  // bytes moved for minutes while the app looked idle. Registering here rather than at each call site is
+  // deliberate — the job then exists no matter which of the four entry points started it.
+  return track("pin", opts.label ?? path.basename(repoRoot), (report) =>
+    pullMissingInner(repoRoot, checkedPaths, opts, report),
+  );
+}
+
+async function pullMissingInner(
+  repoRoot: string,
+  checkedPaths: string[],
+  opts: { compress?: boolean; by?: string | null },
+  report: PinReport,
+): Promise<{ pulled: number; failed: number; errors: string[] }> {
+  const note = new WorkNote(report);
+  // Determinate from the first paint: the user checked N files and every one of them ticks exactly once,
+  // whether it lands or fails.
+  let settled = 0;
+  const tick = (): void => report({ done: ++settled, total: checkedPaths.length, unit: "files" });
+  report({ done: 0, total: checkedPaths.length, unit: "files" });
+  note.phase("reading this repo's file list");
   let manifest: Manifest;
   try {
     // The SAME manifest `missingPinnedFromPeers` built the list from (storage_company.mdx §8.6). This read
@@ -1170,7 +1306,9 @@ export async function pullMissing(
     return { pulled: 0, failed: checkedPaths.length, errors: [(e as Error).message] };
   }
   const byPath = new Map(manifest.files.map((f) => [f.path, f]));
+  note.phase("reading this computer's pin list");
   const pinset = await pinnedCidSet();
+  note.phase("");
   const by = opts.by ?? null;
   let pulled = 0;
   let failed = 0;
@@ -1182,6 +1320,7 @@ export async function pullMissing(
   await Promise.all(
     checkedPaths.map((rel) =>
       ipfsLimiter.run(async () => {
+        note.start(rel, `pulling ${path.basename(rel)}`);
         const entry = byPath.get(rel);
         if (!entry || !entry.cid) {
           failed++;
@@ -1217,6 +1356,7 @@ export async function pullMissing(
             // a metric that "never updates". A clean zero-provider answer fails the file in seconds with a
             // message that names the peer; an inconclusive probe (null) proceeds — absence of evidence
             // from a quick DHT query must never block a pull that would have worked.
+            note.detail(rel, "looking for a computer that has it");
             const avail = await ipfs.hasProvider(entry.cid);
             if (avail === false) {
               const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
@@ -1235,7 +1375,18 @@ export async function pullMissing(
             // in truth we never let it. Observed live on 2026-08-05: 13 files aborted in two bursts, the
             // daemon logging `context canceled` for every one of them.
             try {
-              await ipfs.pinAdd(entry.cid, { stallMs: 2 * 60_000, discoveryMs: 6 * 60_000, attempts: 2 });
+              // Kubo reports only the DAG-node count while a fetch runs; `approxFetchedBytes` turns it into
+              // the "≈310 MB of 734 MB (42%)" reading, marked approximate because that is what it is.
+              note.detail(rel, "waiting for the transfer to start");
+              await ipfs.pinAdd(entry.cid, {
+                stallMs: 2 * 60_000,
+                discoveryMs: 6 * 60_000,
+                attempts: 2,
+                onNodes: (n) =>
+                  note.detailLazy(rel, () =>
+                    bytesDetail(ipfs.approxFetchedBytes(n, entry.size), entry.size, true),
+                  ),
+              });
             } catch (e) {
               if (/abort|stall/i.test((e as Error).message ?? "") || (e as Error).name === "AbortError") {
                 const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
@@ -1249,7 +1400,10 @@ export async function pullMissing(
           }
           if (!fs.existsSync(abs)) {
             // Already unwrapped above — don't pay `resolveFileCid` a second time per file.
-            await ipfs.catToFile(entry.cid, abs, { resolved: true }); // the pinned bytes → the working tree
+            await ipfs.catToFile(entry.cid, abs, {
+              resolved: true,
+              onBytes: (b) => note.detailLazy(rel, () => `writing to disk · ${bytesDetail(b, entry.size)}`),
+            }); // the pinned bytes → the working tree
           }
           pulled++;
           log.info("pin", `Pulled ${rel} <- ${entry.cid} (added by ${entry.pinned_by.find((d) => d !== computerLabel()) ?? "a peer"})`);
@@ -1289,6 +1443,9 @@ export async function pullMissing(
             }
           }
         }
+      }).finally(() => {
+        note.finish(rel);
+        tick(); // every exit path counts — the bar must reach its total even on an all-failed batch
       }),
     ),
   );
@@ -1297,6 +1454,7 @@ export async function pullMissing(
   // the bytes are already on disk; the worst case is that the heal is redone on the next pull.
   if (healed) {
     try {
+      note.phase("saving the corrected file list");
       writeRepoTrackingManifest(repoRoot, manifest);
     } catch (e) {
       log.warn("pin", `pullMissing: could not persist healed CIDs for ${repoRoot}: ${(e as Error).message}`);
