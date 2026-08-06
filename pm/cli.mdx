@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The CLI (`lfb`)
-description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. Bare `lfb` with no arguments is the zero-setup default: it lists EVERY file under the current directory recursively — all file types, whether the directory is a tracked repo or not — so the command is useful with zero flags anywhere; help moves behind `lfb help` / `-h` / `--help`. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines; --everything switches to the bare-`lfb` full listing. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. Anything slow shows a live spinner + elapsed-seconds progress line on stderr (TTY only) so the CLI never looks hung. CLI code lives in ~/BGit/Bryan_git/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
+description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. Bare `lfb` with no arguments is the zero-setup default: it lists EVERY file under the current directory recursively — all file types, whether the directory is a tracked repo or not — so the command is useful with zero flags anywhere; help moves behind `lfb help` / `-h` / `--help`. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines; --everything switches to the bare-`lfb` full listing. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. The second family is per-file artifacts (§9): `lfb transcription|description|ocr FILE` prints the absolute path of the file's derived-text sidecar (locate is the safe default; `--create` makes it via the backend when missing, `--overwrite` regenerates, `--text` prints the content). Anything slow shows a live spinner + elapsed-seconds progress line on stderr (TTY only) so the CLI never looks hung. CLI code lives in ~/BGit/Bryan_git/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
 ---
 
 # LargeFileBridge — The CLI (`lfb`)
@@ -424,7 +424,9 @@ git-ignore) and the CLI as another caller of them. Ground rules for when those v
 * The natural composition is `lfb files … | <action>` or a `--enqueue <task>` flag on `files`;
   either way the file *list* endpoint stays pure and the action is a second, explicit call.
 
-These verbs are out of scope for v1 and each gets its own spec section when built.
+These verbs are out of scope for v1 and each gets its own spec section when built. The **first
+built action family** is the per-file artifact family — `lfb transcription` / `lfb description` /
+`lfb ocr` — specified in **§9**.
 
 ---
 
@@ -462,3 +464,98 @@ These verbs are out of scope for v1 and each gets its own spec section when buil
    flags; its walk truncation (200k soft cap) is always announced, never silent.
 8. Anything slow shows the stderr progress line (spinner + phase + elapsed) when stderr is a TTY;
    progress never touches stdout and is fully erased before real output.
+9. Artifact commands (§9): `lfb transcription|description|ocr FILE` locate by default and NEVER
+   create; `--create` is the only way work happens; `--overwrite` implies `--create`; stdout is
+   exactly one payload (the artifact path, or its text with `--text`) — everything else is stderr.
+   A recorded AI-description rejection is surfaced, never silently retried; only `--overwrite`
+   re-asks. The create call runs with NO client-side timeout — the backend answers when done.
+
+---
+
+## 9. Command family: per-file artifacts (`lfb transcription` / `lfb description` / `lfb ocr`)
+
+The first **action** family (§6's pattern made real). Large File Bridge derives three text
+artifacts from media files — the transcription (what was SAID), the AI description (what is
+SEEN), and the OCR text (what it SAYS on screen) — and stores each as a sidecar in the tracking
+area ([Transcribe.mdx](./Transcribe.mdx), [ai_description.mdx](./ai_description.mdx),
+[ocr.mdx](./ocr.mdx), [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx)). Finding that
+sidecar by hand means knowing the repo-vs-storage pairing rules; these commands answer it in one
+line, and can create the artifact when it does not exist yet.
+
+The driving use case: an agent (or the user) has a video and needs its transcription to work
+from — "give me the path of the transcription, creating it first if needed" — then reads the
+file at the printed path. The Twitter-campaign workflow in
+`~/BGit/Bryan_git/Personal/tweet/act3/` is the canonical consumer.
+
+### 9.1 Command surface
+
+```
+lfb transcription FILE [--create] [--overwrite] [--text]     (alias: lfb transcribe)
+lfb description   FILE [--create] [--overwrite] [--text]     (alias: lfb describe)
+lfb ocr           FILE [--create] [--overwrite] [--text]
+```
+
+* `FILE` is the **media file** (one positional argument, required; `~` expanded, resolved to an
+  absolute path; a missing file is an immediate argument error before any server call).
+* The noun forms (`transcription`, `description`, `ocr`) are the canonical command words — the
+  question is "where is the artifact". The verb forms `transcribe` / `describe` are aliases so
+  muscle memory from the category flags (`--transcribe`, `--describe`) also works as a command.
+
+### 9.2 Locate is the default — creation only on `--create` (LOCKED)
+
+* **No flags → locate only.** The CLI asks the backend whether the artifact exists
+  (`GET /api/<kind>/file?path=<abs>` — a pure read). If it exists, the artifact's **absolute
+  path** prints on stdout and the command exits 0. If not, a stderr message names the missing
+  artifact and shows the exact `--create` command to run, and the exit code is 1. **Nothing is
+  ever created without `--create`** — locate is safe to script anywhere.
+* **`--create`:** if the artifact already exists, just print its path (idempotent — safe to run
+  repeatedly). If missing, POST the single-file create endpoint, wait for it to finish (the §4.7
+  spinner + elapsed seconds runs the whole time — a long video is many minutes), then print the
+  path.
+* **`--overwrite`:** regenerate even when the artifact exists; implies `--create`.
+* **`--text`:** print the artifact's **text content** on stdout instead of its path (composes
+  with locate and create alike).
+* **stdout purity (LOCKED, same as §4.3):** stdout carries exactly one payload — the path (or
+  the text). Progress, hints, statuses, and errors are stderr only, so
+  `cat "$(lfb transcription video.mp4 --create)"` always works.
+
+### 9.3 Backend endpoints — nothing new, the UI's own routes
+
+Per the thin-client rule (§1.1) the CLI adds **zero** backend logic; each kind maps onto the
+existing explicit-user-action single-file routes:
+
+| Command | Locate (GET) | Create (POST) | Artifact path field |
+| --- | --- | --- | --- |
+| `transcription` | `/api/transcribe/file` | `/api/transcribe/file` | `transcriptPath` |
+| `description` | `/api/describe/file` | `/api/describe/file` | `descriptionPath` |
+| `ocr` | `/api/ocr/file` | `/api/ocr/file` | `ocrPath` |
+
+Routes implemented in:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts`,
+`…/modules/describe/describe.router.ts`, `…/modules/ocr/ocr.router.ts` (each: `GET /file`,
+`POST /file`). CLI side implemented in:
+`~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` — `cmdArtifact()` (kind table
+`ARTIFACT_KINDS`, aliases `ARTIFACT_ALIASES`); POST transport in `client.ts` — `apiPost()`.
+
+* **No client-side timeout on create.** The single-file create endpoints answer only when the
+  work is done, which for a long video exceeds fetch/undici's default 300 s headers timeout —
+  so `apiPost()` speaks raw `node:http` on a fresh, unpooled socket with no timeout at all
+  (this also sidesteps the pooled-socket stall class of failures).
+* Path confinement, consent gates, and placement rules all remain the backend's: a path outside
+  the allow-roots is a 403, a machine with no Personal storage gets `needs_setup` (the CLI
+  explains: open the web app once), and artifacts land exactly where the UI would put them.
+
+### 9.4 Special outcomes (truthful, never papered over)
+
+* **`needs_setup`** — no storage owns the file and Personal storage is not configured; the CLI
+  prints the fix (set up Personal storage in the web app) and exits non-zero.
+* **AI-description rejection** — a recorded provider refusal (`.ai_description_rejected`,
+  ai_description.mdx §2.3) is reported as such on locate AND on `--create`: it is **never**
+  silently retried (retrying repeats the verdict). `--overwrite` is the explicit "ask the
+  provider again".
+* **Empty OCR text is success** — an image with no glyphs yields a real, valid `.ocr` sidecar;
+  `--text` prints the empty text (ocr.mdx: empty = a real answer).
+* Every other non-success status (`failed`, `tool_missing`, `no_provider`, `unsupported`, …)
+  prints the backend's status + reason verbatim on stderr and exits non-zero.
+* Each invocation logs its outcome through the client-log channel (§7) — command, file,
+  outcome, duration.

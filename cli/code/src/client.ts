@@ -1,6 +1,7 @@
 // REST client — the only way the CLI gets answers (cli.mdx §1: the CLI computes nothing itself).
 // Speaks to the local backend on :8787 (BE_PORT honored, same as the justfile) with the shared
 // X-LFB-Api-Key secret on every call (cli.mdx §3.2).
+import http from "node:http";
 import { ensureApiSecret } from "./credentials";
 
 export function backendPort(): number {
@@ -71,4 +72,57 @@ export async function apiGet<T>(pathAndQuery: string): Promise<T> {
     throw new Error(body?.error ? `${res.status}: ${body.error}` : `HTTP ${res.status} from ${url}`);
   }
   return body.data as T;
+}
+
+/**
+ * POST for the create-artifact calls (cli.mdx §9). Deliberately node:http, not fetch: a transcription
+ * of a long video can run MANY minutes before the server sends its response headers, and fetch/undici's
+ * default 300 s headers timeout would abort it mid-run. A fresh, unpooled socket with NO timeout — the
+ * server answers exactly once, when the work is done.
+ */
+export async function apiPost<T>(pathname: string, payload: unknown): Promise<T> {
+  const secret = ensureApiSecret();
+  const body = JSON.stringify(payload ?? {});
+  const raw = await new Promise<{ status: number; text: string }>((resolve, reject) => {
+    const req = http.request(
+      {
+        host: "127.0.0.1",
+        port: backendPort(),
+        path: `/api${pathname}`,
+        method: "POST",
+        agent: false, // one fresh socket per call — no pooling, no idle-socket reuse stalls
+        headers: {
+          "Content-Type": "application/json",
+          "Content-Length": Buffer.byteLength(body),
+          "X-LFB-Api-Key": secret,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on("data", (c: Buffer) => chunks.push(c));
+        res.on("end", () => resolve({ status: res.statusCode ?? 0, text: Buffer.concat(chunks).toString("utf8") }));
+        res.on("error", reject);
+      },
+    );
+    req.on("error", reject);
+    req.end(body);
+  });
+  const parsed = ((): { ok?: boolean; data?: T; error?: string } | null => {
+    try {
+      return JSON.parse(raw.text) as { ok?: boolean; data?: T; error?: string };
+    } catch {
+      return null;
+    }
+  })();
+  if (raw.status === 401) {
+    throw new Error(
+      `The backend rejected the Large File Bridge API key (401). The shared secret lives at\n` +
+        `~/.credentials/large_files_bridge.json — if the backend was started under a different\n` +
+        `user or LFB_CREDENTIALS_FILE, align them and retry.`,
+    );
+  }
+  if (raw.status < 200 || raw.status >= 300 || !parsed?.ok) {
+    throw new Error(parsed?.error ? `${raw.status}: ${parsed.error}` : `HTTP ${raw.status} from POST /api${pathname}`);
+  }
+  return parsed.data as T;
 }
