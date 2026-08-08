@@ -400,11 +400,17 @@ export async function ocrMany(inputs: string[], opts: { overwrite?: boolean; eng
 }
 
 /** OCR ALL image/video under a directory or repo working tree. */
-export async function ocrTree(input: string, opts: { overwrite?: boolean; engine?: OcrEngineId | "auto" } = {}): Promise<OcrBatchResult> {
+export async function ocrTree(
+  input: string,
+  opts: { overwrite?: boolean; engine?: OcrEngineId | "auto"; imagesOnly?: boolean } = {},
+): Promise<OcrBatchResult> {
   const abs = path.resolve(expandHome(input.trim()));
   if (!exists(abs)) return summarizeOcr([result(abs, "failed", null, null, null, "path not found")]);
-  const media = await walkOcrable(abs);
-  log.info("ocr", `tree ocr: ${media.length} image/video file(s) under ${abs}`);
+  let media = await walkOcrable(abs);
+  // `--images-only`: drop video and PDF. A still gets ONE accurate pass, so an image-only tree is cheap;
+  // videos are sampled per 15s (§2) and dominate the cost of a mixed tree.
+  if (opts.imagesOnly) media = media.filter((p) => ocrKindFor(path.basename(p)) === "image");
+  log.info("ocr", `tree ocr: ${media.length} ${opts.imagesOnly ? "image" : "image/video/pdf"} file(s) under ${abs}`);
   return ocrMany(media, opts);
 }
 
@@ -484,9 +490,12 @@ export async function enqueueOcr(opts: { paths?: string[]; root?: string; overwr
  * than anywhere because an image is ~250ms and a 40-minute video is a frame-extraction pass plus 160
  * recognitions (§9.1). Async purely for the ffprobe duration reads.
  */
-export async function previewOcr(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<PreviewPlan> {
+export async function previewOcr(opts: { paths?: string[]; root?: string; overwrite?: boolean; imagesOnly?: boolean }): Promise<PreviewPlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = await ocrCandidates(opts);
+  let candidates = await ocrCandidates(opts);
+  // `--images-only` (the CLI's `lfb ensure`): preview exactly the set the run would touch, so a dry-run
+  // and the real sweep never disagree about the count.
+  if (opts.imagesOnly) candidates = candidates.filter((p) => ocrKindFor(path.basename(p)) === "image");
   const cfg = getAppConfig().ocr;
   const stride = cfg?.video_stride_seconds ?? 15;
   const maxFrames = cfg?.max_frames ?? 1000;

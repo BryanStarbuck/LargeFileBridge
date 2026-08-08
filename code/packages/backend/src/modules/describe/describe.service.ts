@@ -530,15 +530,18 @@ export async function describeMany(
   return summarizeDescribe(results);
 }
 
-/** Describe ALL image/video under a directory or repo working tree (ai_description.mdx §5). */
+/** Describe ALL image/video under a directory or repo working tree (ai_description.mdx §5).
+ *  `imagesOnly` narrows the walk to still images — the CLI's `--images-only`, for callers who want a
+ *  photo tree covered without paying video's per-frame cost. */
 export async function describeTree(
   input: string,
-  opts: { overwrite?: boolean; provider?: ProviderId | "auto" } = {},
+  opts: { overwrite?: boolean; provider?: ProviderId | "auto"; imagesOnly?: boolean } = {},
 ): Promise<DescribeBatchResult> {
   const abs = path.resolve(expandHome(input.trim()));
   if (!exists(abs)) return summarizeDescribe([result(abs, "failed", null, null, "path not found")]);
-  const media = await walkDescribable(abs);
-  log.info("describe", `tree describe: ${media.length} image/video file(s) under ${abs}`);
+  let media = await walkDescribable(abs);
+  if (opts.imagesOnly) media = media.filter((p) => describeKindFor(path.basename(p)) === "image");
+  log.info("describe", `tree describe: ${media.length} ${opts.imagesOnly ? "image" : "image/video"} file(s) under ${abs}`);
   return describeMany(media, opts);
 }
 
@@ -680,9 +683,12 @@ export async function enqueueDescribe(opts: {
  * and the popup's Confirm hits /enqueue within that window, so surfacing health here costs ZERO extra probes
  * — the plan and the enqueue share the one call. Async purely for that probe.
  */
-export async function previewDescribe(opts: { paths?: string[]; root?: string; overwrite?: boolean }): Promise<PreviewPlan> {
+export async function previewDescribe(opts: { paths?: string[]; root?: string; overwrite?: boolean; imagesOnly?: boolean }): Promise<PreviewPlan> {
   const overwrite = opts.overwrite ?? false;
-  const candidates = await describeCandidates(opts);
+  let candidates = await describeCandidates(opts);
+  // `--images-only` (the CLI's `lfb ensure`): preview exactly the set the run would touch, so a dry-run
+  // and the real sweep never disagree about the count.
+  if (opts.imagesOnly) candidates = candidates.filter((p) => describeKindFor(path.basename(p)) === "image");
   let alreadyDone = 0;
   let unsupported = 0;
   const files: PreviewPlan["files"] = [];

@@ -9,7 +9,8 @@ import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { confineRequestPaths } from "../fs/allow-root.js";
 import { log } from "../../shared/logging.js";
-import { ocrEngines, readOcr, ocrOne, ocrMany, ocrTree, enqueueOcr, previewOcr } from "./ocr.service.js";
+import { ocrEngines, readOcr, ocrOne, ocrMany, ocrTree, enqueueOcr, previewOcr, resolveOcrPath } from "./ocr.service.js";
+import fs from "node:fs";
 
 export const ocrRouter = Router();
 ocrRouter.use(requireAllowListed);
@@ -31,6 +32,20 @@ ocrRouter.get("/file", (req, res) => {
   if (!p) return res.status(400).json({ ok: false, error: "path required" });
   try {
     res.json({ ok: true, data: readOcr(p) });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// GET /api/ocr/where?path=<abs> — WHERE the OCR sidecar for a media file lives, whether or not it exists
+// yet. /file answers "what is the text"; this answers "which tracking repo would hold it" — the question
+// the CLI's `lfb where` asks so a caller can see the personal/company repo a path maps into.
+ocrRouter.get("/where", (req, res) => {
+  const p = typeof req.query.path === "string" ? req.query.path : undefined;
+  if (!p) return res.status(400).json({ ok: false, error: "path required" });
+  try {
+    const r = resolveOcrPath(p);
+    res.json({ ok: true, data: { ...r, exists: fs.existsSync(r.ocrPath) } });
   } catch (e) {
     res.status(400).json({ ok: false, error: (e as Error).message });
   }
@@ -62,10 +77,15 @@ ocrRouter.post("/batch", async (req, res) => {
 
 // POST /api/ocr/tree — run OCR over ALL image/video under a directory or repo.
 ocrRouter.post("/tree", async (req, res) => {
-  const body = z.object({ path: z.string().min(1), overwrite: z.boolean().optional(), engine: Engine.optional() }).safeParse(req.body);
+  const body = z
+    .object({ path: z.string().min(1), overwrite: z.boolean().optional(), engine: Engine.optional(), imagesOnly: z.boolean().optional() })
+    .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
   try {
-    res.json({ ok: true, data: await ocrTree(body.data.path, { overwrite: body.data.overwrite, engine: body.data.engine }) });
+    res.json({
+      ok: true,
+      data: await ocrTree(body.data.path, { overwrite: body.data.overwrite, engine: body.data.engine, imagesOnly: body.data.imagesOnly }),
+    });
   } catch (e) {
     log.error("ocr", `ocrTree failed for ${body.data.path}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
@@ -91,7 +111,7 @@ ocrRouter.post("/enqueue", async (req, res) => {
 // before the user commits (ocr.mdx §9.2).
 ocrRouter.post("/plan", async (req, res) => {
   const body = z
-    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional() })
+    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional(), imagesOnly: z.boolean().optional() })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
   try {

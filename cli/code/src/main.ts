@@ -47,6 +47,15 @@ USAGE
                         (alias: lfb describe FILE)
   lfb ocr FILE [--create] [--overwrite] [--text]
                         Same for the on-screen/OCR text (.ocr sidecar).
+  lfb ensure PATH [--ocr] [--description] [--transcription]
+             [--images-only] [--skip-existing | --overwrite] [--dry-run]
+                        Walk PATH recursively and make sure EVERY media file
+                        under it has the requested artifacts, creating only what
+                        is missing. The bulk form of the three commands above.
+  lfb where PATH [--ocr | --description]
+                        Print where PATH's artifacts are (or would be) stored in
+                        the tracking repo — the personal/company sidecar repo —
+                        without creating anything.
   lfb up                Bring the web app up (build if needed) and wait for /api/health
   lfb status            Report backend health and the web app port
   lfb help              Show this help (also: -h, --help)
@@ -95,6 +104,36 @@ ARTIFACTS (lfb transcription / description / ocr)
     lfb transcription ~/videos/demo.mp4 --create     # make it if needed, print path
     lfb description  poster.png --create --text      # AI description text itself
     lfb ocr contract.pdf --create                    # OCR a PDF, print sidecar path
+
+BULK COVERAGE (lfb ensure)
+  One recursive sweep that leaves a whole tree fully covered. Pick the artifacts
+  with the kind flags; with none given it does OCR and AI descriptions (the two
+  that apply to still images).
+
+    --ocr             Ensure every eligible file has .ocr text
+    --description     Ensure every eligible file has .ai_description
+    --transcription   Ensure every audio/video file has .transcription
+    --images-only     Consider STILL IMAGES only — skip video, audio and PDF.
+                      Images are one cheap pass each; video is sampled per frame
+                      and dominates the cost of a mixed tree.
+    --skip-existing   Never redo work that is already there. This is the DEFAULT
+                      and the flag only states it; a file that already has the
+                      artifact is left alone.
+    --overwrite       The opposite: regenerate even where an artifact exists.
+    --dry-run         Report what WOULD be created and exit without doing it.
+
+  Exit status is 0 only when nothing failed, so it composes in scripts.
+
+  Examples:
+    lfb ensure ~/_Mirror/Politics --ocr --description --images-only
+    lfb ensure ./photos --ocr --dry-run
+
+WHERE (lfb where)
+  Maps a media path to the tracking repo that holds its derived text. Prints one
+  "kind: path" line per artifact kind, each marked present or missing.
+
+    lfb where ~/_Mirror/Politics/pic.jpg
+    lfb where ~/_Mirror/Politics/pic.jpg --ocr     # just the .ocr line
 
 Large File Bridge runs everything through its local web app; if the app is not
 running, the CLI starts it automatically and waits for it to become healthy.
@@ -285,6 +324,143 @@ async function cmdArtifact(kindWord: string, args: string[]): Promise<void> {
   return finish(view, "created");
 }
 
+// ── Bulk coverage: lfb ensure / lfb where ─────────────────────────────────────────────────────
+// `ensure` is the tree-scale form of the three artifact commands: one recursive sweep that leaves a
+// whole directory covered, creating only what is missing. `where` is its read-only companion — which
+// tracking repo holds (or would hold) a file's derived text. Both stay thin: the backend already owns
+// the walk (/ocr/tree, /describe/tree), the eligibility rules, and the skip-already-done logic.
+
+/** The artifact kinds `ensure` can sweep, in the order they are reported. */
+const ENSURE_KINDS = ["ocr", "description", "transcription"] as const;
+type EnsureKind = (typeof ENSURE_KINDS)[number];
+
+/** REST segment + plan endpoint per kind. `transcription` has no image-only meaning — audio/video only. */
+const ENSURE_API: Record<EnsureKind, { api: string; noun: string; supportsImagesOnly: boolean }> = {
+  ocr: { api: "ocr", noun: "OCR text", supportsImagesOnly: true },
+  description: { api: "describe", noun: "AI description", supportsImagesOnly: true },
+  transcription: { api: "transcribe", noun: "transcription", supportsImagesOnly: false },
+};
+
+interface TreeBatchResult {
+  results?: Array<{ path: string; status: string; reason?: string | null }>;
+  total?: number;
+  [k: string]: unknown;
+}
+interface PlanResult {
+  files: Array<{ path: string }>;
+  considered: number;
+  alreadyDone: number;
+  unsupported: number;
+}
+
+async function cmdEnsure(args: string[]): Promise<void> {
+  let scopeArg: string | null = null;
+  let overwrite = false;
+  let imagesOnly = false;
+  let dryRun = false;
+  const kinds: EnsureKind[] = [];
+  for (const a of args) {
+    if (a === "--ocr") kinds.push("ocr");
+    else if (a === "--description" || a === "--describe") kinds.push("description");
+    else if (a === "--transcription" || a === "--transcribe") kinds.push("transcription");
+    else if (a === "--images-only") imagesOnly = true;
+    // The default already skips what exists; the flag only states the intent out loud, so a script that
+    // spells it is self-documenting rather than relying on a default the reader has to look up.
+    else if (a === "--skip-existing") overwrite = false;
+    else if (a === "--overwrite") overwrite = true;
+    else if (a === "--dry-run") dryRun = true;
+    else if (a === "-h" || a === "--help") return void process.stdout.write(HELP);
+    else if (a.startsWith("-")) fail(`Unknown flag: ${a}\n\n${HELP}`);
+    else if (scopeArg) fail(`Only one PATH may be given (got "${scopeArg}" and "${a}").`);
+    else scopeArg = a;
+  }
+  if (args.includes("--skip-existing") && args.includes("--overwrite"))
+    fail("--skip-existing and --overwrite are opposites — give at most one.");
+  // No kind flags = the two that apply to still images. Transcription is opt-in: it is the expensive one
+  // and it means something different (audio), so sweeping it by accident is never what was wanted.
+  const wanted = kinds.length ? [...new Set(kinds)] : (["ocr", "description"] as EnsureKind[]);
+  if (imagesOnly && wanted.includes("transcription"))
+    fail("--images-only and --transcription conflict: still images have no audio to transcribe.");
+
+  const scope = path.resolve((scopeArg ?? process.cwd()).replace(/^~(?=\/|$)/, os.homedir()));
+  if (!fs.existsSync(scope)) fail(`No such path: ${scope}`);
+  if (!(await ensureServerUp())) process.exit(1);
+
+  const started = Date.now();
+  let failures = 0;
+  for (const kind of ENSURE_KINDS.filter((k) => wanted.includes(k))) {
+    const { api, noun, supportsImagesOnly } = ENSURE_API[kind];
+    const useImagesOnly = imagesOnly && supportsImagesOnly;
+    const spinner = new Spinner();
+
+    if (dryRun) {
+      spinner.start(`Planning ${noun} for everything under ${scope}…`);
+      let plan: PlanResult;
+      try {
+        plan = await apiPost<PlanResult>(`/${api}/plan`, { root: scope, overwrite, imagesOnly: useImagesOnly });
+      } finally {
+        spinner.stop();
+      }
+      process.stderr.write(
+        `${noun}: ${plan.files.length} to create (${plan.considered} considered, ${plan.alreadyDone} already done, ${plan.unsupported} unsupported)\n`,
+      );
+      for (const f of plan.files) process.stdout.write(`${f.path}\n`);
+      continue;
+    }
+
+    spinner.start(`Creating any missing ${noun} under ${scope}… (this can take a long time)`);
+    let res: TreeBatchResult;
+    try {
+      res = await apiPost<TreeBatchResult>(`/${api}/tree`, { path: scope, overwrite, imagesOnly: useImagesOnly });
+    } finally {
+      spinner.stop();
+    }
+    // The tree endpoints answer with a per-file result list; count the outcomes so the sweep can report
+    // whether the tree is actually covered now rather than merely "the call returned".
+    const rows = res.results ?? [];
+    const tally = new Map<string, number>();
+    for (const r of rows) tally.set(r.status, (tally.get(r.status) ?? 0) + 1);
+    const failed = rows.filter((r) => r.status === "failed" || r.status === "error");
+    failures += failed.length;
+    const summary = [...tally.entries()].map(([s, n]) => `${s}=${n}`).join(" ") || "nothing eligible";
+    process.stderr.write(`${noun}: ${rows.length} file(s) — ${summary}\n`);
+    for (const f of failed.slice(0, 20)) process.stderr.write(`  FAILED ${f.path}${f.reason ? ` — ${f.reason}` : ""}\n`);
+    if (failed.length > 20) process.stderr.write(`  …and ${failed.length - 20} more failures\n`);
+    await logInvocation(
+      `ensure kind=${kind} scope=${scope} files=${rows.length} failed=${failed.length} overwrite=${overwrite} imagesOnly=${useImagesOnly} durationMs=${Date.now() - started}`,
+    );
+  }
+  // Non-zero on any failure so `lfb ensure … && next-step` is a real gate, not a formality.
+  if (failures > 0) process.exit(1);
+}
+
+async function cmdWhere(args: string[]): Promise<void> {
+  let fileArg: string | null = null;
+  const kinds: EnsureKind[] = [];
+  for (const a of args) {
+    if (a === "--ocr") kinds.push("ocr");
+    else if (a === "--description" || a === "--describe") kinds.push("description");
+    else if (a === "-h" || a === "--help") return void process.stdout.write(HELP);
+    else if (a.startsWith("-")) fail(`Unknown flag: ${a}\n\n${HELP}`);
+    else if (fileArg) fail(`Only one PATH may be given (got "${fileArg}" and "${a}").`);
+    else fileArg = a;
+  }
+  if (!fileArg) fail("A media file is required: lfb where PATH [--ocr | --description]");
+  const abs = path.resolve(fileArg.replace(/^~(?=\/|$)/, os.homedir()));
+  if (!fs.existsSync(abs)) fail(`No such file: ${abs}`);
+  if (!(await ensureServerUp())) process.exit(1);
+
+  const wanted = kinds.length ? [...new Set(kinds)] : (["ocr", "description"] as EnsureKind[]);
+  const q = encodeURIComponent(abs);
+  for (const kind of wanted) {
+    const { api } = ENSURE_API[kind];
+    const field = kind === "ocr" ? "ocrPath" : "descriptionPath";
+    const view = await apiGet<Record<string, unknown>>(`/${api}/where?path=${q}`);
+    process.stdout.write(`${kind}: ${view[field] as string} (${view.exists ? "present" : "missing"})\n`);
+  }
+  await logInvocation(`where file=${abs} kinds=${wanted.join(",")}`);
+}
+
 /**
  * Where the web app publishes the port it resolved on boot. `/tmp` verbatim on macOS and Linux; on
  * Windows there is no /tmp (Node reads it as `<drive>:\tmp`, which does not exist), so the platform's own
@@ -331,6 +507,10 @@ async function main(): Promise<void> {
     case "describe":
     case "ocr":
       return cmdArtifact(cmd, rest);
+    case "ensure":
+      return cmdEnsure(rest);
+    case "where":
+      return cmdWhere(rest);
     case "up":
       process.exit((await ensureServerUp()) ? 0 : 1);
       break;

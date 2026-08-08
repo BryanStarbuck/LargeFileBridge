@@ -559,3 +559,76 @@ Routes implemented in:
   prints the backend's status + reason verbatim on stderr and exits non-zero.
 * Each invocation logs its outcome through the client-log channel (§7) — command, file,
   outcome, duration.
+
+## 10. Command family: tree coverage (`lfb ensure` / `lfb where`)
+
+§9 answers "where is THIS file's artifact" one file at a time. That is the wrong shape for the
+real job, which is almost always a **directory**: a mirror of research images, a downloaded
+archive, a folder of screenshots — "make sure everything under here has been OCR'd and
+described". Doing that with §9 means the caller writes the walk, the eligibility test, and the
+skip-already-done check, which are exactly the three things the backend already owns.
+
+`ensure` is that job as one command. `where` is its read-only companion: which tracking repo
+holds (or would hold) a file's derived text, without creating anything.
+
+### 10.1 Command surface
+
+```
+lfb ensure PATH [--ocr] [--description] [--transcription]
+                [--images-only] [--skip-existing | --overwrite] [--dry-run]
+lfb where  PATH [--ocr | --description]
+```
+
+* `PATH` for `ensure` is a **directory or a file**, walked recursively; it defaults to the
+  current directory. `~` is expanded; a missing path is an argument error before any server call.
+* **Kind flags** select the artifacts. With none given the default is `--ocr --description` —
+  the two that apply to still images. `--transcription` is deliberately **opt-in**: it is the
+  expensive one and it means something different (audio), so a tree sweep never starts
+  transcribing by accident.
+* `--images-only` narrows to **still images**, skipping video, audio and PDF. This is a cost
+  control, not a nicety: an image is one pass, while a video is sampled per frame
+  ([ocr.mdx §2](./ocr.mdx)) and dominates a mixed tree. It conflicts with `--transcription`
+  (a still image has no audio) and says so rather than silently doing nothing.
+* `--skip-existing` is the **default**, and the flag exists only to say so out loud — a script
+  that spells it is self-documenting instead of relying on a default the reader must look up.
+  `--overwrite` is its opposite. Giving both is an error, not a silent precedence rule.
+* `--dry-run` reports what WOULD be created and exits without doing it. It runs the SAME
+  narrowing as the real sweep (including `--images-only`), so the preview and the run can never
+  disagree about the count.
+
+### 10.2 What it computes — and what it does not
+
+`ensure` stays as thin as every other command (§1): the backend already owns the recursive walk,
+the media-kind eligibility rules, and skip-already-done. The CLI only chooses the endpoint per
+kind, passes the flags through, and tallies the answer:
+
+* `--dry-run` → `POST /api/<kind>/plan` with `root`, printing the eligible paths on stdout and
+  the `considered / already done / unsupported` counts on stderr.
+* otherwise → `POST /api/<kind>/tree`, which walks, skips what exists, and creates the rest.
+
+`imagesOnly` is a backend option on both, so the filter runs where the walk runs — the CLI never
+re-implements "is this an image".
+
+### 10.3 Output and exit status
+
+* **stdout** stays pure (§4.3): on `--dry-run` it is the list of paths that would be created,
+  and nothing else — so `lfb ensure … --dry-run | wc -l` is a real answer.
+* **stderr** carries the per-kind tally (`OCR text: 1664 file(s) — skipped=1657 failed=7`), the
+  first 20 failures with the backend's reason verbatim, and a count of any beyond that. Failures
+  are **never** summarized away: a provider that rejected 7 files says so, per file.
+* **Exit status is 0 only when nothing failed**, so `lfb ensure … && next-step` is a real gate
+  rather than a formality. A partially-covered tree is not reported as success.
+
+### 10.4 `lfb where` — the placement question, answered without side effects
+
+`where` prints one `kind: path (present|missing)` line per artifact kind (both by default). It
+answers the question §9's locate form cannot: **where WOULD this live**, for a file that has no
+artifact yet. That is the mapping a caller needs to find, for example, the OCR text of a file in
+an untracked mirror — it resolves through the same ordered placement rule the UI uses, so an
+`~/_Mirror/...` path resolves into its personal tracking repo and a working repo resolves into
+its `.lfbridge/`.
+
+It is backed by `GET /api/ocr/where` and `GET /api/describe/where`, which are pure reads: they
+resolve placement and stat the sidecar, and create nothing. That is the distinction from
+`/file`, which returns the CONTENT and therefore `null` when the artifact is absent — the exact
+case `where` exists to answer.

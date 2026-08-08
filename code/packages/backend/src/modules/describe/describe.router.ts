@@ -7,7 +7,8 @@ import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
 import { confineRequestPaths } from "../fs/allow-root.js";
 import { log } from "../../shared/logging.js";
-import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, previewDescribe, getAiConfig, setAiConfig, aiCredentialsInfo, providerHealth, resumeDescribeProvider } from "./describe.service.js";
+import { describeProviders, readDescription, describeOne, describeMany, describeTree, enqueueDescribe, previewDescribe, getAiConfig, setAiConfig, aiCredentialsInfo, providerHealth, resumeDescribeProvider, resolveDescriptionPath } from "./describe.service.js";
+import fs from "node:fs";
 import { promptView, customizePrompt, savePrompt, resetPrompt } from "./prompts.js";
 
 export const describeRouter = Router();
@@ -87,6 +88,20 @@ describeRouter.get("/file", (req, res) => {
   }
 });
 
+// GET /api/describe/where?path=<abs> — WHERE the description sidecar for a media file lives, whether or
+// not it exists yet (the `/api/ocr/where` twin). Answers "which tracking repo would hold it", which is
+// what `lfb where` prints.
+describeRouter.get("/where", (req, res) => {
+  const p = typeof req.query.path === "string" ? req.query.path : undefined;
+  if (!p) return res.status(400).json({ ok: false, error: "path required" });
+  try {
+    const r = resolveDescriptionPath(p);
+    res.json({ ok: true, data: { ...r, exists: fs.existsSync(r.descriptionPath) } });
+  } catch (e) {
+    res.status(400).json({ ok: false, error: (e as Error).message });
+  }
+});
+
 // POST /api/describe/file — generate (or regenerate) the description for ONE file (explicit user action).
 describeRouter.post("/file", async (req, res) => {
   const body = z
@@ -118,11 +133,18 @@ describeRouter.post("/batch", async (req, res) => {
 // POST /api/describe/tree — generate for ALL image/video under a directory or repo.
 describeRouter.post("/tree", async (req, res) => {
   const body = z
-    .object({ path: z.string().min(1), overwrite: z.boolean().optional(), provider: Provider.optional() })
+    .object({ path: z.string().min(1), overwrite: z.boolean().optional(), provider: Provider.optional(), imagesOnly: z.boolean().optional() })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "path required" });
   try {
-    res.json({ ok: true, data: await describeTree(body.data.path, { overwrite: body.data.overwrite, provider: body.data.provider }) });
+    res.json({
+      ok: true,
+      data: await describeTree(body.data.path, {
+        overwrite: body.data.overwrite,
+        provider: body.data.provider,
+        imagesOnly: body.data.imagesOnly,
+      }),
+    });
   } catch (e) {
     log.error("describe", `describeTree failed for ${body.data.path}: ${(e as Error).message}`);
     res.status(400).json({ ok: false, error: (e as Error).message });
@@ -154,7 +176,7 @@ describeRouter.post("/enqueue", async (req, res) => {
 // so the pair costs one call, not two — the request still returns promptly.
 describeRouter.post("/plan", async (req, res) => {
   const body = z
-    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional() })
+    .object({ paths: z.array(z.string().min(1)).optional(), root: z.string().min(1).optional(), overwrite: z.boolean().optional(), imagesOnly: z.boolean().optional() })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "paths[] or root required" });
   try {
