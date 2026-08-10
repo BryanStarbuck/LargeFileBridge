@@ -38,6 +38,9 @@ import { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/
 export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { healWindowsPath } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
+// The heartbeat floor is shared with the WRITER (devices.service.ts). One fact, one place — see the module.
+import { HEARTBEAT_MAX_AGE_MS, heartbeatIsStale } from "../../shared/heartbeat.js";
+export { HEARTBEAT_MAX_AGE_MS, heartbeatIsStale } from "../../shared/heartbeat.js";
 // "The machine was offline" is its own class of remote failure — recoverable, retried on reconnect, and
 // deliberately NOT written into the durable fault trail (net-transient.ts, bug #15).
 import { isTransientNetworkError } from "../../shared/net-transient.js";
@@ -1422,31 +1425,10 @@ export function pushRetryDelayMs(attempt: number, rnd: () => number = Math.rando
  * `updated_at` is added by `writeYamlIfChanged` for every document, so entries here list only the EXTRA
  * paths particular to that document.
  */
-/**
- * How stale a PUBLISHED device heartbeat may get before the quiet gate lets one through (devices.mdx §7.1).
- * Six hours: short enough that "is this computer alive?" has a useful answer — the alternative was a stamp
- * frozen for a week — and long enough that heartbeats cost at most 4 commits per computer per day, which is
- * two orders of magnitude below the churn the gate was written to stop.
- */
-export const HEARTBEAT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
-
 /** Is this rel path one of the device records under a storage's `devices/` directory? */
 export function isDeviceRecordPath(relPath: string): boolean {
   const p = healWindowsPath(relPath);
   return p.endsWith(".yaml") && (p.startsWith("devices/") || p.includes("/devices/"));
-}
-
-/**
- * Has the device record COMMITTED AT HEAD aged past the heartbeat floor? An absent or unparseable stamp
- * answers YES on purpose: a record nobody can date is exactly the one whose liveness we cannot vouch for,
- * and letting it through re-stamps it correctly instead of freezing the fault in place forever.
- */
-export function heartbeatIsStale(headDoc: Record<string, unknown>, now = Date.now()): boolean {
-  const raw = headDoc?.updated_at;
-  if (typeof raw !== "string") return true;
-  const t = Date.parse(raw);
-  if (!Number.isFinite(t)) return true;
-  return now - t > HEARTBEAT_MAX_AGE_MS;
 }
 
 export function volatileYamlPathsFor(relPath: string): string[] | null {

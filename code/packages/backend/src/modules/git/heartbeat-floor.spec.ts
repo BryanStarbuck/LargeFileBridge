@@ -8,7 +8,13 @@
 // failed with "<computer> looks offline. Bring it online and try again." about computers that were running
 // the whole time. That is the single fault these tests exist to prevent from coming back.
 import { describe, it, expect } from "vitest";
-import { heartbeatIsStale, isDeviceRecordPath, HEARTBEAT_MAX_AGE_MS } from "./git.service.js";
+import { isDeviceRecordPath } from "./git.service.js";
+// The floor itself is a LEAF module on purpose: it has to hold at TWO layers that must not import each
+// other — the WRITER (devices.service.ts `writeSelfDevice`, which otherwise never re-stamps the file at
+// all) and the COMMITTER (the quiet gate below). Fixing either alone changes nothing, which is exactly
+// what happened the first time: the gate was taught the floor while the writer kept the file clean, so
+// the stamp still never moved.
+import { heartbeatIsStale, HEARTBEAT_MAX_AGE_MS } from "../../shared/heartbeat.js";
 
 const NOW = Date.parse("2026-08-10T16:00:00.000Z");
 const agoMs = (ms: number) => new Date(NOW - ms).toISOString();

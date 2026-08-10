@@ -28,6 +28,8 @@ import { freshVolatileHardware } from "./hardware.service.js";
 import { expandHome } from "../fs/badges.js";
 import { joinRelConfined } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
+// The heartbeat floor, shared with the git backbone's quiet gate — see the module for why it is a leaf.
+import { HEARTBEAT_MAX_AGE_MS, heartbeatIsStale } from "../../shared/heartbeat.js";
 
 const DEVICES_DIR = "devices";
 
@@ -178,9 +180,29 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
   // Left in the change test they replace the `updated_at` churn with a 25-line churn — measured live in
   // the personal repo. They are still WRITTEN (they ride along on the next substantive write, so the
   // Devices table is never stale for long); they simply never justify a commit by themselves.
-  const wrote = writeYamlIfChanged(file, current as unknown as Record<string, unknown>, {
+  let wrote = writeYamlIfChanged(file, current as unknown as Record<string, unknown>, {
     volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"],
   });
+  // THE HEARTBEAT FLOOR (shared/heartbeat.ts). The suppression above is right, and on its own it is also
+  // what silenced this computer: `updated_at` is not only churn, it is the ONLY thing telling the user's
+  // other computers this machine is alive (`deviceRows()` reads `lastSeen` straight off it). With nothing
+  // substantive to say, this file was never rewritten at all — so the stamp froze on the last day
+  // something changed, and every peer read that as "offline since then". Measured 2026-08-10: this Mac
+  // Pro's record was stamped Aug 3 and pull-downs failed with "looks offline" about a computer that was
+  // running the whole time.
+  //
+  // So once the stamp on disk has aged past the floor, write it anyway. The git backbone's quiet gate
+  // holds the SAME floor (it would otherwise revert this as volatile-only), which is why the constant
+  // lives in a leaf module both layers import: fixing either one alone changes nothing.
+  if (!wrote && heartbeatIsStale(readYaml(file, DeviceFileSchema) as unknown as Record<string, unknown>)) {
+    writeYaml(file, current as unknown as Record<string, unknown>);
+    wrote = true;
+    log.info(
+      "storage",
+      `device "${name}" heartbeat re-stamped at ${storageRoot} — the published one had aged past ` +
+        `${Math.round(HEARTBEAT_MAX_AGE_MS / 3_600_000)}h, which reads as "offline" on your other computers`,
+    );
+  }
   if (wrote) {
     log.info("storage", `wrote self device "${name}" (${(current.device.id || "?").slice(0, 8)}) at ${storageRoot}`);
   }
