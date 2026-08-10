@@ -52,6 +52,7 @@ import {
   recheckWorkingRepoConvergence,
 } from "../pin/repo-artifact-sync.service.js";
 import { assertCompanyOwnership, withdrawCompanyOwnership } from "../storage/owner-propagation.service.js";
+import { checkIgnoreVerboseAsyncDetailed } from "../git/git.service.js";
 import { track } from "../progress/progress.registry.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { requireAllowListed } from "../auth/identify.js";
@@ -816,9 +817,25 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
     // back online; the user never has to press the button again. Each file's existing git-ignore axis is
     // preserved (recordDecision coerces an omitted axis to false, so it must be passed explicitly).
     try {
+      // THE GIT-IGNORE AXIS IS READ FROM GIT, NOT FROM THE LEDGER (units.service.ts composeFileRows says the
+      // same thing for the table). The ledger only records files WE ignored through our own toggle, so a
+      // rule the user wrote by hand — including a NESTED `videos/.gitignore` carrying `*.mp4`, the shape
+      // every one of these repos actually uses — leaves no ledger event and the file folded to
+      // `gitignore !== true`. Every pulled video then took the "not ignored" branch and `recordDecision`
+      // coerced its omitted axis to FALSE, wiping the git-ignore state this block exists to preserve
+      // (reproduced on Bryan_Tower 2026-08-10: all 10 stuck videos reported gitignore=false while
+      // `git check-ignore -v` named videos/.gitignore:1). Ask git, and fall back to the ledger only for the
+      // paths git could not answer for.
       const folded = foldLedger(readLedger(repoRoot));
-      const ignored = body.data.paths.filter((p) => folded.get(p)?.gitignore === true);
-      const notIgnored = body.data.paths.filter((p) => folded.get(p)?.gitignore !== true);
+      const abs = body.data.paths.map((p) => joinRel(repoRoot, p));
+      const { rules, unknown } = await checkIgnoreVerboseAsyncDetailed(repoRoot, abs);
+      const isIgnored = (p: string): boolean => {
+        const a = joinRel(repoRoot, p);
+        if (unknown.has(a)) return folded.get(p)?.gitignore === true; // git had no verdict — keep what we knew
+        return rules.has(a);
+      };
+      const ignored = body.data.paths.filter(isIgnored);
+      const notIgnored = body.data.paths.filter((p) => !isIgnored(p));
       if (ignored.length) await recordDecision(folder, ignored, { ipfs: true, gitignore: true }, by);
       if (notIgnored.length) await recordDecision(folder, notIgnored, { ipfs: true }, by);
     } catch (e) {

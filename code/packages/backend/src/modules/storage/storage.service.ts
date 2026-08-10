@@ -17,7 +17,8 @@ import type {
   StorageClones,
   BookmarksResult,
 } from "@lfb/shared";
-import { BookmarksSchema } from "@lfb/shared";
+import { BookmarksSchema, StorageUnitConfigSchema } from "@lfb/shared";
+import { storageUnitDir, unitConfigPath } from "../../shared/store/scopes.js";
 import { getAppConfig } from "../store-model/config.service.js";
 import { listRepoFolders } from "../store-model/units.service.js";
 import { expandHome } from "../fs/badges.js";
@@ -382,15 +383,109 @@ export function invalidateStorageRows(): void {
   rowsCache = null;
 }
 
+/** Does this directory have a git `origin`? Read straight out of `.git/config` — no spawn, because this
+ *  runs inside discovery, which is on a per-file hot path. A worktree/submodule (`.git` is a FILE) or an
+ *  unreadable config answers "no", which is only ever used as a TIEBREAK below, never as a verdict. */
+function hasGitOriginOnDisk(root: string): boolean {
+  try {
+    return /^\s*\[remote "origin"\]/m.test(fs.readFileSync(path.join(root, ".git", "config"), "utf8"));
+  } catch {
+    return false;
+  }
+}
+
+// Roots already reported as shadowed — the warning and the opt-in carry-over each happen ONCE per process,
+// not on every 5-second discovery pass.
+const shadowedReported = new Set<string>();
+
+/**
+ * ONE COMPANY, ONE STORAGE. Two directories can present themselves as the same company: the real clone the
+ * user works in (a `storage.yaml` descriptor, a git `origin`, real content) and a bare `<name>_large_files_bridge`
+ * directory that `classifyByConvention` adopts on its NAME ALONE — with no descriptor and, crucially, no
+ * git remote.
+ *
+ * That second row is not harmless. It gets its own id (`shortHash(root)`), so it gets its own machine-local
+ * settings — and when it is the one carrying `pinned: true`, the pin pass writes this computer's device
+ * registration, manifests and decisions into a repo that CANNOT PUSH. `commitAndPush` then warns "no git
+ * remote" into `error.err` every few minutes and nothing ever leaves the machine, while the properly-remoted
+ * clone sits at `pinned: false` doing nothing. Every peer concludes this computer has been offline since the
+ * day the shadow appeared, so their pull-downs fail with "no computer is currently providing this file" and
+ * their counts never drain. Reproduced on BOTH of Bryan's computers on 2026-08-10: `~/BGit/Bryan_git/act3_large_files_bridge`
+ * (no descriptor, no origin, pinned) shadowing `~/BGit/act3/act3_large_files_bridge` (descriptor, origin, not pinned).
+ *
+ * So: group company rows by normalized identity and keep the BEST one — initialized beats bare, having a
+ * remote beats not having one, and content breaks the remaining tie. The loser's `pinned` opt-in is carried
+ * over to the winner (once), because dropping the row must never silently switch this computer's sharing off.
+ */
+export function resolveCompanyConflicts(
+  rows: StorageRow[],
+  deps: { hasOrigin?: (root: string) => boolean; onShadow?: (loser: StorageRow, winner: StorageRow) => void } = {},
+): StorageRow[] {
+  const hasGitOrigin = deps.hasOrigin ?? hasGitOriginOnDisk;
+  const onShadow = deps.onShadow ?? carryPinnedOptIn;
+  const byIdentity = new Map<string, StorageRow[]>();
+  for (const r of rows) {
+    if (r.type !== "company") continue;
+    const key = normalizeSlug(r.companyName ?? r.name);
+    if (!key) continue;
+    (byIdentity.get(key) ?? byIdentity.set(key, []).get(key)!).push(r);
+  }
+  const shadowed = new Set<StorageRow>();
+  const score = (r: StorageRow): number =>
+    (r.initialized ? 4 : 0) + (hasGitOrigin(r.root) ? 2 : 0) + ((r.fileCount ?? 0) > 0 ? 1 : 0);
+  for (const [key, group] of byIdentity) {
+    if (group.length < 2) continue;
+    const ranked = [...group].sort((a, b) => score(b) - score(a) || a.root.localeCompare(b.root));
+    const winner = ranked[0]!;
+    for (const loser of ranked.slice(1)) {
+      shadowed.add(loser);
+      // The WARNING is once per process (discovery re-runs every few seconds; this must not flood the log).
+      // The carry-over is NOT throttled — it is idempotent, it early-returns when there is nothing to move,
+      // and skipping it on a later pass is exactly how this computer would end up sharing nothing.
+      if (!shadowedReported.has(loser.root)) {
+        shadowedReported.add(loser.root);
+        log.warn(
+          "storage",
+          `two directories both claim to be company "${key}" — using ${winner.root} (descriptor=${winner.initialized}, ` +
+            `origin=${hasGitOrigin(winner.root)}) and IGNORING ${loser.root} (descriptor=${loser.initialized}, ` +
+            `origin=${hasGitOrigin(loser.root)}). A storage with no git remote publishes nothing, so your other ` +
+            `computers would see this one as offline. Delete or rename the ignored directory.`,
+        );
+      }
+      onShadow(loser, winner);
+    }
+  }
+  return rows.filter((r) => !shadowed.has(r));
+}
+
+/** Move a shadowed storage's IPFS-pinning opt-in onto the winner, so dedupe never turns sharing off silently.
+ *  Reads and writes the machine-local unit config DIRECTLY rather than through storage-settings.service:
+ *  this runs INSIDE `discoverRows()`, and `readStorageSettings` resolves its row through `getStorageRow` →
+ *  `discoverRows`, which would recurse before the cache is populated. */
+function carryPinnedOptIn(loser: StorageRow, winner: StorageRow): void {
+  try {
+    const loserCfg = unitConfigPath(storageUnitDir(loser.id));
+    const winnerCfg = unitConfigPath(storageUnitDir(winner.id));
+    if (!readYaml(loserCfg, StorageUnitConfigSchema).pinned) return; // nothing to carry
+    if (readYaml(winnerCfg, StorageUnitConfigSchema).pinned) return; // already on
+    updateYaml(winnerCfg, StorageUnitConfigSchema, (c) => ({ ...c, pinned: true }));
+    log.info("storage", `carried the pinning opt-in from the ignored ${loser.root} onto ${winner.root}`);
+  } catch (e) {
+    log.warn("storage", `could not carry the pinning opt-in from ${loser.root}: ${(e as Error).message}`);
+  }
+}
+
 /** All non-repo directory-based storages as rows (repos are represented by a link, not listed).
  *  Rows are treated as READ-ONLY by every caller (they only `find`/`filter`/`map` over them). */
 function discoverRows(): StorageRow[] {
   const key = getAppConfig().scanner.roots.join("\n");
   const now = Date.now();
   if (rowsCache && rowsCache.key === key && now - rowsCache.at <= ROWS_TTL_MS) return rowsCache.rows;
-  const rows = discoverRoots()
-    .map(buildRow)
-    .filter((r) => r.type !== "repo");
+  const rows = resolveCompanyConflicts(
+    discoverRoots()
+      .map(buildRow)
+      .filter((r) => r.type !== "repo"),
+  );
   rowsCache = { at: now, key, rows };
   return rows;
 }

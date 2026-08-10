@@ -48,7 +48,7 @@ export const METRIC_CATALOG: Record<MetricId, MetricDef> = {
   },
   pullDown: {
     label: "Pull down",
-    hint: "Files another of your computers pinned that aren't on this computer yet. Pull them down so this machine is a real second copy.",
+    hint: "Files another of your computers pinned that this computer isn't holding yet — either the bytes are missing, or they're on the disk but were never pinned into this computer's IPFS node. Pull them down so this machine is a real second copy.",
     positive: "bad",
   },
   deletedHere: {

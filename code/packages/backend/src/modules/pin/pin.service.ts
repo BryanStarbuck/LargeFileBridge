@@ -1242,8 +1242,14 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
       log.warn("pin", `missingPinnedFromPeers: ${repoRoot}: manifest entry "${entry.path}" is not inside the repo — ignored`);
       continue;
     }
-    if (fs.existsSync(abs)) continue; // already on disk here → not missing
-    if (pinset.has(ipfs.canonicalCid(entry.cid))) continue; // already pinned on this node → bytes are here
+    if (pinset.has(ipfs.canonicalCid(entry.cid))) continue; // pinned on this node → this computer really holds it
+    // ON DISK BUT NOT PINNED HERE IS STILL A PULL-DOWN. This used to `continue` on `fs.existsSync(abs)`, which
+    // made the repo metric and the CLI answer two different numbers for one question: the CLI's `pull_down`
+    // (files-query.service.ts) counts `decision === "sync" && pinnedHere === false` as well, so on 2026-08-10
+    // the Tower's CLI said 11 and its API said 10 — and the API's number UNDERCOUNTED the real gap. A file
+    // whose bytes are here but whose CID was never pinned into this node is NOT a second copy: drop the IPFS
+    // node and it is gone, and no peer can fetch it from us. `pullMissing`'s local-bytes fast path pins exactly
+    // this case in place with no network, so listing it here is also actionable, not just honest.
     out.push({
       path: entry.path,
       name: path.basename(entry.path),
@@ -1279,6 +1285,45 @@ export async function pullMissing(
   return track("pin", opts.label ?? path.basename(repoRoot), (report) =>
     pullMissingInner(repoRoot, checkedPaths, opts, report),
   );
+}
+
+/**
+ * The bookkeeping every SUCCESSFUL pull owes, whatever route the bytes took (fetched over IPFS, or already
+ * on disk and pinned in place). Best-effort throughout (repo_tracking_scheme.mdx §3.2/§4) — a sidecar,
+ * history, or compress-queue failure must never turn a pull that worked into a pull that reports failure.
+ */
+function recordPullTracking(
+  repoRoot: string,
+  rel: string,
+  abs: string,
+  entry: ManifestFile,
+  by: string | null,
+  compress: boolean,
+): void {
+  try {
+    appendFileEvent(repoRoot, rel, { kind: "pull", by }); // on_device defaults to this computer
+    appendFileEvent(repoRoot, rel, { kind: "ipfs_pin", by, cid: entry.cid });
+    appendHistory(repoRoot, {
+      verb: "PULL",
+      by,
+      fields: { cid: entry.cid ?? "", size: entry.size },
+      summary: `Pulled ${path.basename(rel)} down over IPFS`,
+    });
+  } catch (e) {
+    log.warn("pin", `pullMissing: tracking write skipped for ${rel}: ${(e as Error).message}`);
+  }
+  // Optional compress axis (§10.8.12 B/C): the bytes are on disk now, so hand the file to the background
+  // compress queue. Only images/videos compress; anything else is left as-is. Recoverable "trash"
+  // disposition (compression.mdx §8 default) so an original is never hard-deleted here.
+  if (!compress) return;
+  const kind = mediaKindForName(path.basename(rel));
+  const mediaKind = kind === "image" ? "image" : kind === "video" ? "video" : null;
+  if (!mediaKind) return;
+  try {
+    enqueue([{ op: "compress", path: abs, overwrite: false, compress: { deleteOriginal: "trash", mediaKind } }]);
+  } catch (e) {
+    log.warn("pin", `pullMissing: could not enqueue compress for ${rel}: ${(e as Error).message}`);
+  }
 }
 
 async function pullMissingInner(
@@ -1340,6 +1385,32 @@ async function pullMissingInner(
           return;
         }
         try {
+          // ── LOCAL-BYTES FAST PATH ──────────────────────────────────────────────────────────────────
+          // "Pull down" does NOT always mean "fetch bytes we don't have". A file whose bytes are already
+          // on this disk but whose CID was never pinned INTO this node counts as pull-down too (a decided
+          // sync file with pinnedHere=false — files-query.service.ts). Sending that file through the DHT
+          // is wrong twice over: the network round trip is pointless, and when the peer that first pinned
+          // it is offline the provider pre-flight below FAILS it — so a file sitting right there on disk
+          // reports "no computer is currently providing this file" and the metric never drains. Observed
+          // 2026-08-10: 30 such files on Bryan_Laptop, every one already on disk, stuck for a week.
+          //
+          // Adding the LOCAL bytes pins them (Kubo `add` pins recursively) with no network at all. When the
+          // resulting CID differs from the manifest's — two add profiles over identical content — that is
+          // recorded as a CID equivalence, exactly as the regular pin pass's adopt path does, so the pair is
+          // never re-added on the next run.
+          if (fs.existsSync(abs) && !pinset.has(ipfs.canonicalCid(entry.cid))) {
+            note.detail(rel, "the bytes are already here — pinning locally");
+            const localCid = await ipfs.addFile(abs);
+            pinset.add(ipfs.canonicalCid(localCid));
+            pinset.add(ipfs.canonicalCid(entry.cid));
+            if (ipfs.canonicalCid(localCid) !== ipfs.canonicalCid(entry.cid)) {
+              noteCidEquivalence(entry.cid, localCid);
+            }
+            pulled++;
+            log.info("pin", `Pinned ${rel} in place (bytes already on disk) <- ${localCid}`);
+            recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
+            return;
+          }
           // Same wrapper-directory self-heal as the pin pass's fetch-missing: unwrap a legacy directory CID
           // to the file inside it BEFORE pinning or cat-ing, and record the corrected CID (written back to
           // the tracking manifest after the fan-out) so the dead CID is never retried again.
@@ -1414,35 +1485,7 @@ async function pullMissingInner(
           return;
         }
 
-        // Best-effort tracking writes (repo_tracking_scheme.mdx §3.2/§4) — never let a sidecar/history write
-        // fail an otherwise-successful pull. on_device defaults to this computer inside appendFileEvent.
-        try {
-          appendFileEvent(repoRoot, rel, { kind: "pull", by });
-          appendFileEvent(repoRoot, rel, { kind: "ipfs_pin", by, cid: entry.cid });
-          appendHistory(repoRoot, {
-            verb: "PULL",
-            by,
-            fields: { cid: entry.cid, size: entry.size },
-            summary: `Pulled ${path.basename(rel)} down over IPFS`,
-          });
-        } catch (e) {
-          log.warn("pin", `pullMissing: tracking write skipped for ${rel}: ${(e as Error).message}`);
-        }
-
-        // Optional compress axis (§10.8.12 B/C): now that the bytes are on disk, hand the file to the
-        // background compress queue. Only images/videos compress; anything else is left as-is. Recoverable
-        // "trash" disposition (compression.mdx §8 default) so an original is never hard-deleted here.
-        if (opts.compress) {
-          const kind = mediaKindForName(path.basename(rel));
-          const mediaKind = kind === "image" ? "image" : kind === "video" ? "video" : null;
-          if (mediaKind) {
-            try {
-              enqueue([{ op: "compress", path: abs, overwrite: false, compress: { deleteOriginal: "trash", mediaKind } }]);
-            } catch (e) {
-              log.warn("pin", `pullMissing: could not enqueue compress for ${rel}: ${(e as Error).message}`);
-            }
-          }
-        }
+        recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
       }).finally(() => {
         note.finish(rel);
         tick(); // every exit path counts — the bar must reach its total even on an all-failed batch
