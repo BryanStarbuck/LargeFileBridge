@@ -143,7 +143,6 @@ function Root() {
     refetchInterval: (q) => (q.state.data && q.state.data.state !== "loaded" ? 3000 : false),
   });
   const authLoaded = auth.data?.state === "loaded";
-  const backendUnreachable = auth.data != null && auth.data.state !== "loaded";
 
   const sec = useQuery({
     queryKey: ["securityConfig"],
@@ -159,6 +158,21 @@ function Root() {
     retry: retryWhileBackendDown,
     enabled: sec.data?.configured === true && authLoaded,
   });
+
+  // "Unreachable" is not only what the AUTH probe reports. A boot query that is still PENDING after a
+  // transient failure is retrying a backend that isn't answering — that is the same condition, observed
+  // from a different query. Reading it only off `auth` was the bug behind an eternal, bare "Loading…":
+  // if the auth probe happened to resolve (state "loaded") while securityConfig/me kept hitting a
+  // network error or a proxy 502, `backendUnreachable` stayed false, so the gate fell through to the
+  // `isPending` branches below and sat on a card that offers no explanation and no way out — forever,
+  // and indistinguishable from a hang. React-Query keeps retrying underneath (so recovery is automatic
+  // once the backend is back); what was wrong was the STATE WE REPORT while that happens.
+  // `failureReason` is the last error of a query still in flight, so this is precisely "tried, failed
+  // transiently, still trying" — never a query that simply hasn't answered yet.
+  const retryingTransiently = (q: { isPending: boolean; failureCount: number; failureReason: unknown }): boolean =>
+    q.isPending && q.failureCount > 0 && isTransientNetworkError(q.failureReason);
+  const backendUnreachable =
+    (auth.data != null && auth.data.state !== "loaded") || retryingTransiently(sec) || retryingTransiently(me);
 
   // 0) Backend unreachable (mid-restart / briefly offline): Reconnecting, NEVER the sign-in page.
   //    Transient failures keep the queries in a retrying (pending) state; the authoritative signal is
