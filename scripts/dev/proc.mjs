@@ -87,12 +87,36 @@ export function runTool(name, args, opts = {}) {
   });
 }
 
+/**
+ * `runTool`, with stdout+stderr CAPTURED instead of inherited. Resolves to `{ code, output }`.
+ * For steps whose chatter is worth showing only when they fail.
+ */
+export function runToolCaptured(name, args, opts = {}) {
+  return new Promise((resolve) => {
+    const child = spawnTool(name, args, { stdio: ["ignore", "pipe", "pipe"], ...opts });
+    let output = "";
+    child.stdout?.on("data", (d) => (output += d));
+    child.stderr?.on("data", (d) => (output += d));
+    child.on("error", (e) => resolve({ code: 127, output: `${output}${name}: ${e?.message || e}\n` }));
+    child.on("exit", (code, signal) =>
+      resolve({ code: typeof code === "number" ? code : signal ? 1 : 0, output }),
+    );
+  });
+}
+
 /** Is this tool callable at all? Used only for the "install X" hints. */
 export function haveTool(name) {
   const probe = isWindows
     ? spawnSync("where", [name], { windowsHide: true, stdio: "ignore" })
-    : spawnSync("command", ["-v", name], { shell: true, stdio: "ignore" });
+    // `command -v` is a shell builtin, so it needs a shell — but pass the shell ONE argv we built
+    // ourselves rather than `shell: true` (which concatenates argv unescaped and trips DEP0190).
+    : spawnSync("/bin/sh", ["-c", `command -v ${shSingleQuote(name)}`], { stdio: "ignore" });
   return probe.status === 0;
+}
+
+/** POSIX single-quoting, so a tool name can never break out of the `sh -c` string. */
+function shSingleQuote(arg) {
+  return `'${String(arg).replace(/'/g, `'\\''`)}'`;
 }
 
 function quoteForCmd(arg) {

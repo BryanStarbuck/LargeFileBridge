@@ -29,7 +29,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
-import { isWindows, runTool } from "./proc.mjs";
+import { isWindows, runTool, runToolCaptured } from "./proc.mjs";
 
 const out = (s) => process.stdout.write(`${s}\n`);
 const err = (s) => process.stderr.write(`${s}\n`);
@@ -132,7 +132,17 @@ export async function ensureInstalled(root, { label: what = root, beforeReinstal
   // tree breaks again at the next checkout no matter how well this goes.
   warnIfTracked(root, what);
   let forced = false;
-  let code = await pnpmInstall(root, false);
+  // A tree that ALREADY resolves has nothing to report but "Already up to date" — so on that path the
+  // install runs captured, and its output is printed only if it turns out to have failed. A tree with
+  // work to do (first install, changed lockfile) stays fully verbose: silence there looks like a hang.
+  let code;
+  if (!treeProblems(root).length) {
+    const quiet = await runToolCaptured("pnpm", ["-C", root, "install"]);
+    code = quiet.code;
+    if (code !== 0) process.stdout.write(quiet.output);
+  } else {
+    code = await pnpmInstall(root, false);
+  }
   if (code !== 0) {
     out("");
     out(`${what}: pnpm install exited ${code} — retrying with --force …`);

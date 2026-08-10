@@ -198,7 +198,11 @@ function cleanLaunchd(): boolean {
 
   const uid = process.getuid?.() ?? 501;
   try {
-    execFileSync("launchctl", ["bootout", `gui/${uid}/${OLD_LAUNCHD_LABEL}`]);
+    // `stdio: "ignore"` is REQUIRED, not tidiness: execFileSync inherits stderr by default, so on every
+    // already-migrated install (i.e. every start from the second one on) launchctl printed
+    // "Boot-out failed: 3: No such process" straight onto the console — an alarming line for the one
+    // case the catch below calls expected. It appeared on each backend boot in launcher.log.
+    execFileSync("launchctl", ["bootout", `gui/${uid}/${OLD_LAUNCHD_LABEL}`], { stdio: "ignore" });
     didSomething = true;
   } catch {
     // Not loaded (or already booted out) — expected on already-migrated installs. Ignore.

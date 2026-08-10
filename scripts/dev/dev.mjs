@@ -477,11 +477,16 @@ async function cmdStatus() {
 
   let backendUp = false;
   if (await isListening(api)) {
-    if (await healthy(api)) {
+    const health = await healthy(api);
+    if (health === "ok") {
       out(`backend  :${api} UP (health OK)`);
       backendUp = true;
+    } else if (health === "slow") {
+      out(`backend  :${api} UP, but SLOW — health took seconds to answer.`);
+      out("           A boot scan/pin pass holds the event loop; it clears when the pass ends.");
+      backendUp = true;
     } else {
-      out(`backend  :${api} LISTENING but /api/health did not answer — the process may be wedged.`);
+      out(`backend  :${api} LISTENING but /api/health never answered in 30s — the process is wedged.`);
     }
   }
 
@@ -526,13 +531,32 @@ async function cmdStatus() {
   }
 }
 
-async function healthy(port) {
-  try {
-    const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(3000) });
-    return res.ok;
-  } catch {
-    return false;
+/**
+ * Did /api/health answer? `"ok"` | `"slow"` | `"dead"`.
+ *
+ * ONE 3-second probe was not enough to tell a wedged process from a BUSY one, and getting that wrong is
+ * expensive in both directions. Measured 2026-08-10, seconds after `just run`: the boot pin pass holds the
+ * event loop for stretches longer than 3s, so health alternated 200 / timeout — and status printed
+ * "***  BACKEND IS DOWN — THE APP IS NOT RUNNING  ***" about a backend that was working, then exited
+ * non-zero. A user told the app is dead restarts it, which throws away the boot pass that was running and
+ * buys the same message again.
+ *
+ * So probe repeatedly across ~30s. ANY 200 in that window means the process is alive and running JS —
+ * report it as UP, and say it was slow, which is true and is the actionable part. Only a window with no
+ * answer at all is the dead/wedged case the loud banner exists for.
+ */
+async function healthy(port, { attempts = 6, perTryMs = 5000 } = {}) {
+  let answered = false;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      const res = await fetch(`http://127.0.0.1:${port}/api/health`, { signal: AbortSignal.timeout(perTryMs) });
+      if (res.ok) return i === 0 ? "ok" : "slow";
+      answered = true; // it replied, just not 200 — still running JS, so not wedged
+    } catch {
+      /* timeout or refused — try again */
+    }
   }
+  return answered ? "slow" : "dead";
 }
 
 /**

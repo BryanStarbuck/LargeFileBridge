@@ -1181,16 +1181,31 @@ function markUnitError(t: UnitTarget, msg: string): void {
 // are pinned only on ANOTHER of the user's computers and are not here yet. These two functions detect that gap
 // and pull the bytes down over IPFS on demand.
 
-/** The local pinset as a CID set — best-effort. IPFS down / unreachable → EMPTY set (never throws), which
- *  makes every manifest CID read as "not pinned here" so nothing is silently hidden from the pull prompt. */
-async function pinnedCidSet(): Promise<Set<string>> {
+/**
+ * The local pinset as a CID set, or NULL when the node could not answer.
+ *
+ * A FAILED `pin ls` IS NOT AN EMPTY PINSET. This used to return `new Set()` on failure, reasoned as "so
+ * nothing is silently hidden from the pull prompt" — but that is not the conservative direction, it is a
+ * false alarm: with an empty pinset EVERY file in the manifest reads as "not pinned here", so the whole
+ * repo lands in Pull down and the user is invited to re-fetch bytes they already hold.
+ *
+ * It bites hardest at exactly the wrong moment. The backend serves requests as soon as it is up, while the
+ * IPFS daemon it auto-starts is still coming up, so the window right AFTER A RESTART is when `listPins` is
+ * most likely to fail — and a user who has just restarted the app is a user watching this number. They see
+ * the count they thought they had cleared come back, which is indistinguishable from having lost the work.
+ *
+ * The pin pass already refuses this (see `pinRepoFolder`: "A failed/timed-out `pin ls` must NEVER be read
+ * as 'nothing is pinned'"). It just aborts the pass. The read path cannot abort, so it says NULL and each
+ * caller decides — which is also what files-query.service.ts does with its `undefined` pinset.
+ */
+async function pinnedCidSet(): Promise<Set<string> | null> {
   try {
     // CANONICAL keys (knowledge/ipfs.mdx §5.1) so a same-block pin in another base is not read as "missing"
     // and needlessly re-pulled. Callers MUST test membership as `pinset.has(ipfs.canonicalCid(cid))`.
     return new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
   } catch (e) {
-    log.warn("pin", `listPins failed (treating pinset as empty): ${(e as Error).message}`);
-    return new Set();
+    log.warn("pin", `listPins failed (pin state UNKNOWN this pass, not empty): ${(e as Error).message}`);
+    return null;
   }
 }
 
@@ -1231,6 +1246,13 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
     return [];
   }
   const pinset = await pinnedCidSet();
+  if (!pinset) {
+    // Pin state UNKNOWN (see `pinnedCidSet`). Answering "everything is missing" here is what made the
+    // pull-down count spring back to life after a restart, so answer nothing instead: the caller keeps the
+    // previous number for a beat and the next computation — seconds later, with a healthy daemon — is true.
+    log.warn("pin", `missingPinnedFromPeers(${repoRoot}): IPFS could not list pins — reporting no offers this pass`);
+    return [];
+  }
   const selfLabel = computerLabel();
   const out: MissingPinnedFile[] = [];
   for (const entry of manifest.files) {
@@ -1352,7 +1374,12 @@ async function pullMissingInner(
   }
   const byPath = new Map(manifest.files.map((f) => [f.path, f]));
   note.phase("reading this computer's pin list");
-  const pinset = await pinnedCidSet();
+  // The two callers of `pinnedCidSet` want OPPOSITE things from an unknown answer, which is why it returns
+  // null rather than deciding for them. The pull-down LIST is a passive report, so unknown means "say
+  // nothing" — a wrong offer there is a false alarm the user acts on. This is an EXPLICIT USER ACTION, so
+  // unknown means "assume not pinned and do the work": re-pinning something already pinned is a cheap
+  // no-op, whereas refusing a pull the user just asked for is the failure they are complaining about.
+  const pinset = (await pinnedCidSet()) ?? new Set<string>();
   note.phase("");
   const by = opts.by ?? null;
   let pulled = 0;
