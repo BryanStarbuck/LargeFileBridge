@@ -268,6 +268,19 @@ class PrunedTreeWatch implements PrunedWatch {
    * One raw event from ONE directory's watch. `filename` is relative to that directory, so the absolute
    * path is ours to rebuild. Act only on "rename" (add/delete/move) — never "change" (a content edit),
    * per scan.mdx §2.2.
+   *
+   * THE "change" FILTER IS BEST-EFFORT, AND ON macOS IT DOES NOT FIRE AT ALL. Verified against Node 26 on
+   * darwin 25.5: rewriting an existing file in place emits `rename` — twice — and never `change`, because
+   * the truncate-and-write replaces the directory entry as far as the kernel notification is concerned. So
+   * on macOS an edit is INDISTINGUISHABLE here from an add, and `onChange` fires for it.
+   *
+   * That is tolerated rather than worked around. The only sound discriminator is knowing whether the path
+   * existed before the event, which means holding an inventory of every file name under every watched
+   * directory — real memory, on the machine whose memory we just spent effort giving back. The cheap
+   * stateless proxies do not survive scrutiny either: `birthtime` misfires on `mv ~/Downloads/shoot .`
+   * (a genuine add carrying an old birthtime, the case bindTree exists to catch) and `ctime` moves for
+   * edits and moves alike. The cost of being wrong is one redundant re-stat of one file, so this stays a
+   * documented platform gap and not a guarantee we cannot keep. See watch-tree.spec.ts.
    */
   private onRaw(dir: string, eventType: fs.WatchEventType, filename: string | Buffer | null): void {
     if (this.closed) return;
