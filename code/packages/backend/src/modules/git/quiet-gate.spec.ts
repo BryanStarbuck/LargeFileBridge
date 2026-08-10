@@ -72,9 +72,18 @@ async function runCycle(dir: string, mutate: (doc: any) => void): Promise<void> 
   await backbone!.commitAndPush({} as never);
 }
 
+/**
+ * A stamp `mins` minutes from now. The tests below must sit INSIDE the heartbeat floor
+ * (git.service.ts HEARTBEAT_MAX_AGE_MS): the gate deliberately lets a device record through once its
+ * PUBLISHED stamp has aged past that floor, so a fixture frozen at a hard-coded past date would exercise
+ * the heartbeat exception rather than the quiet gate it means to test. The staleness path has its own
+ * test at the bottom of this describe, and its unit tests in heartbeat-floor.spec.ts.
+ */
+const stamp = (mins: number): string => new Date(Date.now() + mins * 60_000).toISOString();
+
 const DEVICE = {
   schema_version: 1,
-  updated_at: "2026-07-29T14:15:29.811Z",
+  updated_at: stamp(0),
   device: {
     id: "fdc6e91d",
     name: "bryan-mac-pro",
@@ -87,7 +96,7 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     const dir = repoWithDevice(DEVICE);
     await settleSetup(dir);
     const before = commitCount(dir);
-    await runCycle(dir, (d) => (d.updated_at = "2026-07-29T16:36:05.339Z"));
+    await runCycle(dir, (d) => (d.updated_at = stamp(1)));
     expect(commitCount(dir)).toBe(before); // this is the 58-of-60 case, gone
     expect(git(dir, "status", "--porcelain").trim()).toBe(""); // and the churn is not left behind to re-stage
   });
@@ -99,7 +108,7 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     await settleSetup(dir);
     const before = commitCount(dir);
     await runCycle(dir, (d) => {
-      d.updated_at = "2026-07-29T16:36:05.339Z";
+      d.updated_at = stamp(1);
       d.device.hardware.primary_ip = "192.168.50.9";
       d.device.hardware.ip_addresses = ["192.168.50.9", "fe80::9", "fe80::2"];
     });
@@ -133,7 +142,7 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     await settleSetup(dir);
     const before = commitCount(dir);
     fs.writeFileSync(path.join(dir, "clip.mp4.transcription"), "hello world\n");
-    await runCycle(dir, (d) => (d.updated_at = "2026-07-29T16:40:00.000Z"));
+    await runCycle(dir, (d) => (d.updated_at = stamp(2)));
     expect(commitCount(dir)).toBe(before + 1);
     expect(git(dir, "show", "--name-only", "HEAD")).toMatch(/clip\.mp4\.transcription/);
   });
@@ -144,7 +153,7 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     await settleSetup(dir);
     const before = commitCount(dir);
     fs.writeFileSync(path.join(dir, "notes.md"), "the user's own words\n");
-    await runCycle(dir, (d) => (d.updated_at = "2026-07-29T16:41:00.000Z"));
+    await runCycle(dir, (d) => (d.updated_at = stamp(3)));
     expect(commitCount(dir)).toBe(before + 1);
     expect(fs.readFileSync(path.join(dir, "notes.md"), "utf8")).toBe("the user's own words\n");
   });
@@ -162,12 +171,12 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     // find the merge result canonically equal to HEAD and revert it.
     git(dir, "checkout", "-q", "-b", "peer");
     const peerDoc = YAML.parse(fs.readFileSync(file, "utf8"));
-    peerDoc.updated_at = "2026-07-29T18:00:00.000Z";
+    peerDoc.updated_at = stamp(4);
     fs.writeFileSync(file, YAML.stringify(peerDoc));
     git(dir, "commit", "-qam", "peer stamp");
     git(dir, "checkout", "-q", "main");
     const ourDoc = YAML.parse(fs.readFileSync(file, "utf8"));
-    ourDoc.updated_at = "2026-07-29T18:30:00.000Z";
+    ourDoc.updated_at = stamp(5);
     fs.writeFileSync(file, YAML.stringify(ourDoc));
     git(dir, "commit", "-qam", "our stamp");
 
@@ -194,9 +203,29 @@ describe("the quiet gate — a self-moving field never becomes a commit (§6.6)"
     await settleSetup(dir);
     const before = commitCount(dir);
     for (let i = 0; i < 6; i++) {
-      await runCycle(dir, (d) => (d.updated_at = `2026-07-29T17:0${i}:00.000Z`));
+      await runCycle(dir, (d) => (d.updated_at = stamp(6 + i)));
     }
     expect(commitCount(dir)).toBe(before);
+  });
+
+  it("DOES publish a device heartbeat once the PUBLISHED stamp has aged past the floor", async () => {
+    // THE HEARTBEAT FLOOR (devices.mdx §7.1) — the one exception, and the reason it exists. `deviceRows()`
+    // reads a peer's `lastSeen` off this very `updated_at`, so silence forever means liveness is
+    // unanswerable: on 2026-08-10 this Mac Pro's published record was stamped a week earlier (the last day
+    // anything substantive changed) and every peer concluded it had been offline since, which is why
+    // pull-downs failed with "<computer> looks offline" about computers that were running the whole time.
+    const dir = repoWithDevice({ ...DEVICE, updated_at: stamp(-7 * 24 * 60) }); // published a week ago
+    await settleSetup(dir);
+    const before = commitCount(dir);
+    await runCycle(dir, (d) => (d.updated_at = stamp(0)));
+    expect(commitCount(dir)).toBe(before + 1);
+    expect(git(dir, "show", "--name-only", "HEAD")).toMatch(/devices\/tower\.yaml/);
+
+    // And it goes quiet again immediately: the floor is a FLOOR, not a new flood. The stamp it just
+    // published is fresh, so the next six idle cycles add nothing.
+    const afterBeat = commitCount(dir);
+    for (let i = 0; i < 6; i++) await runCycle(dir, (d) => (d.updated_at = stamp(i + 1)));
+    expect(commitCount(dir)).toBe(afterBeat);
   });
 });
 

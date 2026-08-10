@@ -1140,6 +1140,7 @@ export class GitBackbone {
     }
 
     const reverted: string[] = [];
+    const heartbeats: string[] = [];
     for (const rel of modified) {
       const extra = volatileYamlPathsFor(rel);
       if (!extra) continue; // not a file we know the volatile shape of — leave it alone
@@ -1149,8 +1150,25 @@ export class GitBackbone {
       try {
         const headBlob = await this.git.raw(["show", `HEAD:${rel}`]);
         const working = fs.readFileSync(path.join(this.dir, rel), "utf8");
-        if (canonicalize(YAML.parse(headBlob) ?? {}, volatilePaths) !== canonicalize(YAML.parse(working) ?? {}, volatilePaths)) {
+        const headDoc = (YAML.parse(headBlob) ?? {}) as Record<string, unknown>;
+        if (canonicalize(headDoc, volatilePaths) !== canonicalize(YAML.parse(working) ?? {}, volatilePaths)) {
           continue; // a real change — this is exactly what the backbone exists to carry
+        }
+        // THE HEARTBEAT FLOOR (devices.mdx §7.1). A device record's `updated_at` is not only churn — it is
+        // the ONLY thing that tells the user's other computers this machine is alive (`deviceRows()` reads
+        // `lastSeen` straight off it). Dropping it unconditionally made liveness unanswerable: on
+        // 2026-08-10 this Mac Pro's record was stamped Aug 3 because that was the last day something
+        // SUBSTANTIVE changed, so every peer concluded it had been offline for a week, and the pull-down
+        // failures said "<computer> looks offline. Bring it online and try again." about computers that
+        // were running the whole time.
+        //
+        // So a device record is allowed through when HEAD's stamp has aged past the floor, and only then.
+        // That is at most 4 commits per computer per day — the gate still kills the 2,322-commits-per-week
+        // flood it was written for (that was one commit per PASS, every few minutes) — while making the
+        // liveness signal true to within HEARTBEAT_MAX_AGE_MS.
+        if (isDeviceRecordPath(rel) && heartbeatIsStale(headDoc)) {
+          heartbeats.push(rel);
+          continue;
         }
         // Restore index AND working tree to HEAD, so it does not simply re-stage on the next pass.
         await this.git.raw(["checkout", "HEAD", "--", rel]);
@@ -1165,6 +1183,13 @@ export class GitBackbone {
         "git",
         `${this.dir}: quiet gate dropped ${reverted.length} volatile-only change(s) — no commit for ` +
           `${reverted.slice(0, 5).join(", ")}${reverted.length > 5 ? ", …" : ""}`,
+      );
+    }
+    if (heartbeats.length > 0) {
+      log.info(
+        "git",
+        `${this.dir}: publishing ${heartbeats.length} device heartbeat(s) — ${heartbeats.join(", ")} last ` +
+          `reached your other computers over ${Math.round(HEARTBEAT_MAX_AGE_MS / 3_600_000)}h ago`,
       );
     }
   }
@@ -1397,6 +1422,33 @@ export function pushRetryDelayMs(attempt: number, rnd: () => number = Math.rando
  * `updated_at` is added by `writeYamlIfChanged` for every document, so entries here list only the EXTRA
  * paths particular to that document.
  */
+/**
+ * How stale a PUBLISHED device heartbeat may get before the quiet gate lets one through (devices.mdx §7.1).
+ * Six hours: short enough that "is this computer alive?" has a useful answer — the alternative was a stamp
+ * frozen for a week — and long enough that heartbeats cost at most 4 commits per computer per day, which is
+ * two orders of magnitude below the churn the gate was written to stop.
+ */
+export const HEARTBEAT_MAX_AGE_MS = 6 * 60 * 60 * 1000;
+
+/** Is this rel path one of the device records under a storage's `devices/` directory? */
+export function isDeviceRecordPath(relPath: string): boolean {
+  const p = healWindowsPath(relPath);
+  return p.endsWith(".yaml") && (p.startsWith("devices/") || p.includes("/devices/"));
+}
+
+/**
+ * Has the device record COMMITTED AT HEAD aged past the heartbeat floor? An absent or unparseable stamp
+ * answers YES on purpose: a record nobody can date is exactly the one whose liveness we cannot vouch for,
+ * and letting it through re-stamps it correctly instead of freezing the fault in place forever.
+ */
+export function heartbeatIsStale(headDoc: Record<string, unknown>, now = Date.now()): boolean {
+  const raw = headDoc?.updated_at;
+  if (typeof raw !== "string") return true;
+  const t = Date.parse(raw);
+  if (!Number.isFinite(t)) return true;
+  return now - t > HEARTBEAT_MAX_AGE_MS;
+}
+
 export function volatileYamlPathsFor(relPath: string): string[] | null {
   if (!relPath.endsWith(".yaml")) return null;
   const p = healWindowsPath(relPath);

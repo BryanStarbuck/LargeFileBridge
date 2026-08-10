@@ -112,7 +112,10 @@ describe("checkpointOwnWrites — the pre-merge checkpoint obeys the quiet gate"
     fs.mkdirSync(path.join(work, "devices"), { recursive: true });
     fs.writeFileSync(
       path.join(work, device),
-      YAML.stringify({ device: { name: "tower", hardware: { primary_ip: "192.168.1.4", ip_addresses: ["192.168.1.4"] } } }),
+      // A FRESH `updated_at`, because the quiet gate's heartbeat floor (git.service.ts HEARTBEAT_MAX_AGE_MS)
+      // deliberately lets a device record through once its published stamp has aged out — and an ABSENT stamp
+      // counts as aged out. Without one this fixture would exercise the heartbeat exception, not the gate.
+      YAML.stringify({ updated_at: new Date().toISOString(), device: { name: "tower", hardware: { primary_ip: "192.168.1.4", ip_addresses: ["192.168.1.4"] } } }),
     );
     git(work, "add", "-A");
     git(work, "commit", "-qm", "seed device");
@@ -122,6 +125,7 @@ describe("checkpointOwnWrites — the pre-merge checkpoint obeys the quiet gate"
     fs.writeFileSync(
       path.join(work, device),
       YAML.stringify({
+        updated_at: new Date(Date.now() + 60_000).toISOString(),
         device: { name: "tower", hardware: { primary_ip: "192.168.1.9", ip_addresses: ["192.168.1.9", "fe80::1"] } },
       }),
     );

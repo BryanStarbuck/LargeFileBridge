@@ -113,12 +113,13 @@ export function ensureSyncRepoMarker(
  * `history/<device>.txt` log and MERGE it instead of stamping over it (tracked-file-merge.ts). Every other
  * shape still gets the plain copy it always got.
  */
-function copyTree(src: string, dst: string, rel = ""): void {
+function copyTree(src: string, dst: string, rel = ""): boolean {
   let entries: fs.Dirent[];
+  let changed = false;
   try {
     entries = fs.readdirSync(src, { withFileTypes: true });
   } catch {
-    return;
+    return false;
   }
   fs.mkdirSync(dst, { recursive: true });
   for (const e of entries) {
@@ -131,11 +132,11 @@ function copyTree(src: string, dst: string, rel = ""): void {
       // is what makes the bad spelling travel — and a `\` filename cannot be checked out on Windows at
       // all, so mirroring it breaks the clone for the machine that produced it. Heal it here instead.
       if (e.isFile() && isStrayPathName(e.name)) {
-        copyHealed(s, dst, e.name);
+        changed = copyHealed(s, dst, e.name) || changed;
         continue;
       }
-      if (e.isDirectory()) copyTree(s, d, childRel);
-      else if (e.isFile()) copyTrackedFile(s, d, childRel);
+      if (e.isDirectory()) changed = copyTree(s, d, childRel) || changed;
+      else if (e.isFile()) changed = copyTrackedFile(s, d, childRel) || changed;
     } catch (err) {
       // Skip an unreadable/unwritable leaf; never fail the whole mirror — BUT make it observable. A file
       // that silently stops copying between the user's computers is the exact failure this module exists to
@@ -143,6 +144,7 @@ function copyTree(src: string, dst: string, rel = ""): void {
       log.warn("storage", `copyTree: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
     }
   }
+  return changed;
 }
 
 /**
@@ -293,10 +295,32 @@ function readManifestBestEffort(file: string, unit: Manifest["unit"]): Manifest 
  * never folded in at all. Both halves of that are fixed: the merge is real, and the pin pass calls it on
  * every backbone pull.
  */
+/**
+ * Write `content` to `file` only when that would actually change it, and say whether it did.
+ *
+ * The three merged documents below are RECONCILIATIONS: on a computer where nothing arrived, the merge
+ * result is byte-identical to what is already on disk. Writing it anyway is not merely wasted I/O — the
+ * return value of `reconcileFromSyncRepo` is what tells `reconcileMirroredRepos` to run the EXPENSIVE fold
+ * (a full unit-manifest merge, a ledger re-parse, and a UI topic bump) for that repo, so "I wrote a file"
+ * masquerading as "something arrived" made all of that run for every repo on every pass. See the caller.
+ */
+function writeIfDifferent(file: string, content: string): boolean {
+  try {
+    if (fs.readFileSync(file, "utf8") === content) return false;
+  } catch {
+    /* absent or unreadable — fall through and write it */
+  }
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content, "utf8");
+  return true;
+}
+
 export function reconcileFromSyncRepo(repoRoot: string): boolean {
   const src = resolveStateSyncRepo(repoRoot);
   if (!src) return false;
   const dst = repoStateDir(repoRoot);
+  // Did anything ACTUALLY arrive? Reported honestly — see `writeIfDifferent` and the caller.
+  let changed = false;
   try {
     if (!fs.existsSync(src)) return false;
     // 1. the manifest — a MERGE, never a copy (§8.4.3)
@@ -307,10 +331,9 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         readManifestBestEffort(localPath, "repo"),
         readManifestBestEffort(incomingManifest, "repo"),
       );
-      fs.mkdirSync(dst, { recursive: true });
       // The CANONICAL serializer, not a bare stringify: this file is also written by manifest.service, and
       // two spellings of one document make each writer re-dirty what the other just wrote (§6).
-      fs.writeFileSync(localPath, serializeManifest(merged), "utf8");
+      changed = writeIfDifferent(localPath, serializeManifest(merged)) || changed;
     }
     // 2. the decision ledger — ALSO a merge, never a copy (decisions.mdx §5). A copy replaces the local
     // log with whatever the mirror last held; events recorded here but not yet mirrored (or erased from
@@ -324,8 +347,7 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         parseLedgerBestEffort(readFileOrNull(localLedger)),
         parseLedgerBestEffort(readFileOrNull(incomingLedger)),
       );
-      fs.mkdirSync(dst, { recursive: true });
-      fs.writeFileSync(localLedger, serializeLedger(merged), "utf8");
+      changed = writeIfDifferent(localLedger, serializeLedger(merged)) || changed;
     }
     // 2b. repo_storage.yaml — a MERGE that PRESERVES this computer's own {@link MACHINE_LOCAL_REPO_STORAGE}
     // fields. The mirror's copy is scrubbed of them on purpose (see mirrorToSyncRepo); a wholesale copy
@@ -346,8 +368,7 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
               )[key];
             }
           }
-          fs.mkdirSync(dst, { recursive: true });
-          fs.writeFileSync(localFile, YAML.stringify(incoming.data, { sortMapEntries: true }), "utf8");
+          changed = writeIfDifferent(localFile, YAML.stringify(incoming.data, { sortMapEntries: true })) || changed;
         }
       } catch (e) {
         log.warn("storage", `reconcile: repo_storage fold failed for ${dst}: ${(e as Error).message}`);
@@ -355,8 +376,8 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
     }
     // 3. everything else — the per-file sidecars and per-device history logs are MERGED inside
     //    `copyTrackedFile`; only shapes with nothing shared to lose are still copied outright.
-    copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"]));
-    return true;
+    changed = copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"])) || changed;
+    return changed;
   } catch (e) {
     log.warn("storage", `reconcileFromSyncRepo(${repoRoot}) failed: ${(e as Error).message}`);
     return false;
@@ -436,12 +457,13 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
 }
 
 /** copyTree, skipping named top-level entries (the manifest, which is merged instead of copied). */
-function copyTreeExcept(src: string, dst: string, skip: Set<string>): void {
+function copyTreeExcept(src: string, dst: string, skip: Set<string>): boolean {
   let entries: fs.Dirent[];
+  let changed = false;
   try {
     entries = fs.readdirSync(src, { withFileTypes: true });
   } catch {
-    return;
+    return false;
   }
   fs.mkdirSync(dst, { recursive: true });
   for (const e of entries) {
@@ -454,15 +476,16 @@ function copyTreeExcept(src: string, dst: string, skip: Set<string>): void {
       // the shared sync repo, and this copy materialized it locally again. Normalize on arrival, and the
       // bounce becomes one-way — the peer can keep sending it, it stops here.
       if (e.isFile() && isStrayPathName(e.name)) {
-        copyHealed(s, dst, e.name);
+        changed = copyHealed(s, dst, e.name) || changed;
         continue;
       }
       // `e.name` IS the state-dir-relative path at this level, so the sidecar/history merge sees the
       // `files/` and `history/` prefixes it keys on.
-      if (e.isDirectory()) copyTree(s, d, e.name);
-      else if (e.isFile()) copyTrackedFile(s, d, e.name);
+      if (e.isDirectory()) changed = copyTree(s, d, e.name) || changed;
+      else if (e.isFile()) changed = copyTrackedFile(s, d, e.name) || changed;
     } catch (err) {
       log.warn("storage", `reconcile: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
     }
   }
+  return changed;
 }

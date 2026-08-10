@@ -58,15 +58,33 @@ export function isHistoryPath(relFromStateDir: string): boolean {
  * can only ever add safety. The one asymmetry is the UNREADABLE case, resolved by least-loss:
  *   • destination unparseable → copy over it (we are replacing garbage with something valid);
  *   • source unparseable      → keep the destination (never clobber good with bad).
+ *
+ * RETURNS whether the destination's bytes actually changed. The reconcile leg uses that answer to decide
+ * whether a peer's state really arrived — and therefore whether to pay for the expensive downstream fold
+ * (a whole-manifest merge, a ledger re-parse, a UI topic bump) for this repo. Reporting an idempotent
+ * no-op as an arrival is what made that fold run for every repo on every pass; see reconcileFromSyncRepo.
  */
-export function copyTrackedFile(src: string, dst: string, rel: string): void {
+export function copyTrackedFile(src: string, dst: string, rel: string): boolean {
   if (!fs.existsSync(dst)) {
     fs.copyFileSync(src, dst);
-    return;
+    return true;
   }
   if (isSidecarPath(rel)) return mergeSidecarInto(src, dst);
   if (isHistoryPath(rel)) return mergeHistoryInto(src, dst);
+  // The plain-copy fallback compares first. `copyFileSync` on identical bytes is not free — this path runs
+  // for every tracked file of every mirrored repo on every backbone pass.
+  if (sameBytes(src, dst)) return false;
   fs.copyFileSync(src, dst);
+  return true;
+}
+
+/** Are these two files byte-identical? A read failure answers "no", so the copy still happens. */
+function sameBytes(a: string, b: string): boolean {
+  try {
+    return fs.readFileSync(a).equals(fs.readFileSync(b));
+  } catch {
+    return false;
+  }
 }
 
 // ── sidecars ────────────────────────────────────────────────────────────────────────────────────────
@@ -113,15 +131,15 @@ function earlierFirstSeen(a: unknown, b: unknown): unknown {
   return JSON.stringify(ao) <= JSON.stringify(bo) ? ao : bo;
 }
 
-function mergeSidecarInto(src: string, dst: string): void {
+function mergeSidecarInto(src: string, dst: string): boolean {
   const incoming = readYamlDoc(src);
   const local = readYamlDoc(dst);
   const incomingBlock = incoming?.file as Record<string, unknown> | undefined;
   const localBlock = local?.file as Record<string, unknown> | undefined;
-  if (!incomingBlock) return; // unreadable/foreign source — keep what we have
+  if (!incomingBlock) return false; // unreadable/foreign source — keep what we have
   if (!localBlock) {
     fs.copyFileSync(src, dst); // destination is garbage; the incoming copy is strictly better
-    return;
+    return true;
   }
   const byKey = new Map<string, Record<string, unknown>>();
   for (const e of [...eventsOf(localBlock), ...eventsOf(incomingBlock)]) byKey.set(eventKey(e), e);
@@ -137,11 +155,12 @@ function mergeSidecarInto(src: string, dst: string): void {
   const next = { ...(local as Record<string, unknown>), file: merged };
   // Only write when the bytes actually change — an unchanged sidecar must never re-dirty the mirror.
   try {
-    if (fs.readFileSync(dst, "utf8") === serialize(next)) return;
+    if (fs.readFileSync(dst, "utf8") === serialize(next)) return false;
   } catch {
     /* unreadable destination — fall through and write */
   }
   writeYamlDoc(dst, next);
+  return true;
 }
 
 // ── history logs ────────────────────────────────────────────────────────────────────────────────────
@@ -171,7 +190,7 @@ function headerOf(text: string): string[] {
   return text.split("\n").filter(isHeaderLine);
 }
 
-function mergeHistoryInto(src: string, dst: string): void {
+function mergeHistoryInto(src: string, dst: string): boolean {
   let incoming: string;
   let local: string;
   try {
@@ -179,7 +198,7 @@ function mergeHistoryInto(src: string, dst: string): void {
     local = fs.readFileSync(dst, "utf8");
   } catch (e) {
     log.warn("storage", `history merge: could not read ${src} / ${dst}: ${(e as Error).message}`);
-    return; // keep the destination — never clobber on a read failure
+    return false; // keep the destination — never clobber on a read failure
   }
   const seen = new Set<string>();
   const blocks: string[] = [];
@@ -193,11 +212,12 @@ function mergeHistoryInto(src: string, dst: string): void {
   blocks.sort((a, b) => a.localeCompare(b));
   const header = headerOf(local).length > 0 ? headerOf(local) : headerOf(incoming);
   const next = [...header, ...blocks].join("\n") + "\n";
-  if (next === local) return; // nothing new arrived — leave the file (and the mirror) alone
+  if (next === local) return false; // nothing new arrived — leave the file (and the mirror) alone
   const tmp = `${dst}.${process.pid}.${Date.now()}.tmp`;
   try {
     fs.writeFileSync(tmp, next, "utf8");
     fs.renameSync(tmp, dst);
+    return true;
   } catch (e) {
     try {
       fs.rmSync(tmp, { force: true });
@@ -205,5 +225,6 @@ function mergeHistoryInto(src: string, dst: string): void {
       /* ignore */
     }
     log.warn("storage", `history merge: could not write ${dst}: ${(e as Error).message}`);
+    return false;
   }
 }
