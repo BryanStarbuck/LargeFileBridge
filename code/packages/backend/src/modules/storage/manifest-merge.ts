@@ -59,32 +59,58 @@ export function foldManifestFiles(files: ManifestFile[], unit: Manifest["unit"])
  *     last-writer copy erases the peer's claim, and the peer's claim IS the "a computer of yours has this"
  *     signal the whole pull-down feature reads;
  *   • **absence is NEVER a delete** — a path missing from the incoming copy keeps its local entry;
- *   • a **CID conflict** on the same path resolves to the newer `modified_at` (ties keep local).
+ *   • a **CID conflict** on the same path resolves to the newer `modified_at`; at the SAME stamp it
+ *     resolves to the lexicographically smaller CID — see `incAuthoritative` below.
  *
- * This computer's own `pinned_by` claim is NOT trusted from the wire — the pin pass re-derives it from the
- * real local pinset every run, so a peer's manifest can never make this machine believe it holds bytes it
- * does not (ipfs.mdx §1.1).
+ * `selfLabel` is THIS computer's device label, and passing it is what ENFORCES the rule the header of this
+ * paragraph used to only assert: an incoming `pinned_by` claim naming us is DROPPED, never unioned in. Pin
+ * truth is self-claim-only and derived from the local pinset (ipfs.mdx §1.1), so a claim about us arriving
+ * over the wire is not evidence of anything — it is our own past claim coming back, or a peer's stale copy
+ * of it. The merge used to union it and rely on the pin pass to re-derive the truth afterwards, which holds
+ * only for units the pin pass actually visits: a repo with `pinned: false` runs the RECEIVE half every pass
+ * (marker + reconcile) and `runUnitPin` NEVER, so the claim had no writer that could ever correct it.
+ * Measured on charlie-kirk (`pinned: false`, `last_pin_at: null`): 173 entries advertised `xenx-xenx-pc`
+ * while `ipfs pin ls` held none of those CIDs — this computer telling the user's other computers it was
+ * holding bytes it did not have. Omit the argument only where there is no wire (a fold of two local
+ * documents); every path that reads another computer's copy must pass it.
  */
-export function mergeManifests(local: Manifest, incoming: Manifest): Manifest {
+export function mergeManifests(local: Manifest, incoming: Manifest, selfLabel?: string | null): Manifest {
   // FOLD EACH SIDE FIRST. Either side may legitimately carry the same path twice (a `merge=union` git
   // merge concatenates both), and keying a raw list into a Map is last-wins — the twin that held the CID
   // or the peer's claim would be dropped before this function's own union rules ever ran.
   const byPath = new Map<string, ManifestFile>(foldManifestFiles(local.files, local.unit).map((f) => [f.path, f]));
+  // Our own label, stripped from every arriving entry before it is unioned (see the doc block).
+  const peerClaims = (f: ManifestFile): string[] =>
+    selfLabel ? (f.pinned_by ?? []).filter((c) => c !== selfLabel) : (f.pinned_by ?? []);
   for (const inc of foldManifestFiles(incoming.files, incoming.unit)) {
     const cur = byPath.get(inc.path);
     if (!cur) {
-      byPath.set(inc.path, { ...inc });
+      byPath.set(inc.path, { ...inc, pinned_by: peerClaims(inc) });
       continue;
     }
     const incNewer = (inc.modified_at ?? "") > (cur.modified_at ?? "");
+    const sameStamp = (inc.modified_at ?? "") === (cur.modified_at ?? "");
+    // THE TIE IS THE WHOLE BUG. Two CIDs for one path at the SAME `modified_at` is not a disagreement about
+    // time — it is the same bytes recorded under two add profiles (a bare `ipfs add` → `Qm…` vs this app's
+    // v1-raw-leaves → `bafk…`). "Ties keep local" is not a tie-break at all: it is symmetric, so BOTH
+    // computers keep their own value and stamp it over the other's on the next mirror, forever. Measured on
+    // charlie-kirk's mirror: 14 consecutive backbone commits alternating `Qm…` / `bafk…` every ~20 minutes,
+    // one commit per pass on each machine, none of them carrying any new information.
+    //
+    // A total order on the VALUE converges instead: both sides compute the same winner, so the merge after
+    // it is a no-op and the churn stops. Plain `<` and never `localeCompare` — collation is locale-dependent
+    // and two computers must not be able to disagree about which CID won.
+    const incWinsTie = sameStamp && !!cur.cid && !!inc.cid && cur.cid !== inc.cid && inc.cid < cur.cid;
+    const incAuthoritative = incNewer || incWinsTie;
     byPath.set(inc.path, {
       ...cur,
-      // A conflicting CID resolves by recency; an absent side never wins over a present one.
-      cid: cur.cid && inc.cid && cur.cid !== inc.cid ? (incNewer ? inc.cid : cur.cid) : (cur.cid ?? inc.cid),
-      size: incNewer ? (inc.size ?? cur.size) : cur.size,
+      // The winning side supplies the whole (cid, size) pair — splitting them would leave `size` to
+      // ping-pong on its own for exactly the reason the CID did.
+      cid: cur.cid && inc.cid ? (incAuthoritative ? inc.cid : cur.cid) : (cur.cid ?? inc.cid),
+      size: incAuthoritative ? (inc.size ?? cur.size) : cur.size,
       sha256: cur.sha256 ?? inc.sha256,
-      modified_at: incNewer ? inc.modified_at : cur.modified_at,
-      pinned_by: [...new Set([...(cur.pinned_by ?? []), ...(inc.pinned_by ?? [])])].sort((a, b) => a.localeCompare(b)),
+      modified_at: incAuthoritative ? inc.modified_at : cur.modified_at,
+      pinned_by: [...new Set([...(cur.pinned_by ?? []), ...peerClaims(inc)])].sort((a, b) => a.localeCompare(b)),
     });
   }
   return {

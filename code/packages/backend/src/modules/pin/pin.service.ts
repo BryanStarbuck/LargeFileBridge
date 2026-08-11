@@ -598,6 +598,15 @@ async function pinRepoFolderInner(
       const repoPath = expandHome(cfg.repo.path);
       ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
       reconcileFromSyncRepo(repoPath);
+      // The receive half runs every pass; `runUnitPin` — the ONLY writer that re-derives this computer's own
+      // `pinned_by` from the real pinset — runs never. So this is the one unit shape where a self-claim can
+      // outlive the pin that justified it, and the mirror publishes it to the user's other computers on
+      // every scan. Verify ours here instead. Reads no bytes and costs nothing on a healthy repo: the
+      // pinset is only fetched when there is a claim of ours to check, so after the first heal it is free.
+      await healSelfPinClaims(folder, [
+        { read: () => getRepoManifest(folder), write: (m) => writeRepoManifest(folder, m) },
+        { read: () => readRepoTrackingManifest(repoPath), write: (m) => writeRepoTrackingManifest(repoPath, m) },
+      ]);
       log.info("pin", `Skip ${folder}: pinned=false (reconciled peer state only).`);
       return zeroCounts(); // background scheduler respects the opt-in — an honest no-op tally
     }
@@ -623,7 +632,7 @@ async function pinRepoFolderInner(
   // Pull-down count that no row can explain.
   opts.report?.({ note: "merging the file lists" });
   await yieldToLoop();
-  const unitManifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath));
+  const unitManifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath), computerLabel());
   return runUnitPin(
     {
       kind: "repo",
@@ -861,6 +870,11 @@ async function pinStorageUnitInner(id: string, onPhase?: PhaseNote): Promise<voi
         : undefined,
     );
   } else {
+    // Same gap as a `pinned: false` repo (see `pinRepoFolderInner`): this storage's text is pulled, merged
+    // and pushed every pass while the one writer that re-derives our own pin claims never runs.
+    await healSelfPinClaims(`storage:${id}`, [
+      { read: () => readCommittedManifest(root), write: (m) => writeCommittedManifest(root, m) },
+    ]);
     log.info("pin", `Storage ${id}: pinned=false — device info kept current, no byte work.`);
   }
 
@@ -1168,6 +1182,68 @@ function setPinClaim(entry: ManifestFile, label: string, pinned: boolean): void 
   const has = entry.pinned_by.includes(label);
   if (pinned && !has) entry.pinned_by.push(label);
   else if (!pinned && has) entry.pinned_by = entry.pinned_by.filter((c) => c !== label);
+}
+
+/**
+ * Re-derive THIS computer's own `pinned_by` claims from the real pinset, for the units whose pin pass does
+ * not run — a repo or storage with `pinned: false`.
+ *
+ * `mergeManifests` refuses to ADOPT a self-claim from the wire, which stops new ones; this removes the ones
+ * already on disk from before that rule existed. The two are a pair: without the merge-side strip the write
+ * below is undone by the next union with the mirror, and without this the strip alone never heals what is
+ * already published.
+ *
+ * DROP-ONLY, deliberately asymmetric: it removes a claim it can prove false and never adds one it could
+ * prove true. Adding would mean reading the pinset for every non-opted-in unit on every pass — `pin ls` is
+ * the slowest call the app makes — and the two errors are not equally bad. Under-claiming costs a peer one
+ * missed offer to pull from us; over-claiming is what breaks the feature, because the peer offers a pull
+ * that can never complete. The full re-derivation stays where it can be paid for: `runUnitPin`.
+ *
+ * Everything here is deliberately conditional. The pinset is read ONLY when a claim of ours actually exists,
+ * so a healthy unit pays nothing and a healed one pays nothing ever again; the manifest is written ONLY when
+ * a claim is genuinely unbacked, so this never manufactures a commit for the backbone to push. And a FAILED
+ * `pin ls` is not an empty pinset (the rule `runUnitPin` states): dropping every claim because the daemon was
+ * still coming up would tell the user's other computers this machine had lost the bytes.
+ */
+async function healSelfPinClaims(
+  name: string,
+  docs: Array<{ read: () => Manifest; write: (m: Manifest) => void }>,
+): Promise<void> {
+  const label = computerLabel();
+  const held = (m: Manifest): ManifestFile[] => m.files.filter((f) => f.cid && f.pinned_by.includes(label));
+  let loaded: Array<{ manifest: Manifest; claims: ManifestFile[]; write: (m: Manifest) => void }>;
+  try {
+    loaded = docs
+      .map((d) => {
+        const manifest = d.read();
+        return { manifest, claims: held(manifest), write: d.write };
+      })
+      .filter((d) => d.claims.length > 0);
+  } catch (e) {
+    log.warn("pin", `${name}: could not read manifests to verify pin claims: ${(e as Error).message}`);
+    return;
+  }
+  if (loaded.length === 0) return;
+  let pinset: Set<string>;
+  try {
+    pinset = new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
+  } catch (e) {
+    log.warn("pin", `${name}: pin claims left as they are — could not read the pin list: ${(e as Error).message}`);
+    return;
+  }
+  for (const doc of loaded) {
+    // Content-aware, exactly as the pin pass is: bytes we hold under a different add profile ARE pinned
+    // here, so that claim stands (knowledge/ipfs.mdx §5.1).
+    const stale = doc.claims.filter((f) => !pinsetHasContent(pinset, f.cid!));
+    if (stale.length === 0) continue;
+    for (const f of stale) setPinClaim(f, label, false);
+    try {
+      doc.write(doc.manifest);
+      log.info("pin", `${name}: dropped ${stale.length} pin claim(s) this computer does not actually hold.`);
+    } catch (e) {
+      log.warn("pin", `${name}: could not persist corrected pin claims: ${(e as Error).message}`);
+    }
+  }
 }
 
 function markUnitError(t: UnitTarget, msg: string): void {

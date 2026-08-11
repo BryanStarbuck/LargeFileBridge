@@ -218,6 +218,25 @@ Only the **byte work** is gated by the `pinned` opt-in (§1):
 * If the unit is **not opted in** (`pinned: false`): the pass still visits and reconciles it (steps
   1–4) but adds/pins/fetches **nothing** — until the user opts in.
 
+**Step 2 is NOT optional on a not-opted-in unit, and this is the rule that was missing in code.** Its text
+still travels: the receive half of the mirror runs every pass, and the scan path publishes the unit's
+manifest onward to the user's other computers. So a **self-claim on a `pinned: false` unit has no writer
+that can ever correct it** — `runUnitPin`, the only place the claim was re-derived from the real pinset,
+never runs for that unit. Measured on charlie-kirk (`pinned: false`, `last_pin_at: null`) on 2026-08-11:
+**173 entries advertised this computer as holding CIDs that `ipfs pin ls` did not have**, published to the
+fleet on every scan. The verification is now unconditional for both repos and storages, and it stays
+free: the pinset is read **only when a claim of ours actually exists**, and the manifest is written **only
+when a claim is genuinely unbacked**, so a healthy unit never pays for `pin ls` and never manufactures a
+commit for the backbone to push. A **failed** `pin ls` leaves every claim untouched — a dead daemon is not
+an empty pinset, and dropping our claims on it would tell the user's other computers this machine had lost
+the bytes.
+Self-claim verification for units whose pin pass does not run, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+`healSelfPinClaims()`, called from `pinRepoFolderInner()` and `pinStorageUnitInner()` on the
+`pinned: false` branch. The paired rule that stops new ones arriving lives at the merge:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` —
+`mergeManifests(local, incoming, selfLabel)`.
+
 **Device write-back is explicitly NOT gated by `pinned`.** Writing **this computer's own**
 `devices/<self>.yaml` into a Git-backed storage — and running that storage's **git backbone cycle** to
 carry it — is the "understand", not the "pin", side of §1: it puts your own identity text into your own

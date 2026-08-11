@@ -383,7 +383,10 @@ function mergeRepoManifests(folder: string, cfg: RepoUnitConfig): Manifest {
     // Healed BEFORE the merge (§6.1): mergeManifests keys by exact path, so folding two manifests that
     // still disagree about separators just carries both spellings through into the rows.
     const tracking = normalizeManifestPaths(readYaml(trackingFile, ManifestSchema), trackingFile);
-    return mergeManifests(unit, tracking);
+    // The tracking manifest is the copy the sync repo lands in, so it is the wire: the rows must read this
+    // computer's pin claim from the UNIT manifest the pin pass derives, never from a claim about us that
+    // travelled back. Self-claim-only (ipfs.mdx §1.1), enforced at the merge.
+    return mergeManifests(unit, tracking, computerLabel());
   } catch (e) {
     log.debug("units", `tracking manifest fold skipped for ${folder}: ${(e as Error).message}`);
     return unit;

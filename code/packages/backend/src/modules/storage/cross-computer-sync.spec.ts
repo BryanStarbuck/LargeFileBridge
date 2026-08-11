@@ -80,13 +80,74 @@ describe("mergeManifests — receiving is a merge, never a copy (§8.4.3)", () =
     expect(merged.files.map((f) => f.path)).toContain("videos/keep-me.mp4");
   });
 
-  it("resolves a conflicting CID by the newer modified_at, keeping local on a tie", () => {
+  it("resolves a conflicting CID by the newer modified_at", () => {
     const older = { path: VIDEO, cid: "bafyOLD", size: 1, sha256: null, modified_at: "2026-01-01T00:00:00Z", pinned_by: [LAPTOP] };
     const newer = { path: VIDEO, cid: "bafyNEW", size: 2, sha256: null, modified_at: "2026-07-20T00:00:00Z", pinned_by: [TOWER] };
     expect(mergeManifests(manifest([older]), manifest([newer])).files[0]!.cid).toBe("bafyNEW");
     expect(mergeManifests(manifest([newer]), manifest([older])).files[0]!.cid).toBe("bafyNEW");
-    const tie = { ...newer, cid: "bafyINCOMING" };
-    expect(mergeManifests(manifest([{ ...newer, cid: "bafyLOCAL" }]), manifest([tie])).files[0]!.cid).toBe("bafyLOCAL");
+  });
+
+  it("breaks a same-stamp CID conflict the SAME WAY on both computers, so the mirror stops ping-ponging", () => {
+    // THE 2026-08-10 charlie-kirk CHURN. Two CIDs for one path at the same `modified_at` are the same bytes
+    // under two add profiles (`Qm…` from a bare `ipfs add`, `bafk…` from this app). The rule used to be
+    // "ties keep local", which is symmetric: each computer kept its own value and stamped it over the
+    // other's on the next mirror. The mirror's history shows exactly that — 14 consecutive backbone commits
+    // alternating the two values every ~20 minutes, none of them carrying new information.
+    const STAMP = "2026-07-08T00:01:51.501Z";
+    const v0 = { path: VIDEO, cid: "QmVA7WhYwAvFXe7rjdrgrRwdCJpprLG39vrS3Xp8PK2otq", size: 151830, sha256: null, modified_at: STAMP, pinned_by: [LAPTOP] };
+    const v1 = { ...v0, cid: "bafkreib4v4qv66scydzxvlhfrc5xrb7xukwnvhqvgiqwjwrxxq3jhsnfla", pinned_by: [TOWER] };
+    // The laptop holds v0 and receives v1; the Tower holds v1 and receives v0. Both must land on one value.
+    const onLaptop = mergeManifests(manifest([v0]), manifest([v1])).files[0]!.cid;
+    const onTower = mergeManifests(manifest([v1]), manifest([v0])).files[0]!.cid;
+    expect(onLaptop).toBe(onTower);
+    // …and the merge after it changes nothing, which is what actually ends the commit-per-pass loop.
+    expect(mergeManifests(manifest([{ ...v0, cid: onLaptop }]), manifest([v1])).files[0]!.cid).toBe(onLaptop);
+    expect(mergeManifests(manifest([{ ...v1, cid: onTower }]), manifest([v0])).files[0]!.cid).toBe(onTower);
+  });
+
+  it("carries size with the winning CID rather than splitting the pair", () => {
+    // Same argument as the CID: a `size` that tracks the other side's entry would ping-pong on its own.
+    const STAMP = "2026-07-08T00:01:51.501Z";
+    const a = { path: VIDEO, cid: "bafyA", size: 10, sha256: null, modified_at: STAMP, pinned_by: [LAPTOP] };
+    const b = { ...a, cid: "bafyB", size: 20, pinned_by: [TOWER] };
+    const onLaptop = mergeManifests(manifest([a]), manifest([b])).files[0]!;
+    const onTower = mergeManifests(manifest([b]), manifest([a])).files[0]!;
+    expect(onLaptop.cid).toBe(onTower.cid);
+    expect(onLaptop.size).toBe(onTower.size);
+    expect(onLaptop.size).toBe(onLaptop.cid === "bafyA" ? 10 : 20);
+  });
+
+  it("NEVER adopts a claim about THIS computer from the wire", () => {
+    // Pin truth is self-claim-only (ipfs.mdx §1.1). charlie-kirk (`pinned: false`, so `runUnitPin` — the one
+    // writer that re-derives this from the real pinset — never ran) advertised 173 entries as held by
+    // `xenx-xenx-pc` while `ipfs pin ls` held none of those CIDs: our own stale claim arriving back over the
+    // mirror and being unioned in again on every pass, with nothing that could ever correct it.
+    const merged = mergeManifests(
+      manifest([{ path: VIDEO, cid: "bafy1", size: 10, sha256: null, modified_at: "2026-01-01T00:00:00Z", pinned_by: [] }]),
+      manifest([{ path: VIDEO, cid: "bafy1", size: 10, sha256: null, modified_at: "2026-01-01T00:00:00Z", pinned_by: [LAPTOP, TOWER] }]),
+      LAPTOP,
+    );
+    expect(merged.files[0]!.pinned_by).toEqual([TOWER]);
+  });
+
+  it("drops the self-claim on an entry this computer has never seen, and keeps every peer's", () => {
+    const merged = mergeManifests(
+      manifest([]),
+      manifest([{ path: VIDEO, cid: "bafy1", size: 10, sha256: null, modified_at: "2026-01-01T00:00:00Z", pinned_by: [LAPTOP, TOWER] }]),
+      LAPTOP,
+    );
+    expect(merged.files[0]!.pinned_by).toEqual([TOWER]);
+  });
+
+  it("keeps OUR OWN claim when it is local — the pin pass derived it from the real pinset", () => {
+    // The strip is about the WIRE only. A claim the pin pass wrote here must survive a merge, or every
+    // reconcile would erase this computer from its own manifest.
+    const merged = mergeManifests(
+      manifest([{ path: VIDEO, cid: "bafy1", size: 10, sha256: null, modified_at: "2026-01-01T00:00:00Z", pinned_by: [LAPTOP] }]),
+      manifest([{ path: VIDEO, cid: "bafy1", size: 10, sha256: null, modified_at: "2026-01-01T00:00:00Z", pinned_by: [TOWER] }]),
+      LAPTOP,
+    );
+    expect(merged.files[0]!.pinned_by).toEqual([LAPTOP, TOWER].sort());
   });
 
   it("is order-independent and stable — merging both ways yields the same set", () => {

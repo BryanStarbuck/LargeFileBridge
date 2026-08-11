@@ -14,6 +14,9 @@ import YAML from "yaml";
 import { RepoStorageDocSchema, type Manifest, type ManifestFile } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
 import { repoUidFor } from "./repo-identity.js";
+// THIS computer's device label — the identity a manifest's `pinned_by` is keyed by. Both directions of
+// the mirror hand it to `mergeManifests` so an arriving claim about US is never adopted (ipfs.mdx §1.1).
+import { computerLabel } from "../store-model/config.service.js";
 // The per-entry merge lives in a LEAF module so units.service can fold both manifests on the read path
 // without dragging this service (and its storage.service dependency) into an import cycle.
 import { mergeManifests, serializeManifest } from "./manifest-merge.js";
@@ -187,7 +190,14 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     if (priorMirrorManifest.files.length > 0) {
       try {
         const localManifest = readManifestBestEffort(path.join(repoStateDir(repoRoot), "manifest.yaml"), "repo");
-        fs.writeFileSync(mirrorManifestFile, serializeManifest(mergeManifests(localManifest, priorMirrorManifest)), "utf8");
+        // The PRIOR MIRROR IS THE WIRE, so our own label is stripped from it here too. Without this the
+        // union hands us back the very self-claim we may have just dropped locally, and no correction to
+        // this computer's own claim could ever be published — it would be re-adopted on the way out.
+        fs.writeFileSync(
+          mirrorManifestFile,
+          serializeManifest(mergeManifests(localManifest, priorMirrorManifest, computerLabel())),
+          "utf8",
+        );
       } catch (e) {
         log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
       }
@@ -330,6 +340,7 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
       const merged = mergeManifests(
         readManifestBestEffort(localPath, "repo"),
         readManifestBestEffort(incomingManifest, "repo"),
+        computerLabel(),
       );
       // The CANONICAL serializer, not a bare stringify: this file is also written by manifest.service, and
       // two spellings of one document make each writer re-dirty what the other just wrote (§6).

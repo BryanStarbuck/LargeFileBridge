@@ -446,9 +446,26 @@ Local Storage therefore **merges per file entry** and never overwrites the local
 * **Union `pinned_by`.** The two computers' pin claims are **added together**, never replaced. A
   last-writer copy would erase the Tower's claim on the laptop and with it the entire "a peer has this"
   signal — the exact signal this use case is built on.
-* **Conflicting CID for the same path** resolves by the newer `modified_at`; ties keep the local value.
-* **This computer's own claim is re-derived from its real pinset**, never from what arrived
+* **Conflicting CID for the same path** resolves by the newer `modified_at`. At the **same** `modified_at`
+  it resolves to the **lexicographically smaller CID** — a total order on the value, so BOTH computers pick
+  the same winner and the next merge is a no-op. "Ties keep local" is symmetric and therefore not a
+  tie-break at all: each computer kept its own value and stamped it over the other's on the next mirror,
+  producing a commit per pass forever (charlie-kirk's mirror, 2026-08-10: 14 consecutive backbone commits
+  alternating `Qm…` / `bafk…` every ~20 minutes, none carrying new information). The winning side supplies
+  the whole `(cid, size)` pair, so `size` cannot ping-pong on its own.
+  Merge rules and the tie-break in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` —
+  `mergeManifests()`.
+* **This computer's own claim is never adopted from the wire**, only derived from its real pinset
   ([ipfs.mdx](./ipfs.mdx)): a peer's manifest cannot make this machine believe it holds bytes it does not.
+  This is **enforced at the merge** — the caller passes this computer's device label and an arriving
+  `pinned_by` naming us is dropped before the union. Relying on the pin pass to re-derive it afterwards was
+  not enough: it holds only for units the pin pass visits, and a repo with `pinned: false` runs the receive
+  half every pass and `runUnitPin` never
+  ([pin_process.mdx §5](./pin_process.mdx#5-what-a-pass-does-per-unit--and-what-the-opt-in-gates)).
+  Self-label passed at both wire boundaries in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` —
+  `reconcileFromSyncRepo()` and `mirrorToSyncRepo()`.
 * **Reconcile runs on every backbone pull** for the SDL, not on demand. A merge that only happens when
   someone clicks something is a merge that does not happen.
 
