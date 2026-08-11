@@ -346,13 +346,32 @@ must converge **without a human ever resolving a conflict**. The design that gua
    determinism), every teammate computes the **same** current decisions from the **same** merged log. No
    central server, no coordination.
 
-4. **Compaction (bounded growth).** An append log grows. On a full pin pass, the **owning device**
-   ([devices.mdx](./devices.mdx) — the same self-owned-file trust rule) may **compact**: fold to current
-   state and rewrite the log as one event per live `path`, dropping superseded events, preserving each
-   surviving record's original `decided_by`/`decided_at`. Compaction is a semantic no-op (the folded state
-   is unchanged) and is itself just another commit that union-merges. A short retention window (default
-   the last **10** superseded events per file, or 90 days, whichever is larger) keeps recent history for
-   the audit trail (§11) before it is dropped.
+4. **Compaction (bounded growth) — at the merge leaf, by every writer, not by an owner.** An append log
+   grows, and a union-merged one has no other way to lose a line: whatever a buggy writer appends is
+   permanent. The fix therefore cannot be an *owner* rewriting the log on a full pass — that is a
+   **subtraction**, the exact class of defect point 6 closes. A teammate who has not compacted re-adds
+   every dropped event at the next union, and a "one event per live `path`" rewrite deletes events other
+   computers still hold and may not have folded yet.
+
+   What is safe is a rule that is a **pure function of the merged set**, applied by **every** writer at the
+   one place the document is serialized. It collapses **re-stamps** — an event identical to another for the
+   same file on every recorded field except *when* it was recorded — keeping the **first** and the **last**
+   statement of each unchanged decision. Being a pure function of the set makes it idempotent and
+   **order-independent**, so two computers land on the same bytes and the merge after it is a no-op;
+   because it never drops a group's latest event, the fold's answer is unchanged **by construction**; and
+   because it only ever collapses events that say the *same thing*, it can never remove a decision anyone
+   made. Every **change** of decision survives forever, so §11's audit trail is intact and no retention
+   window is needed.
+
+   This is what the growth looks like when nothing collapses re-stamps. The Windows-separator mismatch in
+   §13's backfill guard re-appended an unchanged "migrated" decision on **every** reconcile: measured on the
+   live company sync repo on 2026-08-11, **21,142 events for 2,059 distinct files** — one file re-stamped
+   **1,585 times in two days** — a **4.8 MB, 172k-line** document every teammate's computer parses on every
+   decision. Compaction returns it to **596 KB / 2,265 events**, and the same rule run over charlie-kirk's
+   ledger — whose history is real — removes **46 of 3,306** events. It is surgical, not lossy.
+
+   Collapsing re-stamps at the single shared serialization of the ledger is handled in code:
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `compactLedger()`, applied in `serializeLedger()` (the one spelling used by `decisions.service.ts` — `writeLedger()` and by both mirror directions).
 
 5. **Provenance is preserved, not overwritten.** Last-writer-wins changes the *current* decision but the
    log still shows the earlier events until compaction — so "who decided what, when" is auditable. If Bob
@@ -372,8 +391,8 @@ must converge **without a human ever resolving a conflict**. The design that gua
    The event-identity union crossing the mirror boundary in both directions is handled in code:
    `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `unionLedgerEvents()`, applied in `tracking-sync.service.ts` — `mirrorToSyncRepo()` (write) and `reconcileFromSyncRepo()` (read).
 
-Folding the merged event log to current per-file state (latest `decided_at` per `path`, `decided_by` tiebreak) and compacting on a full pass is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()` and `compactLedger(repoRoot)` (compaction called from the pin pass in `pin.service.ts`).
+Folding the merged event log to current per-file state (latest `decided_at` per `path`, `decided_by` tiebreak) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()`.
 
 ---
 

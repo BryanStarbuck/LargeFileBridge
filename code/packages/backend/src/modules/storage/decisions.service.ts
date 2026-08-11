@@ -29,6 +29,7 @@ import {
 import { readStorageIndex } from "./tracking.service.js";
 import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { mirrorToSyncRepo } from "./tracking-sync.service.js";
+import { serializeLedger } from "./ledger-merge.js";
 import { storageSid } from "./storage.service.js";
 import { readStorageSettings } from "./storage-settings.service.js";
 import { applyGitIgnore, unignorePaths } from "../git/gitignore.service.js";
@@ -186,14 +187,9 @@ function writeLedger(repoRoot: string, events: DecisionEvent[]): void {
   } catch {
     /* best effort */
   }
-  const sorted = [...events].sort(
-    (a, b) =>
-      a.decided_at.localeCompare(b.decided_at) ||
-      a.sid.localeCompare(b.sid) ||
-      a.path.localeCompare(b.path) ||
-      (a.decided_by ?? "").localeCompare(b.decided_by ?? ""),
-  );
-  const body = YAML.stringify({ schema_version: 1, events: sorted });
+  // ONE spelling of this document, shared with the mirror and the reconcile (ledger-merge.ts): sorted,
+  // deduped and COMPACTED. Two writers stringifying the same log their own way is churn by construction.
+  const body = serializeLedger(events);
   const file = ledgerPath(repoRoot);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {

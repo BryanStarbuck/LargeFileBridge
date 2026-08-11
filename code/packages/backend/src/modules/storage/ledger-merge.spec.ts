@@ -5,7 +5,7 @@
 // unable to ever reach the user's other computers.
 import { describe, it, expect } from "vitest";
 import type { DecisionEvent } from "@lfb/shared";
-import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
+import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger, compactLedger } from "./ledger-merge.js";
 
 function ev(path: string, decidedAt: string, over: Partial<DecisionEvent> = {}): DecisionEvent {
   return {
@@ -57,5 +57,58 @@ describe("parseLedgerBestEffort", () => {
   it("round-trips through serializeLedger", () => {
     const events = [ev("videos/a.mp4", "2026-07-20T19:09:03.446Z")];
     expect(parseLedgerBestEffort(serializeLedger(events))).toEqual(events);
+  });
+});
+
+// COMPACTION — the ledger is append-only and union-merged, so a writer that re-appends an unchanged
+// decision every pass grows it without bound and nothing can ever shrink it again. That is what the
+// Windows-separator mismatch in `reconcile` did: 21,142 events for 2,059 files on the live company repo,
+// 5 MB parsed on every decision, one file re-stamped 1,585 times in two days.
+describe("compactLedger", () => {
+  const restamps = (n: number): DecisionEvent[] =>
+    Array.from({ length: n }, (_, i) => ev("videos/a.mp4", `2026-08-04T0${i}:00:00.000Z`, { decided_by: "migrated" }));
+
+  it("keeps the FIRST and LAST statement of an unchanged decision and drops the middle", () => {
+    const kept = compactLedger(restamps(5));
+    expect(kept.map((e) => e.decided_at)).toEqual(["2026-08-04T00:00:00.000Z", "2026-08-04T04:00:00.000Z"]);
+  });
+
+  it("never changes what `foldLedger` answers — the latest event of every group survives", () => {
+    const events = [...restamps(5), ev("videos/a.mp4", "2026-08-05T00:00:00.000Z", { ipfs: false })];
+    const kept = compactLedger(events);
+    const latest = [...kept].sort((a, b) => b.decided_at.localeCompare(a.decided_at))[0]!;
+    expect(latest.decided_at).toBe("2026-08-05T00:00:00.000Z");
+    expect(latest.ipfs).toBe(false);
+  });
+
+  it("keeps every CHANGE of decision, however many times each was re-stamped", () => {
+    const kept = compactLedger([
+      ...restamps(4),
+      ev("videos/a.mp4", "2026-08-04T05:00:00.000Z", { ipfs: false, decided_by: "u_a" }),
+      ev("videos/a.mp4", "2026-08-04T06:00:00.000Z", { gitignore: true, decided_by: "u_a" }),
+    ]);
+    expect(kept).toHaveLength(4);
+    expect(kept.filter((e) => !e.ipfs)).toHaveLength(1);
+    expect(kept.filter((e) => e.gitignore)).toHaveLength(1);
+  });
+
+  it("collapses a Windows peer's re-stamp against this computer's — the fold's own path normalization", () => {
+    // Two spellings of ONE file is exactly how the defect doubled: `jfk\\training\\…` from a Windows
+    // teammate never matched `jfk/training/…` here, so both lines lived on forever.
+    const kept = compactLedger([
+      ev("jfk\\training\\a.mp4", "2026-08-04T00:00:00.000Z", { decided_by: "migrated" }),
+      ev("jfk/training/a.mp4", "2026-08-04T01:00:00.000Z", { decided_by: "migrated" }),
+      ev("jfk\\training\\a.mp4", "2026-08-04T02:00:00.000Z", { decided_by: "migrated" }),
+    ]);
+    expect(kept).toHaveLength(2);
+  });
+
+  it("is IDEMPOTENT and order-independent, so two computers converge instead of ping-ponging", () => {
+    const events = [...restamps(6), ev("videos/b.mp4", "2026-08-04T09:00:00.000Z")];
+    const once = serializeLedger(events);
+    expect(serializeLedger(parseLedgerBestEffort(once))).toBe(once);
+    expect(serializeLedger([...events].reverse())).toBe(once);
+    // And the union of a compacted copy with an UNCOMPACTED peer's still lands on that one answer.
+    expect(serializeLedger(unionLedgerEvents(parseLedgerBestEffort(once), events))).toBe(once);
   });
 });
