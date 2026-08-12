@@ -224,7 +224,9 @@ export function ProcessingItemsTable({
       cell: (it) => {
         const dir = dirname(it.path);
         return (
-          <span className="flex min-w-0 flex-col">
+          // Both lines are cut on a narrow column, and between them they ARE the file's identity — the
+          // tooltip carries the whole path so the row never becomes ambiguous.
+          <span className="flex min-w-0 flex-col" title={it.path}>
             <span className="truncate font-medium text-black">{basename(it.path)}</span>
             {dir && <span className="truncate text-xs text-black/40">{dir}</span>}
           </span>
@@ -363,7 +365,10 @@ export function ProcessingItemsTable({
         // ai.studio, then Resume") and read in amber; only a real failure is red (to_fix.mdx §7.3).
         const tone = it.state === "halted" ? "var(--lfb-warn)" : "var(--lfb-bad)";
         return (
-          <span className="flex min-w-0 flex-col">
+          // The reason is the provider's ACTIONABLE prose ("gemini credits are depleted — top up at
+          // ai.studio, then Resume"), and the actionable half is the half that gets cut. It must be
+          // readable in full without leaving the page.
+          <span className="flex min-w-0 flex-col" title={[it.reason, covered].filter(Boolean).join(" · ")}>
             <span className="truncate" style={{ color: tone }}>
               {it.reason}
             </span>

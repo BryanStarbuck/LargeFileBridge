@@ -57,7 +57,9 @@ export function ProcessingBatchesTable({ batches, onStop }: { batches: Processin
       cell: (b) => (
         <span className="flex min-w-0 items-center gap-2">
           <StateIcon b={b} />
-          <span className="truncate font-medium text-black">{b.label}</span>
+          <span className="truncate font-medium text-black" title={b.label}>
+            {b.label}
+          </span>
         </span>
       ),
     },

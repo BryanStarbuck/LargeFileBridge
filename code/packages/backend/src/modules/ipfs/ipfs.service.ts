@@ -251,7 +251,10 @@ export async function addFile(absPath: string, opts: { onBytes?: (bytes: number)
  * `files/stat` reads the root block, moves no file bytes. Best-effort: an unresolvable CID yields null so
  * callers fall through to their normal error path instead of inventing a verdict.
  */
-async function dagNodeType(cid: string): Promise<"file" | "directory" | null> {
+/** `file` | `directory` | null when the node's type cannot be established (offline, unreadable, timeout).
+ *  Exported because "is this recorded CID actually a FILE" is a question the reconciler has to ask before it
+ *  can decide whether a CID is merely differently-encoded or plain wrong (§5.1 Layer 0). */
+export async function dagNodeType(cid: string): Promise<"file" | "directory" | null> {
   try {
     const res = await rpc("files/stat", { args: [`/ipfs/${cid}`] });
     const json = (await res.json()) as { Type?: string };

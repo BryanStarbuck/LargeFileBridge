@@ -12,6 +12,9 @@
 import { RefreshCw } from "lucide-react";
 import type { ProgressJob } from "@lfb/shared";
 import { useProgress, verb } from "../progress/progress-context.js";
+// The card's text rules — which piece truncates and which never does — live as pure functions so they can
+// be tested without a DOM (cardText.ts).
+import { metricText, cardTooltip } from "../progress/cardText.js";
 import { leftBar } from "../config/left_bar.js";
 // The dock is mounted OUTSIDE <RouterProvider> (main.tsx renders it as a sibling so it overlays every
 // screen), so router HOOKS are off-limits here — useNavigate() fired "useRouter must be used inside a
@@ -26,22 +29,17 @@ const DOCK_LEFT = `calc(${leftBar.sidebarWidth} + 16px)`;
 // "+ N more running" summary line (processing.mdx §3) so a mass compress-inside run never walls the screen.
 const MAX_DOCK_CARDS = 3;
 
-function detail(job: ProgressJob): string | null {
-  if (job.total === undefined || job.done === undefined) return null;
-  const unit = job.unit ?? "";
-  if (unit === "%") return `${Math.round(job.done)}%`;
-  if (unit === "MB" || unit === "GB") return `${job.done} / ${job.total} ${unit}`;
-  return `${job.done.toLocaleString()} / ${job.total.toLocaleString()} ${unit}`.trim();
-}
-
 function Card({ job }: { job: ProgressJob }) {
   const determinate = job.total !== undefined && job.done !== undefined && job.total > 0;
   const pct = determinate ? Math.min(100, Math.round((job.done! / job.total!) * 100)) : 0;
-  const line = detail(job);
+  const line = metricText(job);
   return (
     <div
       className="min-w-[260px] max-w-[360px] rounded-lg border bg-white/95 px-3 py-2 shadow-[var(--lfb-shadow-md)] backdrop-blur"
       style={{ borderColor: "var(--lfb-border)" }}
+      // Hovering anywhere on the card reads back everything it shows, untruncated. The child titles below
+      // are more specific and win when the pointer is over them.
+      title={cardTooltip(job)}
       role={determinate ? "progressbar" : undefined}
       aria-valuenow={determinate ? pct : undefined}
       aria-valuemin={determinate ? 0 : undefined}
@@ -49,9 +47,17 @@ function Card({ job }: { job: ProgressJob }) {
     >
       <div className="flex items-center gap-2 text-sm">
         <RefreshCw className="h-4 w-4 shrink-0 animate-spin text-[var(--lfb-primary)]" aria-hidden />
-        <span className="text-black/60">{verb(job.kind)}</span>
-        <span className="min-w-0 flex-1 truncate font-medium text-black">{job.target}</span>
-        {line && <span className="shrink-0 text-xs text-black/50">{line}</span>}
+        <span className="shrink-0 whitespace-nowrap text-black/60">{verb(job.kind)}</span>
+        {/* The ONLY element that gives way. `min-w-0` is what lets it shrink below its content inside a
+            flex row at all, and the tooltip is where the full name stays readable. */}
+        <span className="min-w-0 flex-1 truncate font-medium text-black" title={job.target}>
+          {job.target}
+        </span>
+        {line && (
+          <span className="shrink-0 whitespace-nowrap text-xs tabular-nums text-black/50" title={line}>
+            {line}
+          </span>
+        )}
       </div>
       {determinate && (
         <div className="mt-1.5 h-1 w-full overflow-hidden rounded-full bg-[var(--lfb-surface-sunken)]">
@@ -64,7 +70,11 @@ function Card({ job }: { job: ProgressJob }) {
       {/* THE PHASE LINE (webapp.mdx §10.2). "Pinning all" + a spinner cannot tell a pass that is reconciling
           a ledger from one that has wedged; this line says which step is running and, inside a big file, how
           far its bytes have got. Truncated to one line so the card keeps its short shape. */}
-      {job.note && <div className="mt-1 truncate text-xs text-black/45">{job.note}</div>}
+      {job.note && (
+        <div className="mt-1 truncate text-xs text-black/45" title={job.note}>
+          {job.note}
+        </div>
+      )}
     </div>
   );
 }

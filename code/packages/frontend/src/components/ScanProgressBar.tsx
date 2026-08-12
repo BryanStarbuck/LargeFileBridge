@@ -62,9 +62,13 @@ export function ScanProgressBar() {
           )}
           <div className="min-w-0 flex-1">
             <div className="flex items-center justify-between gap-2 text-sm">
-              <span className="truncate font-medium text-black">{label(job)}</span>
+              <span className="truncate font-medium text-black" title={label(job)}>
+                {label(job)}
+              </span>
               {running && job.phase !== "discovering" && (
-                <span className="shrink-0 tabular-nums text-black/50">
+                // Never shortened, never wrapped — the count is the answer to "is this moving"; the label
+                // beside it is what gives way, and its tooltip is where the full text stays readable.
+                <span className="shrink-0 whitespace-nowrap tabular-nums text-black/50">
                   {job.reposDone} / {job.reposTotal}
                 </span>
               )}

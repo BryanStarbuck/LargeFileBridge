@@ -32,6 +32,7 @@ import { startScan, getScanJob, maybeTriggerStaleScan } from "../scanner/scan-jo
 import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing, ORPHAN_GRACE_MS } from "../pin/pin.service.js";
 import { pinsetHasContent } from "../pin/cid-equivalence.service.js";
 import { schedulePullRetry } from "../pin/pull-retry.service.js";
+import { reconcileRepo, reconcilerRunning } from "../pin/reconciler.service.js";
 import {
   recordDecision,
   readDecisionPolicy,
@@ -876,6 +877,26 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
     res.json({ ok: true, data: detail });
   } catch (e) {
     log.error("repos", `${folder}: pull failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: (e as Error).message });
+  }
+});
+
+// POST /api/repos/:repoId/reconcile — run the manifest ⇄ pinset ⇄ working-tree repair for THIS repo now,
+// instead of waiting for the 6-hourly background pass (reconciler.service.ts `reconcileRepo`). Returns the
+// refreshed detail, so the metric tiles show the corrected numbers without a second round trip.
+reposRouter.post("/:repoId/reconcile", async (req, res) => {
+  const folder = folderForRepoId(req.params.repoId);
+  if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
+  if (reconcilerRunning()) {
+    return res.status(409).json({ ok: false, error: "A check is already running — it will finish shortly." });
+  }
+  try {
+    const counts = await reconcileRepo(folder);
+    const detail: RepoDetail = await repoDetailWithPins(folder);
+    detail.missingPinned = await missingPinnedSafe(repoRootFor(folder));
+    res.json({ ok: true, data: { counts, detail } });
+  } catch (e) {
+    log.error("repos", `${folder}: reconcile failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: (e as Error).message });
   }
 });

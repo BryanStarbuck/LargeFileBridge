@@ -344,6 +344,111 @@ Turning a fetching pin's DAG-node stream into the byte reading that line shows i
 
 ---
 
+## 6b. The reconciler — the three records must AGREE, and one pass owns saying so
+
+A tracked file is described in three independent places, and until this pass existed nothing compared them
+as a set:
+
+1. the **manifest's `pinned_by`** — which computers claim to hold the bytes;
+2. the **IPFS pinset** — what this node actually holds;
+3. the **working tree** — what is actually on disk.
+
+Each existing pass tends one edge of that triangle and only for the units it visits, so a file could sit
+indefinitely in a state every downstream surface then reported as fact — `Pull down`, the three-state pin
+icon, and `Not backed up` all read these records and cannot tell a stale one from a true one. The observed
+shapes: a claim on bytes this computer no longer held (so a teammate was told a second copy existed), a file
+sitting on disk the node had never pinned (so it was NOT a second copy and no peer could fetch it), and a
+recorded CID that is a wrapper **directory** rather than a file (§5.1 Layer 0) — which no computer in the
+fleet can ever `cat`, so the file is unreachable for everyone until someone who holds the bytes re-adds it.
+
+**It validates RECORDS; it does not move bytes.** Nothing here adds a file to IPFS, fetches one, or writes
+one back to the working tree. Those already have owners — `runUnitPin`'s add/fetch-missing (§5), the
+pull-retry pass (warnings.mdx §10.8.12 C.3) and auto-sync-in (storage_company.mdx §14.3) — and a second
+mover would race them for the same files under a different set of rules. The one outward call it makes is
+`ipfs add --only-hash`, which computes what a local file's CID *would* be without storing a block or
+creating a pin: a read, used to recognise bytes we already hold under a CID no string comparison can reach.
+A disagreement it cannot settle by editing a record is therefore **reported**, not acted on.
+
+**What it checks, per manifest entry.** Deciding the verdict from `onDisk` × `heldHere` × `claimed` and
+correcting the record is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` — function
+`reconcileEntry()`; the per-repo pass that folds both manifests, writes them back and bumps the repo's
+topics is `reconcileRepo()` / `reconcileRepoInner()` in the same file.
+
+| Situation | What the record must say | Action |
+|---|---|---|
+| we claim it, the pinset does not hold it | not ours | drop **our** claim |
+| the pinset holds it, we never claimed it | ours | add our claim |
+| our dropped claim was the last one, and no copy is on disk | nothing at all | remove the entry |
+| on disk, looks unpinned, recorded CID is a **file** | maybe pinned under another add profile | `--only-hash` probe; a hit is recorded as a CID **equivalence** |
+| on disk, looks unpinned, recorded CID is a **directory** | the CID of the bytes we actually hold | replace the recorded CID — see below |
+| recorded CID is a **directory**, unwrappable, not on disk | the file inside it | replace the recorded CID |
+| recorded CID is a **directory**, interior gone | unknown — do not guess | report: it needs re-adding where the bytes are |
+
+**Equivalence or replacement is decided by which record is wrong.** A differing FILE CID is a legitimate
+second add profile: the fleet's record stays exactly as the fleet wrote it and the pair is remembered
+locally (§5.1 Layer 3). A DIRECTORY CID is not a spelling of the file at all — nobody can `cat` it — so an
+equivalence there would repair only the machine that computed it while every peer kept a CID it can never
+use. On the one computer that still holds the bytes, **replacing** the recorded CID is the single repair
+that travels to the others, and it is the only way a wrapper-CID file becomes pullable again once the
+original wrapper's interior nodes have been collected.
+
+`pinned_by` means "these bytes are pinned on this computer" and nothing else — not "the file is here", not
+"we intend to". A claim we cannot back tells a teammate a second copy exists when it does not; a pin we hold
+but never claimed tells them the opposite. This is the rule `runUnitPin` already applies to the units it
+visits, extended to every unit and enforced in **both** directions.
+
+**The other record on a repo.** The machine-local frozen `decisions:` enum is a projection of the shared
+ledger, and every read path trusts the projection rather than re-folding it, so drift there is the same
+class of defect as a stale pin claim. The pass re-projects rather than re-deriving its own answer.
+Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
+`reconcile()`, called per repo from `reconcileRepoInner()`.
+
+**Two invariants outrank "make the records agree", and the pass yields to both.**
+
+* **A peer's claim is not ours to edit.** We can verify exactly one computer's bytes — this one. Every write
+  touches our own label only, and an entry disappears only when the last claim on it was ours and we just
+  disproved it. Union merge makes that safe: a peer that still holds the file re-contributes the entry on
+  its next mirror, which is precisely the confirmation we lacked.
+* **A delete must still mean something** (decisions.mdx §12). "Pinned here but not on disk" is also the
+  signature of a user deleting a synced file. This is the sharpest reason the pass writes no bytes: putting
+  that file back from our own pin is exactly the surprise re-pinning §12 forbids. `orphans.service.ts` owns
+  that judgement and its grace period, and the reconciler neither restores the file nor pre-empts the
+  verdict — it only records that we do, in fact, still hold the bytes.
+
+**A pass that cannot see does nothing.** An unreachable node answers "unknown", never "nothing is pinned"
+(§5.1). Read as empty, every rule above fires the wrong way at once and a single pass could strip a repo's
+whole manifest, so the pass declines to run instead of guessing. Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinnedCidSet()`
+returning `null`, checked at the top of `reconcileRepoInner()`.
+
+**Concurrency and cost.** It takes the SAME per-repo unit lock the pin pass takes — both write the manifest
+wholesale from a snapshot taken at entry, so running them together would silently drop the loser's repairs
+(`unit-lock.ts`). Entries are checked serially, so at most one probe is ever in flight and no second
+concurrency budget exists beside §4's. Probes are capped per repo per pass (`LFB_RECONCILE_CID_PROBES`,
+default 25): an `--only-hash` re-hash reads the whole file, and a wrapper unwrap is a network round trip
+that re-proves the same thing.
+
+**Scheduling — periodic, in-process, nothing to install.** Every 6 hours (`LFB_RECONCILE_MS`), first run no
+sooner than 5 minutes after boot (`LFB_RECONCILE_BOOT_MS`) because the daemon it interrogates is usually
+still coming up. There is no launchd/schtasks/systemd job and nothing for the user to enable — it is a
+re-arming timer inside the running server, armed once at boot. The due time is persisted for the reason
+pull-retry persists its own: a restart must RESUME the remaining wait, not reset it, or a long-interval pass
+never runs on a machine that restarts often. Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` —
+`startReconciler()` and `nextReconcileDelayMs()`; armed from `code/packages/backend/src/main.ts`.
+
+**Asking for it now.** A user who does not want to wait for the next tick can run one repo's repair on
+demand; the response carries the refreshed detail so the metric tiles show corrected numbers without a
+second round trip. Implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+`POST /api/repos/:repoId/reconcile`.
+
+Locked tests: `code/packages/backend/src/modules/pin/reconciler.spec.ts`.
+
+---
+
 ## 7. Acceptance criteria
 
 1. **Every repo is known automatically** with no user action; the pass **visits and reconciles every
@@ -384,6 +489,10 @@ Turning a fetching pin's DAG-node stream into the byte reading that line shows i
   (§5) Opt-in gates add/pin/fetch; a manual Pin now IS the opt-in. Device write-back rides the git
        backbone (pinStorageUnit) and is NOT gated by `pinned`.
   (§6) Never a silent no-op — report truthfully with counts (the real defect this spec learned from).
+  (§6b) The reconciler VALIDATES RECORDS ONLY — manifest claims + the frozen decisions enum against the
+       real pinset and the working tree. It moves no bytes (no add, no fetch, no write-back: §5, pull-retry
+       and auto-sync-in own those) and edits our own claim only, never a peer's. In-process 6-hourly timer
+       (reconciler.service.ts startReconciler/reconcileRepo), no OS job to install.
   storage_local.mdx §13, scan.mdx, one_repo.mdx §3, and sync_list.mdx §5 reference THIS file for the process
   and must not redefine it. Keep code pointers (pin.service.ts pinAll/runPool/pinRepoFolder,
   repos.router POST /:repoId/pin) accurate.

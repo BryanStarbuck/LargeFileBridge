@@ -46,6 +46,7 @@ import { syncBackboneOnBoot } from "./modules/storage/backbone-freshness.service
 import { startWatchdog } from "./modules/schedule/watchdog.service.js";
 import { schedulePullRetryIfPending } from "./modules/pin/pull-retry.service.js";
 import { startAutoSyncIn } from "./modules/pin/auto-sync-in.service.js";
+import { startReconciler } from "./modules/pin/reconciler.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
 import { resolveStateDir } from "./config/state-dir.js";
@@ -126,6 +127,13 @@ async function bootstrapState(): Promise<void> {
   // Arm the hourly auto-sync-in timer (storage_company.mdx §14.3): companies with the machine-local
   // auto_sync_in radio ON automatically pull down teammates' pinned+decided files. The timer always runs;
   // a run with the setting off everywhere is a no-op list filter, so idle cost is effectively zero.
+  // Arm the 6-hourly reconciler: manifest claims vs the real pinset vs the working tree, repaired where
+  // they disagree. In-process and self-arming — nothing to install (reconciler.service.ts).
+  try {
+    startReconciler();
+  } catch (e) {
+    log.warn("main", `reconciler failed to start: ${(e as Error).message}`);
+  }
   try {
     startAutoSyncIn();
   } catch (e) {

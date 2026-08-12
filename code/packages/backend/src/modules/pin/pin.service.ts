@@ -1184,7 +1184,7 @@ export async function pinAll(opts: { priorityDone?: string } = {}): Promise<void
  * Set whether THIS computer claims to pin `entry.cid`, matching the real pinset (storage.mdx §9.5).
  * Only ever touches this computer's own label — peer claims are not ours to verify or edit.
  */
-function setPinClaim(entry: ManifestFile, label: string, pinned: boolean): void {
+export function setPinClaim(entry: ManifestFile, label: string, pinned: boolean): void {
   const has = entry.pinned_by.includes(label);
   if (pinned && !has) entry.pinned_by.push(label);
   else if (!pinned && has) entry.pinned_by = entry.pinned_by.filter((c) => c !== label);
@@ -1280,7 +1280,7 @@ function markUnitError(t: UnitTarget, msg: string): void {
  * as 'nothing is pinned'"). It just aborts the pass. The read path cannot abort, so it says NULL and each
  * caller decides — which is also what files-query.service.ts does with its `undefined` pinset.
  */
-async function pinnedCidSet(): Promise<Set<string> | null> {
+export async function pinnedCidSet(): Promise<Set<string> | null> {
   try {
     // CANONICAL keys (knowledge/ipfs.mdx §5.1) so a same-block pin in another base is not read as "missing"
     // and needlessly re-pulled. Callers MUST test membership as `pinset.has(ipfs.canonicalCid(cid))`.
