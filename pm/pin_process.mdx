@@ -199,6 +199,45 @@ per-file add/pin/fetch work — is implemented in code:
 
 ---
 
+## 4a. One file, one transfer — the four pull entry points (LOCKED, learned from a defect)
+
+A pin pass holds the repo **unit lock** (§2), so two passes never overlap on one repo. A **pull** holds
+nothing, and it has **four** entry points that all reach the same repo:
+
+* the repo page's **Pull down** button (`POST /:repoId/pull`);
+* the **To Do** apply (`todo.router.ts`, fire-and-forget);
+* **auto-sync-in**, hourly ([storage_company.mdx §14.3](./storage_company.mdx));
+* **pull-retry**, 3-hourly ([warnings.mdx §10.8.12 C.3](./warnings.mdx)).
+
+Two of them landing on one repo is **ordinary, not exotic** — a person clicks Pull down and the sweep that
+has been re-arming for hours fires underneath it. Observed on `charlie-kirk`: **two dock cards pulling the
+same 3.0 GB video**, one reading ≈2.3 GB and the other ≈2.2 GB. Each ran its own DAG walk and its own full
+write to disk, and between them they held **two of the eight** transfer slots (§4) for bytes that only have
+to arrive once — so the rest of the batch waited on duplicated work.
+
+**A whole-pass lock is the wrong fix.** Serializing pulls the way §2 serializes pin passes would park the
+user's click behind a three-hour background sweep, with a spinner and no explanation. The rules are:
+
+* **Dedupe per FILE, not per pass.** The second caller for a file **joins** the first one's transfer and
+  reports its outcome as its own — so every card still answers for every file it was asked about, its
+  bar still reaches its total, and a failure carries the real reason rather than a fresh guess. The
+  waiter does **not** hold a transfer slot.
+* **A pull never blocks a pull.** Different files in the same repo keep running concurrently.
+* **The background sweeps stand down; user actions never do.** auto-sync-in and pull-retry skip a repo
+  that is already being pulled — a second pass would only re-derive the same list and paint a second
+  card. Neither advances its cursor past the repo it skipped, so the next cycle finishes the job.
+* **A pull writes back only what it CORRECTED.** Healed wrapper-directory CIDs are applied by
+  **re-reading** the manifest and setting those paths — never by writing back the whole snapshot the pass
+  opened with, which for an hours-long pull silently drops every entry a pin pass, the reconciler (§6b) or
+  another pull wrote meanwhile. That short read-modify-write is the one moment a pull takes the unit lock.
+
+*Implemented in:*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `fetchesInFlight` +
+`inFlightKey` (per-file single flight), `repoPullInFlight(repoRoot)` (what the sweeps ask), and the
+`healedCids` re-read at the end of `pullMissingInner`.
+
+---
+
 ## 5. What a pass does per unit — and what the opt-in gates
 
 For **every** known unit the pass visits, it always **reconciles** (no opt-in required):

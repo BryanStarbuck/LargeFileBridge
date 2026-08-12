@@ -19,7 +19,7 @@ import {
 } from "../storage/storage-settings.service.js";
 import { GitBackbone, openRepo } from "../git/git.service.js";
 import { getRepoConfig } from "../store-model/units.service.js";
-import { missingPinnedFromPeers, pullMissing, syncStorageText } from "./pin.service.js";
+import { missingPinnedFromPeers, pullMissing, repoPullInFlight, syncStorageText } from "./pin.service.js";
 import { schedulePullRetry } from "./pull-retry.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { track } from "../progress/progress.registry.js";
@@ -127,8 +127,17 @@ export async function runAutoSyncIn(
           // Step 4: teammates checked something in — pull the qualifying set per owned repo.
           let failedHere = 0;
           let pulledHere = 0;
+          let deferredHere = 0; // repos left to a pull already in progress — see repoPullInFlight below
           for (const { folder, repoRoot } of getOwnedRepoFolders(storageId)) {
             try {
+              if (repoPullInFlight(repoRoot)) {
+                // A pull is already moving this repo's files — the user's, or the 3-hourly retry. Starting a
+                // second pass would re-derive the same list and paint a second card for one transfer
+                // (pin.service.ts `fetchesInFlight`). The cursor stays put, so next hour finishes the job.
+                log.info("pin", `auto-sync-in: ${folder} is already being pulled — leaving it to that run`);
+                deferredHere++;
+                continue;
+              }
               note.detail(storageId, `checking ${folder} for files to pull`);
               const missing = await missingPinnedFromPeers(repoRoot);
               const pending = decidedSync(folder, missing.map((m) => m.path));
@@ -156,11 +165,15 @@ export async function runAutoSyncIn(
           // Step 5: advance the cursor ONLY on a clean run; a failure leaves it and arms pull-retry.
           totalPulled += pulledHere;
           totalFailed += failedHere;
-          if (failedHere === 0) {
-            await writeAutoSyncCursor(storageId, head);
-          } else {
+          if (failedHere > 0) {
             await writeAutoSyncCursor(storageId, null);
             schedulePullRetry(`auto-sync-in: ${failedHere} file(s) did not land for company ${storageId}`);
+          } else if (deferredHere > 0) {
+            // Nothing failed, but a repo was left to a pull already running — so this pass did not see the
+            // head through. Stamp the run WITHOUT advancing the cursor; next hour reads the same head.
+            await writeAutoSyncCursor(storageId, null);
+          } else {
+            await writeAutoSyncCursor(storageId, head);
           }
         } catch (e) {
           log.warn("pin", `auto-sync-in: company ${storageId} failed: ${(e as Error).message}`);

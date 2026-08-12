@@ -325,6 +325,8 @@ export async function resolveFileCid(cid: string, basename?: string): Promise<st
  */
 const CAT_STALL_MS = 10 * 60_000; // 10 min with no bytes arriving ⇒ the transfer is dead, not slow
 
+let fetchTempSeq = 0;
+
 export async function catToFile(
   cid: string,
   destPath: string,
@@ -341,7 +343,11 @@ export async function catToFile(
   // discovery rescan of every repo, concurrently with the transfers still running. Claimed here rather
   // than at the two call sites so a future caller cannot forget.
   noteOwnWrite(destPath);
-  const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}.tmp`;
+  // pid + clock is NOT unique on its own: two pulls of the same file can reach this line inside the same
+  // millisecond (pin.service.ts `fetchesInFlight` explains how they overlap), and two write streams onto one
+  // temp path interleave into a corrupt file that then gets renamed over the real one. The counter makes the
+  // name unique per call, which is the only property this name has to have.
+  const tmp = `${destPath}.lfb-fetch-${process.pid}-${Date.now()}-${++fetchTempSeq}.tmp`;
   let guard: StallGuard | undefined;
   try {
     // Unwrap a legacy wrapper-directory CID to the file inside it (see resolveFileCid). Inside the try so a

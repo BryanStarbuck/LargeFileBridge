@@ -16,7 +16,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { listRepoFolders, getRepoConfig } from "../store-model/units.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
-import { missingPinnedFromPeers, pullMissing } from "./pin.service.js";
+import { missingPinnedFromPeers, pullMissing, repoPullInFlight } from "./pin.service.js";
 import { resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { readDevices } from "../storage/devices.service.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
@@ -185,6 +185,14 @@ export async function runPullRetry(): Promise<{ pending: number; pulled: number 
           try {
             note.detail(folder, "checking what is still missing");
             repoRoot = repoRootFor(folder);
+            if (repoPullInFlight(repoRoot)) {
+              // Someone is already pulling this repo — the user's click, or the hourly team sync. A second
+              // pass over it would re-derive the same list and paint a second card for one transfer
+              // (pin.service.ts `fetchesInFlight`). Leave it, and stay armed so we look again later.
+              log.info("pin", `pull-retry: ${folder} is already being pulled — leaving it to that run`);
+              stillPending++;
+              continue;
+            }
             missing = await missingPinnedFromPeers(repoRoot);
             pending = pendingFor(folder, missing.map((m) => m.path));
           } catch (e) {

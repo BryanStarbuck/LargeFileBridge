@@ -1369,6 +1369,38 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
   return out;
 }
 
+/** What one file's fetch ended up doing — for the caller, and for anyone who asked for the same file. */
+type PullOutcome = { ok: boolean; error?: string };
+
+/**
+ * Files whose bytes are moving RIGHT NOW, keyed `<resolved repo root>\u0000<relative path>`.
+ *
+ * A pull has FOUR entry points — the repo page's Pull down, the To Do apply, the hourly auto-sync-in and
+ * the 3-hourly pull-retry — and, unlike a pin pass, none of them takes the repo unit lock. Two of them
+ * landing on one repo is therefore ordinary, not exotic. Seen on charlie-kirk: two cards pulling the same
+ * 3.0 GB video, one reading ≈2.3 GB and the other ≈2.2 GB — a separate DAG walk and a separate full write
+ * to disk each, holding two of the eight global transfer slots for bytes that only have to arrive once.
+ *
+ * Serializing whole passes would fix that by making the user's click wait behind a three-hour sweep. This
+ * is the narrower thing: the second caller for a file ATTACHES to the first one's outcome and reports it
+ * as its own, so every card still answers for every file it was asked about, and the bytes move once.
+ */
+const fetchesInFlight = new Map<string, Promise<PullOutcome>>();
+
+function inFlightKey(repoRoot: string, rel: string): string {
+  return `${path.resolve(repoRoot)}\u0000${rel}`; // NUL — no path component can contain it
+}
+
+/** How many pulls are working a given repo root right now. */
+const pullsPerRepo = new Map<string, number>();
+
+/** True while any pull is running on this repo. The BACKGROUND sweeps ask before starting a pass of their
+ *  own: a pull already in progress is moving these same bytes, so a second pass would only re-derive the
+ *  same list and paint a second card. User-started pulls never ask — they dedupe per file instead. */
+export function repoPullInFlight(repoRoot: string): boolean {
+  return (pullsPerRepo.get(path.resolve(repoRoot)) ?? 0) > 0;
+}
+
 /**
  * Pull the checked peer-pinned files down over IPFS (warnings.mdx §10.8.12 C). For each checked repo-relative
  * path we look up its manifest CID and PIN it on this node — pinning FETCHES the bytes over IPFS; we never
@@ -1390,9 +1422,17 @@ export async function pullMissing(
   // three BACKGROUND callers — auto-sync-in, pull-retry, and the To Do apply — showed literally nothing:
   // bytes moved for minutes while the app looked idle. Registering here rather than at each call site is
   // deliberate — the job then exists no matter which of the four entry points started it.
-  return track("pin", opts.label ?? path.basename(repoRoot), (report) =>
-    pullMissingInner(repoRoot, checkedPaths, opts, report),
-  );
+  const rootKey = path.resolve(repoRoot);
+  pullsPerRepo.set(rootKey, (pullsPerRepo.get(rootKey) ?? 0) + 1);
+  try {
+    return await track("pin", opts.label ?? path.basename(repoRoot), (report) =>
+      pullMissingInner(repoRoot, checkedPaths, opts, report),
+    );
+  } finally {
+    const left = (pullsPerRepo.get(rootKey) ?? 1) - 1;
+    if (left > 0) pullsPerRepo.set(rootKey, left);
+    else pullsPerRepo.delete(rootKey);
+  }
 }
 
 /**
@@ -1437,19 +1477,25 @@ function recordPullTracking(
 /** How long a running pull must wait between telling open pages to re-read. See `announceLanded` below. */
 const PULL_LANDED_BUMP_MS = 10_000;
 
-/** The topics an open page watches for this repo — the SAME set `writeRepoManifest` publishes, so a pull's
- *  refresh reaches whoever the end-of-pass one reaches. Resolved once per pull: it re-reads every unit config. */
-function repoBumpTopicsForRoot(repoRoot: string): string[] {
+/** Which configured repo unit a working-tree root belongs to, or null when it belongs to none. */
+function folderForRepoRoot(repoRoot: string): string | null {
   const target = path.resolve(repoRoot);
   for (const folder of listRepoFolders()) {
     try {
       const p = getRepoConfig(folder).repo.path;
-      if (p && path.resolve(expandHome(p)) === target) return repoBumpTopics(folder);
+      if (p && path.resolve(expandHome(p)) === target) return folder;
     } catch {
       /* unreadable unit config — keep looking */
     }
   }
-  return [];
+  return null;
+}
+
+/** The topics an open page watches for this repo — the SAME set `writeRepoManifest` publishes, so a pull's
+ *  refresh reaches whoever the end-of-pass one reaches. Resolved once per pull: it re-reads every unit config. */
+function repoBumpTopicsForRoot(repoRoot: string): string[] {
+  const folder = folderForRepoRoot(repoRoot);
+  return folder ? repoBumpTopics(folder) : [];
 }
 
 async function pullMissingInner(
@@ -1489,7 +1535,7 @@ async function pullMissingInner(
   let pulled = 0;
   let failed = 0;
   const errors: string[] = []; // first few per-file failure reasons — the route surfaces these to the popup
-  let healed = false; // any wrapper-directory CID rewritten below → persist the manifest afterwards
+  const healedCids = new Map<string, string>(); // wrapper-directory CIDs rewritten below, persisted at the end
   // A landed file changes the Pull-down count, but only the pin pass's END-of-run manifest write bumps this
   // repo's topic — so a pull ran for an hour under a number that never moved. Throttled far wider than the
   // 1s default: one bump re-composes the whole repo detail, which must not compete with the transfer.
@@ -1498,147 +1544,199 @@ async function pullMissingInner(
     if (repoTopics.length > 0) bumpTopicsThrottled(repoTopics, PULL_LANDED_BUMP_MS);
   };
 
+  // Every exit path a file can take, tallied in ONE place: `fetchOne` now returns its verdict instead of
+  // reaching into the counters, because a file this pass did not fetch itself — one it joined below — has
+  // to be counted the same way.
+  const settle = (rel: string, r: PullOutcome): void => {
+    if (r.ok) {
+      pulled++;
+      return;
+    }
+    failed++;
+    if (errors.length < 3) errors.push(`${path.basename(rel)}: ${r.error ?? "the pull failed"}`);
+  };
+
+  const fetchOne = async (rel: string): Promise<PullOutcome> => {
+    note.start(rel, `pulling ${path.basename(rel)}`);
+    const entry = byPath.get(rel);
+    if (!entry || !entry.cid) {
+      log.warn("pin", `pullMissing: no manifest CID for ${rel} in ${repoRoot} — skipping`);
+      return { ok: false, error: "no manifest CID" };
+    }
+    // Confined — this is the call that WRITES the bytes (`catToFile` mkdir -p's and streams to disk), and
+    // `entry.path` came off a shared, git-merged manifest. `checkedPaths` normally arrives from
+    // `missingPinnedFromPeers` (already confined), but the route accepts a caller-supplied list, so the
+    // check belongs where the write happens rather than only where the offer was built.
+    const abs = joinRelConfined(repoRoot, entry.path);
+    if (abs === null) {
+      log.warn("pin", `pullMissing: refusing ${rel} in ${repoRoot} — the manifest key does not resolve inside the repo`);
+      return { ok: false, error: "not inside this repo" };
+    }
+    try {
+      // ── LOCAL-BYTES FAST PATH ──────────────────────────────────────────────────────────────────
+      // "Pull down" does NOT always mean "fetch bytes we don't have". A file whose bytes are already
+      // on this disk but whose CID was never pinned INTO this node counts as pull-down too (a decided
+      // sync file with pinnedHere=false — files-query.service.ts). Sending that file through the DHT
+      // is wrong twice over: the network round trip is pointless, and when the peer that first pinned
+      // it is offline the provider pre-flight below FAILS it — so a file sitting right there on disk
+      // reports "no computer is currently providing this file" and the metric never drains. Observed
+      // 2026-08-10: 30 such files on Bryan_Laptop, every one already on disk, stuck for a week.
+      //
+      // Adding the LOCAL bytes pins them (Kubo `add` pins recursively) with no network at all. When the
+      // resulting CID differs from the manifest's — two add profiles over identical content — that is
+      // recorded as a CID equivalence, exactly as the regular pin pass's adopt path does, so the pair is
+      // never re-added on the next run.
+      if (fs.existsSync(abs) && !pinset.has(ipfs.canonicalCid(entry.cid))) {
+        note.detail(rel, "the bytes are already here — pinning locally");
+        const localCid = await ipfs.addFile(abs);
+        pinset.add(ipfs.canonicalCid(localCid));
+        pinset.add(ipfs.canonicalCid(entry.cid));
+        if (ipfs.canonicalCid(localCid) !== ipfs.canonicalCid(entry.cid)) {
+          noteCidEquivalence(entry.cid, localCid);
+        }
+        log.info("pin", `Pinned ${rel} in place (bytes already on disk) <- ${localCid}`);
+        recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
+        announceLanded();
+        return { ok: true };
+      }
+      // Same wrapper-directory self-heal as the pin pass's fetch-missing: unwrap a legacy directory CID
+      // to the file inside it BEFORE pinning or cat-ing, and record the corrected CID (written back to
+      // the tracking manifest after the fan-out) so the dead CID is never retried again.
+      const fileCid = await ipfs.resolveFileCid(entry.cid, path.basename(entry.path));
+      if (fileCid !== entry.cid) {
+        log.info("pin", `pullMissing: healed wrapper-directory CID for ${rel}: ${entry.cid} -> ${fileCid}`);
+        entry.cid = fileCid;
+        healedCids.set(rel, fileCid);
+      }
+      if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
+        // PRE-FLIGHT (warnings.mdx §10.8.12 C): is any computer actually providing these bytes right
+        // now? The only holder is often a laptop that is asleep/offline — without this check the
+        // pin/add below wedges for its full 3 × 10-minute stall budget per file while the user watches
+        // a metric that "never updates". A clean zero-provider answer fails the file in seconds with a
+        // message that names the peer; an inconclusive probe (null) proceeds — absence of evidence
+        // from a quick DHT query must never block a pull that would have worked.
+        note.detail(rel, "looking for a computer that has it");
+        const avail = await ipfs.hasProvider(entry.cid);
+        if (avail === false) {
+          const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
+          throw new Error(
+            `no computer is currently providing this file — ${holder} looks offline. Bring it online and try again.`,
+          );
+        }
+        // Tight interactive IDLE budget (2 min × 2 attempts): a user is watching this pull. A transfer
+        // that is MOVING keeps resetting the guard (never cut off); one that goes quiet for 2 minutes
+        // mid-flight is dead and fails fast.
+        //
+        // DISCOVERY IS NOT IDLENESS and gets its own 6 minutes. The 2-minute number was being applied to
+        // the phase BEFORE any byte exists — Kubo walking the DHT and dialling a NAT'd peer through a
+        // relay, reporting `Progress:0` the whole way — so a pull with a perfectly good provider was
+        // hung up on at 2:00 and again at 4:00, and the user was told "the transfer never started" when
+        // in truth we never let it. Observed live on 2026-08-05: 13 files aborted in two bursts, the
+        // daemon logging `context canceled` for every one of them.
+        try {
+          // Kubo reports only the DAG-node count while a fetch runs; `approxFetchedBytes` turns it into
+          // the "≈310 MB of 734 MB (42%)" reading, marked approximate because that is what it is.
+          note.detail(rel, "waiting for the transfer to start");
+          await ipfs.pinAdd(entry.cid, {
+            stallMs: 2 * 60_000,
+            discoveryMs: 6 * 60_000,
+            attempts: 2,
+            onNodes: (n) =>
+              note.detailLazy(rel, () =>
+                bytesDetail(ipfs.approxFetchedBytes(n, entry.size), entry.size, true),
+              ),
+          });
+        } catch (e) {
+          if (/abort|stall/i.test((e as Error).message ?? "") || (e as Error).name === "AbortError") {
+            const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
+            throw new Error(
+              `the transfer never started — ${holder} looks offline. Bring it online and try again.`,
+            );
+          }
+          throw e;
+        }
+        pinset.add(ipfs.canonicalCid(entry.cid));
+      }
+      if (!fs.existsSync(abs)) {
+        // Already unwrapped above — don't pay `resolveFileCid` a second time per file.
+        await ipfs.catToFile(entry.cid, abs, {
+          resolved: true,
+          onBytes: (b) => note.detailLazy(rel, () => `writing to disk · ${bytesDetail(b, entry.size)}`),
+        }); // the pinned bytes → the working tree
+      }
+      log.info("pin", `Pulled ${rel} <- ${entry.cid} (added by ${entry.pinned_by.find((d) => d !== computerLabel()) ?? "a peer"})`);
+    } catch (e) {
+      log.warn("pin", `pullMissing: pull failed for ${rel} (${entry.cid}): ${(e as Error).message}`);
+      return { ok: false, error: (e as Error).message };
+    }
+
+    recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
+    announceLanded();
+    return { ok: true };
+  };
+
   // Bounded fan-out through the same global IPFS limiter the pin pass uses, so many pulls don't stampede
   // the daemon. Each file's failure is contained; one bad CID never fails the rest.
   await Promise.all(
-    checkedPaths.map((rel) =>
-      ipfsLimiter.run(async () => {
+    checkedPaths.map(async (rel) => {
+      const key = inFlightKey(repoRoot, rel);
+      const joined = fetchesInFlight.get(key);
+      if (joined) {
+        // Another pass is already moving these exact bytes (see `fetchesInFlight`). Wait for ITS answer and
+        // report it as ours: this card was asked about the file, so it still owes a result for it.
         note.start(rel, `pulling ${path.basename(rel)}`);
-        const entry = byPath.get(rel);
-        if (!entry || !entry.cid) {
-          failed++;
-          if (errors.length < 3) errors.push(`${rel}: no manifest CID`);
-          log.warn("pin", `pullMissing: no manifest CID for ${rel} in ${repoRoot} — skipping`);
-          return;
-        }
-        // Confined — this is the call that WRITES the bytes (`catToFile` mkdir -p's and streams to disk), and
-        // `entry.path` came off a shared, git-merged manifest. `checkedPaths` normally arrives from
-        // `missingPinnedFromPeers` (already confined), but the route accepts a caller-supplied list, so the
-        // check belongs where the write happens rather than only where the offer was built.
-        const abs = joinRelConfined(repoRoot, entry.path);
-        if (abs === null) {
-          failed++;
-          if (errors.length < 3) errors.push(`${rel}: not inside this repo`);
-          log.warn("pin", `pullMissing: refusing ${rel} in ${repoRoot} — the manifest key does not resolve inside the repo`);
-          return;
-        }
+        note.detail(rel, "another pass is already fetching this file — waiting for it");
         try {
-          // ── LOCAL-BYTES FAST PATH ──────────────────────────────────────────────────────────────────
-          // "Pull down" does NOT always mean "fetch bytes we don't have". A file whose bytes are already
-          // on this disk but whose CID was never pinned INTO this node counts as pull-down too (a decided
-          // sync file with pinnedHere=false — files-query.service.ts). Sending that file through the DHT
-          // is wrong twice over: the network round trip is pointless, and when the peer that first pinned
-          // it is offline the provider pre-flight below FAILS it — so a file sitting right there on disk
-          // reports "no computer is currently providing this file" and the metric never drains. Observed
-          // 2026-08-10: 30 such files on Bryan_Laptop, every one already on disk, stuck for a week.
-          //
-          // Adding the LOCAL bytes pins them (Kubo `add` pins recursively) with no network at all. When the
-          // resulting CID differs from the manifest's — two add profiles over identical content — that is
-          // recorded as a CID equivalence, exactly as the regular pin pass's adopt path does, so the pair is
-          // never re-added on the next run.
-          if (fs.existsSync(abs) && !pinset.has(ipfs.canonicalCid(entry.cid))) {
-            note.detail(rel, "the bytes are already here — pinning locally");
-            const localCid = await ipfs.addFile(abs);
-            pinset.add(ipfs.canonicalCid(localCid));
-            pinset.add(ipfs.canonicalCid(entry.cid));
-            if (ipfs.canonicalCid(localCid) !== ipfs.canonicalCid(entry.cid)) {
-              noteCidEquivalence(entry.cid, localCid);
-            }
-            pulled++;
-            log.info("pin", `Pinned ${rel} in place (bytes already on disk) <- ${localCid}`);
-            recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
-            announceLanded();
-            return;
-          }
-          // Same wrapper-directory self-heal as the pin pass's fetch-missing: unwrap a legacy directory CID
-          // to the file inside it BEFORE pinning or cat-ing, and record the corrected CID (written back to
-          // the tracking manifest after the fan-out) so the dead CID is never retried again.
-          const fileCid = await ipfs.resolveFileCid(entry.cid, path.basename(entry.path));
-          if (fileCid !== entry.cid) {
-            log.info("pin", `pullMissing: healed wrapper-directory CID for ${rel}: ${entry.cid} -> ${fileCid}`);
-            entry.cid = fileCid;
-            healed = true;
-          }
-          if (!pinset.has(ipfs.canonicalCid(entry.cid))) {
-            // PRE-FLIGHT (warnings.mdx §10.8.12 C): is any computer actually providing these bytes right
-            // now? The only holder is often a laptop that is asleep/offline — without this check the
-            // pin/add below wedges for its full 3 × 10-minute stall budget per file while the user watches
-            // a metric that "never updates". A clean zero-provider answer fails the file in seconds with a
-            // message that names the peer; an inconclusive probe (null) proceeds — absence of evidence
-            // from a quick DHT query must never block a pull that would have worked.
-            note.detail(rel, "looking for a computer that has it");
-            const avail = await ipfs.hasProvider(entry.cid);
-            if (avail === false) {
-              const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
-              throw new Error(
-                `no computer is currently providing this file — ${holder} looks offline. Bring it online and try again.`,
-              );
-            }
-            // Tight interactive IDLE budget (2 min × 2 attempts): a user is watching this pull. A transfer
-            // that is MOVING keeps resetting the guard (never cut off); one that goes quiet for 2 minutes
-            // mid-flight is dead and fails fast.
-            //
-            // DISCOVERY IS NOT IDLENESS and gets its own 6 minutes. The 2-minute number was being applied to
-            // the phase BEFORE any byte exists — Kubo walking the DHT and dialling a NAT'd peer through a
-            // relay, reporting `Progress:0` the whole way — so a pull with a perfectly good provider was
-            // hung up on at 2:00 and again at 4:00, and the user was told "the transfer never started" when
-            // in truth we never let it. Observed live on 2026-08-05: 13 files aborted in two bursts, the
-            // daemon logging `context canceled` for every one of them.
-            try {
-              // Kubo reports only the DAG-node count while a fetch runs; `approxFetchedBytes` turns it into
-              // the "≈310 MB of 734 MB (42%)" reading, marked approximate because that is what it is.
-              note.detail(rel, "waiting for the transfer to start");
-              await ipfs.pinAdd(entry.cid, {
-                stallMs: 2 * 60_000,
-                discoveryMs: 6 * 60_000,
-                attempts: 2,
-                onNodes: (n) =>
-                  note.detailLazy(rel, () =>
-                    bytesDetail(ipfs.approxFetchedBytes(n, entry.size), entry.size, true),
-                  ),
-              });
-            } catch (e) {
-              if (/abort|stall/i.test((e as Error).message ?? "") || (e as Error).name === "AbortError") {
-                const holder = entry.pinned_by.find((d) => d !== computerLabel()) ?? "the computer holding it";
-                throw new Error(
-                  `the transfer never started — ${holder} looks offline. Bring it online and try again.`,
-                );
-              }
-              throw e;
-            }
-            pinset.add(ipfs.canonicalCid(entry.cid));
-          }
-          if (!fs.existsSync(abs)) {
-            // Already unwrapped above — don't pay `resolveFileCid` a second time per file.
-            await ipfs.catToFile(entry.cid, abs, {
-              resolved: true,
-              onBytes: (b) => note.detailLazy(rel, () => `writing to disk · ${bytesDetail(b, entry.size)}`),
-            }); // the pinned bytes → the working tree
-          }
-          pulled++;
-          log.info("pin", `Pulled ${rel} <- ${entry.cid} (added by ${entry.pinned_by.find((d) => d !== computerLabel()) ?? "a peer"})`);
-        } catch (e) {
-          failed++;
-          if (errors.length < 3) errors.push(`${path.basename(rel)}: ${(e as Error).message}`);
-          log.warn("pin", `pullMissing: pull failed for ${rel} (${entry.cid}): ${(e as Error).message}`);
-          return;
+          settle(rel, await joined);
+        } finally {
+          note.finish(rel);
+          tick();
         }
-
-        recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
-        announceLanded();
-      }).finally(() => {
+        return;
+      }
+      // The limiter slot is taken INSIDE the shared entry, so a waiter never holds one. The catch keeps a
+      // throw from collapsing the batch — and hands whoever joined a real answer instead of a rejection.
+      const run = ipfsLimiter
+        .run(() => fetchOne(rel))
+        .catch((e): PullOutcome => ({ ok: false, error: (e as Error).message }));
+      fetchesInFlight.set(key, run);
+      try {
+        settle(rel, await run);
+      } finally {
+        if (fetchesInFlight.get(key) === run) fetchesInFlight.delete(key);
         note.finish(rel);
         tick(); // every exit path counts — the bar must reach its total even on an all-failed batch
-      }),
-    ),
+      }
+    }),
   );
 
   // Persist any healed CIDs. Best-effort: a manifest write failure must not fail an otherwise-good pull —
   // the bytes are already on disk; the worst case is that the heal is redone on the next pull.
-  if (healed) {
+  //
+  // RE-READ AND APPLY ONLY MY HEALS — never write back the snapshot this pass opened with. A pull can run
+  // for hours, and in that time a pin pass, the reconciler or a second pull will have written the manifest;
+  // handing back an hours-old whole copy drops everything they corrected. That is the same lost update the
+  // unit lock exists to stop for pin passes, which a pull does not hold (it must not: the user's click
+  // cannot queue behind a three-hour sweep). Taken here for the WRITE only, so the read-modify-write cannot
+  // interleave with theirs.
+  if (healedCids.size > 0) {
+    const applyHeals = (): void => {
+      const current = readRepoTrackingManifest(repoRoot);
+      let changed = false;
+      for (const f of current.files) {
+        const cid = healedCids.get(f.path);
+        if (cid && f.cid !== cid) {
+          f.cid = cid;
+          changed = true;
+        }
+      }
+      if (changed) writeRepoTrackingManifest(repoRoot, current);
+    };
     try {
       note.phase("saving the corrected file list");
-      writeRepoTrackingManifest(repoRoot, manifest);
+      const folder = folderForRepoRoot(repoRoot);
+      if (folder) await withUnitLock(`repo:${folder}`, async () => applyHeals());
+      else applyHeals();
     } catch (e) {
       log.warn("pin", `pullMissing: could not persist healed CIDs for ${repoRoot}: ${(e as Error).message}`);
     }
