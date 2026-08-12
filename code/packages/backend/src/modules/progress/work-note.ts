@@ -82,10 +82,16 @@ export class WorkNote {
     const first = this.live.values().next();
     if (first.done) return this.phaseText; // no item in flight — the phase IS the whole line
     const item = first.value;
-    const head = this.phaseText ? `${this.phaseText} ${item.label}` : item.label;
-    const withDetail = item.detail ? `${head} · ${item.detail}` : head;
+    // "+N more" sits with the NAME, not at the end. The byte reading on this line is ONE file's, and this
+    // is the only thing that says so — at the end it was the first thing the dock's 360px card truncated
+    // away. What was left looked like a single transfer whose total grew on its own: the named file
+    // finished, the line handed over to the next-oldest still running, and that one was already part-way
+    // through because it had been transferring in parallel all along (≈41.8 MB of 85.2 MB, where the line
+    // had just been reading a 16 MB file). The count moved in the same instant; the context did not survive.
     const more = this.live.size - 1;
-    return more > 0 ? `${withDetail} (+${more} more)` : withDetail;
+    const name = more > 0 ? `${item.label} +${more} more` : item.label;
+    const head = this.phaseText ? `${this.phaseText} ${name}` : name;
+    return item.detail ? `${head} · ${item.detail}` : head;
   }
 }
 

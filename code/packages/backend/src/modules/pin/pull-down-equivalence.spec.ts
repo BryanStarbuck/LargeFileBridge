@@ -39,13 +39,17 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** One manifest entry, pinned by a peer, whose CID is what the FLEET recorded — not what we pinned. */
+/** One manifest entry, pinned by a peer, whose CID is what the FLEET recorded — not what we pinned. The
+ *  file itself is on disk: these tests are about the CID axis, and a pull that finished leaves BOTH the pin
+ *  and the copy (an entry with a pin but no copy is its own offer — pull-down-materialized.spec.ts). */
 async function seedManifest(): Promise<void> {
   const { writeRepoTrackingManifest } = await import("./manifest.service.js");
   writeRepoTrackingManifest(repoRoot, {
     schema_version: 1,
     files: [{ path: "images/a.jpg", cid: RECORDED, size: 10, pinned_by: ["bryan-laptop"] }],
   } as never);
+  fs.mkdirSync(path.join(repoRoot, "images"), { recursive: true });
+  fs.writeFileSync(path.join(repoRoot, "images/a.jpg"), "bytes");
 }
 
 describe("missingPinnedFromPeers — a file held under an equivalent CID is not still 'missing'", () => {

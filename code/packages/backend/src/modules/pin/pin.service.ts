@@ -1312,13 +1312,31 @@ function resolveAddedBy(repoRoot: string, entry: ManifestFile, selfLabel: string
 }
 
 /**
- * List the files a PEER computer of the user's pinned that THIS computer is missing (warnings.mdx §10.8.12 A).
- * Joins the COMMITTED manifest (arrived via the git backbone) against the local working tree (`fs.existsSync`)
- * and the running IPFS node's pinset. A file QUALIFIES when it is missing on disk here AND its manifest CID is
- * NOT pinned on this node — i.e. a peer pinned it, its identity travelled in the manifest, but its bytes are
- * not here yet. A manifest entry with NO cid is not a candidate (nothing to pull); a stray media file that is
- * not in the manifest is likewise not one (it was never a shared large file). Best-effort and NON-throwing:
- * a corrupt/half-merged manifest or a down IPFS node yields [] (or an empty pinset), never an exception.
+ * The paths this computer DELETED from its working tree and has not staled yet (decisions.mdx §12) — read
+ * off the unit status the pin pass writes, so it costs no IPFS call. While a path is on that list it is the
+ * "Deleted here" tile's business and its bytes are usually still pinned; offering it here as well would have
+ * the hourly auto-sync-in put the file straight back. An unreadable status, or a root that maps to no unit,
+ * yields the empty set: a missing record must not turn a deletion into an offer.
+ */
+function deletedHerePaths(repoRoot: string): Set<string> {
+  const folder = folderForRepoRoot(repoRoot);
+  if (!folder) return new Set();
+  try {
+    return new Set(Object.keys(getRepoStatus(folder).orphans ?? {}));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * List the files this computer does not fully hold (warnings.mdx §10.8.12 A). Joins the COMMITTED manifest
+ * (arrived via the git backbone) against the local working tree (`fs.existsSync`) and the running IPFS node's
+ * pinset. A file QUALIFIES when EITHER record says no — its manifest CID is not pinned on this node, or there
+ * is no copy at its path — because a pull is what fixes both (the two halves are spelled out at the test itself). A file
+ * this computer deleted on purpose, still inside its grace period, is not an offer. A manifest entry with NO
+ * cid is not a candidate (nothing to pull); a stray media file that is not in the manifest is likewise not one
+ * (it was never a shared large file). Best-effort and NON-throwing: a corrupt/half-merged manifest or a down
+ * IPFS node yields [] (or an empty pinset), never an exception.
  */
 export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingPinnedFile[]> {
   let manifest: Manifest;
@@ -1337,6 +1355,7 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
     return [];
   }
   const selfLabel = computerLabel();
+  const deletedHere = deletedHerePaths(repoRoot);
   const out: MissingPinnedFile[] = [];
   for (const entry of manifest.files) {
     if (!entry.cid) continue; // no CID → nothing to pull
@@ -1347,18 +1366,31 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
       log.warn("pin", `missingPinnedFromPeers: ${repoRoot}: manifest entry "${entry.path}" is not inside the repo — ignored`);
       continue;
     }
-    // CONTENT, not the literal CID (knowledge/ipfs.mdx §5.1). `canonicalCid` only re-encodes the SAME
-    // multihash, so a peer's legacy `Qm…` and our raw-leaves `bafk…` for identical bytes stayed unequal and
-    // every such file was offered forever: each pull re-added it, re-recorded the same equivalence pair,
-    // reported success, and this count never moved. `runUnitPin` has always tested it this way.
-    if (pinsetHasContent(pinset, entry.cid)) continue; // pinned on this node → this computer really holds it
-    // ON DISK BUT NOT PINNED HERE IS STILL A PULL-DOWN. This used to `continue` on `fs.existsSync(abs)`, which
-    // made the repo metric and the CLI answer two different numbers for one question: the CLI's `pull_down`
-    // (files-query.service.ts) counts `decision === "sync" && pinnedHere === false` as well, so on 2026-08-10
-    // the Tower's CLI said 11 and its API said 10 — and the API's number UNDERCOUNTED the real gap. A file
-    // whose bytes are here but whose CID was never pinned into this node is NOT a second copy: drop the IPFS
-    // node and it is gone, and no peer can fetch it from us. `pullMissing`'s local-bytes fast path pins exactly
-    // this case in place with no network, so listing it here is also actionable, not just honest.
+    // TWO RECORDS, AND HOLDING A FILE MEANS BOTH SAY YES: its bytes pinned into this node, and a real copy
+    // in the working tree. Either one alone is a gap the user can act on, and both are fixed by a pull —
+    // so both belong in this count. Each half was once the missing half:
+    //   • ON DISK BUT NOT PINNED. This used to `continue` on `fs.existsSync(abs)`, so the repo metric and the
+    //     CLI answered two different numbers for one question — the CLI's `pull_down` (files-query.service.ts)
+    //     counts `decision === "sync" && pinnedHere === false` too, and on 2026-08-10 one machine's CLI said
+    //     11 while its API said 10. Bytes with no pin are not a second copy: drop the IPFS node and they are
+    //     gone, and no peer can fetch them from us.
+    //   • PINNED BUT NOT ON DISK. The pull pins the CID and THEN writes the tree (`pullMissing`); an
+    //     interrupted run leaves the first half done. The row renders red (it has no file) while this count
+    //     skipped it for being pinned — one file of 2091 on charlie-kirk, red row, `Pull down 0`.
+    // Neither needs the network: `pullMissing` pins present bytes in place, and materializes absent ones
+    // from the local blockstore.
+    //
+    // The pinset test is by CONTENT, not the literal CID (knowledge/ipfs.mdx §5.1). `canonicalCid` only
+    // re-encodes the SAME multihash, so a peer's legacy `Qm…` and our raw-leaves `bafk…` for identical bytes
+    // stayed unequal and every such file was offered forever: each pull re-added it, re-recorded the same
+    // equivalence pair, reported success, and this count never moved. `runUnitPin` tests it this way too.
+    if (pinsetHasContent(pinset, entry.cid)) {
+      if (fs.existsSync(abs)) continue; // pinned AND in the tree → this computer really holds it
+      // Pinned, absent from the tree, and absent BY CHOICE — the pin pass already recorded this path as a
+      // deletion. Re-offering it is the surprise re-pinning decisions.mdx §12 forbids, and `runUnitPin`
+      // skips it for the same reason. It is not hidden: it is the "Deleted here" tile's row.
+      if (deletedHere.has(entry.path)) continue;
+    }
     out.push({
       path: entry.path,
       name: path.basename(entry.path),

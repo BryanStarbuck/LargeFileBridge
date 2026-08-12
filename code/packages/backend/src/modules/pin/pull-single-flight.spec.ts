@@ -31,7 +31,8 @@ vi.mock("../ipfs/ipfs.service.js", async (orig) => {
 });
 
 beforeEach(() => {
-  vi.resetModules();
+  vi.resetModules(); // clears the MODULE registry — not the MOCK one, so the call counts need their own reset
+  vi.clearAllMocks();
   tmp = fs.mkdtempSync(path.join(os.tmpdir(), "lfb-pull-single-flight-"));
   process.env.LFB_STATE_DIR = path.join(tmp, "state");
   process.env.LFB_LOG_DIR = path.join(tmp, "state");

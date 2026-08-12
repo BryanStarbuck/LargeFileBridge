@@ -32,11 +32,11 @@ describe("WorkNote", () => {
     n.phase("");
     n.start("a/clip.mp4", "fetching clip.mp4");
     n.start("b/other.mov", "fetching other.mov");
-    expect(notes.at(-1)).toBe("fetching clip.mp4 (+1 more)");
+    expect(notes.at(-1)).toBe("fetching clip.mp4 +1 more");
     // A detail tick is throttled, so advance past the floor before asserting it landed.
     vi.advanceTimersByTime(500);
     n.detail("a/clip.mp4", "≈310 MB of 734 MB (42%)");
-    expect(notes.at(-1)).toBe("fetching clip.mp4 · ≈310 MB of 734 MB (42%) (+1 more)");
+    expect(notes.at(-1)).toBe("fetching clip.mp4 +1 more · ≈310 MB of 734 MB (42%)");
   });
 
   it("follows the OLDEST in-flight item — a later worker never steals the line", () => {
@@ -46,7 +46,7 @@ describe("WorkNote", () => {
     n.start("second", "adding second");
     vi.advanceTimersByTime(500);
     n.detail("second", "12 MB"); // the newer worker ticks…
-    expect(notes.at(-1)).toBe("adding first (+1 more)"); // …and the line still names the older one
+    expect(notes.at(-1)).toBe("adding first +1 more"); // …and the line still names the older one
   });
 
   it("drops a settled item from the line immediately", () => {

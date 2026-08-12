@@ -866,6 +866,13 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
   [storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked))
   is `decision === "sync"` with `pinnedHere === false` and **no bytes here whatsoever** — it renders in this
   same red state and needs **no new icon vocabulary**.
+* **A red row and `Pull down 0` must never appear together.** A remote-only row is red because there is no
+  file at its path — but the **Pull down** tile used to ask only "is the CID pinned?", so a file whose pull
+  pinned the CID and was then interrupted before writing the bytes was red on its row and invisible in the
+  tile (one entry of 2091 on `charlie-kirk`). The count now qualifies a file when **either** record says no,
+  which is what §4.10 has always said this row does ("Counts toward Pull down ALWAYS"). *Counted in:*
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+  `missingPinnedFromPeers()` ([warnings.mdx §10.8.12 A](./warnings.mdx)).
 * **`pinnedHere` is a LIVE, CANONICAL read of this node's pinset — never a per-file hash on the read path.**
   The blue↔red split is driven by `FileRow.pinnedHere`, computed by testing the file's recorded manifest CID
   against `ipfs.canonicalPinnedSet()` (this node's `ipfs pin ls`, canonicalized to CIDv1 base32 so a `Qm…`
