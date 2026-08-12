@@ -22,6 +22,7 @@ import {
   getRepoStatus,
   writeRepoManifest,
   writeRepoStatus,
+  repoBumpTopics,
   getComputerConfig,
   getComputerManifest,
   getComputerStatus,
@@ -73,7 +74,7 @@ import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
 import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
-import { bumpTopicThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
+import { bumpTopicThrottled, bumpTopicsThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 import { whenOnline, hostFromRemote } from "../../shared/net-transient.js";
 import { statOrNull } from "../../shared/fs-probe.js";
@@ -1429,6 +1430,24 @@ function recordPullTracking(
   }
 }
 
+/** How long a running pull must wait between telling open pages to re-read. See `announceLanded` below. */
+const PULL_LANDED_BUMP_MS = 10_000;
+
+/** The topics an open page watches for this repo — the SAME set `writeRepoManifest` publishes, so a pull's
+ *  refresh reaches whoever the end-of-pass one reaches. Resolved once per pull: it re-reads every unit config. */
+function repoBumpTopicsForRoot(repoRoot: string): string[] {
+  const target = path.resolve(repoRoot);
+  for (const folder of listRepoFolders()) {
+    try {
+      const p = getRepoConfig(folder).repo.path;
+      if (p && path.resolve(expandHome(p)) === target) return repoBumpTopics(folder);
+    } catch {
+      /* unreadable unit config — keep looking */
+    }
+  }
+  return [];
+}
+
 async function pullMissingInner(
   repoRoot: string,
   checkedPaths: string[],
@@ -1467,6 +1486,13 @@ async function pullMissingInner(
   let failed = 0;
   const errors: string[] = []; // first few per-file failure reasons — the route surfaces these to the popup
   let healed = false; // any wrapper-directory CID rewritten below → persist the manifest afterwards
+  // A landed file changes the Pull-down count, but only the pin pass's END-of-run manifest write bumps this
+  // repo's topic — so a pull ran for an hour under a number that never moved. Throttled far wider than the
+  // 1s default: one bump re-composes the whole repo detail, which must not compete with the transfer.
+  const repoTopics = repoBumpTopicsForRoot(repoRoot);
+  const announceLanded = (): void => {
+    if (repoTopics.length > 0) bumpTopicsThrottled(repoTopics, PULL_LANDED_BUMP_MS);
+  };
 
   // Bounded fan-out through the same global IPFS limiter the pin pass uses, so many pulls don't stampede
   // the daemon. Each file's failure is contained; one bad CID never fails the rest.
@@ -1517,6 +1543,7 @@ async function pullMissingInner(
             pulled++;
             log.info("pin", `Pinned ${rel} in place (bytes already on disk) <- ${localCid}`);
             recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
+            announceLanded();
             return;
           }
           // Same wrapper-directory self-heal as the pin pass's fetch-missing: unwrap a legacy directory CID
@@ -1594,6 +1621,7 @@ async function pullMissingInner(
         }
 
         recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);
+        announceLanded();
       }).finally(() => {
         note.finish(rel);
         tick(); // every exit path counts — the bar must reach its total even on an all-failed batch
