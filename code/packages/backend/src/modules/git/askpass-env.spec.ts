@@ -18,11 +18,33 @@ const VSCODE_INJECTED = [
   "VSCODE_GIT_IPC_HANDLE",
 ];
 
+// simple-git's own env rejection map (`@simple-git/argv-parser`, const `y`). Stripping these one defect at
+// a time only swaps which variable fails next — GIT_ASKPASS gave way to PAGER within the hour — so the whole
+// set is asserted. If an upgrade grows the map, THIS is the line that moves with it.
+const SIMPLE_GIT_REJECTS = [
+  "EDITOR",
+  "GIT_ASKPASS",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_COUNT",
+  "GIT_CONFIG",
+  "GIT_EDITOR",
+  "GIT_EXEC_PATH",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_PAGER",
+  "GIT_PROXY_COMMAND",
+  "GIT_TEMPLATE_DIR",
+  "GIT_SEQUENCE_EDITOR",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "PAGER",
+  "PREFIX",
+  "SSH_ASKPASS",
+];
+
 describe("NON_INTERACTIVE_ENV_STRIP — no git child may inherit a prompt", () => {
-  it("removes every variable simple-git refuses to run alongside", () => {
-    for (const k of ["GIT_ASKPASS", "SSH_ASKPASS"]) {
-      expect(NON_INTERACTIVE_ENV_STRIP).toContain(k);
-    }
+  it("removes EVERY variable simple-git refuses to run alongside, not just the ones that bit us", () => {
+    for (const k of SIMPLE_GIT_REJECTS) expect(NON_INTERACTIVE_ENV_STRIP).toContain(k);
   });
 
   it("removes the whole VS Code askpass mechanism, not just its entry point", () => {

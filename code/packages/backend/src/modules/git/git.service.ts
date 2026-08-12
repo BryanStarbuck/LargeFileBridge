@@ -420,9 +420,12 @@ const QUOTEPATH = "false";
  *  `--stdin` + EPIPE handling) instead of going through {@link openRepo}. */
 const QUOTEPATH_ARGS = ["-c", `core.quotepath=${QUOTEPATH}`];
 
-/** Environment variables removed from every git child: the ones that would open an editor or a credential
- *  prompt. `VSCODE_GIT_ASKPASS_*` are the helper's own arguments — they are inert once `GIT_ASKPASS` is
- *  gone, but leaving half a mechanism behind is how the next reader concludes it is still wired up. */
+/** Environment removed from every git child. This is simple-git's OWN rejection set (`@simple-git/argv-parser`
+ *  env map) in full, not the subset we have been bitten by: it refuses to run at all while any of them is
+ *  set, so stripping them one defect at a time just swaps which variable fails next — `GIT_ASKPASS` gave way
+ *  to `PAGER` within the hour. Copy the whole list when that map changes. `VISUAL` and the
+ *  `VSCODE_GIT_ASKPASS_*` companions are ours to add: inert once their principals are gone, but half a
+ *  mechanism left behind reads as still wired up. */
 export const NON_INTERACTIVE_ENV_STRIP = [
   "EDITOR",
   "VISUAL",
@@ -431,6 +434,19 @@ export const NON_INTERACTIVE_ENV_STRIP = [
   "GIT_ASKPASS",
   "SSH_ASKPASS",
   "SSH_ASKPASS_REQUIRE",
+  "PAGER",
+  "GIT_PAGER",
+  "GIT_CONFIG",
+  "GIT_CONFIG_GLOBAL",
+  "GIT_CONFIG_SYSTEM",
+  "GIT_CONFIG_COUNT",
+  "GIT_EXEC_PATH",
+  "GIT_EXTERNAL_DIFF",
+  "GIT_PROXY_COMMAND",
+  "GIT_TEMPLATE_DIR",
+  "GIT_SSH",
+  "GIT_SSH_COMMAND",
+  "PREFIX",
   "VSCODE_GIT_ASKPASS_NODE",
   "VSCODE_GIT_ASKPASS_MAIN",
   "VSCODE_GIT_ASKPASS_EXTRA_ARGS",
