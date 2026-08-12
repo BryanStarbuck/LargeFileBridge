@@ -191,6 +191,8 @@ differed from ours — the "invisible v0 pins" class.
   Implemented in code: `code/packages/backend/src/modules/ipfs/ipfs.service.ts`, function
   **`canonicalCid()`** (and `canonicalPinnedSet()`). **Rule: any comparison of a CID against the pinset MUST
   be written `pinset.has(ipfs.canonicalCid(cid))`, and any CID-keyed index MUST key on `canonicalCid(cid)`.**
+  For a **manifest** CID — one the fleet recorded, not one we minted — that is the FLOOR, not the whole
+  test: use `pinsetHasContent()` (Layer 3) as well, or you re-ask for bytes this computer already holds.
   Every seam that reads the pinset applies this: the pin pass reconcile
   (`modules/pin/pin.service.ts` `runUnitPin` / `pinnedCidSet`), the scan's per-file pinned flag
   (`modules/scanner/scanner.service.ts` `isPinnedPath` / `reconcileExternalState`), and the IPFS page's
@@ -207,6 +209,19 @@ differed from ours — the "invisible v0 pins" class.
   looks unpinned, we probe once and, if its bytes are already pinned under another profile, **adopt that CID
   instead of re-adding a duplicate**. It is deliberately NOT run for brand-new adds or during a scan, so we
   never pay a full-file hash on the hot path.
+
+* **Layer 3 — remember the Layer-2 answer, and READ it (`cid_equivalence.yaml`).** A re-hash is expensive,
+  so the pull/pin paths record the result once — "the manifest says `Qm…`, this computer has `bafk…` for the
+  same bytes" — via `noteCidEquivalence()`, and test membership with **`pinsetHasContent(pinset, cid)`**
+  (`modules/pin/cid-equivalence.service.ts`). **Every READER of a manifest CID owes this, not just the
+  writer.** `runUnitPin` did it; the three read paths did not, and each answered "not pinned here" about a
+  file that was pinned: the `Pull down` metric (`missingPinnedFromPeers`) re-offered the same files on every
+  pass forever — a pull re-added the bytes, re-wrote the identical pair, reported success, and the count
+  never moved — while `pinnedHere` (`units.service.ts` `composeFileRows`, and the streamed route's patch in
+  `repos.router.ts`) painted a red "not pinned" icon on rows this computer held. On one machine that was 30
+  of a reported 48. Locked test: `modules/pin/pull-down-equivalence.spec.ts`. Note what the map is NOT: it
+  records a past add, not a present pin — `pinsetHasContent` still requires the equivalent to be in the live
+  pinset, so an unpinned copy correctly reappears as a pull-down.
 
 * **Layer 0 — add the FILE, not a directory wrapper (a related defect found alongside this one).** Kubo's
   HTTP `add` treats a **slashed multipart filename as a directory path** and wraps the file in one DAG node

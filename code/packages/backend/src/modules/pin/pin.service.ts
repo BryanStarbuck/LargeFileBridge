@@ -1346,7 +1346,11 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
       log.warn("pin", `missingPinnedFromPeers: ${repoRoot}: manifest entry "${entry.path}" is not inside the repo — ignored`);
       continue;
     }
-    if (pinset.has(ipfs.canonicalCid(entry.cid))) continue; // pinned on this node → this computer really holds it
+    // CONTENT, not the literal CID (knowledge/ipfs.mdx §5.1). `canonicalCid` only re-encodes the SAME
+    // multihash, so a peer's legacy `Qm…` and our raw-leaves `bafk…` for identical bytes stayed unequal and
+    // every such file was offered forever: each pull re-added it, re-recorded the same equivalence pair,
+    // reported success, and this count never moved. `runUnitPin` has always tested it this way.
+    if (pinsetHasContent(pinset, entry.cid)) continue; // pinned on this node → this computer really holds it
     // ON DISK BUT NOT PINNED HERE IS STILL A PULL-DOWN. This used to `continue` on `fs.existsSync(abs)`, which
     // made the repo metric and the CLI answer two different numbers for one question: the CLI's `pull_down`
     // (files-query.service.ts) counts `decision === "sync" && pinnedHere === false` as well, so on 2026-08-10

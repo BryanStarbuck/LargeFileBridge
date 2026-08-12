@@ -35,7 +35,6 @@ import { getStorageRow, listStorageIds } from "../storage/storage.service.js";
 // Peer device LABELS for a remote-only row (devices.mdx §6.9) — the id/name → nice-name index. Same
 // function-body-only usage as getStorageRow above, so the storage.service cycle stays safe.
 import { deviceLabelIndex, resolveDeviceLabel } from "../storage/devices.service.js";
-import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 import { analysisOutputs, storageIndexDroppedFiles } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
@@ -43,6 +42,7 @@ import { resolveStorageType } from "../storage/storage-type.service.js";
 import { repoStateDir } from "../storage/tracking-root.service.js";
 import { mergeManifests } from "../storage/manifest-merge.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
+import { pinsetHasContent } from "../pin/cid-equivalence.service.js";
 import { joinRel, healPathKeyedMap } from "../../shared/rel-path.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { bumpTopics, repoTopic, REPOS_TOPIC } from "../events/state-events.service.js";
@@ -550,11 +550,13 @@ async function composeFileRows(
       transfer: transferFor(decision, m?.cid ?? null, peers, selfLabel),
       peers,
       // Live pin reality for the three-state icon (one_repo.mdx §4.9). Only meaningful for a decided file
-      // that has a recorded CID; the pinset is CANONICAL so a `Qm…`-encoded pin of a `bafy…` manifest CID
-      // (same block) still counts (knowledge/ipfs.mdx §5.1). Undefined when we have no pinset (IPFS down /
-      // not fetched) or no CID → icon shows intent only, never a false red. NO per-file hashing here.
+      // that has a recorded CID. Tested by CONTENT: `canonicalCid` bridges bases but not add PROFILES, so a
+      // peer's `Qm…` beside our `bafk…` for the same bytes read as "not pinned here" and painted a red icon
+      // on a file this computer holds (knowledge/ipfs.mdx §5.1). Undefined when we have no pinset (IPFS
+      // down / not fetched) or no CID → icon shows intent only, never a false red. NO hashing here — the
+      // equivalence map is a cached lookup.
       pinnedHere:
-        pinset && decision === "sync" && m?.cid ? pinset.has(canonicalCid(m.cid)) : undefined,
+        pinset && decision === "sync" && m?.cid ? pinsetHasContent(pinset, m.cid) : undefined,
       // Node REALITY for an UNDECIDED file: a background pass discovered its bytes pinned OUTSIDE us under a
       // foreign CID (foreign_pin_discovery.mdx §6). Cheap read of the recorded global index — NO hashing on
       // this hot path. Only meaningful when the file isn't already surfacing as a decided/sync pin.

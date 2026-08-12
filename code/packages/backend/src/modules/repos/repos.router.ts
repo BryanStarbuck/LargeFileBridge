@@ -30,6 +30,7 @@ import {
 } from "../store-model/units.service.js";
 import { startScan, getScanJob, maybeTriggerStaleScan } from "../scanner/scan-job.js";
 import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing, ORPHAN_GRACE_MS } from "../pin/pin.service.js";
+import { pinsetHasContent } from "../pin/cid-equivalence.service.js";
 import { schedulePullRetry } from "../pin/pull-retry.service.js";
 import {
   recordDecision,
@@ -631,7 +632,7 @@ reposRouter.get("/:repoId/detail/stream", async (req, res) => {
         // EXACTLY the rows composeFileRows would have given a defined `pinnedHere` — computed here, from the
         // same three conditions, so the patch can never disagree with the buffered route's rows.
         if (f.presence === "remote-only") pinnedHere[f.path] = false;
-        else if (f.decision === "sync" && f.cid) pinnedHere[f.path] = pinset.has(ipfs.canonicalCid(f.cid));
+        else if (f.decision === "sync" && f.cid) pinnedHere[f.path] = pinsetHasContent(pinset, f.cid);
       }
     }
     write({ t: "pins", ipfs: health, pinnedHere });
