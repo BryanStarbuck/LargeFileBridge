@@ -6,9 +6,9 @@
 //
 // Parallelism (pin_process.mdx §4): the pass fans out across units, and WITHIN a unit the independent
 // per-file add/pin and fetch operations fan out too — all heavy IPFS work is drawn through ONE global
-// limiter (`ipfsLimiter`, size `cores − 2`) so total in-flight operations stay bounded no matter how
-// units × files multiply. Concurrent state writes are safe because the store layer serializes per file
-// with atomic temp-then-rename (storage.mdx §15).
+// limiter (`ipfsLimiter`) so total in-flight transfers stay bounded no matter how units × files multiply.
+// Concurrent state writes are safe because the store layer serializes per file with atomic
+// temp-then-rename (storage.mdx §15).
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
@@ -79,12 +79,16 @@ import { whenOnline, hostFromRemote } from "../../shared/net-transient.js";
 import { statOrNull } from "../../shared/fs-probe.js";
 import { expandHome } from "../../shared/home-path.js";
 
-// One global concurrency budget for ALL heavy IPFS work in a pass — the canonical RESPONSIVE budget
-// (`cores − 2`, parallelization.mdx §1) so a 20–30-core machine stays busy while 2 cores keep the web app
-// + IPFS node responsive (pin_process.mdx §4). Drawn from the ONE shared helper so there is no second
-// core-count definition. Every add/pin/fetch runs through `ipfsLimiter.run(...)`, so unit-level and
-// file-level fan-out share the same ceiling and never oversubscribe the box.
+// The UNIT budget — CPU-bound pass work, the canonical RESPONSIVE budget (pin_process.mdx §4).
 const PIN_CONCURRENCY = responsiveBudget();
+
+/** IPFS fetches in flight. A hard 8, NOT `cores − 2`: a transfer is bounded by one shared uplink, so sizing
+ *  it by cores makes a fast machine starve itself faster than a slow one — starved pulls pass
+ *  `pullMissing`'s idle budget with no progress record and fail as "the transfer never started". */
+const IPFS_TRANSFER_CONCURRENCY = Number(process.env.LFB_IPFS_TRANSFER_CONCURRENCY) || 8;
+
+/** Exported so the test asserts the number this build uses, not a re-derivation of it. */
+export const ipfsTransferConcurrency = IPFS_TRANSFER_CONCURRENCY;
 
 class Limiter {
   private active = 0;
@@ -107,7 +111,8 @@ class Limiter {
     }
   }
 }
-const ipfsLimiter = new Limiter(PIN_CONCURRENCY);
+/** Every add/pin/fetch runs through this, so unit- and file-level fan-out share one ceiling. */
+const ipfsLimiter = new Limiter(IPFS_TRANSFER_CONCURRENCY);
 
 let passInFlight = false;
 

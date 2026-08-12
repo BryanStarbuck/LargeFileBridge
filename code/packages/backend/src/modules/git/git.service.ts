@@ -448,15 +448,11 @@ export function openRepo(workingDir: string): SimpleGit {
   // URL remote from blocking on a password prompt (§5).
   //
   // The ASKPASS vars are the same class of inherited-environment hazard and cost a machine its whole
-  // backbone. simple-git treats `GIT_ASKPASS`/`SSH_ASKPASS` in the environment as an unsafe-config vector
-  // and REFUSES TO RUN AT ALL unless `allowUnsafeAskPass` is opted in — every commit failing with
-  // `Use of "GIT_ASKPASS" is not permitted without enabling allowUnsafeAskPass`. VS Code exports both into
-  // every terminal and every child of one, so a backend started from an integrated terminal (the ordinary
-  // way this app is run during development, and how PC-10 was set up) never commits again: measured there
-  // on 2026-08-12, twelve hours of passes, zero commits, its own device file still untracked, while the
-  // Scans page showed every job green. Stripping them is also what we WANT independent of simple-git —
-  // GIT_TERMINAL_PROMPT=0 already declares that this process must never prompt, and an askpass helper is a
-  // prompt by another name.
+  // backbone. simple-git treats `GIT_ASKPASS`/`SSH_ASKPASS` as an unsafe-config vector and REFUSES TO RUN
+  // AT ALL unless `allowUnsafeAskPass` is opted in, so every commit fails. VS Code exports both into every
+  // terminal and every child of one, so a backend started from an integrated terminal — the ordinary way
+  // this app is run in development — silently never commits again. Stripping them is also what we want
+  // independent of simple-git: GIT_TERMINAL_PROMPT=0 already says this process must never prompt.
   //
   // WINDOWS: simple-git REFUSES to construct when the custom `binary` path holds a character outside its
   // allow-list — and `C:\Program Files\Git\cmd\git.exe` has a space, so every standard Git for Windows

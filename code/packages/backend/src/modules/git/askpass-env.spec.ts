@@ -1,19 +1,15 @@
-// THE INHERITED ASKPASS ENVIRONMENT (git_backbone.mdx §5). On 2026-08-12, PC-10 had every LFB service
-// installed, enabled and firing on schedule, the Scans page showed all of them green — and the machine had
-// not made a single git commit since it was set up. Twelve hours of passes, its own device file still
-// untracked, `0 repo(s) with your commits`, and one line repeating in the log:
+// THE INHERITED ASKPASS ENVIRONMENT (git_backbone.mdx §5). `simple-git` treats `GIT_ASKPASS`/`SSH_ASKPASS`
+// in the environment as an unsafe-config vector and refuses to run git AT ALL unless the caller opts in:
 //
 //   Git commit failed: Use of "GIT_ASKPASS" is not permitted without enabling allowUnsafeAskPass
 //
-// `simple-git` treats `GIT_ASKPASS`/`SSH_ASKPASS` in the environment as an unsafe-config vector and refuses
-// to run git AT ALL unless the caller opts in. VS Code exports both into every integrated terminal and every
-// child of one, so a backend started from a terminal — the ordinary way this app is run in development —
-// inherits them and loses its whole backbone. The right answer is not to opt in to the unsafe flag: this
-// process already declares `GIT_TERMINAL_PROMPT=0`, and an askpass helper is a prompt by another name.
+// VS Code exports both into every integrated terminal and every child of one, so a backend started from a
+// terminal loses its whole backbone — silently, since only the log says so. Not opting in to the unsafe
+// flag is the point: this process declares `GIT_TERMINAL_PROMPT=0`, and an askpass helper is a prompt.
 import { describe, it, expect } from "vitest";
 import { NON_INTERACTIVE_ENV_STRIP } from "./git.service.js";
 
-// The exact variables VS Code injects, captured from the live PC-10 backend's /proc/<pid>/environ.
+// The exact variables VS Code injects into a terminal's children.
 const VSCODE_INJECTED = [
   "GIT_ASKPASS",
   "VSCODE_GIT_ASKPASS_NODE",
@@ -41,7 +37,7 @@ describe("NON_INTERACTIVE_ENV_STRIP — no git child may inherit a prompt", () =
   });
 
   it("leaves an environment with none of them exactly as it was", () => {
-    const clean = { PATH: "/usr/bin", HOME: "/home/pc-10", GIT_TERMINAL_PROMPT: "0" };
+    const clean = { PATH: "/usr/bin", HOME: "/home/user", GIT_TERMINAL_PROMPT: "0" };
     const after = { ...clean };
     for (const k of NON_INTERACTIVE_ENV_STRIP) delete (after as Record<string, string>)[k];
     expect(after).toEqual(clean);

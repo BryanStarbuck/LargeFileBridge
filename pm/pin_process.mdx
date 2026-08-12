@@ -151,12 +151,29 @@ Answering with the priority repo's detail immediately, then running the remainde
 Modern machines have **20–30 cores**; pinning units one-at-a-time wastes almost all of them. A pin
 pass is **concurrent by default**:
 
-* **One global budget for all heavy work.** Every add/pin/fetch is drawn through a **single limiter**
-  sized **`cores − 2`**, so total in-flight IPFS operations stay bounded **no matter how units × files
-  multiply**. Two cores are left for the web app and the IPFS node so the UI stays responsive during a
-  big pass. Concurrent state writes are safe because every write goes through the store layer's
-  **per-file mutex + atomic temp-then-rename**
+* **One global budget for all TRANSFERS, and it is a HARD 8 — not the core count (LOCKED, corrected).**
+  Every add/pin/fetch is drawn through a **single limiter**, so total in-flight IPFS operations stay
+  bounded **no matter how units × files multiply**. Concurrent state writes are safe because every write
+  goes through the store layer's **per-file mutex + atomic temp-then-rename**
   ([storage_local.mdx §15](./storage_local.mdx#15-the-store-layer-how-code-touches-disk)).
+
+  This limiter was sized `cores − 2`, which asked the wrong question of the wrong resource. Cores say how
+  much **work** a box can do at once; a fetch is bounded by **one uplink shared by every transfer on it**,
+  so scaling fan-out with cores makes a fast machine **starve itself faster than a slow one**. Measured on a
+  20-core machine (⇒ 18 in flight) behind carrier-grade NAT at ~262 KB/s aggregate — a ceiling that does not
+  move whatever the concurrency:
+
+  | in flight | behaviour |
+  | --- | --- |
+  | 1 | 188 progress records in 170s, longest gap **5s** |
+  | 8 | **six of eight** got one record then nothing for **99 of 100s**; the two that moved went **54s** and **80s** between records |
+
+  §10.8.12 C allows 120s of silence and two attempts, so a starved file exhausts both and reports "the
+  transfer never started" — for bytes that were live on IPFS the whole time and fetch in ~2s given the pipe
+  to themselves. **70 files in one repo sat unpullable** there while every one of them was available.
+  The cap costs nothing real: the uplink, not the fan-out, sets total throughput, so eight
+  streams that finish beat eighteen that time out. `LFB_IPFS_TRANSFER_CONCURRENCY` widens it for a link
+  that can take it.
 * **Across units.** Units pin concurrently.
 * **Within a unit.** A unit's independent per-file operations (add + pin new/changed files, fetch
   missing CIDs) **fan out in parallel** through the same global limiter — not a strict file-by-file
@@ -167,19 +184,18 @@ pass is **concurrent by default**:
 Sequential pinning is a **defect to fix**, not an acceptable baseline. Any place that still loops
 `for … await` over units or files across a pass should be flagged and converted to the pool/limiter.
 
-**Canonical budget (unified — one definition).** The `cores − 2` figure this pass uses is now the canonical
-**RESPONSIVE budget** defined in [parallelization.mdx §1](./parallelization.mdx) and exposed as
-`responsiveBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
-The pin pass is its **reference consumer** — the work that runs *alongside* interactive use, so it leaves 2
-cores for the web app + IPFS node rather than running hot at ~90% like the mass-compute budget the job queue
-draws ([performance.mdx P-26](./performance.mdx)). The inline `PIN_CONCURRENCY = cores − 2` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` should be
-**expressed via `responsiveBudget()`** so there is exactly **one** definition of the number, not a second
-copy that can drift. The two-level fan-out design above is unchanged — this only unifies *where the count
-comes from*.
+**Two budgets, because there are two resources.** The **unit** fan-out is CPU-shaped and keeps the canonical
+**RESPONSIVE budget** (`cores − 2`) defined in [parallelization.mdx §1](./parallelization.mdx) and exposed as
+`responsiveBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`:
+the pin pass is its **reference consumer** — work that runs *alongside* interactive use, leaving 2 cores for
+the web app + IPFS node rather than running hot at ~90% like the mass-compute budget the job queue draws
+([performance.mdx P-26](./performance.mdx)). The **transfer** ceiling is the hard 8 above and is deliberately
+**not** drawn from that helper. Unifying them was the mistake: one definition is right only when there is one
+resource, and "how many cores" can never answer "how many streams fit down this link."
 
-The bounded fan-out — a `cores − 2` pool across units and one shared `cores − 2` limiter that caps ALL per-file add/pin/fetch work — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitPin` (per-file `Promise.all` through the limiter)
+The two-level fan-out — a `cores − 2` pool across units and one shared **hard-8** limiter that caps ALL
+per-file add/pin/fetch work — is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `IPFS_TRANSFER_CONCURRENCY` (per-file `Promise.all` through the limiter)
 
 ---
 
@@ -340,8 +356,9 @@ Turning a fetching pin's DAG-node stream into the byte reading that line shows i
    Pin now — reduces scope to one unit (§2).
 4. A **manual Pin now on one repo prioritizes that repo (pinned first, awaited) and then runs the full
    pass over the remaining units** in the background; it never pins one repo and stops (§2, §3).
-5. The pass runs with **bounded concurrency** (default `cores − 2`) across units, and fans out per-file
-   work within a unit; sequential `for…await` over a whole pass is treated as a defect (§4).
+5. The pass runs with **bounded concurrency** across units (`cores − 2`) and fans out per-file work
+   within a unit through the **hard-8 transfer limiter**; sequential `for…await` over a whole pass is
+   treated as a defect (§4).
 6. A **manual Pin now is the explicit opt-in** for its repo (flips `pinned: true` and moves bytes),
    while the **background scheduler still respects `pinned: false`** (§5).
 7. **No silent no-ops.** A user-initiated pin does real work or reports an honest "nothing to pin,"
@@ -356,12 +373,14 @@ Turning a fetching pin's DAG-node stream into the byte reading that line shows i
        "opted in to IPFS pinning," and it gates BYTE WORK only, never visiting/reconciling.
   (§2) Every pin pass is a FULL PASS over all known units; a repo-scoped trigger sets PRIORITY, not scope.
   (§3) Priority = order only (priority unit first + awaited, remainder in background under an overlap guard).
-  (§4) Bounded-concurrency parallelism (cores-2) across units and across files; sequential is a defect.
-       The cores-2 figure is the canonical RESPONSIVE budget from parallelization.mdx §1 (responsiveBudget()
-       in shared/concurrency.ts); the pin pass is its reference consumer (runs alongside interactive use,
-       leaves 2 cores for HTTP+IPFS). The inline PIN_CONCURRENCY=cores-2 in pin.service.ts should call
-       responsiveBudget() so there is ONE definition — cross-ref performance.mdx P-26 (queue = mass-compute
-       budget). Design in §4 unchanged; unification note only.
+  (§4) Bounded concurrency: cores-2 across units, a HARD 8 for transfers; sequential is a defect.
+       TWO budgets because there are TWO resources. Units: the canonical RESPONSIVE budget from
+       parallelization.mdx §1 (responsiveBudget() in shared/concurrency.ts) — the pin pass is its reference
+       consumer, running alongside interactive use and leaving 2 cores for HTTP+IPFS; cross-ref
+       performance.mdx P-26 (queue = mass-compute budget). Transfers: IPFS_TRANSFER_CONCURRENCY, a hard 8,
+       NOT drawn from that helper — bytes cross one shared uplink, so cores cannot answer how many streams
+       fit down it. Sizing transfers by cores made a fast machine starve itself faster than a slow one
+       (20 cores ⇒ 18 in flight: 6 of 8 files silent for 99 of 100s, 70 available files unpullable).
   (§5) Opt-in gates add/pin/fetch; a manual Pin now IS the opt-in. Device write-back rides the git
        backbone (pinStorageUnit) and is NOT gated by `pinned`.
   (§6) Never a silent no-op — report truthfully with counts (the real defect this spec learned from).

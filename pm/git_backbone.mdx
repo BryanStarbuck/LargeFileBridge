@@ -398,14 +398,14 @@ Two independent reasons, either sufficient:
 * `simple-git` treats either variable as an unsafe-config vector and **refuses to run git at all** unless
   `allowUnsafeAskPass` is opted in. We do not opt in — the point is to have no prompt, not to permit one.
 
-**The defect (2026-08-12, PC-10).** VS Code exports both variables into every integrated terminal and every
-child of one, so a backend started from a terminal — the ordinary way this app is run in development —
-inherited them. Every commit then failed with `Use of "GIT_ASKPASS" is not permitted without enabling
-allowUnsafeAskPass`. The machine had every service installed, enabled, and firing on schedule; the Scans
-page showed all of them green; and it had not committed once since setup — twelve hours of passes, its own
-device file still untracked, `company discovery: 0 repo(s) with your commits`. The failure appeared only in
-`log.log`. **A job that fails every cycle must not render as a healthy job** (see `background_processing.mdx`);
-a green check that survives twelve hours of total failure is the part of this that cost the day.
+**The defect (2026-08-12).** VS Code exports both variables into every integrated terminal and every child
+of one, so a backend started from a terminal — the ordinary way this app is run in development — inherited
+them, and every commit failed with `Use of "GIT_ASKPASS" is not permitted without enabling
+allowUnsafeAskPass`. The affected machine had every service installed, enabled and firing on schedule, the
+Scans page showed all of them green, and it had not committed once since setup: half a day of passes, its
+own device file still untracked, `company discovery: 0 repo(s) with your commits`. The failure appeared only
+in `log.log`. **A job that fails every cycle must not render as a healthy job**
+(see `background_processing.mdx`) — the green check that outlived total failure is what cost the day.
 
 ---
 
