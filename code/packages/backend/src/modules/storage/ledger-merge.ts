@@ -41,9 +41,10 @@ export function unionLedgerEvents(a: DecisionEvent[], b: DecisionEvent[]): Decis
 }
 
 /**
- * Collapse RE-STAMPS: an event whose decision is identical to another for the same file, differing only in
- * WHEN it was recorded. A pure function of the SET, so it is idempotent and converges under `merge=union` —
- * both computers compute the same result from the same union and the merge after it is a no-op.
+ * Collapse RE-STAMPS: an event stating the same DECISION as another for the same file, differing only in
+ * when it was recorded and in metadata the fold never reads. A pure function of the SET, so it is
+ * idempotent and converges under `merge=union` — both computers compute the same result from the same
+ * union and the merge after it is a no-op.
  *
  * Append-only is the right shape for this log, but a writer that re-appends an unchanged decision every
  * pass turns it into unbounded growth carrying no new information, and a union-merged log has no other way
@@ -60,17 +61,25 @@ export function unionLedgerEvents(a: DecisionEvent[], b: DecisionEvent[]): Decis
 export function compactLedger(events: DecisionEvent[]): DecisionEvent[] {
   const groups = new Map<string, DecisionEvent[]>();
   for (const e of events) {
-    // The payload IS the key — two events saying the same thing about the same file are one decision stated
-    // twice. Paths normalize the way `foldLedger` normalizes them, so a Windows peer's `jfk\training\…`
-    // re-stamp collapses against this computer's `jfk/training/…` instead of living beside it forever.
+    // The key is EXACTLY WHAT `foldLedger` READS, and nothing else — that is the whole rule. Two events
+    // agreeing on every field the fold consults say the same thing about the same file, whatever else
+    // differs, so collapsing them cannot change any answer this log can be asked for. Paths normalize the
+    // way the fold normalizes them, so a Windows peer's `jfk\training\…` re-stamp collapses against this
+    // computer's `jfk/training/…` instead of living beside it forever.
+    //
+    // `sid` and `fingerprint` are therefore ABSENT, and their absence is the point: the fold reads NEITHER
+    // (it keys on path alone and returns no fingerprint), yet keying on them is what let the noise survive
+    // the fix meant to remove it. The live company ledger carries THREE sids for one storage — the raw
+    // remote-URL hash since corrected in `decisionSid` — so events identical in every way the fold reads
+    // sat in different groups and no amount of compaction could bring them together. `fingerprint` is the
+    // same trap not yet sprung: it moves whenever a file's CONTENT changes, so one decision re-stated
+    // across an edit would open a fresh group every time and grow without bound again.
     const key = [
       healWindowsPath(e.path),
-      e.sid,
       e.asked,
       e.ipfs,
       e.gitignore,
       e.decided_by ?? "",
-      e.fingerprint ?? "",
     ].join("\u0000");
     const g = groups.get(key);
     if (g) g.push(e);

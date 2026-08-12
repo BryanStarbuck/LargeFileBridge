@@ -31,6 +31,7 @@ import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { mirrorToSyncRepo } from "./tracking-sync.service.js";
 import { serializeLedger } from "./ledger-merge.js";
 import { storageSid } from "./storage.service.js";
+import { normalizeRemoteKey } from "./repo-identity.js";
 import { readStorageSettings } from "./storage-settings.service.js";
 import { applyGitIgnore, unignorePaths } from "../git/gitignore.service.js";
 import { classifyRemoteVisibility } from "../git/git.service.js";
@@ -238,12 +239,18 @@ function repoRootFor(folder: string): string {
  * remote (a purely local repo, whose decisions don't travel anyway). The `sid` is provenance/portability
  * metadata, not a fold key (foldLedger keys on path alone) — but keeping it stable makes the same logical
  * storage identifiable across machines and in any aggregated/quarantined view.
+ *
+ * It hashes the NORMALIZED remote key, not the raw URL. Hashing the raw string made "stable across the
+ * team" a promise the function could not keep: `https://github.com/ACT3ai/all.git` and
+ * `git@github.com:ACT3ai/all.git` are one repo and hashed to two ids, and the live company ledger carries
+ * THREE — `r:c2a759acab00`, `r:1b66e4487b3f`, `r:00bb9017e98d` — for a single storage. That is not
+ * cosmetic: `compactLedger` groups by the payload, so events identical in every way the fold reads sat in
+ * different groups and could never collapse. `repoUidFor` already keys the sync-repo subtree this exact
+ * way, so the two now agree by construction.
  */
 function decisionSid(folder: string, repoRoot: string): string {
-  const remote = getRepoConfig(folder).repo.remote;
-  if (remote && remote.trim()) {
-    return "r:" + crypto.createHash("sha1").update(remote.trim()).digest("hex").slice(0, 12);
-  }
+  const key = normalizeRemoteKey(getRepoConfig(folder).repo.remote ?? null);
+  if (key) return "r:" + crypto.createHash("sha1").update(key.toLowerCase()).digest("hex").slice(0, 12);
   return storageSid(repoRoot);
 }
 

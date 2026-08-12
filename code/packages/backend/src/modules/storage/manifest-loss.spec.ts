@@ -124,6 +124,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
   let syncRepo: string;
   let mirrorDir: string;
   let mirrorToSyncRepo: (repoRoot: string) => boolean;
+  let computerLabel: () => string;
   let localManifestPath: string;
   let prevStateDir: string | undefined;
 
@@ -141,6 +142,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     const mod = await import("./tracking-sync.service.js");
     const { repoStateDir, resolveStateSyncRepo } = await import("./tracking-root.service.js");
     mirrorToSyncRepo = mod.mirrorToSyncRepo;
+    computerLabel = (await import("../store-model/config.service.js")).computerLabel;
     mod.setSyncRepoMarker(repoRoot, syncRepo, REMOTE);
     mirrorDir = resolveStateSyncRepo(repoRoot)!;
     localManifestPath = path.join(repoStateDir(repoRoot), "manifest.yaml");
@@ -175,7 +177,8 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
   });
 
   it("keeps a peer's pin claim on an entry both computers know", () => {
-    // The 13 stripped `nayan-desktop-tqau7t7` claims in a6cf284e6, in one assertion.
+    // The 13 stripped `nayan-desktop-tqau7t7` claims in a6cf284e6, in one assertion: the claim is on the
+    // MIRROR, and publishing must not stamp over it.
     const shared = "jfk/training/videos/shared.mp4";
     fs.writeFileSync(
       path.join(mirrorDir, "manifest.yaml"),
@@ -184,14 +187,74 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     );
     fs.writeFileSync(
       localManifestPath,
-      serializeManifest(manifest([file({ path: shared, pinned_by: [TOWER] })])),
+      serializeManifest(manifest([file({ path: shared, pinned_by: [] })])),
       "utf8",
     );
 
     mirrorToSyncRepo(repoRoot);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
-    expect(after.files.find((f) => f.path === shared)!.pinned_by.sort()).toEqual([NAYAN, TOWER].sort());
+    expect(after.files.find((f) => f.path === shared)!.pinned_by).toEqual([NAYAN]);
+  });
+
+  it("does NOT re-publish a peer claim the mirror no longer carries", () => {
+    // The other half of the same rule, and the one that stops the churn. Only the device named by a claim
+    // can know it is still true, so on the wire every OTHER device's claim is the MIRROR's to state: we
+    // pass through what it says and never add back what we happen to remember. Without this, a withdrawal
+    // survives exactly one hop — measured 2026-08-11, `bryan-mac-pro` dropped 10 unbacked claims and the
+    // second computer re-unioned every one from its stale copy, one commit each way, all day.
+    const shared = "jfk/training/videos/shared.mp4";
+    fs.writeFileSync(
+      path.join(mirrorDir, "manifest.yaml"),
+      serializeManifest(manifest([file({ path: shared, pinned_by: [] })])), // TOWER withdrew it here
+      "utf8",
+    );
+    fs.writeFileSync(
+      localManifestPath,
+      serializeManifest(manifest([file({ path: shared, pinned_by: [TOWER] })])), // our stale memory of it
+      "utf8",
+    );
+
+    mirrorToSyncRepo(repoRoot);
+
+    const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
+    expect(after.files.find((f) => f.path === shared)!.pinned_by).toEqual([]);
+  });
+
+  it("still publishes OUR OWN claim from the local copy, not the mirror's view of it", () => {
+    // The asymmetry that makes the rule above safe: a peer's claim comes from the wire, but ours comes from
+    // US — it is the one claim this computer can actually prove, and the mirror's copy of it is only ever
+    // our own past statement coming back.
+    const shared = "jfk/training/videos/ours.mp4";
+    fs.writeFileSync(
+      path.join(mirrorDir, "manifest.yaml"),
+      serializeManifest(manifest([file({ path: shared, pinned_by: [NAYAN] })])),
+      "utf8",
+    );
+    fs.writeFileSync(
+      localManifestPath,
+      serializeManifest(manifest([file({ path: shared, pinned_by: [computerLabel()] })])),
+      "utf8",
+    );
+
+    mirrorToSyncRepo(repoRoot);
+
+    const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
+    expect(after.files.find((f) => f.path === shared)!.pinned_by.sort()).toEqual([NAYAN, computerLabel()].sort());
+  });
+
+  it("leaves an unparseable mirror alone instead of stamping over it", () => {
+    // `readManifestBestEffort` answers "nothing" for a file that EXISTS but will not parse, and the merge
+    // is skipped in exactly that case — so before this, `copyTree` silently REPLACED a conflicted mirror
+    // with this computer's copy: the wholesale overwrite the whole block exists to prevent, through the one
+    // door left open.
+    const conflicted = "<<<<<<< HEAD\nschema_version: 1\n=======\nfiles: []\n>>>>>>> origin/main\n";
+    fs.writeFileSync(path.join(mirrorDir, "manifest.yaml"), conflicted, "utf8");
+    fs.writeFileSync(localManifestPath, serializeManifest(manifest([file({ pinned_by: [] })])), "utf8");
+
+    mirrorToSyncRepo(repoRoot);
+
+    expect(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")).toBe(conflicted);
   });
 
   it("writes byte-stable bytes — a mirror of unchanged state produces no diff to commit", () => {

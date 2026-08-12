@@ -177,7 +177,8 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     // BEFORE the tree copy overwrites the file, then write the UNION back (decisions.mdx §5). Without this
     // the copy is last-writer-wins and silently erases the other writer's events.
     const mirrorLedgerFile = path.join(dst, "decisions.yaml");
-    const priorMirrorEvents = parseLedgerBestEffort(readFileOrNull(mirrorLedgerFile));
+    const priorLedgerRaw = readFileOrNull(mirrorLedgerFile);
+    const priorMirrorEvents = parseLedgerBestEffort(priorLedgerRaw);
     // THE MANIFEST NEEDS THE SAME PROTECTION, AND DID NOT HAVE IT. The two files are the same kind of thing —
     // SHARED state whose entries arrive from several computers — yet only the ledger was captured here, so
     // `copyTree` below stamped this machine's whole view of the manifest over every peer's. Measured on the
@@ -185,17 +186,32 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     // owned them pushed them, and 8 commits in that file's history dropped entries this way. `mergeManifests`
     // has always documented "absence is NEVER a delete"; the mirror simply never called it.
     const mirrorManifestFile = path.join(dst, "manifest.yaml");
+    const priorManifestRaw = readFileOrNull(mirrorManifestFile);
     const priorMirrorManifest = readManifestBestEffort(mirrorManifestFile, "repo");
     copyTree(repoStateDir(repoRoot), dst);
+    // BOTH captures above are BEST-EFFORT READS, and both hand back "nothing" for a file that EXISTS but
+    // will not parse — conflict markers, a truncated write, a schema that moved. `copyTree` has already
+    // stamped our copy over it by then, and the guards below skip the merge precisely in that case, so an
+    // unreadable mirror was silently REPLACED: the wholesale overwrite this whole block exists to prevent,
+    // reached through the one door left open. Put the bytes back instead and say so loudly. A conflicted
+    // mirror is a problem for a human or the next git merge to settle; it is not ours to discard, and the
+    // readers already refuse to parse one as truth rather than trusting a half-merged file.
+    restoreUnparseableMirror(mirrorManifestFile, priorManifestRaw, priorMirrorManifest.files.length > 0, repoRoot);
+    restoreUnparseableMirror(mirrorLedgerFile, priorLedgerRaw, priorMirrorEvents.length > 0, repoRoot);
     if (priorMirrorManifest.files.length > 0) {
       try {
         const localManifest = readManifestBestEffort(path.join(repoStateDir(repoRoot), "manifest.yaml"), "repo");
         // The PRIOR MIRROR IS THE WIRE, so our own label is stripped from it here too. Without this the
         // union hands us back the very self-claim we may have just dropped locally, and no correction to
         // this computer's own claim could ever be published — it would be re-adopted on the way out.
+        // `incomingIsWire` is the other half of that: every OTHER computer's claim passes through from the
+        // mirror rather than being re-unioned from our copy, so this machine can never re-publish a peer's
+        // withdrawn claim (manifest-merge.ts).
         fs.writeFileSync(
           mirrorManifestFile,
-          serializeManifest(mergeManifests(localManifest, priorMirrorManifest, computerLabel())),
+          serializeManifest(
+            mergeManifests(localManifest, priorMirrorManifest, computerLabel(), { incomingIsWire: true }),
+          ),
           "utf8",
         );
       } catch (e) {
@@ -231,6 +247,33 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
   } catch (e) {
     log.warn("storage", `mirrorToSyncRepo(${repoRoot}) failed (path missing/unwritable): ${(e as Error).message}`);
     return false;
+  }
+}
+
+/**
+ * Undo `copyTree`'s overwrite of ONE shared mirror file that existed but could not be parsed, so the merge
+ * that would have preserved it never ran. Called with the bytes read BEFORE the copy: a file that was
+ * absent (`null`), empty, or parsed fine (`parsedOk`) is left exactly as the copy left it — this only ever
+ * fires for the case where we know we destroyed something we could not read.
+ */
+function restoreUnparseableMirror(
+  file: string,
+  priorRaw: string | null,
+  parsedOk: boolean,
+  repoRoot: string,
+): void {
+  if (parsedOk || !priorRaw?.trim()) return;
+  try {
+    if (fs.readFileSync(file, "utf8") === priorRaw) return; // copy was a no-op — nothing was lost
+    fs.writeFileSync(file, priorRaw, "utf8");
+    log.error(
+      "storage",
+      `mirrorToSyncRepo(${repoRoot}): ${file} exists but could not be parsed (conflict markers or corrupt) — ` +
+        `restored the mirror's own bytes rather than overwriting it with this computer's copy. ` +
+        `Resolve it in the sync repo; nothing from this machine was merged into it this pass.`,
+    );
+  } catch (e) {
+    log.warn("storage", `mirrorToSyncRepo(${repoRoot}): could not restore ${file}: ${(e as Error).message}`);
   }
 }
 
@@ -341,6 +384,7 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         readManifestBestEffort(localPath, "repo"),
         readManifestBestEffort(incomingManifest, "repo"),
         computerLabel(),
+        { incomingIsWire: true }, // the mirror is the shared copy — peer claims are ITS statement, not ours
       );
       // The CANONICAL serializer, not a bare stringify: this file is also written by manifest.service, and
       // two spellings of one document make each writer re-dirty what the other just wrote (§6).
@@ -439,7 +483,13 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
         // Pull-down list and the mirror read); the One-Repo FILE ROWS read the unit manifest. Updating only
         // one leaves the user with a Pull-down count that no row explains, or a row that cannot be pulled.
         try {
-          writeRepoManifest(folder, mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath)));
+          // Both sides are LOCAL documents, so peer claims union normally — but our own label still must not
+          // be re-adopted from the tracking copy. This was the one `mergeManifests` call site of five left
+          // without a `selfLabel` when that rule was introduced.
+          writeRepoManifest(
+            folder,
+            mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath), computerLabel()),
+          );
         } catch (e) {
           log.warn("storage", `reconcile: unit manifest fold for ${folder} failed: ${(e as Error).message}`);
         }

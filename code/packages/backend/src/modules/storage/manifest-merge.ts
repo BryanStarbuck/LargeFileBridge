@@ -73,8 +73,28 @@ export function foldManifestFiles(files: ManifestFile[], unit: Manifest["unit"])
  * while `ipfs pin ls` held none of those CIDs — this computer telling the user's other computers it was
  * holding bytes it did not have. Omit the argument only where there is no wire (a fold of two local
  * documents); every path that reads another computer's copy must pass it.
+ *
+ * `opts.incomingIsWire` says the incoming side is the SHARED MIRROR — the one copy every computer writes
+ * its own claims into — and it is what makes a WITHDRAWN claim able to travel at all. "Union `pinned_by`"
+ * is grow-only, and `healSelfPinClaims` is a DELETE: only device D can prove D no longer holds a CID, and
+ * under a pure union no other computer can ever learn that it did. Measured on the live company repo,
+ * 2026-08-11: `bryan-mac-pro` dropped 10 unbacked claims in charlie-kirk and 3 in `all`, and
+ * `bryanstarbuck-macbook-pro` — for whom those are ordinary PEER claims — re-unioned every one of them from
+ * its stale local copy and pushed them back, one commit each way, every ten to twenty minutes, all day.
+ * 77% of that day's commits were this and nothing else.
+ *
+ * So on the wire the two halves of `pinned_by` have DIFFERENT owners and must merge differently: OUR label
+ * comes from the local document (only we can know it, and that is the existing self-claim rule), and every
+ * OTHER label PASSES THROUGH from the mirror unchanged — never re-added from what we happen to remember.
+ * A peer's withdrawal then survives one hop instead of being undone by it. This cannot lose an entry: a
+ * path the wire has never seen is not iterated here at all and keeps its local claims whole.
  */
-export function mergeManifests(local: Manifest, incoming: Manifest, selfLabel?: string | null): Manifest {
+export function mergeManifests(
+  local: Manifest,
+  incoming: Manifest,
+  selfLabel?: string | null,
+  opts: { incomingIsWire?: boolean } = {},
+): Manifest {
   // FOLD EACH SIDE FIRST. Either side may legitimately carry the same path twice (a `merge=union` git
   // merge concatenates both), and keying a raw list into a Map is last-wins — the twin that held the CID
   // or the peer's claim would be dropped before this function's own union rules ever ran.
@@ -82,6 +102,11 @@ export function mergeManifests(local: Manifest, incoming: Manifest, selfLabel?: 
   // Our own label, stripped from every arriving entry before it is unioned (see the doc block).
   const peerClaims = (f: ManifestFile): string[] =>
     selfLabel ? (f.pinned_by ?? []).filter((c) => c !== selfLabel) : (f.pinned_by ?? []);
+  // What the LOCAL side contributes. Off the wire that is our own label only — every peer's claim is the
+  // mirror's to state, so a withdrawal there is not undone by our stale copy of it. Requires `selfLabel`:
+  // without one we cannot tell our claim from a peer's, and dropping both would publish a lie.
+  const ownClaims = (f: ManifestFile): string[] =>
+    opts.incomingIsWire && selfLabel ? (f.pinned_by ?? []).filter((c) => c === selfLabel) : (f.pinned_by ?? []);
   for (const inc of foldManifestFiles(incoming.files, incoming.unit)) {
     const cur = byPath.get(inc.path);
     if (!cur) {
@@ -110,7 +135,7 @@ export function mergeManifests(local: Manifest, incoming: Manifest, selfLabel?: 
       size: incAuthoritative ? (inc.size ?? cur.size) : cur.size,
       sha256: cur.sha256 ?? inc.sha256,
       modified_at: incAuthoritative ? inc.modified_at : cur.modified_at,
-      pinned_by: [...new Set([...(cur.pinned_by ?? []), ...peerClaims(inc)])].sort((a, b) => a.localeCompare(b)),
+      pinned_by: [...new Set([...ownClaims(cur), ...peerClaims(inc)])].sort((a, b) => a.localeCompare(b)),
     });
   }
   return {

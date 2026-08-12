@@ -103,6 +103,40 @@ describe("compactLedger", () => {
     expect(kept).toHaveLength(2);
   });
 
+  it("collapses re-stamps that differ only in `sid` — provenance the fold never reads", () => {
+    // The live company ledger carried THREE sids for ONE storage, because `decisionSid` hashed the raw
+    // remote URL and `https://github.com/ACT3ai/all.git` / `git@github.com:ACT3ai/all.git` are the same
+    // repo spelled two ways. `foldLedger` keys on path alone, so these events are one decision stated three
+    // times — but while `sid` was in the group key they sat in three groups and never collapsed.
+    const kept = compactLedger([
+      ev("videos/a.mp4", "2026-08-04T00:00:00.000Z", { sid: "r:c2a759acab00" }),
+      ev("videos/a.mp4", "2026-08-04T01:00:00.000Z", { sid: "r:1b66e4487b3f" }),
+      ev("videos/a.mp4", "2026-08-04T02:00:00.000Z", { sid: "r:00bb9017e98d" }),
+    ]);
+    expect(kept).toHaveLength(2);
+  });
+
+  it("collapses re-stamps that differ only in `fingerprint` — the same trap, not yet sprung", () => {
+    // A fingerprint moves whenever the file's CONTENT does. Keyed on, one decision re-stated across a
+    // couple of edits opens a fresh group each time and the log grows without bound again.
+    const kept = compactLedger([
+      ev("videos/a.mp4", "2026-08-04T00:00:00.000Z", { fingerprint: "fp1" }),
+      ev("videos/a.mp4", "2026-08-04T01:00:00.000Z", { fingerprint: "fp2" }),
+      ev("videos/a.mp4", "2026-08-04T02:00:00.000Z", { fingerprint: "fp3" }),
+    ]);
+    expect(kept).toHaveLength(2);
+  });
+
+  it("still keeps a decision made by a DIFFERENT person — `decided_by` is part of the fold", () => {
+    // The line between "metadata" and "the decision": the fold returns `decidedBy` and breaks its ties
+    // with it, so two people saying the same thing are two statements and both survive.
+    const kept = compactLedger([
+      ev("videos/a.mp4", "2026-08-04T00:00:00.000Z", { decided_by: "u_a" }),
+      ev("videos/a.mp4", "2026-08-04T01:00:00.000Z", { decided_by: "u_b" }),
+    ]);
+    expect(kept).toHaveLength(2);
+  });
+
   it("is IDEMPOTENT and order-independent, so two computers converge instead of ping-ponging", () => {
     const events = [...restamps(6), ev("videos/b.mp4", "2026-08-04T09:00:00.000Z")];
     const once = serializeLedger(events);

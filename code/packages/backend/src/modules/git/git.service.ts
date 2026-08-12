@@ -420,6 +420,23 @@ const QUOTEPATH = "false";
  *  `--stdin` + EPIPE handling) instead of going through {@link openRepo}. */
 const QUOTEPATH_ARGS = ["-c", `core.quotepath=${QUOTEPATH}`];
 
+/** Environment variables removed from every git child: the ones that would open an editor or a credential
+ *  prompt. `VSCODE_GIT_ASKPASS_*` are the helper's own arguments — they are inert once `GIT_ASKPASS` is
+ *  gone, but leaving half a mechanism behind is how the next reader concludes it is still wired up. */
+export const NON_INTERACTIVE_ENV_STRIP = [
+  "EDITOR",
+  "VISUAL",
+  "GIT_EDITOR",
+  "GIT_SEQUENCE_EDITOR",
+  "GIT_ASKPASS",
+  "SSH_ASKPASS",
+  "SSH_ASKPASS_REQUIRE",
+  "VSCODE_GIT_ASKPASS_NODE",
+  "VSCODE_GIT_ASKPASS_MAIN",
+  "VSCODE_GIT_ASKPASS_EXTRA_ARGS",
+  "VSCODE_GIT_IPC_HANDLE",
+] as const;
+
 /**
  * A `simple-git` handle on a working directory, configured NON-INTERACTIVE so a URL remote authenticates
  * through the OS git credential helper and NEVER hangs on a password prompt (git_backbone.mdx §5).
@@ -430,6 +447,17 @@ export function openRepo(workingDir: string): SimpleGit {
   // our commits always carry a `-m` message so no editor is ever needed. GIT_TERMINAL_PROMPT=0 keeps a
   // URL remote from blocking on a password prompt (§5).
   //
+  // The ASKPASS vars are the same class of inherited-environment hazard and cost a machine its whole
+  // backbone. simple-git treats `GIT_ASKPASS`/`SSH_ASKPASS` in the environment as an unsafe-config vector
+  // and REFUSES TO RUN AT ALL unless `allowUnsafeAskPass` is opted in — every commit failing with
+  // `Use of "GIT_ASKPASS" is not permitted without enabling allowUnsafeAskPass`. VS Code exports both into
+  // every terminal and every child of one, so a backend started from an integrated terminal (the ordinary
+  // way this app is run during development, and how PC-10 was set up) never commits again: measured there
+  // on 2026-08-12, twelve hours of passes, zero commits, its own device file still untracked, while the
+  // Scans page showed every job green. Stripping them is also what we WANT independent of simple-git —
+  // GIT_TERMINAL_PROMPT=0 already declares that this process must never prompt, and an askpass helper is a
+  // prompt by another name.
+  //
   // WINDOWS: simple-git REFUSES to construct when the custom `binary` path holds a character outside its
   // allow-list — and `C:\Program Files\Git\cmd\git.exe` has a space, so every standard Git for Windows
   // install threw here and took the whole backbone down with it (isSimpleGitSafeBinary, git-bin.ts).
@@ -438,7 +466,7 @@ export function openRepo(workingDir: string): SimpleGit {
   const bin = stableGitBin();
   const binaryOk = isSimpleGitSafeBinary(bin);
   const env = binaryOk ? { ...process.env } : withGitOnPath({ ...process.env });
-  for (const k of ["EDITOR", "VISUAL", "GIT_EDITOR", "GIT_SEQUENCE_EDITOR"]) delete env[k];
+  for (const k of NON_INTERACTIVE_ENV_STRIP) delete env[k];
   return simpleGit({
     baseDir: workingDir,
     binary: binaryOk ? bin : "git", // absolute path — immune to a thin background PATH (git-bin.ts)

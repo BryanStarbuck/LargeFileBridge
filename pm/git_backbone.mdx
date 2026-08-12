@@ -384,6 +384,29 @@ its own password prompt and **never** stores a plaintext password in its own con
 Running git with a non-interactive, credential-helper-backed environment and turning an auth failure into a surfaced storage problem (not a hang) is handled in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()` sets `GIT_TERMINAL_PROMPT=0` and inherits the OS credential helper; `push()` / `fetch()` classify an auth error into a `GitAuthProblem` surfaced by `pinStorageUnit(id)`.
 
+### 5.2 An inherited ASKPASS variable must never reach a git child (LOCKED, learned from a defect)
+
+"Non-interactive" is a property of the **environment we hand the child**, not only of the flags we pass —
+and the environment we inherit is not ours. Every git child therefore has `GIT_ASKPASS`, `SSH_ASKPASS` and
+the `VSCODE_GIT_ASKPASS_*` companions **deleted**, alongside the editor variables stripped for the same
+reason (`NON_INTERACTIVE_ENV_STRIP`).
+
+Two independent reasons, either sufficient:
+
+* An askpass helper **is** a prompt, by another name. `GIT_TERMINAL_PROMPT=0` declares that this process
+  must never block on one; leaving a helper wired up contradicts that declaration.
+* `simple-git` treats either variable as an unsafe-config vector and **refuses to run git at all** unless
+  `allowUnsafeAskPass` is opted in. We do not opt in — the point is to have no prompt, not to permit one.
+
+**The defect (2026-08-12, PC-10).** VS Code exports both variables into every integrated terminal and every
+child of one, so a backend started from a terminal — the ordinary way this app is run in development —
+inherited them. Every commit then failed with `Use of "GIT_ASKPASS" is not permitted without enabling
+allowUnsafeAskPass`. The machine had every service installed, enabled, and firing on schedule; the Scans
+page showed all of them green; and it had not committed once since setup — twelve hours of passes, its own
+device file still untracked, `company discovery: 0 repo(s) with your commits`. The failure appeared only in
+`log.log`. **A job that fails every cycle must not render as a healthy job** (see `background_processing.mdx`);
+a green check that survives twelve hours of total failure is the part of this that cost the day.
+
 ---
 
 ## 6. The backbone cycle — where Git runs inside the pass (LOCKED order)

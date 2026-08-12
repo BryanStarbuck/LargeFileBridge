@@ -232,12 +232,24 @@ every record for the reason the user gave: **"the other user may not see those f
 > 1. **The fold key is `path` alone** (§5), never `(sid, path)`. The ledger file is physically
 >    one-per-storage, so `path` is already unique within it; `sid` is **provenance/portability metadata,
 >    not a fold key.** This makes fold correctness **independent** of how the SID is derived.
-> 2. **The recorded SID is derived from the SHARED git remote URL** (`sha1(repo.remote)`), which is
->    identical for every teammate, not from the per-machine path. A repo with **no remote** (a purely local
->    repo whose decisions don't travel anyway) falls back to the local storage id.
+> 2. **The recorded SID is derived from the SHARED git remote URL**, which is identical for every teammate,
+>    not from the per-machine path. A repo with **no remote** (a purely local repo whose decisions don't
+>    travel anyway) falls back to the local storage id.
 
-Deriving the STABLE, team-shared SID from the git remote (falling back to the local storage id only when there is no remote) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `decisionSid(folder, repoRoot)` (prefers `repo.remote`, else `storageSid()`). The fold that keys on `path` alone is `foldLedger()` in the same file.
+> **The remote must be NORMALIZED before it is hashed (LOCKED, learned from a defect).** Hashing the raw
+> `repo.remote` string made "identical for every teammate" a promise the derivation could not keep:
+> `https://github.com/ACT3ai/all.git` and `git@github.com:ACT3ai/all.git` are **one repo spelled two ways**
+> and hash to two different SIDs. Measured on the live company ledger 2026-08-12: **three** SIDs
+> (`r:c2a759acab00`, `r:1b66e4487b3f`, `r:00bb9017e98d`) for a **single** storage. Correction 1 above kept
+> the fold correct throughout — that is exactly the independence it was designed to give — but a splintered
+> SID is not harmless, because **§5's compaction groups by the payload**: events identical in every way the
+> fold reads sat in different groups and could never collapse. So `decisionSid` hashes
+> `normalizeRemoteKey(remote)` — `host/owner/repo`, the same key `repoUidFor` uses for the sync-repo
+> subtree, so the two agree by construction — and §5's group key **excludes `sid` entirely**, since the
+> fold does not read it.
+
+Deriving the STABLE, team-shared SID from the NORMALIZED git remote key (falling back to the local storage id only when there is no remote) is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `decisionSid(folder, repoRoot)` (hashes `normalizeRemoteKey(repo.remote)` from `repo-identity.ts`, else `storageSid()`). The fold that keys on `path` alone is `foldLedger()` in the same file.
 
 ### 3.2 `path` + `fingerprint` — identity that survives absence and change
 
@@ -354,8 +366,8 @@ must converge **without a human ever resolving a conflict**. The design that gua
    computers still hold and may not have folded yet.
 
    What is safe is a rule that is a **pure function of the merged set**, applied by **every** writer at the
-   one place the document is serialized. It collapses **re-stamps** — an event identical to another for the
-   same file on every recorded field except *when* it was recorded — keeping the **first** and the **last**
+   one place the document is serialized. It collapses **re-stamps** — an event agreeing with another for
+   the same file on **every field the fold reads** — keeping the **first** and the **last**
    statement of each unchanged decision. Being a pure function of the set makes it idempotent and
    **order-independent**, so two computers land on the same bytes and the merge after it is a no-op;
    because it never drops a group's latest event, the fold's answer is unchanged **by construction**; and
@@ -369,6 +381,18 @@ must converge **without a human ever resolving a conflict**. The design that gua
    **1,585 times in two days** — a **4.8 MB, 172k-line** document every teammate's computer parses on every
    decision. Compaction returns it to **596 KB / 2,265 events**, and the same rule run over charlie-kirk's
    ledger — whose history is real — removes **46 of 3,306** events. It is surgical, not lossy.
+
+   > **The group key is EXACTLY what `foldLedger` reads, and nothing else (LOCKED).** That is
+   > `path` (POSIX-normalized the way the fold normalizes it), `asked`, `ipfs`, `gitignore`, `decided_by`.
+   > Two events agreeing on all of them say the *same thing about the same file* whatever else differs, so
+   > collapsing them cannot change any answer this log can be asked for. `sid` and `fingerprint` are
+   > therefore **excluded**, and their exclusion is load-bearing: the fold reads neither, yet keying on them
+   > is what let the noise survive the fix meant to remove it. §3.1's three-SIDs-for-one-storage defect put
+   > identical decisions into three groups that could never collapse; `fingerprint` is the same trap not yet
+   > sprung, since it moves whenever a file's **content** does, so one decision re-stated across a few edits
+   > would open a fresh group each time and grow without bound again. `decided_by` stays **in** the key — the
+   > fold returns it and breaks its ties with it, so two people stating the same decision are two statements
+   > and both survive.
 
    Collapsing re-stamps at the single shared serialization of the ledger is handled in code:
    `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `compactLedger()`, applied in `serializeLedger()` (the one spelling used by `decisions.service.ts` — `writeLedger()` and by both mirror directions).
