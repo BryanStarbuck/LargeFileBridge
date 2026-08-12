@@ -56,6 +56,7 @@ import { mergeManifests } from "../storage/tracking-sync.service.js";
 import { reconcile as reconcileDecisionEnum } from "../storage/decisions.service.js";
 import { pinnedCidSet, setPinClaim, type PinReport } from "./pin.service.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
+import { noteSupersededCid } from "./superseded-cids.service.js";
 import { withUnitLock, unitLockBusy } from "./unit-lock.js";
 import { bumpTopics } from "../events/state-events.service.js";
 import { joinRelConfined } from "../../shared/rel-path.js";
@@ -252,6 +253,7 @@ async function reconcileEntry(
         // — so an equivalence would fix only THIS machine while every peer kept a CID it cannot use. On the
         // one computer that holds the bytes, replacing it is the single repair that reaches the others.
         if ((await ipfs.dagNodeType(entry.cid)) === "directory") {
+          noteSupersededCid(entry.cid, found.cid); // so the wire merge cannot hand the folder CID back
           entry.cid = found.cid;
           counts.cidsHealed = 1;
         } else {
@@ -296,6 +298,7 @@ async function reconcileEntry(
       if ((await ipfs.dagNodeType(entry.cid)) === "directory") {
         const fileCid = await ipfs.resolveFileCid(entry.cid, path.basename(entry.path));
         if (ipfs.canonicalCid(fileCid) !== ipfs.canonicalCid(entry.cid)) {
+          noteSupersededCid(entry.cid, fileCid); // proven by the walk, so the merge may rely on it
           entry.cid = fileCid;
           counts.cidsHealed = 1;
         }

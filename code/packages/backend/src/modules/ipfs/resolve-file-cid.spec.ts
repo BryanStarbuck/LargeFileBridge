@@ -57,4 +57,30 @@ describe("resolveFileCid (wrapper-directory CIDs)", () => {
     stubDaemon({ [DIRS[0]!]: [{ Name: "a.mp4", Hash: "bafy-a" }, { Name: "b.mp4", Hash: "bafy-b" }] });
     await expect(resolveFileCid(DIRS[0]!, "clip.mp4")).rejects.toThrow(/cannot resolve it to a single file/);
   });
+
+  it("budgets the WHOLE walk as a transfer, and says what actually happened when it runs out", async () => {
+    // These blocks come off the NETWORK — every level has to be fetched from whichever computer added the
+    // file — but `ls` was going through the 15s control-call cap. On charlie-kirk that aborted 8 of 16 files
+    // mid-walk, before a single byte was ever asked for, and the user was shown the runtime's bare
+    // "This operation was aborted" as though the download had failed.
+    const json = (body: unknown) => ({ ok: true, json: async () => body, text: async () => "" });
+    vi.stubGlobal("fetch", async (url: string, init?: { signal?: AbortSignal }) => {
+      const u = new URL(url);
+      if (u.pathname.endsWith("/files/stat")) return json({ Type: "directory" });
+      if (u.pathname.endsWith("/ls")) {
+        // The peer never answers for this level — the exact shape of a holder that has gone away.
+        return new Promise((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => {
+            const e = new Error("This operation was aborted");
+            e.name = "AbortError";
+            reject(e);
+          });
+        });
+      }
+      throw new Error(`unexpected RPC ${u.pathname}`);
+    });
+    await expect(resolveFileCid(DIRS[0]!, "clip.mp4", { budgetMs: 1000 })).rejects.toThrow(
+      /records a folder, and its contents did not arrive within 1s/,
+    );
+  });
 });

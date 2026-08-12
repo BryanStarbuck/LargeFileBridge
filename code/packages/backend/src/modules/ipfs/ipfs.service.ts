@@ -254,9 +254,9 @@ export async function addFile(absPath: string, opts: { onBytes?: (bytes: number)
 /** `file` | `directory` | null when the node's type cannot be established (offline, unreadable, timeout).
  *  Exported because "is this recorded CID actually a FILE" is a question the reconciler has to ask before it
  *  can decide whether a CID is merely differently-encoded or plain wrong (§5.1 Layer 0). */
-export async function dagNodeType(cid: string): Promise<"file" | "directory" | null> {
+export async function dagNodeType(cid: string, timeoutMs?: number): Promise<"file" | "directory" | null> {
   try {
-    const res = await rpc("files/stat", { args: [`/ipfs/${cid}`] });
+    const res = await rpc("files/stat", { args: [`/ipfs/${cid}`], timeoutMs });
     const json = (await res.json()) as { Type?: string };
     return json.Type === "directory" ? "directory" : json.Type === "file" ? "file" : null;
   } catch (e) {
@@ -266,8 +266,8 @@ export async function dagNodeType(cid: string): Promise<"file" | "directory" | n
 }
 
 /** One directory listing (`ls`) as {name, hash} links; [] when the CID lists nothing / can't be read. */
-async function lsLinks(cid: string): Promise<Array<{ name: string; hash: string }>> {
-  const res = await rpc("ls", { args: [cid] });
+async function lsLinks(cid: string, timeoutMs?: number): Promise<Array<{ name: string; hash: string }>> {
+  const res = await rpc("ls", { args: [cid], timeoutMs });
   const json = (await res.json()) as {
     Objects?: Array<{ Links?: Array<{ Name?: string; Hash?: string }> }>;
   };
@@ -280,6 +280,10 @@ async function lsLinks(cid: string): Promise<Array<{ name: string; hash: string 
 // A wrapper chain is one node per path segment (`bryan/BGit/…/videos/clip.mp4`), so allow a generous but
 // finite descent — a cycle or a genuine deep tree must not spin forever.
 const MAX_WRAPPER_DEPTH = 24;
+
+/** How long the WHOLE wrapper descent may take before a file is given up on. Sized as a discovery budget,
+ *  not an RPC one: these blocks come off the network. `LFB_WRAPPER_WALK_MS` overrides it. */
+const WRAPPER_WALK_MS = Number(process.env.LFB_WRAPPER_WALK_MS) || 90_000;
 
 /**
  * Resolve a recorded CID to the CID of the actual FILE it denotes — the fix for the "this dag node is a
@@ -296,11 +300,40 @@ const MAX_WRAPPER_DEPTH = 24;
  * `cat`/`pin` reports the real fault). THROWS only when the node IS a directory but no single file can be
  * picked out of it — an honest "this recorded CID does not denote one file".
  */
-export async function resolveFileCid(cid: string, basename?: string): Promise<string> {
+export async function resolveFileCid(
+  cid: string,
+  basename?: string,
+  opts: { budgetMs?: number } = {},
+): Promise<string> {
+  // ONE budget for the WHOLE descent, not the 15s control-call cap per step.
+  //
+  // `ls` and `files/stat` LOOK like control calls, and `rpc` treated them as such. On a wrapper CID they are
+  // nothing of the kind: every level's directory block has to be fetched from whichever computer added the
+  // file, so this walk is a network transfer wearing an RPC's clothes — exactly the case the stall guard
+  // above was written for ("a wall clock sized for a control call kills them mid-flight"). Measured on
+  // charlie-kirk 2026-08-12: 8 of 16 files failed with a bare `This operation was aborted` after 15s at one
+  // level of `<cid>/bryan/BGit/Bryan_git/charlie-kirk/videos/<file>`, never reaching the transfer at all —
+  // and the very same walk completed instantly once the blocks were cached.
+  //
+  // A whole-walk budget rather than a per-call one, because the ceiling that matters is how long ONE FILE
+  // may hold a transfer slot before giving up; a slow level may spend the time a fast level did not need.
+  const budgetMs = Math.max(1_000, opts.budgetMs ?? WRAPPER_WALK_MS);
+  const deadline = Date.now() + budgetMs;
+  const left = (): number => Math.max(1_000, deadline - Date.now());
   let cur = cid;
   for (let depth = 0; depth < MAX_WRAPPER_DEPTH; depth++) {
-    if ((await dagNodeType(cur)) !== "directory") return cur; // a file (or unreadable) — nothing to unwrap
-    const links = await lsLinks(cur);
+    if ((await dagNodeType(cur, left())) !== "directory") return cur; // a file (or unreadable) — nothing to unwrap
+    let links: Array<{ name: string; hash: string }>;
+    try {
+      links = await lsLinks(cur, left());
+    } catch (e) {
+      if (!isAbortError(e)) throw e;
+      // Say what actually happened. The raw `This operation was aborted` reached the user's popup verbatim
+      // and reads as "the download failed", when nothing had been downloaded yet.
+      throw new Error(
+        `CID ${cid} records a folder, and its contents did not arrive within ${Math.round(budgetMs / 1000)}s — the computer that holds this file may be offline`,
+      );
+    }
     const named = basename ? links.find((l) => l.name === basename) : undefined;
     const next = named ?? (links.length === 1 ? links[0] : undefined);
     if (!next) {

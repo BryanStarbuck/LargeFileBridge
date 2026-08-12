@@ -14,6 +14,11 @@ export const authSecretPath = () => path.join(root(), ".auth_session_secret");
 // record — putting it in the SDL is what made two machines rewrite each other's manifest forever.
 export const cidEquivalencePath = () => path.join(root(), "cid_equivalence.yaml");
 
+// ALSO machine-local (superseded-cids.service.ts): recorded CIDs proven to be wrapper directories rather
+// than the file, and the file CID each one really contains. Local because it is derived — any computer
+// re-establishes it by walking the CID — and because the fleet's copy of the fact travels in the manifest.
+export const supersededCidsPath = () => path.join(root(), "superseded_cids.yaml");
+
 // ── User scope (created lazily) ─────────────────────────────────────────────
 export const userDir = (email: string) => path.join(root(), "users", emailKey(email));
 export const userConfigPath = (email: string) => path.join(userDir(email), "config.yaml");

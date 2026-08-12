@@ -93,7 +93,13 @@ export function mergeManifests(
   local: Manifest,
   incoming: Manifest,
   selfLabel?: string | null,
-  opts: { incomingIsWire?: boolean } = {},
+  opts: {
+    incomingIsWire?: boolean;
+    /** Map a recorded CID this computer has DISPROVED to the one that replaces it (superseded-cids.service.ts).
+     *  Injected rather than imported so this stays a pure leaf; only the two WIRE merges pass it, because a
+     *  fold of two local documents cannot reintroduce a CID we already corrected. */
+    supersededCid?: (cid: string) => string | null;
+  } = {},
 ): Manifest {
   // FOLD EACH SIDE FIRST. Either side may legitimately carry the same path twice (a `merge=union` git
   // merge concatenates both), and keying a raw list into a Map is last-wins — the twin that held the CID
@@ -138,9 +144,24 @@ export function mergeManifests(
       pinned_by: [...new Set([...ownClaims(cur), ...peerClaims(inc)])].sort((a, b) => a.localeCompare(b)),
     });
   }
+  // LAST, AFTER the winner is chosen — a CID we have PROVEN wrong must not stand however it won.
+  //
+  // The tie-break above is a total order on the VALUE, which converges but does not know what it is
+  // ordering. For two add profiles of one file that is exactly right. For a wrapper-DIRECTORY CID beside
+  // the file CID it contains it is a coin toss, and on charlie-kirk it came up wrapper: a pull healed 8
+  // entries and pulled the bytes down, the next backbone reconcile put all 8 wrapper CIDs straight back,
+  // and the count returned to 16 with every file on disk and pinned. Correcting here rather than inside the
+  // tie-break also means the corrected value is what gets PUBLISHED, so the peer still holding the bad CID
+  // is fixed by the next round rather than arguing with us forever.
+  const fixCid = opts.supersededCid;
   return {
     ...local,
-    files: [...byPath.values()].sort((a, b) => a.path.localeCompare(b.path)),
+    files: [...byPath.values()]
+      .map((f) => {
+        const fixed = f.cid && fixCid ? fixCid(f.cid) : null;
+        return fixed && fixed !== f.cid ? { ...f, cid: fixed } : f;
+      })
+      .sort((a, b) => a.path.localeCompare(b.path)),
   };
 }
 

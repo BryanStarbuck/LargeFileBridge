@@ -72,6 +72,7 @@ import { WorkNote, yieldToLoop } from "../progress/work-note.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
+import { noteSupersededCid } from "./superseded-cids.service.js";
 import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, bumpTopicsThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
@@ -1605,6 +1606,10 @@ async function pullMissingInner(
       const fileCid = await ipfs.resolveFileCid(entry.cid, path.basename(entry.path));
       if (fileCid !== entry.cid) {
         log.info("pin", `pullMissing: healed wrapper-directory CID for ${rel}: ${entry.cid} -> ${fileCid}`);
+        // WRITE DOWN WHAT THE WALK PROVED, not just its result. The manifest correction alone does not
+        // survive: the next backbone reconcile hands the peer's wrapper CID back and the merge's tie-break
+        // may prefer it, which is how 8 healed files reverted within a minute of landing on charlie-kirk.
+        noteSupersededCid(entry.cid, fileCid);
         entry.cid = fileCid;
         healedCids.set(rel, fileCid);
       }

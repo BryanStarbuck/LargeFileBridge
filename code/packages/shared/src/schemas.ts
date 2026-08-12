@@ -933,6 +933,22 @@ export const CidEquivalenceSchema = z.object({
 });
 export type CidEquivalence = z.infer<typeof CidEquivalenceSchema>;
 
+// ── superseded_cids.yaml (knowledge/ipfs.mdx §5.1 Layer 0) — MACHINE-LOCAL, never in an SDL ──────────
+// "A CID that was PROVEN not to denote this file" → "the CID that does". Distinct from the equivalence
+// map above and not its sibling: an equivalence says two CIDs are the same bytes recorded differently,
+// this says one of them is simply WRONG — a wrapper-directory CID that no computer can ever `cat`.
+//
+// It exists because `mergeManifests` cannot tell those apart. Its tie-break picks the lower CID by sort
+// order, which is right for two add profiles of one file and arbitrary for a directory beside a file: on
+// charlie-kirk it handed the wrapper CID back on every backbone reconcile, so all 8 heals a pull had just
+// made were reverted within a minute and the pull-down count sprang from 8 to 16 again.
+export const SupersededCidsSchema = z.object({
+  schema_version: z.number().default(1),
+  updated_at: iso.optional(),
+  pairs: z.record(z.string(), z.string()).default({}), // canonical(proven wrong) → canonical(the file)
+});
+export type SupersededCids = z.infer<typeof SupersededCidsSchema>;
+
 // ── peers.yaml (storage.mdx §11) ────────────────────────────────────────────
 export const PeersSchema = z.object({
   schema_version: z.number().default(1),

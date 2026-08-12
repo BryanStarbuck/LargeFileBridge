@@ -20,6 +20,7 @@ import { computerLabel } from "../store-model/config.service.js";
 // The per-entry merge lives in a LEAF module so units.service can fold both manifests on the read path
 // without dragging this service (and its storage.service dependency) into an import cycle.
 import { mergeManifests, serializeManifest } from "./manifest-merge.js";
+import { supersededCid } from "../pin/superseded-cids.service.js";
 export { mergeManifests } from "./manifest-merge.js";
 // The decision-ledger union merge is a LEAF for the same reason — the ledger, like the manifest, is
 // SHARED state that must union, never last-writer-copy (decisions.mdx §5; the 2026-07-20 "not backed up:
@@ -210,7 +211,10 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
         fs.writeFileSync(
           mirrorManifestFile,
           serializeManifest(
-            mergeManifests(localManifest, priorMirrorManifest, computerLabel(), { incomingIsWire: true }),
+            mergeManifests(localManifest, priorMirrorManifest, computerLabel(), {
+              incomingIsWire: true,
+              supersededCid, // a wrapper CID we disproved must not ride back in from the mirror
+            }),
           ),
           "utf8",
         );
@@ -384,7 +388,10 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
         readManifestBestEffort(localPath, "repo"),
         readManifestBestEffort(incomingManifest, "repo"),
         computerLabel(),
-        { incomingIsWire: true }, // the mirror is the shared copy — peer claims are ITS statement, not ours
+        {
+          incomingIsWire: true, // the mirror is the shared copy — peer claims are ITS statement, not ours
+          supersededCid, // …but a CID we PROVED wrong is not a peer's statement to make (§5.1 Layer 0)
+        },
       );
       // The CANONICAL serializer, not a bare stringify: this file is also written by manifest.service, and
       // two spellings of one document make each writer re-dirty what the other just wrote (§6).

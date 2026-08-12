@@ -233,6 +233,27 @@ differed from ours — the "invisible v0 pins" class.
   — `addFile()` (and the `addOnlyHash` helper). Existing manifests that recorded a wrapper CID heal on the
   next content change (or when the wrapper pin is lost) rather than all at once.
 
+  **A HEAL MUST STICK, AND FOR MONTHS IT DID NOT (`superseded_cids.yaml`).** Unwrapping is only half the
+  repair: the manifest is SHARED, so the peer that recorded the wrapper CID keeps sending it back, and
+  `mergeManifests` settles a same-timestamp CID disagreement with a **total order on the value** — correct
+  for two add profiles of one file (Layer 2/3), arbitrary for a folder beside the file it contains.
+  Measured on charlie-kirk 2026-08-12: a pull unwrapped 8 CIDs and pulled the bytes down, the backbone
+  reconcile a minute later restored all 8 wrapper CIDs, and the pull-down count went **8 → 16** with every
+  file on disk and pinned under the healed CID. So a walk that ACTUALLY RESOLVED writes down what it
+  proved, and the two WIRE merges read the arriving CID through that record: a CID we disproved cannot win
+  a tie it should never have been in, and the corrected value is what gets published — which is how the
+  peer still holding the bad CID is eventually fixed too. Machine-local and derived, like the equivalence
+  map, because any computer re-establishes it by walking the CID. `superseded-cids.service.ts` —
+  `noteSupersededCid()` / `supersededCid()`, injected into `mergeManifests` by `tracking-sync.service.ts`.
+
+  **THE WALK IS A TRANSFER, NOT A CONTROL CALL.** Every level of the descent has to fetch that directory
+  block from whichever computer added the file, but `ls` / `files/stat` went through the generic 15-second
+  RPC cap — the exact wall-clock-on-a-fetch mistake `stallGuard` exists to prevent. On the same day 8 of 16
+  files aborted mid-walk with the runtime's bare `This operation was aborted`, having never asked for a
+  byte, while the identical walk finished instantly once the blocks were cached. `resolveFileCid()` now
+  spends ONE budget (`LFB_WRAPPER_WALK_MS`, default 90s) across the whole descent — the ceiling that
+  matters is how long a single file may hold a transfer slot — and reports a timeout in those terms.
+
 **What we DO surface cheaply — the three-state pin icon for DECIDED files (no hashing).** For a file the
 user has **decided to sync**, we already know its CID (it is in the manifest), so checking whether **this
 computer** actually holds the pin is an **O(1) set lookup** against the once-fetched canonical pinset — no
