@@ -14,7 +14,7 @@ import { PageActions } from "../../components/menu/PageActions.js";
 import { pinAllRepos } from "../../components/menu/domainActions.js";
 import type { Action } from "../../components/menu/EntityMenu.js";
 import { RepoStatusPill } from "../../components/Pill.js";
-import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
+import { relativeTime, absoluteTime, middleTruncate, formatBytes } from "../../lib/format.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { useCensusPending } from "../../lib/useCensusPending.js";
 import { clientLog } from "../../lib/clientLog.js";
@@ -27,6 +27,14 @@ const STATUS_OPTIONS: RepoStatus[] = [
   "error",
   "never",
 ];
+
+/** The large files a row's counts cover — the five buckets are disjoint and exhaustive by construction
+ *  (units.service `repoRowStats`), so their sum IS the repo's tracked-file total. Derived rather than sent
+ *  so the Files column can never disagree with the columns beside it. */
+function totalFiles(r: RepoRow): number {
+  const c = r.counts;
+  return c.pinned + c.pending + c.undecided + c.ignored + c.pinnedForeign;
+}
 
 export function ReposPage() {
   const qc = useQueryClient();
@@ -141,10 +149,78 @@ export function ReposPage() {
       cell: (r) => <span className={r.counts.undecided > 0 ? "text-[var(--lfb-primary)] font-medium" : ""}>{r.counts.undecided}</span> },
     { id: "ignored", header: "Ignored", kind: "int", align: "right", priority: 8, minWidth: 78, accessor: (r) => r.counts.ignored,
       cell: (r) => <span className="text-black/40">{r.counts.ignored}</span> },
+    // Already pinned (repos.mdx §3.2 col 11) — `counts.pinnedForeign`. The backend has always counted these
+    // and the table never showed them, so an undecided file whose bytes another IPFS tool already pinned on
+    // this node was subtracted from Undecided and added to nothing: the four count columns stopped adding
+    // up to the repo's file total and there was no cell to explain the gap.
+    { id: "alreadyPinned", header: "Already pinned", kind: "int", align: "right", priority: 14, minWidth: 116,
+      accessor: (r) => r.counts.pinnedForeign,
+      cell: (r) => (
+        <span className={r.counts.pinnedForeign > 0 ? "text-green-700" : "text-black/40"}
+          title="Undecided files whose bytes are already pinned on this computer by another IPFS tool">
+          {r.counts.pinnedForeign}
+        </span>
+      ) },
+    // The denominator (§3.2 col 8). Without it an all-zero row is unreadable: a repo with no large files at
+    // all and a repo whose scan never ran look identical. Derived as the sum of the five count columns, so
+    // the row is self-checking — if Files disagrees with what the columns add up to, one of them is wrong.
+    { id: "files", header: "Files", kind: "int", align: "right", priority: 12, minWidth: 76,
+      accessor: (r) => totalFiles(r),
+      cell: (r) => (
+        <span className={totalFiles(r) === 0 ? "text-black/40" : ""}
+          title="Large files Large File Bridge tracks in this repo (small analysis-only media excluded)">
+          {totalFiles(r)}
+        </span>
+      ) },
+    { id: "size", header: "Size", kind: "bytes", align: "right", priority: 9, minWidth: 88,
+      accessor: (r) => r.bytes.total,
+      cell: (r) => (
+        <span className="text-black/60"
+          title={r.bytes.total > 0 ? `${formatBytes(r.bytes.pinned)} of it pinned on this computer` : undefined}>
+          {r.bytes.total > 0 ? formatBytes(r.bytes.total) : "—"}
+        </span>
+      ) },
+    // Bytes owed IN (§3.2 col 13) — the remote-only rows (storage_company.mdx §8.5). These files are inside
+    // Pending/Undecided already; this is the same files on the "where are the bytes?" axis, and it is the
+    // number a freshly-set-up second computer needs most.
+    { id: "missingHere", header: "Missing here", kind: "int", align: "right", priority: 13, minWidth: 104,
+      accessor: (r) => r.missingHere,
+      cell: (r) => (
+        <span className={r.missingHere > 0 ? "text-amber-600" : "text-black/40"}
+          title="Files another of your computers has that this one does not — pull them down">
+          {r.missingHere}
+        </span>
+      ) },
+    // The risk number (§3.2 col 12) — the repo-level roll-up of the One-repo `Not backed up` tile.
+    { id: "notBackedUp", header: "Not backed up", kind: "int", align: "right", priority: 11, minWidth: 112,
+      accessor: (r) => r.notBackedUp,
+      cell: (r) => (
+        <span className={r.notBackedUp > 0 ? "text-red-600 font-medium" : "text-black/40"}
+          title="Pinned files that exist only on this computer — no other machine has a copy">
+          {r.notBackedUp}
+        </span>
+      ) },
+    // Peers = your OTHER computers. Red 0 is the "nothing is backing this up" alarm (§4.1), so it must only
+    // fire when there is something to back up: a repo with no pinned files has no redundancy to be missing,
+    // and painting its 0 red made every repo without large files shout for attention it did not need.
     { id: "peers", header: "Peers", kind: "int", align: "right", priority: 10, minWidth: 72, accessor: (r) => r.peerCount,
-      cell: (r) => <span className={r.peerCount === 0 ? "text-red-600" : ""}>{r.peerCount}</span> },
+      cell: (r) =>
+        r.counts.pinned === 0 && r.peerCount === 0 ? (
+          <span className="text-black/40" title="Nothing pinned here yet — no copies to count">—</span>
+        ) : (
+          <span className={r.peerCount === 0 ? "text-red-600" : ""}
+            title="Your other computers that hold at least one of this repo's files">
+            {r.peerCount}
+          </span>
+        ) },
     { id: "lastPin", header: "Last pin", kind: "timestamp", priority: 4, minWidth: 96, accessor: (r) => r.lastPinAt,
       cell: (r) => <span title={absoluteTime(r.lastPinAt)}>{relativeTime(r.lastPinAt)}</span> },
+    // When the census behind every count on this row was taken (§3.2 col 14). A stale scan is the single
+    // most common reason a number here is not what the disk says.
+    { id: "lastScan", header: "Last scan", kind: "timestamp", priority: 15, minWidth: 96, accessor: (r) => r.lastScanAt,
+      cell: (r) => (
+        <span className="text-black/50" title={absoluteTime(r.lastScanAt)}>{relativeTime(r.lastScanAt)}</span>
+      ) },
     { id: "status", header: "Status", kind: "enum", accessor: (r) => r.status, filterOptions: STATUS_OPTIONS,
       cell: (r) => <RepoStatusPill status={r.status} /> },
   ];

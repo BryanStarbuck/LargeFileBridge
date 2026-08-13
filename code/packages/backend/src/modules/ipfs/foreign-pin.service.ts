@@ -302,6 +302,19 @@ export function foreignPinByAbsPath(absPath: string): ForeignPinRecord | undefin
   return readForeignPins().find((r) => r.absPath === absPath);
 }
 
+/**
+ * The discovered paths as a SET, for callers that ask about many files in a row.
+ *
+ * {@link foreignPinByAbsPath} is a linear scan, and the two composition walks in units.service ask it once
+ * PER CANDIDATE — so on this machine's `all` repo that was 2,188 candidates x 410 records of string
+ * compares, per repo, on the Repos-list hot path the whole cheap-counting design exists to protect. Build
+ * this once per repo and test membership instead. Callers must not hold it across a scan (a discovery
+ * recorded meanwhile would be missing); one composition pass is the intended lifetime.
+ */
+export function foreignPinPathSet(): Set<string> {
+  return new Set(readForeignPins().map((r) => r.absPath));
+}
+
 /** Discovered foreign pin for a CANONICAL cid (IPFS-page reverse resolution — §4). */
 export function foreignPinByCanonicalCid(cid: string): ForeignPinRecord | undefined {
   const target = canonicalCid(cid);

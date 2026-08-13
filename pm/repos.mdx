@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repos
-description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Pinned / Pending / Undecided / Ignored), peer count, last-pin time, and a rolled-up pin status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns) and the always-visible facet rail carrying the promoted "Bookmarked only" checkbox and the Status facet (value checkboxes, all checked by default — tables.mdx §2); the filter icon keeps only free-text contains, the numeric ≥ thresholds for the count columns, and rail overflow. Clicking a row opens that repo's per-file screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
+description: The landing screen (route /) — one TanStack Table listing every git repo on THIS computer that LargeFileBridge manages. One row per repo, with a leading bookmark (favorite) toggle, the repo name, local path, large-file counts (Files / Pinned / Pending / Undecided / Ignored / Already pinned), total size, the two "where are the bytes" counts (Missing here / Not backed up), peer count, last-pin and last-scan times, and a rolled-up pin status. Above the table sits the standard control row (search box + icon-only filter and sort dropdowns) and the always-visible facet rail carrying the promoted "Bookmarked only" checkbox and the Status facet (value checkboxes, all checked by default — tables.mdx §2); the filter icon keeps only free-text contains, the numeric ≥ thresholds for the count columns, and rail overflow. Clicking a row opens that repo's per-file screen (one_repo.mdx). Defines the table columns, the leading bookmark toggle (persisted per-repo in config.yaml), the RepoRow type, the add-repo action, the row → one_repo navigation, pagination at 500, and empty/loading states.
 ---
 
 # LargeFileBridge — Repos
@@ -60,9 +60,15 @@ export interface RepoRow {
     pending: number;     // decided "Add to IPFS (pin)" but not yet transferred (fetch/push queued)
     undecided: number;   // found by LFBridge, no pin/Ignore decision yet
     ignored: number;     // decided "Ignore" — deliberately not pinned
+    pinnedForeign: number; // undecided, but their bytes are ALREADY pinned on this computer by another
+                           //   IPFS tool (foreign_pin_discovery.mdx §6) — not a pin nag, but still files
   };
-  peerCount: number;     // how many of your computers currently pin this repo
+  peerCount: number;     // how many of your OTHER computers pin this repo — never this one (§4.3)
+  notBackedUp: number;   // pinned files no OTHER computer holds — they live only on this machine
+  missingHere: number;   // files a peer has that this computer does not have on disk at all
+  bytes: { total: number; pinned: number }; // bytes of the files `counts` covers, and the pinned subset
   lastPinAt: string | null;  // ISO date-time of the last completed pin pass, or null
+  lastScanAt: string | null; // when the census behind every count above was taken
   status: RepoStatus;    // rolled-up pin status (see §4.2)
 }
 
@@ -93,10 +99,11 @@ header**, the **top-right Add repo button**, and the **Repos table** with its co
 │ Repos ◀    ├───────────────────────────────────────────────────────────────────────────┤
 │ Peers      │  search…                                                      ⇅   ⛛        │ ← control row
 │ Scans      ├───────────────────────────────────────────────────────────────────────────┤
-│ Settings   │     Repo        Path             Pinned Pending Undec Ignored Peers Last     │
-│            │  ▮  Our_Movies  ~/BGit/…/Movies   128    2       5     40      3   09:14 › ⋮│ ← ▮ = solid yellow (bookmarked)
-│            │  ▯  render_farm ~/work/render       0    311      0      0      1   —     › ⋮│ ← ▯ = gray outline (not bookmarked)
-│            │  ▮  photos_2026 ~/Pictures/2026    980    0      12      0      2   06:30 › ⋮│ ← trailing ⋮ = row kebab (repo catalog)
+│ Settings   │     Repo        Path           Files   Size Pinned Pend Undec Ign Peers Last│
+│            │  ▮  Our_Movies  ~/BGit/…/Movies   175 1.2 TB   128    2     5  40    3 09:14 ⋮│ ← ▮ = solid yellow (bookmarked)
+│            │  ▯  render_farm ~/work/render     311 890 GB     0  311     0   0    1 —     ⋮│ ← ▯ = gray outline (not bookmarked)
+│            │  ▮  photos_2026 ~/Pictures/2026   992 240 GB   980    0    12   0    2 06:30 ⋮│ ← trailing ⋮ = row kebab (repo catalog)
+│            │     (Already pinned · Missing here · Not backed up · Last scan hide first — §3.2.1)
 │            ├───────────────────────────────────────────────────────────────────────────┤
 │  [account] │  3 repos                                        page 1 / 1        [500 ▾]   │ ← count + pagination
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -133,8 +140,9 @@ A single control row sits above the table, matching the standard toolbar:
 * **Filter icon** (right, icon-only `⛛` funnel — **no text label, no button box**) — **no longer the
   place filters live.** It holds only the long tail
   ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)): the free-text
-  **`contains`** filters (**Repo**, **Path**), the **numeric `≥` thresholds** for the count columns
-  (Pinned / Pending / Undecided / Ignored / Peers) and the **Last pin** date bound, plus any facet that
+  **`contains`** filters (**Repo**, **Path**), the **numeric `≥` thresholds** for the count/size columns
+  (Files / Pinned / Pending / Undecided / Ignored / Already pinned / Size / Missing here / Not backed up /
+  Peers) and the **Last pin** + **Last scan** date bounds, plus any facet that
   **overflows** the rail at narrow widths. There is **no operator select + value input** row and **no
   `<select>`** anywhere in it. The icon stays **colored when any filter is active — rail facets
   included** (with an optional count), so it remains the single honest "something is filtered" mark.
@@ -180,14 +188,27 @@ a **responsive priority** that decides which columns hide as the table narrows �
 | 4 | **Pending** | int | ✓ | ✓ (`≥`) | `counts.pending`. Amber when > 0. |
 | 5 | **Undecided** | int | ✓ | ✓ (`≥`) | `counts.undecided`. Accent-highlighted when > 0 (there are decisions to make). |
 | 6 | **Ignored** | int | ✓ | ✓ (`≥`) | `counts.ignored`. Muted. |
-| 7 | **Peers** | int | ✓ | ✓ (`≥`) | `peerCount` — how many of your computers pin this repo. `0` renders red (nothing backing it up). |
-| 8 | **Last pin** | timestamp | ✓ | ✓ (bound) | `lastPinAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. A date bound in the `⛛` popover, not a facet. |
-| 9 | **Status** | enum | ✓ | ✓ (facet) | `status` (§4.2) as a colored pill. **The one facet on this page's rail** — see §3.2.2 for its declared vocabulary. |
+| 7 | **Peers** | int | ✓ | ✓ (`≥`) | `peerCount` — how many of your **other** computers pin this repo (**§4.3** — this computer is never counted). `0` renders red (nothing backing it up), **but only when `counts.pinned > 0`**: a repo with nothing pinned has no redundancy to be missing, so it renders a muted `—` instead of a red alarm it cannot act on. |
+| 8 | **Files** | int | ✓ | ✓ (`≥`) | The repo's tracked large-file total. **Derived in the client as the sum of cols 3–6 + col 11**, never sent separately — so the row is self-checking and the total can never disagree with the columns beside it (§4.1a). Excludes `analysisOnly` media, like every count here. |
+| 9 | **Size** | bytes | ✓ | ✓ (`≥`) | `bytes.total` — the bytes those Files occupy, including the ones only a peer holds. Tooltip names `bytes.pinned`, the part pinned on this computer. `—` when there is nothing. Sizes come from the scan candidates and the manifest, so this costs no `stat`. |
+| 10 | **Missing here** | int | ✓ | ✓ (`≥`) | `missingHere` — files another of your computers has that this one does not have on disk at all (the remote-only rows, [storage_company.mdx §8.5](./storage_company.mdx)). Amber when > 0. **Not an extra row:** these files are already inside cols 3–6 by their decision; this is the same files on the "where are the bytes?" axis. |
+| 11 | **Already pinned** | int | ✓ | ✓ (`≥`) | `counts.pinnedForeign` — undecided files whose bytes another IPFS tool already pinned on this node ([foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx)). Green when > 0. They are deliberately **not** in Undecided (nagging "pin it" about a pinned file is the bug §4.1 documents) — this column is where they land instead. |
+| 12 | **Not backed up** | int | ✓ | ✓ (`≥`) | `notBackedUp` — files pinned **here** that **no other computer** holds. Red when > 0. Always a **subset of `Pinned`** (§4.1a). The repo-level roll-up of the One-repo **`Not backed up`** tile; both go through `isSingleCopy()`, so the two surfaces cannot drift. |
+| 13 | **Last pin** | timestamp | ✓ | ✓ (bound) | `lastPinAt`, relative (`2h ago`) with an absolute tooltip; `—` if never. A date bound in the `⛛` popover, not a facet. |
+| 14 | **Last scan** | timestamp | ✓ | ✓ (bound) | `lastScanAt` — when the census every count on this row projects was taken. A stale scan is the commonest reason a number here is not what the disk says, and without it an all-zero row cannot be told apart from a row whose scan never ran. |
+| 15 | **Status** | enum | ✓ | ✓ (facet) | `status` (§4.2) as a colored pill. **The one facet on this page's rail** — see §3.2.2 for its declared vocabulary. |
 | — | *(chevron)* | — | — | — | Trailing **› right chevron** affordance (opens the repo, same as the row click). |
 | — | **`⋮`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
-**The four count columns are not facets, and are not pin/git-ignore axes (LOCKED).** *Pinned · Pending
-· Undecided · Ignored* (cols 3–6) are **integers** — a per-repo tally of that repo's files — not enum
+The counting columns are composed by the backend in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (one pass over the scan candidates + the remote-only rows, producing `counts` / `peerCount` / `notBackedUp` / `missingHere` / `bytes`).
+
+The columns themselves are declared in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (the `columns` array) + `totalFiles()` for col 8.
+
+**The count columns are not facets, and are not pin/git-ignore axes (LOCKED).** *Pinned · Pending
+· Undecided · Ignored* (cols 3–6) — and equally *Files · Missing here · Already pinned · Not backed up*
+(cols 8, 10–12) — are **integers** — a per-repo tally of that repo's files — not enum
 values a repo holds. They therefore filter with a **numeric `≥` threshold** in the `⛛` popover
 ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)) — *"show repos with
 Undecided ≥ 1"* — and **never** render as rail facets. In particular **col 6 `Ignored` is a count, not
@@ -231,14 +252,24 @@ second-lowest (dropped next)**.
 | **6** | **Pinned** | no | dropped 5th | Reassurance count of backed-up files. |
 | **7** | **Path** | no | dropped 4th | Useful but long and already middle-truncated with a tooltip; the name carries identity. |
 | **8** | **Ignored** | no | dropped 3rd | Least-actionable count. |
-| **9** | **Size** | no | **dropped 2nd** | *(File tables only — not on the Repos list.)* Second-lowest per the rule. |
-| **10** | **Peers** | no | **dropped 1st** | **Lowest priority — the first to go.** Redundancy detail; the Status verdict already flags "not backed up." |
+| **9** | **Size** | no | **dropped 2nd** *(of the original eight)* | Second-lowest per the rule. The Repos list now carries one (§3.2 col 9). |
+| **10** | **Peers** | no | **dropped 1st** *(of the original eight)* | **Lowest of the original columns.** Redundancy detail; the Status verdict already flags "not backed up." |
+| **11** | **Not backed up** | no | dropped 4th | The risk number — kept longest of the four detail columns, because it is the only one that says "you could lose these." |
+| **12** | **Files** | no | dropped 3rd | Context for the counts, not a count you act on. |
+| **13** | **Missing here** | no | dropped 2nd | Actionable, but the same files already show as Pending / Undecided. |
+| **14** | **Already pinned** | no | dropped 1st | Reconciliation detail; zero on most machines. |
+| **15** | **Last scan** | no | **dropped first of all** | Freshness, not state — reach for it when a number looks wrong, not while reading the table. |
 
-**Drop order as the Repos list narrows** (it has no Size column, so the sequence skips priority 9):
-`Peers` (10) → `Ignored` (8) → `Path` (7) → `Pinned` (6) → `Pending` (5) → `Last pin` (4) → `Undecided`
-(3). It **stops** before ever dropping the three pinned columns (**Bookmark · Repo · Status**), which
-always remain so the table is never useless. The trailing **› chevron** and **`⋮` kebab** control cell
-also always remain (they are not priority columns).
+**Two lowest, restated.** The user's rule — *Peers lowest, Size second-lowest* — is about the **original
+eight** columns and still holds among them. The six columns added since (**9 Size** aside, which takes its
+spec'd rank) are finer-grained still, so they rank **below** Peers and leave today's drop order intact
+underneath them.
+
+**Drop order as the Repos list narrows:** `Last scan` (15) → `Already pinned` (14) → `Missing here` (13)
+→ `Files` (12) → `Not backed up` (11) → `Peers` (10) → `Size` (9) → `Ignored` (8) → `Path` (7) → `Pinned`
+(6) → `Pending` (5) → `Last pin` (4) → `Undecided` (3). It **stops** before ever dropping the three pinned
+columns (**Bookmark · Repo · Status**), which always remain so the table is never useless. The trailing
+**› chevron** and **`⋮` kebab** control cell also always remain (they are not priority columns).
 
 **Rules.**
 * A column with **no `priority`** set is **treated as pinned** (never auto-hidden) — hiding is
@@ -356,9 +387,10 @@ export const repoColumns: ColumnDef<RepoRow>[] = [
 
 ### 4.1 The counts, at a glance
 
-Each row's four counts are the whole point of the page — they let the user decide, per repo, what
+Each row's counts are the whole point of the page — they let the user decide, per repo, what
 needs attention: **Undecided > 0** means there are files to triage; **Pending > 0** means bytes are
-owed in or out; **Peers = 0** means nothing is backing this repo up.
+owed in or out; **Not backed up > 0** means files here exist nowhere else; **Peers = 0** (with something
+pinned) means nothing is backing this repo up.
 
 > **The list's `Undecided` COLUMN is not the removed one-repo TILE.** On the per-repo screen the metric
 > tile named `Undecided` no longer exists — it split into the two tiles **`Add to IPFS`** and **`Git
@@ -387,6 +419,41 @@ owed in or out; **Peers = 0** means nothing is backing this repo up.
 > toggle is turned off ([tables.mdx §2.9](./tables.mdx)). This keeps the repos-list counts honest — a repo
 > full of small images does not read as hundreds of pending decisions.
 
+### 4.1a Every row adds up (LOCKED)
+
+**`Files` (col 8) = `Pinned` + `Pending` + `Undecided` + `Ignored` + `Already pinned`.** The five buckets
+are disjoint and exhaustive by construction — one pass assigns each counted file to exactly one of them —
+so the identity is not a check the code performs, it is a property of how the counts are built, and the
+client derives `Files` as that sum rather than receiving it. A row that does not add up is a bug in
+`repoRowStats()`, not a rounding difference.
+
+Two columns sit **outside** the sum on purpose, because they are the same files counted on a different
+axis and adding them would double-count:
+
+* **`Missing here`** — a file a peer has and this computer does not is already in `Pending` or
+  `Undecided`, by its decision. This column says *where the bytes are*, not *what was decided*.
+* **`Not backed up`** — those files are in `Pinned`. This column says *how many copies exist*.
+
+**"Not backed up" requires the file to be pinned HERE (LOCKED).** The test is `transfer === "pinned"`
+**and** no other computer claims it — not `decision === "sync" && cid != null`, which is what three
+separate copies of this rule used to say. Those are different: a file with a CID that **nobody** claims
+(a peer dropped its pin, or ours was never recorded) passed the old test while being **Pending** — we
+want it and do not have it. So a file this computer does not hold was counted as "lives only on this
+computer", offered the one remedy that cannot work for it ("open Large File Bridge on another computer
+so it can pull them" — there is nothing to pull), and pushed the count **above `Pinned`**, breaking the
+subset relation above.
+
+*Defined once in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `isSingleCopy()`, used by `repoRowStats()` (the column), `computeTaskMetrics()` (the One-repo tile) and `export-repo-recommendations.ts` (the CLI export).
+
+**Why `Already pinned` had to become a column.** `counts.pinnedForeign` has always been computed and
+never shown. A file whose bytes another IPFS tool already pinned on this node is deliberately kept out of
+`Undecided` (re-asking "pin this?" about a pinned file was the 4th bug in the "CLI says pinned, app says
+not" saga), so before this column existed it was subtracted from Undecided and added to **nothing** — the
+visible columns silently stopped summing to the repo's file count, with no cell to explain the gap.
+
+*Composed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()`; *summed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `totalFiles()`.
+*Guarded in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — every aggregate is asserted against the same aggregate recomputed from `computeRepoDetail`'s fully-composed rows.
+
 ### 4.2 Status pill colors (LOCKED)
 
 | `status` | Meaning | Pill |
@@ -400,6 +467,31 @@ owed in or out; **Peers = 0** means nothing is backing this repo up.
 
 Precedence when several could apply: `error` > `pinning` > `behind` > `needs_review` > `up_to_date`
 > `never`.
+
+**`never` is the LAST verdict, not a short-circuit (LOCKED).** It means *nothing has ever been pinned
+here* — `counts.pinned === 0` **and** no `lastPinAt` stamp. It must **not** be returned merely because
+the stamp is missing: bytes reach a computer by import, by a pull, or by a pass whose stamp predates the
+current state root, and testing `!lastPinAt` ahead of `up_to_date` put a grey **never** pill on rows
+reading *114 Pinned / 0 Pending / 0 Undecided* — the healthiest state the product has, labelled as the
+emptiest. A repo with **nothing to pin** (no large files at all) is `never` too: there is no work and no
+verdict, and a green "Up to date" tick over an empty census would be a claim the scan never made. Read it
+together with **Files** (col 8) and **Last scan** (col 14), which say whether the census is empty or stale.
+
+*Rolled up in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `rollupStatus()` (one function, used by both the Repos row and the One-repo detail, so the list and the page it opens can never disagree).
+
+### 4.3 `Peers` counts your OTHER computers (LOCKED)
+
+`peerCount` is **how many of your other computers hold at least one of this repo's files**. **This
+computer is never one of them.**
+
+The manifest's `pinned_by` list includes our own label — pin truth is a self-claim
+([ipfs.mdx §1.1](./ipfs.mdx)) — so counting it made **every repo this machine had pinned read at least
+1**, and the LOCKED "**Peers = 0** means nothing is backing this repo up" alarm (§4.1) could never fire
+for the one situation it exists to catch: files that live on this machine and nowhere else. The file-level
+twin (`TaskMetrics.notBackedUp`) always excluded self; this is the repo-level number brought in line with
+it, and **`Not backed up`** (col 12) is the same test surfaced as a count.
+
+*Counted in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (cheap path) and `peerCountForFiles()` (composed path); both skip `computerLabel()`.
 
 ---
 
@@ -613,20 +705,24 @@ is its **reference implementation**. In short:
 1. The brand header shows **"Repos"** as normal text; the left-bar Repos item routes here (`/`).
 2. The page is **one TanStack Table**, flat/chromeless, **one row per repo — every git repo on this
    computer** (all known automatically, no "managed" opt-in), with columns: a
-   leading **bookmark toggle**, then Repo, Path, Pinned, Pending, Undecided, Ignored, Peers, Last pin,
-   Status (in that order), plus a trailing **›** chevron.
+   leading **bookmark toggle**, then Repo, Path, Pinned, Pending, Undecided, Ignored, Peers, Files,
+   Size, Missing here, Already pinned, Not backed up, Last pin, Last scan, Status (§3.2 gives the order),
+   plus a trailing **›** chevron.
 3. The **control row** above the table has a left **search box** and **icon-only** filter (`⛛`) and
    sort dropdowns on the right — no text labels, no button boxes; the icon colors when active;
    filters AND together and reset to page 1. Beneath it an **always-visible facet rail** carries the
    promoted **`☐ Bookmarked only`** checkbox at its head and the **Status** facet (§3.2.2) — value
    checkboxes, all checked by default, **no `<select>`** and no `any` option; the `⛛` popover holds
-   only the free-text `contains` (Repo / Path), the numeric `≥` thresholds (the four counts + Peers),
+   only the free-text `contains` (Repo / Path), the numeric `≥` thresholds (every count + Size + Peers),
    the Last-pin bound, and rail overflow (§3.1). The **active sort** reads as a chip run on the control
    row and **shift-click a header appends** a key ([tables.mdx §3.5](./tables.mdx#35-sorting-without-opening-the-dropdown--the-active-sort-chips-locked)).
 4. **Pagination defaults to 500** items per page; the **repo count** shows to the left of the pager;
    options are 500 / 1000 / All.
-5. Each numeric count renders per §4.1 (Peers = 0 → red; Undecided > 0 → accent; Pending > 0 →
-   amber) and the **Status** column is a colored pill per the locked §4.2 mapping and precedence.
+5. Each numeric count renders per §4.1 (Peers = 0 with something pinned → red, else muted `—`;
+   Undecided > 0 → accent; Pending > 0 and Missing here > 0 → amber; Not backed up > 0 → red; Already
+   pinned > 0 → green). Every row **adds up** (§4.1a). **Peers means your other computers, never this
+   one** (§4.3). The **Status** column is a colored pill per the locked §4.2 mapping and precedence,
+   in which **`never` is the last verdict, not a short-circuit**.
 6. **Clicking a bare part of a row** opens that repo at `/repos/$repoId` ([One repo](./one_repo.mdx));
    the trailing chevron does the same. **Each data cell is additionally a deep link** per §5.1 (counts
    → the repo's files filtered to that slice; Path → File System; Peers → Peers filtered to the repo).

@@ -35,7 +35,7 @@ import { getStorageRow, listStorageIds } from "../storage/storage.service.js";
 // Peer device LABELS for a remote-only row (devices.mdx §6.9) — the id/name → nice-name index. Same
 // function-body-only usage as getStorageRow above, so the storage.service cycle stays safe.
 import { deviceLabelIndex, resolveDeviceLabel } from "../storage/devices.service.js";
-import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
+import { foreignPinPathSet } from "../ipfs/foreign-pin.service.js";
 import { analysisOutputs, storageIndexDroppedFiles } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
 // Leaf modules only — the read path must not pull tracking-sync.service (and its storage.service edge) in.
@@ -338,7 +338,11 @@ export async function computeRepoRow(folder: string): Promise<RepoRow> {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
   const manifest = getRepoManifest(folder);
-  const { counts, peerCount, transferring } = await repoRowStats(cfg, status, manifest);
+  const { counts, peerCount, transferring, notBackedUp, missingHere, bytes } = await repoRowStats(
+    cfg,
+    status,
+    manifest,
+  );
   return {
     repoId: repoIdFromPath(cfg.repo.path || folder),
     bookmarked: cfg.bookmarked,
@@ -346,8 +350,12 @@ export async function computeRepoRow(folder: string): Promise<RepoRow> {
     path: cfg.repo.path || "",
     counts,
     peerCount,
+    notBackedUp,
+    missingHere,
+    bytes,
     lastPinAt: status.last_pin_at,
-    status: rollupStatus(cfg.pinned, counts, status, transferring),
+    lastScanAt: status.last_scan_at,
+    status: rollupStatus(counts, status, transferring),
     pinned: cfg.pinned,
     // Company/personal owner: honor the local owner_override (manual) else derive from the git remote (auto)
     // (repo_company_mapping.mdx §5.2). ownerForRepoConfig threads the user's personal-accounts list so an
@@ -421,7 +429,6 @@ export async function computeRepoDetail(
       remote: cfg.repo.remote,
       pinned: cfg.pinned,
       status: rollupStatus(
-        cfg.pinned,
         counts,
         status,
         files.some((f) => f.transfer === "fetching" || f.transfer === "pushing"),
@@ -525,6 +532,9 @@ async function composeFileRows(
   // The sticky-flag map, snapshotted ONCE per repo instead of re-read and re-resolved per row
   // (config.service `flagsResolver`) — the per-row form was O(rows × flags) of repeated work.
   const flagsFor = flagsResolver();
+  // Foreign-pin discoveries as a SET, built ONCE per repo — the per-row `foreignPinByAbsPath` it replaces
+  // was a linear scan of the whole global index for every candidate (foreign-pin.service foreignPinPathSet).
+  const foreignPins = foreignPinPathSet();
   const local: FileRow[] = [];
   let batch: FileRow[] = [];
   let sinceYield = 0;
@@ -562,7 +572,7 @@ async function composeFileRows(
       // this hot path. Only meaningful when the file isn't already surfacing as a decided/sync pin.
       pinnedForeign:
         repoRootAbs && decision !== "sync"
-          ? !!foreignPinByAbsPath(joinRel(repoRootAbs, cand.path))
+          ? foreignPins.has(joinRel(repoRootAbs, cand.path))
           : undefined,
       changedAt: cand.modified_at ?? status.last_scan_at ?? new Date(0).toISOString(),
       // Provenance and the git-ignore axis are BOTH patched in below, once their expensive sources land.
@@ -921,9 +931,8 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     // Undecided tile asks "pin these?", and their bytes are already pinned on this node.
     if (f.decision === "undecided" && !f.pinnedForeign) m.undecided++;
     if (f.decision === "sync" && f.transfer === "pending") m.pending++;
-    // "Backed up" means a pin on an OTHER computer (ipfs.mdx §1.1) — this device's own pinned_by claim is
-    // local pin truth, not a backup, so it must not silence the "live only on this machine" warning.
-    if (f.decision === "sync" && f.cid != null && !f.peers.some((p) => p !== selfLabel)) m.notBackedUp++;
+    // "Lives only on this computer" — pinned HERE and claimed by no other machine (isSingleCopy).
+    if (isSingleCopy(f.transfer, f.peers, selfLabel)) m.notBackedUp++;
     if (f.compress === "could") {
       if (compressInfo(path.basename(f.path)).compressible === "image") m.compressibleImages++;
       else m.compressibleVideos++;
@@ -965,6 +974,33 @@ export function transferFor(
   return peers.includes(selfLabel) ? "pinned" : "pending";
 }
 
+/**
+ * Does this file live ONLY on this computer? — the "Not backed up" test (repos.mdx §3.2 col 12,
+ * task_tabs.mdx §2). ONE function, because three surfaces ask it: the Repos-list column, the One-repo
+ * metric tile, and the recommendations export. They each had their own copy, and the copies disagreed.
+ *
+ * Both halves are load-bearing:
+ *
+ * - `transfer === "pinned"` means THIS computer holds it — {@link transferFor} returns "pinned" only for
+ *   a `sync` file that has a CID **and** carries our own `pinned_by` claim. The old test asked
+ *   `decision === "sync" && cid != null` instead, which is NOT the same: a file with a CID that NOBODY
+ *   claims (a peer dropped its pin, or ours was never recorded) passed it. That file is **Pending** — we
+ *   want it and do not have it — so counting it here labelled a file we do not hold as "lives only on
+ *   this computer", and offered the one fix that cannot work for it: "open Large File Bridge on another
+ *   computer so it can pull them." There is nothing for a peer to pull. It also made the count exceed
+ *   `counts.pinned`, breaking the subset relation repos.mdx §4.1a states.
+ *
+ * - `!peers.some(p => p !== selfLabel)` means no OTHER computer claims it. Our own claim is local pin
+ *   truth, not a backup (ipfs.mdx §1.1), so it must not silence this — the same self-exclusion §4.3
+ *   applies to `peerCount`.
+ *
+ * A remote-only row can never satisfy this (its transfer is always "pending"), which is correct: bytes
+ * another computer holds are by definition not a single copy here.
+ */
+export function isSingleCopy(transfer: TransferStatus, peers: string[], selfLabel: string): boolean {
+  return transfer === "pinned" && !peers.some((p) => p !== selfLabel);
+}
+
 function countDecisions(files: FileRow[]): RepoCounts {
   const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0, pinnedForeign: 0 };
   for (const f of files) {
@@ -986,9 +1022,14 @@ function countDecisions(files: FileRow[]): RepoCounts {
   return counts;
 }
 
+/** How many OTHER of your computers claim at least one of these files. `FileRow.peers` is the manifest's
+ *  raw `pinned_by` list and INCLUDES this computer's own claim (pin truth is self-claim-only, ipfs.mdx
+ *  §1.1) — counting it made every repo this machine pinned read >= 1 peer, so the "Peers = 0 → nothing is
+ *  backing this up" alarm (repos.mdx §4.1) could never fire for the single-copy case it exists to catch. */
 function peerCountForFiles(files: FileRow[]): number {
+  const selfLabel = computerLabel();
   const set = new Set<string>();
-  for (const f of files) for (const p of f.peers) set.add(p);
+  for (const f of files) for (const p of f.peers) if (p !== selfLabel) set.add(p);
   return set.size;
 }
 
@@ -1009,40 +1050,65 @@ function peerCountForFiles(files: FileRow[]): number {
  * from the cached foreign-pin index), and the remote-only rows come from the SAME {@link remoteOnlyRows}
  * composer, so the counts here and the counts on the One-repo page cannot drift apart.
  */
+interface RepoRowStats {
+  counts: RepoCounts;
+  peerCount: number; // OTHER computers only — never this one (ipfs.mdx §1.1)
+  transferring: boolean;
+  notBackedUp: number;
+  missingHere: number;
+  bytes: { total: number; pinned: number };
+}
+
 async function repoRowStats(
   cfg: RepoUnitConfig,
   status: UnitStatus,
   manifest: Manifest,
-): Promise<{ counts: RepoCounts; peerCount: number; transferring: boolean }> {
+): Promise<RepoRowStats> {
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
   const repoRootAbs = cfg.repo.path
     ? path.resolve(expandHome(cfg.repo.path))
     : null;
   const selfLabel = computerLabel();
+  // Built ONCE per repo — the `foreignPinByAbsPath` this replaces was a linear scan of the whole global
+  // discovery index, run per candidate, on the very path this function exists to keep cheap.
+  const foreignPins = foreignPinPathSet();
 
   const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0, pinnedForeign: 0 };
   const peerSet = new Set<string>();
+  const bytes = { total: 0, pinned: 0 };
   let transferring = false;
+  let notBackedUp = 0;
+  let missingHere = 0;
 
-  // One file's contribution — the exact arithmetic countDecisions()/peerCountForFiles()/rollupStatus()
-  // perform over a composed FileRow, applied to the raw fields instead.
+  // One file's contribution — the exact arithmetic countDecisions()/peerCountForFiles()/computeTaskMetrics()
+  // /rollupStatus() perform over a composed FileRow, applied to the raw fields instead.
   const tally = (
     decision: Decision,
     transfer: TransferStatus,
     peers: string[],
     analysisOnly: boolean,
     pinnedForeign: boolean,
+    size: number,
+    remoteOnly: boolean,
   ): void => {
-    for (const p of peers) peerSet.add(p);
+    // Peers are OTHER computers. Pin truth is a self-claim (ipfs.mdx §1.1), so counting our own label
+    // here made every locally-pinned repo read >= 1 peer and silenced the "nothing is backing this up"
+    // alarm exactly where it matters. Same test computeTaskMetrics() already used per file.
+    for (const p of peers) if (p !== selfLabel) peerSet.add(p);
     if (transfer === "fetching" || transfer === "pushing") transferring = true;
     if (analysisOnly) return; // small analysis-only media is not a decision the user owes (scan.mdx §4.1 rule 5)
+    bytes.total += size;
+    if (remoteOnly) missingHere++;
     if (decision === "ignore") counts.ignored++;
     else if (decision === "undecided") {
       if (pinnedForeign) counts.pinnedForeign++;
       else counts.undecided++;
     } else if (decision === "sync") {
-      if (transfer === "pinned") counts.pinned++;
-      else counts.pending++;
+      if (transfer === "pinned") {
+        counts.pinned++;
+        bytes.pinned += size;
+      } else counts.pending++;
+      if (isSingleCopy(transfer, peers, selfLabel)) notBackedUp++;
     }
   };
 
@@ -1062,31 +1128,42 @@ async function repoRowStats(
       transferFor(decision, m?.cid ?? null, peers, selfLabel),
       peers,
       cand.analysisOnly === true,
-      !!(repoRootAbs && decision !== "sync" && foreignPinByAbsPath(joinRel(repoRootAbs, cand.path))),
+      !!(repoRootAbs && decision !== "sync" && foreignPins.has(joinRel(repoRootAbs, cand.path))),
+      cand.size,
+      false,
     );
   }
   // Files only another of the user's computers holds (storage_company.mdx §8.5). Composed, not
   // re-derived: the four conditions that admit one of these rows live in exactly one place.
   for (const r of await remoteOnlyRows(cfg, manifest, status.candidates, repoRootAbs, selfLabel)) {
-    tally(r.decision, r.transfer, r.peers, !!r.analysisOnly, !!r.pinnedForeign);
+    tally(r.decision, r.transfer, r.peers, !!r.analysisOnly, !!r.pinnedForeign, r.sizeBytes, true);
   }
 
-  return { counts, peerCount: peerSet.size, transferring };
+  return { counts, peerCount: peerSet.size, transferring, notBackedUp, missingHere, bytes };
 }
 
-// Rolled-up status with the LOCKED precedence (repos.mdx §4.2).
-function rollupStatus(
-  pinned: boolean,
-  counts: RepoCounts,
-  status: UnitStatus,
-  transferring: boolean,
-): RepoStatus {
+/**
+ * Rolled-up status with the LOCKED precedence (repos.mdx §4.2):
+ * `error` > `pinning` > `behind` > `needs_review` > `up_to_date` > `never`.
+ *
+ * `never` is LAST for a reason, and the old order got it backwards: it returned `never` for any repo with
+ * no `last_pin_at`, ahead of `up_to_date`. So a repo whose files were all pinned and all on a peer — the
+ * healthiest state the product has — reported "Repo added but never pinned" purely because this computer's
+ * own pin PASS had not stamped a completion here (the bytes can arrive by import, by a pull, or by a pass
+ * whose stamp predates the state root). That is what put a grey `never` pill on a row reading 114 Pinned /
+ * 0 Pending / 0 Undecided.
+ *
+ * `never` now means what §4.2 says: nothing has been pinned here, ever. A repo LFB has never pinned AND
+ * that has nothing to pin (no large files at all) is also `never` — there is no work and no verdict to
+ * give, and calling that "Up to date" would be a green tick over an empty census.
+ */
+function rollupStatus(counts: RepoCounts, status: UnitStatus, transferring: boolean): RepoStatus {
   if (status.last_error || status.repo_state === "missing") return "error";
   if (transferring) return "pinning";
   if (counts.pending > 0) return "behind";
   if (counts.undecided > 0) return "needs_review";
-  if (!status.last_pin_at) return pinned ? "never" : "never";
-  return "up_to_date";
+  if (counts.pinned > 0 || status.last_pin_at) return "up_to_date";
+  return "never";
 }
 
 // ── git helpers (no shell for scanning; git metadata read from files) ───────

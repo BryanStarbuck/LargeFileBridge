@@ -88,8 +88,29 @@ export interface RepoRow {
   name: string;
   path: string;
   counts: RepoCounts;
+  // How many OTHER of your computers pin at least one of this repo's files — THIS computer is never
+  // counted (repos.mdx §3.2 col 7). Self-inclusion was the defect: pin truth is a self-claim
+  // (ipfs.mdx §1.1), so every repo this machine had pinned read >=1 and the LOCKED "Peers = 0 means
+  // nothing is backing this repo up" alarm could not fire for the one case it exists to catch — a
+  // single copy, on this machine only. The file-level twin (TaskMetrics.notBackedUp) always excluded
+  // self; this is the repo-level number brought in line with it.
   peerCount: number;
+  // Large files that live ONLY on this computer: pinned HERE, and claimed by no OTHER computer
+  // (repos.mdx §3.2 col 12). The repo-level roll-up of the One-repo `Not backed up` tile
+  // (TaskMetrics.notBackedUp); both call units.service `isSingleCopy()`, so they cannot drift.
+  // Always a SUBSET of `counts.pinned` — "has a CID" is not "is pinned here", and counting the
+  // difference put files this computer does not hold under a label saying it does.
+  notBackedUp: number;
+  // Large files another of your computers holds that this one does not have on disk at all — the
+  // remote-only rows (storage_company.mdx §8.5). They are already inside `counts` (as Pending or
+  // Undecided, per their decision); this is the SAME files counted on the "where are the bytes?" axis,
+  // and until it existed the Repos list had no way to say "this repo is 92 files behind this machine".
+  missingHere: number;
+  // Total bytes of the large files `counts` covers, and the subset of them that is pinned here. The
+  // sizes come from the scan candidates (and the manifest, for remote-only rows) — no stat storm.
+  bytes: { total: number; pinned: number };
   lastPinAt: string | null;
+  lastScanAt: string | null; // when the census behind every count above was last taken
   status: RepoStatus;
   pinned: boolean; // per-repo master toggle (one_repo.mdx §3.2)
   owner?: RepoOwner; // company/personal mapping (repo_company_mapping.mdx §7) — drives left-bar grouping
@@ -221,7 +242,7 @@ export interface TaskMetrics {
   // pinned here (green state, one_repo.mdx §4.9), so counting it re-asks a satisfied question.
   undecided: number;
   pending: number; // sync files queued to transfer
-  notBackedUp: number; // sync files with a CID that no OTHER computer pins (live only on this machine)
+  notBackedUp: number; // pinned HERE and claimed by no OTHER computer (units.service isSingleCopy)
   compressibleVideos: number; // videos that look uncompressed
   compressibleImages: number; // images that look uncompressed / convertible
   alreadyCompressed: number; // media already compressed

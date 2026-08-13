@@ -17,7 +17,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import YAML from "yaml";
-import { listRepoFolders, getRepoConfig, computeRepoDetail } from "../modules/store-model/units.service.js";
+import {
+  listRepoFolders,
+  getRepoConfig,
+  computeRepoDetail,
+  isSingleCopy,
+} from "../modules/store-model/units.service.js";
 import { missingPinnedFromPeers } from "../modules/pin/pin.service.js";
 import { compressInfo } from "../modules/fs/badges.js";
 import { computerLabel } from "../modules/store-model/config.service.js";
@@ -99,9 +104,9 @@ async function main() {
   const gitIgnore = files.filter(
     (f) => !f.gitignore && !f.gitignoreLocked && !f.analysisOnly && f.presence !== "remote-only",
   );
-  const notBackedUp = files.filter(
-    (f) => local(f) && f.decision === "sync" && f.cid != null && !f.peers.some((p) => p !== selfLabel),
-  );
+  // The SAME predicate the Repos column and the One-repo tile use (units.service isSingleCopy) — this
+  // export used to carry its own copy, and "has a CID" is not "is pinned here".
+  const notBackedUp = files.filter((f) => local(f) && isSingleCopy(f.transfer, f.peers, selfLabel));
   const compressible = files.filter((f) => local(f) && f.compress === "could");
   const compressibleImages = compressible.filter(
     (f) => compressInfo(path.basename(f.path)).compressible === "image",
