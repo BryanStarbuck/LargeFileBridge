@@ -495,7 +495,9 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
           // without a `selfLabel` when that rule was introduced.
           writeRepoManifest(
             folder,
-            mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath), computerLabel()),
+            mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath), computerLabel(), {
+              supersededCid, // the unit copy is local, and local is exactly where a disproved CID hides
+            }),
           );
         } catch (e) {
           log.warn("storage", `reconcile: unit manifest fold for ${folder} failed: ${(e as Error).message}`);

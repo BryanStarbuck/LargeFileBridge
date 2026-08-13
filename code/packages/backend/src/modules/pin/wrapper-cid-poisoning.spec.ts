@@ -224,6 +224,44 @@ describe("the equivalence audit — the pairs already on disk are the ones keepi
   });
 });
 
+describe("a disproved CID must not come back through a LOCAL fold", () => {
+  it("does not let the unit manifest's wrapper CID beat the tracking manifest's file CID", async () => {
+    // THE DAY-TWO FAILURE, and the one the first fix missed. The corrections that arrive over the wire are
+    // applied to the TRACKING manifest; the UNIT manifest is never on the wire, so it keeps the wrapper CID
+    // — and `pinRepoFolderInner` folds the two LOCAL documents with a tie-break that is a total order on the
+    // CID value. `bafybeiazdwq…` sorts before `bafybeigm2ju…`, so the folder beat the file it contains, was
+    // written back into both records, mirrored, and published. Measured on pc-10 an hour after deploying.
+    const { noteSupersededCid } = await import("./superseded-cids.service.js");
+    noteSupersededCid(RECORDED, LOCAL); // this computer has already PROVED it
+    const units = await import("../store-model/units.service.js");
+    await units.updateRepoConfig(FOLDER, (c) => ({
+      ...c,
+      repo: { ...c.repo, name: FOLDER, path: repoRoot, remote: null },
+      pinned: true,
+      decisions: { [REL]: "sync" },
+    }));
+    const entry = (cid: string) => ({
+      schema_version: 1,
+      unit: "repo",
+      files: [{ path: REL, cid, size: SIZE, sha256: null, pinned_by: ["bryan-mac-pro"] }],
+    });
+    units.writeRepoManifest(FOLDER, entry(RECORDED) as never); // the stale local copy
+    const { writeRepoTrackingManifest } = await import("./manifest.service.js");
+    writeRepoTrackingManifest(repoRoot, entry(LOCAL) as never); // already corrected
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: LOCAL }] as never);
+    // The fold is what this test is about, so close the pass's OTHER repair routes: a re-add here would
+    // heal the entry no matter what the fold did, and the test would pass with the bug in place.
+    vi.mocked(ipfs.addFile).mockResolvedValue(RECORDED);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    await pinRepoFolder(FOLDER);
+
+    expect(await recordedCid()).toBe(LOCAL); // …and not republished as the wrapper
+    expect(units.getRepoManifest(FOLDER).files.find((f) => f.path === REL)?.cid).toBe(LOCAL);
+  });
+});
+
 describe("the state root keeps the two maps apart", () => {
   it("writes the correction to superseded_cids.yaml and nothing to cid_equivalence.yaml", async () => {
     // A regression here is invisible in behaviour until a merge runs, so assert the files themselves.

@@ -19,9 +19,9 @@
  */
 export const APP_BUILD = {
   /** Monotonic. Higher = newer. Compared across computers to find who is behind. */
-  number: 5,
+  number: 6,
   /** What this build is, in a few words — shown next to the number so a stale peer is self-explaining. */
-  label: "IPFS decisions pin + publish; pull-down feed reconciles even when pinned=false",
+  label: "a disproved wrapper CID cannot survive ANY merge, local or wire; corrections audited and published",
 } as const;
 
 export type AppBuild = typeof APP_BUILD;

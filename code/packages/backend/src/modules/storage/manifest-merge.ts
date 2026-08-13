@@ -96,8 +96,14 @@ export function mergeManifests(
   opts: {
     incomingIsWire?: boolean;
     /** Map a recorded CID this computer has DISPROVED to the one that replaces it (superseded-cids.service.ts).
-     *  Injected rather than imported so this stays a pure leaf; only the two WIRE merges pass it, because a
-     *  fold of two local documents cannot reintroduce a CID we already corrected. */
+     *  Injected rather than imported so this stays a pure leaf. EVERY caller passes it, wire or not — the
+     *  earlier rule ("only the wire merges need this; a fold of two local documents cannot reintroduce a CID
+     *  we already corrected") was wrong, and cost a day. The arriving fix lands in the TRACKING manifest;
+     *  the UNIT manifest is never on the wire, so it keeps the disproved CID indefinitely — and the tie-break
+     *  below is a total order on the VALUE, which cannot know one side is a folder. On pc-10, an hour after
+     *  the correction shipped: unit `bafybeiazdwq…` (wrapper) beat tracking `bafybeigm2ju…` (the file) in a
+     *  LOCAL fold, was written back into both records, mirrored, and published — the ping-pong continuing
+     *  from a merge that never touched the wire. */
     supersededCid?: (cid: string) => string | null;
   } = {},
 ): Manifest {

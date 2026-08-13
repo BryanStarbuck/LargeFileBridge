@@ -61,6 +61,9 @@ import { readLedger, foldLedger, type FoldedDecision } from "../storage/decision
 import { flagsResolver, getAppConfig, computerLabel } from "./config.service.js";
 import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
+// A CID this computer PROVED wrong must not survive any fold, including this read-side one
+// (manifest-merge.ts). Leaf module: it reads one local YAML and `canonicalCid`, so no cycle.
+import { supersededCid } from "../pin/superseded-cids.service.js";
 import { expandHome } from "../../shared/home-path.js";
 
 export function repoIdFromPath(absPath: string): string {
@@ -394,7 +397,9 @@ function mergeRepoManifests(folder: string, cfg: RepoUnitConfig): Manifest {
     // The tracking manifest is the copy the sync repo lands in, so it is the wire: the rows must read this
     // computer's pin claim from the UNIT manifest the pin pass derives, never from a claim about us that
     // travelled back. Self-claim-only (ipfs.mdx §1.1), enforced at the merge.
-    return mergeManifests(unit, tracking, computerLabel());
+    // `supersededCid` on this read fold too: the rows render the CID, and the unit copy is the one document
+    // no wire merge corrects, so without it a row keeps showing a wrapper CID nothing can fetch.
+    return mergeManifests(unit, tracking, computerLabel(), { supersededCid });
   } catch (e) {
     log.debug("units", `tracking manifest fold skipped for ${folder}: ${(e as Error).message}`);
     return unit;

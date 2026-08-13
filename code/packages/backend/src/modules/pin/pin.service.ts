@@ -73,7 +73,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 import { pinsetHasContent } from "./cid-equivalence.service.js";
 import { recordCidCorrection } from "./cid-correction.js";
-import { noteSupersededCid, supersededPairs, adoptSupersededCids } from "./superseded-cids.service.js";
+import { noteSupersededCid, supersededCid, supersededPairs, adoptSupersededCids } from "./superseded-cids.service.js";
 import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, bumpTopicsThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
@@ -647,7 +647,15 @@ async function pinRepoFolderInner(
   // Pull-down count that no row can explain.
   opts.report?.({ note: "merging the file lists" });
   await yieldToLoop();
-  const unitManifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath), computerLabel());
+  // `supersededCid` on a LOCAL fold too. The UNIT manifest is never touched by the wire merges (the
+  // arriving fix lands in the tracking copy), so it keeps a disproved wrapper CID indefinitely — and this
+  // fold's tie-break is a total order on the VALUE, which on charlie-kirk means the wrapper beats the file
+  // it contains and gets written back into BOTH records, then mirrored and published. Measured on pc-10,
+  // 2026-08-13, an hour after the correction shipped: unit `bafybeiazdwq…` (wrapper), tracking
+  // `bafybeigm2ju…` (file), and the manifest still alternating in the backbone.
+  const unitManifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoPath), computerLabel(), {
+    supersededCid,
+  });
   return runUnitPin(
     {
       kind: "repo",

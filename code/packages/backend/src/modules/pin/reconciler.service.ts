@@ -56,7 +56,7 @@ import { mergeManifests } from "../storage/tracking-sync.service.js";
 import { reconcile as reconcileDecisionEnum } from "../storage/decisions.service.js";
 import { pinnedCidSet, setPinClaim, type PinReport } from "./pin.service.js";
 import { dropCidEquivalence, equivalenceKeys, pinsetHasContent } from "./cid-equivalence.service.js";
-import { noteSupersededCid } from "./superseded-cids.service.js";
+import { noteSupersededCid, supersededCid } from "./superseded-cids.service.js";
 import { recordCidCorrection } from "./cid-correction.js";
 import { withUnitLock, unitLockBusy } from "./unit-lock.js";
 import { bumpTopics } from "../events/state-events.service.js";
@@ -395,7 +395,10 @@ async function reconcileRepoInner(folder: string, report?: PinReport): Promise<R
     // carves out. Passing it would strip our own claims on the way in, and a claim this pass cannot SEE is
     // one it cannot count, disprove, or discover was the last one on an entry. Every self-claim that
     // survives this fold is then verified against the pinset below, which is the whole job.
-    manifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoRoot));
+    // `supersededCid` even here, where both sides are local: the unit manifest is the one document no wire
+    // merge ever corrects, so without this the fold hands a disproved wrapper CID back to the pass that is
+    // supposed to repair it (manifest-merge.ts).
+    manifest = mergeManifests(getRepoManifest(folder), readRepoTrackingManifest(repoRoot), null, { supersededCid });
   } catch (e) {
     log.warn("pin", `reconcile: ${folder} manifests unreadable: ${(e as Error).message}`);
     return zero();
