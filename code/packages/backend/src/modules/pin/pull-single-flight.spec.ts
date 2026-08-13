@@ -65,7 +65,7 @@ async function seedRepo(paths: string[]): Promise<void> {
   vi.mocked(ipfs.listPins).mockResolvedValue([]);
   vi.mocked(ipfs.hasProvider).mockResolvedValue(true);
   vi.mocked(ipfs.pinAdd).mockResolvedValue(undefined);
-  vi.mocked(ipfs.catToFile).mockResolvedValue(undefined);
+  vi.mocked(ipfs.catToFile).mockImplementation(async (cid: string) => cid);
   vi.mocked(ipfs.resolveFileCid).mockImplementation(async (cid: string) => cid);
 }
 

@@ -52,7 +52,7 @@ beforeEach(async () => {
   vi.clearAllMocks();
   vi.mocked(ipfs.listPins).mockResolvedValue([]);
   vi.mocked(ipfs.addFile).mockResolvedValue(LOCAL_CID);
-  vi.mocked(ipfs.catToFile).mockResolvedValue(undefined);
+  vi.mocked(ipfs.catToFile).mockImplementation(async (cid: string) => cid);
   vi.mocked(ipfs.contentPinnedCidDetailed).mockResolvedValue(null);
   vi.mocked(ipfs.dagNodeType).mockResolvedValue("file");
   vi.mocked(ipfs.resolveFileCid).mockImplementation(async (cid: string) => cid);

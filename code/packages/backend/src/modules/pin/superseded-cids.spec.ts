@@ -26,7 +26,7 @@ const manifest = (cid: string, pinnedBy: string[]): Manifest =>
     files: [{ path: REL, cid, size: 1029637, sha256: null, modified_at: STAMP, pinned_by: pinnedBy }],
   }) as Manifest;
 
-const cidOf = (m: Manifest): string | undefined => m.files.find((f) => f.path === REL)?.cid;
+const cidOf = (m: Manifest): string | null | undefined => m.files.find((f) => f.path === REL)?.cid;
 
 describe("mergeManifests — a disproved CID cannot win", () => {
   it("keeps the healed FILE cid when the wire hands the wrapper back", async () => {
@@ -47,7 +47,7 @@ describe("mergeManifests — a disproved CID cannot win", () => {
   it("corrects an entry the wire never mentioned, so the fix is PUBLISHED and not just held", async () => {
     // The mirror write is a merge too. A correction that only survived where the peer also sent the path
     // would never reach the computer still holding the bad CID.
-    const merged = mergeManifests(manifest(WRAPPER, ["pc-10"]), { schema_version: 1, files: [] } as Manifest, "pc-10", {
+    const merged = mergeManifests(manifest(WRAPPER, ["pc-10"]), { schema_version: 1, unit: "repo", files: [] } as Manifest, "pc-10", {
       incomingIsWire: true,
       supersededCid: (c) => (c === WRAPPER ? FILE : null),
     });
@@ -112,7 +112,7 @@ describe("a wrapper-CID heal records what it proved", () => {
     vi.mocked(ipfs.listPins).mockResolvedValue([]);
     vi.mocked(ipfs.hasProvider).mockResolvedValue(true);
     vi.mocked(ipfs.pinAdd).mockResolvedValue(undefined);
-    vi.mocked(ipfs.catToFile).mockResolvedValue(undefined);
+    vi.mocked(ipfs.catToFile).mockImplementation(async (cid: string) => cid);
     vi.mocked(ipfs.resolveFileCid).mockImplementation(async (c: string) => (c === WRAPPER ? FILE : c));
 
     const { pullMissing } = await import("./pin.service.js");
