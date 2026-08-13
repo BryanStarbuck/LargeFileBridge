@@ -21,6 +21,45 @@ export function isStrayPathName(name: string): boolean {
   return name.includes("\\");
 }
 
+// ── case collisions ─────────────────────────────────────────────────────────────────────────────────
+//
+// THE SECOND SPELLING BUG, same shape as the `\` one. Two entries that differ ONLY in case (`nano_banana/`
+// vs `Nano_Banana/`) coexist happily on a case-SENSITIVE peer, so it mirrors both into the shared repo.
+// A macOS or Windows clone then cannot hold them apart: only one directory exists on disk, and git — which
+// IS case-sensitive in its index — ends up tracking two paths for it. Measured on the live act3 repo, the
+// damage is that `git add` binds to whichever entry the case-insensitive lookup reaches first and silently
+// updates THAT one, so the file `git status` reports as modified can never be committed from a Mac at all.
+//
+// The heal is the same shape as healing `\`: normalize at the copy boundary. The spelling ALREADY in the
+// destination wins, so whichever cased name landed first is the one that travels, and a second one is never
+// created. Collapsing is the correct call and not a data loss risk: the two are mergeable halves of one
+// history (`events:` is append-only), and no macOS or Windows clone could ever check both out anyway.
+
+/** Index a directory by lowercased name → the spelling already on disk. Read ONCE per directory. */
+export function caseIndex(dir: string): Map<string, string> {
+  const index = new Map<string, string>();
+  try {
+    for (const name of fs.readdirSync(dir)) {
+      const key = name.toLowerCase();
+      if (!index.has(key)) index.set(key, name);
+    }
+  } catch {
+    // Unreadable/absent destination — no established spelling to defer to, so the incoming one stands.
+  }
+  return index;
+}
+
+/**
+ * The name to write as: an existing case-variant in the destination beats the incoming spelling.
+ * Returns `name` unchanged when there is no collision (the overwhelmingly common case).
+ */
+export function resolveCasing(index: Map<string, string>, name: string): string {
+  const existing = index.get(name.toLowerCase());
+  if (!existing || existing === name) return name;
+  log.info("storage", `case heal: ${name} -> ${existing}`);
+  return existing;
+}
+
 /** Where `name` should have landed: `a\b\c.yaml` under `dst` → `dst/a/b/c.yaml`. */
 export function healedTarget(dst: string, name: string): string {
   return path.join(dst, ...name.split("\\"));

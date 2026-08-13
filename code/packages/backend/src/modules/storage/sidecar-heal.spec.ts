@@ -7,7 +7,14 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { parse } from "yaml";
-import { isStrayPathName, healedTarget, copyHealed, mergeSidecarFiles } from "./sidecar-heal.js";
+import {
+  isStrayPathName,
+  healedTarget,
+  copyHealed,
+  mergeSidecarFiles,
+  caseIndex,
+  resolveCasing,
+} from "./sidecar-heal.js";
 
 let tmp: string;
 let src: string;
@@ -114,5 +121,37 @@ describe("mergeSidecarFiles", () => {
     fs.writeFileSync(a, sidecar([{ at: "2026-08-04T04:52:56Z", kind: "pull", on_device: "rafin" }]));
     fs.writeFileSync(b, ":\n  not: [valid");
     expect(mergeSidecarFiles(a, b)).toBe(false);
+  });
+});
+
+// The CASE heal. A case-sensitive peer can hold `nano_banana/` and `Nano_Banana/` at once and mirrors both;
+// a Mac or Windows clone cannot, and git ends up tracking two paths for one file. Observed on the live act3
+// repo: `git add` bound to the wrong index entry and silently updated it, so the file `git status` showed as
+// modified could not be committed from the Mac at all. These tests pin the boundary that stops that.
+describe("caseIndex / resolveCasing — the case heal", () => {
+  it("defers to the spelling already on disk", () => {
+    fs.mkdirSync(path.join(dst, "Nano_Banana"));
+    expect(resolveCasing(caseIndex(dst), "nano_banana")).toBe("Nano_Banana");
+  });
+
+  it("leaves a name alone when it already matches exactly", () => {
+    fs.mkdirSync(path.join(dst, "Nano_Banana"));
+    expect(resolveCasing(caseIndex(dst), "Nano_Banana")).toBe("Nano_Banana");
+  });
+
+  it("leaves a genuinely new name alone", () => {
+    fs.mkdirSync(path.join(dst, "Nano_Banana"));
+    expect(resolveCasing(caseIndex(dst), "jenny_movie")).toBe("jenny_movie");
+  });
+
+  it("is stable: whichever spelling landed first keeps winning", () => {
+    fs.mkdirSync(path.join(dst, "Nano_Banana"));
+    const index = caseIndex(dst);
+    expect(resolveCasing(index, "NANO_BANANA")).toBe("Nano_Banana");
+    expect(resolveCasing(index, "nano_banana")).toBe("Nano_Banana");
+  });
+
+  it("treats an absent destination as having no established spelling", () => {
+    expect(resolveCasing(caseIndex(path.join(tmp, "nope")), "nano_banana")).toBe("nano_banana");
   });
 });

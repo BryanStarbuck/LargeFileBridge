@@ -29,7 +29,7 @@ import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./led
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
-import { isStrayPathName, copyHealed } from "./sidecar-heal.js";
+import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar-heal.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
 // logs. Both directions route through it, so neither leg can stamp over the other side's events.
 import { copyTrackedFile } from "./tracked-file-merge.js";
@@ -126,11 +126,16 @@ function copyTree(src: string, dst: string, rel = ""): boolean {
     return false;
   }
   fs.mkdirSync(dst, { recursive: true });
+  // One listing of the destination, reused for every entry: a name that differs from an existing one ONLY
+  // in case must reuse that established spelling, or a case-sensitive peer plants a second directory that
+  // no Mac or Windows clone can hold apart from the first (sidecar-heal.ts, "case collisions").
+  const dstCasing = caseIndex(dst);
   for (const e of entries) {
     if (rel === "" && LOCAL_ONLY.has(e.name)) continue;
+    const name = resolveCasing(dstCasing, e.name);
     const s = path.join(src, e.name);
-    const d = path.join(dst, e.name);
-    const childRel = rel === "" ? e.name : `${rel}/${e.name}`;
+    const d = path.join(dst, name);
+    const childRel = rel === "" ? name : `${rel}/${name}`;
     try {
       // A `\` in the NAME is a whole relative path that lost its separators (§6.1b). Copying it verbatim
       // is what makes the bad spelling travel — and a `\` filename cannot be checked out on Windows at
@@ -536,10 +541,14 @@ function copyTreeExcept(src: string, dst: string, skip: Set<string>): boolean {
     return false;
   }
   fs.mkdirSync(dst, { recursive: true });
+  // Ingress side of the same case heal — this is the direction that materializes a peer's second spelling
+  // on THIS disk. Normalizing here is what makes the bounce one-way.
+  const dstCasing = caseIndex(dst);
   for (const e of entries) {
     if (skip.has(e.name) || LOCAL_ONLY.has(e.name)) continue;
+    const name = resolveCasing(dstCasing, e.name);
     const s = path.join(src, e.name);
-    const d = path.join(dst, e.name);
+    const d = path.join(dst, name);
     try {
       // THE INGRESS HEAL (§6.1b). This is the direction that put the strays back on this disk 2 minutes
       // after they were deleted: a peer on an older build re-added `files/jfk\training\clip.mp4.yaml` to
@@ -549,10 +558,10 @@ function copyTreeExcept(src: string, dst: string, skip: Set<string>): boolean {
         changed = copyHealed(s, dst, e.name) || changed;
         continue;
       }
-      // `e.name` IS the state-dir-relative path at this level, so the sidecar/history merge sees the
+      // `name` IS the state-dir-relative path at this level, so the sidecar/history merge sees the
       // `files/` and `history/` prefixes it keys on.
-      if (e.isDirectory()) changed = copyTree(s, d, e.name) || changed;
-      else if (e.isFile()) changed = copyTrackedFile(s, d, e.name) || changed;
+      if (e.isDirectory()) changed = copyTree(s, d, name) || changed;
+      else if (e.isFile()) changed = copyTrackedFile(s, d, name) || changed;
     } catch (err) {
       log.warn("storage", `reconcile: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
     }
