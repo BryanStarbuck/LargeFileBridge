@@ -23,7 +23,14 @@ import YAML from "yaml";
 let tmp: string;
 let repoRoot: string;
 const FOLDER = "charlie-kirk";
-const PEER = "bryan-mac-pro";
+/**
+ * A peer label that cannot be this computer's own, whichever machine runs the suite. This suite's entire
+ * subject is "a claim of OURS vs a claim of a PEER's", so a hard-coded real device name breaks it on the one
+ * machine it names: `PEER = "bryan-mac-pro"` IS `computerLabel()` on Bryan's Mac Pro, which collapsed
+ * `pinned_by: [PEER, label]` to a single claim and made "drops ours, keeps the peer's" unsatisfiable there
+ * while passing in every other checkout. Deriving from the local label keeps it foreign by construction.
+ */
+const peerOf = (label: string): string => `peer-${label}-elsewhere`;
 const HELD = "bafyReallyPinnedHere";
 const UNHELD = "bafyNotPinnedHere";
 const STAMP = "2026-07-08T00:01:51.501Z";
@@ -61,11 +68,15 @@ function seedConfig(): void {
   );
 }
 
-/** Seed BOTH manifests with the same two entries: one this computer really holds, one it does not. */
-async function seedManifests(label: string): Promise<void> {
+/**
+ * Seed BOTH manifests with the same two entries: one this computer really holds, one it does not.
+ * `claims` is the exact `pinned_by` list both entries carry, so a caller that means "a peer's claim and
+ * ours" and one that means "a peer's claim ONLY" say so explicitly instead of encoding it in one argument.
+ */
+async function seedManifests(claims: string[]): Promise<void> {
   const files = [
-    { path: "images/held.jpg", cid: HELD, size: 10, sha256: null, modified_at: STAMP, pinned_by: [PEER, label] },
-    { path: "images/unheld.jpg", cid: UNHELD, size: 20, sha256: null, modified_at: STAMP, pinned_by: [PEER, label] },
+    { path: "images/held.jpg", cid: HELD, size: 10, sha256: null, modified_at: STAMP, pinned_by: [...claims] },
+    { path: "images/unheld.jpg", cid: UNHELD, size: 20, sha256: null, modified_at: STAMP, pinned_by: [...claims] },
   ];
   const { writeRepoManifest } = await import("../store-model/units.service.js");
   const { writeRepoTrackingManifest } = await import("./manifest.service.js");
@@ -85,8 +96,9 @@ describe("a `pinned: false` repo must not publish pin claims it cannot back", ()
   it("drops this computer's unbacked claims from BOTH manifests and keeps the peer's", async () => {
     const { computerLabel } = await import("../store-model/config.service.js");
     const label = computerLabel();
+    const peer = peerOf(label);
     seedConfig();
-    await seedManifests(label);
+    await seedManifests([peer, label]);
     const ipfs = await import("../ipfs/ipfs.service.js");
     vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: HELD }] as never);
 
@@ -99,9 +111,9 @@ describe("a `pinned: false` repo must not publish pin claims it cannot back", ()
       // The claim we can back survives; the one we cannot is gone. A peer's claim is never ours to touch —
       // we can only verify our own pinset, so removing theirs would delete the pull-down signal itself.
       expect(claims["images/held.jpg"]).toContain(label);
-      expect(claims["images/held.jpg"]).toContain(PEER);
+      expect(claims["images/held.jpg"]).toContain(peer);
       expect(claims["images/unheld.jpg"]).not.toContain(label);
-      expect(claims["images/unheld.jpg"]).toContain(PEER);
+      expect(claims["images/unheld.jpg"]).toContain(peer);
     }
   });
 
@@ -112,7 +124,7 @@ describe("a `pinned: false` repo must not publish pin claims it cannot back", ()
     const { computerLabel } = await import("../store-model/config.service.js");
     const label = computerLabel();
     seedConfig();
-    await seedManifests(label);
+    await seedManifests([peerOf(label), label]);
     const ipfs = await import("../ipfs/ipfs.service.js");
     vi.mocked(ipfs.listPins).mockRejectedValue(new Error("connect ECONNREFUSED 127.0.0.1:5001"));
 
@@ -129,8 +141,9 @@ describe("a `pinned: false` repo must not publish pin claims it cannot back", ()
     // The pass visits every non-opted-in repo every 15 minutes and `pin ls` is the slowest call the app
     // makes. Paying it per repo per pass would trade one defect for a much more visible one, so the whole
     // check is conditional — a healed repo costs nothing ever again.
+    const { computerLabel } = await import("../store-model/config.service.js");
     seedConfig();
-    await seedManifests(PEER); // peer claims only
+    await seedManifests([peerOf(computerLabel())]); // peer claims ONLY — nothing of ours to verify
     const ipfs = await import("../ipfs/ipfs.service.js");
     vi.mocked(ipfs.listPins).mockResolvedValue([] as never);
 

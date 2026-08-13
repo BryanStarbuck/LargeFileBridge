@@ -128,6 +128,14 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
   let localManifestPath: string;
   let prevStateDir: string | undefined;
 
+  // A PEER label that cannot collide with whichever computer runs this suite. Every assertion below turns on
+  // "is this claim ours or a peer's?", so a hard-coded real device name makes the test pass everywhere EXCEPT
+  // on that device — where the merge correctly republishes it as OUR claim and the expectation is simply
+  // wrong. `TOWER` here did exactly that: on bryan-mac-pro, `computerLabel()` IS "bryan-mac-pro", so
+  // "does NOT re-publish a peer claim" failed on Bryan's machine alone while passing in every other checkout.
+  // Deriving from the local label keeps it foreign by construction (strictly longer than it, so never equal).
+  let peer: string;
+
   const REMOTE = "https://github.com/ACT3ai/all.git";
 
   beforeAll(async () => {
@@ -146,6 +154,11 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     mod.setSyncRepoMarker(repoRoot, syncRepo, REMOTE);
     mirrorDir = resolveStateSyncRepo(repoRoot)!;
     localManifestPath = path.join(repoStateDir(repoRoot), "manifest.yaml");
+    peer = `peer-${computerLabel()}-elsewhere`;
+  });
+
+  it("uses a peer label that is not this computer — the premise every case below rests on", () => {
+    expect(peer).not.toBe(computerLabel());
   });
 
   afterAll(() => {
@@ -160,12 +173,12 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     fs.mkdirSync(mirrorDir, { recursive: true });
     fs.writeFileSync(
       path.join(mirrorDir, "manifest.yaml"),
-      serializeManifest(manifest([file({ path: VIDEO, pinned_by: [NAYAN] })])),
+      serializeManifest(manifest([file({ path: VIDEO, pinned_by: [peer] })])),
       "utf8",
     );
     fs.writeFileSync(
       localManifestPath,
-      serializeManifest(manifest([file({ path: "jfk/mine.mp4", cid: "bafyMINE", pinned_by: [TOWER] })])),
+      serializeManifest(manifest([file({ path: "jfk/mine.mp4", cid: "bafyMINE", pinned_by: [computerLabel()] })])),
       "utf8",
     );
 
@@ -173,7 +186,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
     expect(after.files.map((f) => f.path).sort()).toEqual([VIDEO, "jfk/mine.mp4"].sort());
-    expect(after.files.find((f) => f.path === VIDEO)!.pinned_by).toEqual([NAYAN]);
+    expect(after.files.find((f) => f.path === VIDEO)!.pinned_by).toEqual([peer]);
   });
 
   it("keeps a peer's pin claim on an entry both computers know", () => {
@@ -182,7 +195,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     const shared = "jfk/training/videos/shared.mp4";
     fs.writeFileSync(
       path.join(mirrorDir, "manifest.yaml"),
-      serializeManifest(manifest([file({ path: shared, pinned_by: [NAYAN] })])),
+      serializeManifest(manifest([file({ path: shared, pinned_by: [peer] })])),
       "utf8",
     );
     fs.writeFileSync(
@@ -194,7 +207,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     mirrorToSyncRepo(repoRoot);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
-    expect(after.files.find((f) => f.path === shared)!.pinned_by).toEqual([NAYAN]);
+    expect(after.files.find((f) => f.path === shared)!.pinned_by).toEqual([peer]);
   });
 
   it("does NOT re-publish a peer claim the mirror no longer carries", () => {
@@ -206,12 +219,12 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     const shared = "jfk/training/videos/shared.mp4";
     fs.writeFileSync(
       path.join(mirrorDir, "manifest.yaml"),
-      serializeManifest(manifest([file({ path: shared, pinned_by: [] })])), // TOWER withdrew it here
+      serializeManifest(manifest([file({ path: shared, pinned_by: [] })])), // the peer withdrew it here
       "utf8",
     );
     fs.writeFileSync(
       localManifestPath,
-      serializeManifest(manifest([file({ path: shared, pinned_by: [TOWER] })])), // our stale memory of it
+      serializeManifest(manifest([file({ path: shared, pinned_by: [peer] })])), // our stale memory of it
       "utf8",
     );
 
@@ -228,7 +241,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     const shared = "jfk/training/videos/ours.mp4";
     fs.writeFileSync(
       path.join(mirrorDir, "manifest.yaml"),
-      serializeManifest(manifest([file({ path: shared, pinned_by: [NAYAN] })])),
+      serializeManifest(manifest([file({ path: shared, pinned_by: [peer] })])),
       "utf8",
     );
     fs.writeFileSync(
@@ -240,7 +253,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     mirrorToSyncRepo(repoRoot);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
-    expect(after.files.find((f) => f.path === shared)!.pinned_by.sort()).toEqual([NAYAN, computerLabel()].sort());
+    expect(after.files.find((f) => f.path === shared)!.pinned_by.sort()).toEqual([peer, computerLabel()].sort());
   });
 
   it("leaves an unparseable mirror alone instead of stamping over it", () => {
