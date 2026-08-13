@@ -1037,6 +1037,14 @@ export const DeviceFileSchema = z.object({
     .prefault({}),
   // one entry per mapped source directory keyed in mapped_dirs.yaml (§4)
   graft: z.record(z.string(), DeviceGraftEntrySchema).default({}),
+  // WRAPPER CIDs THIS COMPUTER HAS DISPROVED, published so the proof reaches the fleet (ipfs.mdx §5.1
+  // Layer 0). The local `superseded_cids.yaml` only ever protected the machine that did the walk: a peer
+  // that cannot resolve the wrapper keeps winning the merge tie-break with it (the tie is a total order on
+  // the CID VALUE, which knows nothing about directories) and re-publishes it forever. Measured on
+  // charlie-kirk 2026-08-13: 16 entries alternating between a wrapper CID and its file CID every 5-10
+  // minutes for days, one commit each way. Self-owned like every other field here — one device writes it,
+  // every device reads it — so it can never conflict, and it moves only when a walk proves something new.
+  superseded_cids: z.record(z.string(), z.string()).default({}), // canonical(proven wrong) → canonical(the file)
 });
 export type DeviceFile = z.infer<typeof DeviceFileSchema>;
 

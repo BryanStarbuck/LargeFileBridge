@@ -535,6 +535,31 @@ fix"), and it is the one field here that *should* travel promptly.
 Publishing the build, and naming peers that are behind, is implemented in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD`; written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`; compared across the fleet by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `stalePeersAcrossStorages()` / `stalePeerMessage()`.
 
+### 7.3 The wrapper CIDs this computer has DISPROVED (LOCKED, learned from a defect)
+
+A second fact travels in the device file, and it is the only one here that is not about the machine itself:
+**`superseded_cids`** — recorded CIDs this computer has proved are a wrapper *directory* rather than the
+file, each mapped to the file CID it really contains ([knowledge/ipfs.mdx §5.1 Layer 0](../knowledge/ipfs.mdx)).
+
+It travels because **the proof cannot be repeated everywhere**. Establishing it needs the wrapper's blocks:
+the computer that has them can walk the CID, and a computer that never held them simply cannot, no matter
+how many passes it runs. Until this field existed, that asymmetry was permanent — the machine with the
+evidence corrected the manifest entry, every machine without it re-published the wrapper CID, and
+`mergeManifests` handed the wrapper back each round because its tie-break is a total order on the CID
+*value*, which cannot know one of the two is a folder. Measured on charlie-kirk 2026-08-13: **16 entries
+alternating between the two CIDs every 5-10 minutes for days**, 30 consecutive commits carrying 4 distinct
+versions of one file, and not one of them new information.
+
+Same trust model as the rest of the registry, with one addition: **a first-hand walk outranks a peer's
+report**, so adopting never overwrites a pair this computer proved itself, and a pair whose halves do not
+parse as CIDs is skipped rather than trusted. Like `app_build` it is SUBSTANTIVE and rarely moves — a new
+pair is a new proof — so it costs a commit only when there is something to say.
+
+Published with this device's own file, and folded in from the peers on the same pass, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()` / `readPeerSupersededCids()`;
+the local map and the adoption rule live in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/superseded-cids.service.ts` — `supersededPairs()` / `adoptSupersededCids()`,
+called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `fleetSupersededCids()`.
+
 ---
 
 ## 8. Auto-naming & disambiguation — combine only what differs (LOCKED)

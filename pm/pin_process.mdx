@@ -427,6 +427,8 @@ topics is `reconcileRepo()` / `reconcileRepoInner()` in the same file.
 | the pinset holds it, we never claimed it | ours | add our claim |
 | our dropped claim was the last one, and no copy is on disk | nothing at all | remove the entry |
 | on disk, looks unpinned, recorded CID is a **file** | maybe pinned under another add profile | `--only-hash` probe; a hit is recorded as a CID **equivalence** |
+| on disk, looks unpinned, the node cannot say what the recorded CID **is** | unknown — do not guess | pin the bytes if asked to, record neither map (§5.1 Layer 0) |
+| an equivalence pair whose recorded CID is a **directory** | it was never an equivalence | drop the pair so the entry can be repaired again |
 | on disk, looks unpinned, recorded CID is a **directory** | the CID of the bytes we actually hold | replace the recorded CID — see below |
 | recorded CID is a **directory**, unwrappable, not on disk | the file inside it | replace the recorded CID |
 | recorded CID is a **directory**, interior gone | unknown — do not guess | report: it needs re-adding where the bytes are |
@@ -443,6 +445,20 @@ original wrapper's interior nodes have been collected.
 "we intend to". A claim we cannot back tells a teammate a second copy exists when it does not; a pin we hold
 but never claimed tells them the opposite. This is the rule `runUnitPin` already applies to the units it
 visits, extended to every unit and enforced in **both** directions.
+
+**A claim is only EDITED on a settled answer (LOCKED, 2026-08-13).** "Not in the pinset" is half an answer
+while the file is sitting on disk, because identical bytes can be pinned under a CID no string comparison
+reaches — that is what the `--only-hash` probe is for, and the probe is **budgeted per repo per pass** and
+can throw. Both of those used to land in the same branch as a genuine "not pinned here" and drop the claim,
+which is a WRITE to the shared manifest; the pin pass's own adopt path (which has no budget) then recognised
+the bytes and put the claim straight back. Measured on the live `all` repo, 2026-08-12: three entries
+alternating `pinned_by: []` / `[bryan-mac-pro]` across consecutive backbone commits, all day, each flip a
+commit. So a claim is dropped only when this pass actually established the absence; an unexamined or
+errored probe leaves the record exactly as found, counts as `claimsUnverified`, and does **not** count as a
+change (or the manifests would be rewritten and committed every pass on any repo big enough to exhaust the
+budget). Adding a claim needs no such caution — `held` is only ever true because we saw the pin. Implemented
+in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` —
+`reconcileEntry()` STEP 1/STEP 2. Locked test: `modules/pin/claim-verification.spec.ts`.
 
 **The other record on a repo.** The machine-local frozen `decisions:` enum is a projection of the shared
 ledger, and every read path trusts the projection rather than re-folding it, so drift there is the same

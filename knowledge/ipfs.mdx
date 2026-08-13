@@ -254,6 +254,36 @@ differed from ours — the "invisible v0 pins" class.
   spends ONE budget (`LFB_WRAPPER_WALK_MS`, default 90s) across the whole descent — the ceiling that
   matters is how long a single file may hold a transfer slot — and reports a timeout in those terms.
 
+  **A WRAPPER CID FILED AS A LAYER-3 EQUIVALENCE IS A TRAP DOOR (LOCKED, 2026-08-13).** The two records are
+  opposites — an equivalence deliberately LEAVES the shared CID alone, a supersession CORRECTS it — and
+  three code paths recognise "these bytes are pinned here under a different CID" but only the reconciler
+  ever asked which case it was. The other two wrote an equivalence unconditionally, and that pair is
+  permanent and silent: `pinsetHasContent()` answers **true** through it, so the reconciler's own probe —
+  the one thing that would have noticed the directory — never runs on that entry again. Measured on the
+  live fleet: pc-10 pulled a file whose bytes were already on disk (the local-bytes fast path), filed
+  `wrapper → file` as an equivalence, and from then on re-published a CID no computer can `cat`, against a
+  peer that kept correcting it. Three rules close it, and they only work together:
+  * **Classify before recording, and treat silence as a third answer.** `dagNodeType` returns `null` when
+    the node cannot say (blocks absent, nobody served them in time) — that is NOT "file". Record nothing
+    and ask again next pass. `modules/pin/cid-correction.ts` — `recordCidCorrection()`, the one decision for
+    all three callers (`reconciler.service.ts` `reconcileEntry`, `pin.service.ts` `runUnitPin` adopt +
+    `pullMissingInner` fast path).
+  * **Re-examine the pairs already on disk**, since stopping new ones does not clear the ones written before
+    the fix. `reconciler.service.ts` — `auditCidEquivalences()` drops any pair whose key is a directory
+    (bounded per pass, short per-CID cap, and a CID the node cannot describe is left alone); the entry's
+    normal repair then re-answers it with a proof.
+  * **Let the proof travel** — see the next paragraph.
+
+  **A PROOF ONLY ONE COMPUTER CAN MAKE HAS TO REACH THE OTHERS.** `superseded_cids.yaml` is machine-local
+  because it is derived, but the walk that derives it needs the wrapper's blocks — so a computer that never
+  held them can never reproduce it, and on that machine the tie-break keeps choosing the wrapper and
+  publishing it. Each computer therefore PUBLISHES its own pairs in its own device file and folds in its
+  peers' on every storage pass, with a first-hand walk always outranking a peer's report
+  ([pm/devices.mdx §7.3](../pm/devices.mdx)). `superseded-cids.service.ts` — `supersededPairs()` /
+  `adoptSupersededCids()`; carried by `storage/devices.service.ts` — `writeSelfDevice()` /
+  `readPeerSupersededCids()`. Locked tests: `modules/pin/wrapper-cid-poisoning.spec.ts`,
+  `modules/pin/superseded-fleet.spec.ts`.
+
 **What we DO surface cheaply — the three-state pin icon for DECIDED files (no hashing).** For a file the
 user has **decided to sync**, we already know its CID (it is in the manifest), so checking whether **this
 computer** actually holds the pin is an **O(1) set lookup** against the once-fetched canonical pinset — no

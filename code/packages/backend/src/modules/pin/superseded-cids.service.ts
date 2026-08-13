@@ -65,6 +65,47 @@ export function supersededCid(recorded: string): string | null {
   return load().pairs[canonicalCid(recorded)] ?? null;
 }
 
+/** A cheap shape test for the ONE untrusted input this module takes: pairs copied out of a peer's device
+ *  file. Not a full multibase parse — just enough that a truncated line or a stray comment can never be
+ *  written into a map whose whole job is to override CIDs. */
+function looksLikeCid(s: string): boolean {
+  return typeof s === "string" && (/^Qm[1-9A-HJ-NP-Za-km-z]{44}$/.test(s) || /^ba[a-z2-7]{57,}$/.test(s));
+}
+
+/** Everything this computer has proved, for publishing into its own device file (devices.mdx §7.3). */
+export function supersededPairs(): Record<string, string> {
+  return { ...load().pairs };
+}
+
+/**
+ * Take on what ANOTHER of the user's computers proved (`devices/<peer>.yaml` → `superseded_cids`).
+ *
+ * WHY A SECOND-HAND PROOF IS ACCEPTED HERE and nowhere else. The walk that establishes a pair needs the
+ * wrapper's blocks; a computer that never held them cannot repeat it, so on that machine the merge tie-break
+ * keeps choosing the wrapper CID and publishing it — and the one machine that DID prove it keeps correcting
+ * it back. That is not a disagreement anyone can win: it is two computers with different evidence, forever.
+ * Whoever has the evidence states it, and the rest of the fleet stops arguing.
+ *
+ * Conservative in the one direction that matters: a pair we already hold is never overwritten (our own walk
+ * outranks a peer's report), and a pair is only taken when both halves parse as CIDs, so a mangled peer file
+ * cannot suppress a legitimate CID here. Returns how many were new.
+ */
+export function adoptSupersededCids(pairs: Record<string, string>): number {
+  let added = 0;
+  for (const [wrong, file] of Object.entries(pairs ?? {})) {
+    // A peer file we cannot make sense of is a claim we skip, never a failure — and never a pair, because
+    // `canonicalCid` passes an unrecognized string straight through (it is deliberately non-throwing).
+    if (!looksLikeCid(wrong) || !looksLikeCid(file)) continue;
+    const key = canonicalCid(wrong);
+    const val = canonicalCid(file);
+    if (key === val || load().pairs[key]) continue;
+    noteSupersededCid(key, val);
+    added++;
+  }
+  if (added > 0) log.info("pin", `adopted ${added} wrapper-CID correction(s) proved by another of your computers`);
+  return added;
+}
+
 /** Test seam — drop the in-process cache so a fresh read hits disk. */
 export function resetSupersededCidsCache(): void {
   cache = null;

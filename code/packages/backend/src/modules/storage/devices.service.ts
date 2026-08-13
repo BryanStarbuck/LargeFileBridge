@@ -124,7 +124,17 @@ function toRecord(doc: DeviceFile): DeviceRecord {
  * graft edits, and seeds a graft entry for every mapped dir not yet grafted here (from mapped_dirs.yaml's
  * canonical path, or absent when there is none). Only ever writes this device's own file.
  */
-export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | null }): DeviceRecord {
+export function writeSelfDevice(
+  storageRoot: string,
+  opts?: {
+    owner?: string | null;
+    /** Wrapper CIDs this computer has DISPROVED (superseded-cids.service.ts), published for the fleet.
+     *  INJECTED rather than imported so this module stays free of the pin layer — and OMITTED means "leave
+     *  what is already published alone", never "clear it": most callers here have nothing to say about
+     *  CIDs, and a caller's silence must not retract a proof the last pass wrote. */
+    supersededCids?: Record<string, string>;
+  },
+): DeviceRecord {
   const cfg = getAppConfig();
   const name = selfName();
   const file = deviceFilePath(storageRoot, name);
@@ -161,6 +171,8 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
   // Seed the graft from the shared mapped-directory list — one entry per mapped key not already grafted
   // here (never clobber a user's existing graft edits — self-owned). canonical is the WRITER's path, so on
   // the writing machine it is a reasonable initial local_path; other computers re-root it themselves.
+  if (opts?.supersededCids) current.superseded_cids = { ...opts.supersededCids };
+
   const mapped = readMappedDirsForRoot(storageRoot).mapped;
   for (const m of mapped) {
     if (current.graft[m.key]) continue;
@@ -207,6 +219,43 @@ export function writeSelfDevice(storageRoot: string, opts?: { owner?: string | n
     log.info("storage", `wrote self device "${name}" (${(current.device.id || "?").slice(0, 8)}) at ${storageRoot}`);
   }
   return toRecord(readYaml(file, DeviceFileSchema));
+}
+
+/**
+ * The wrapper-CID corrections the user's OTHER computers have published in this storage (devices.mdx §7.3).
+ *
+ * Read straight off the device files rather than through `DeviceRecord`, because this is not registry
+ * information a page renders — it is evidence one machine gathered and the others cannot gather themselves
+ * (superseded-cids.service.ts `adoptSupersededCids` explains why it has to travel). Our own file is skipped:
+ * re-adopting what we published would be a no-op at best and, if our local map has since been corrected, a
+ * way to resurrect the very pair we dropped.
+ */
+export function readPeerSupersededCids(storageRoot: string): Record<string, string> {
+  const out: Record<string, string> = {};
+  const self = `${repoFolderKey(selfName())}.yaml`;
+  const seen = new Set<string>();
+  const legacy = legacyDevicesDir(storageRoot);
+  for (const dir of [devicesDir(storageRoot), ...(legacy ? [legacy] : [])]) {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const ent of entries) {
+      if (!ent.isFile() || !ent.name.endsWith(".yaml") || ent.name === self) continue;
+      if (seen.has(ent.name)) continue; // current dir wins over the legacy copy
+      seen.add(ent.name);
+      try {
+        for (const [k, v] of Object.entries(readYaml(path.join(dir, ent.name), DeviceFileSchema).superseded_cids)) {
+          if (k && v && !out[k]) out[k] = v;
+        }
+      } catch (e) {
+        log.warn("storage", `skipping unreadable device file ${ent.name}: ${(e as Error).message}`);
+      }
+    }
+  }
+  return out;
 }
 
 /** Read the whole device registry for a storage (every `devices/*.yaml`). Tolerates a missing dir (→ []).

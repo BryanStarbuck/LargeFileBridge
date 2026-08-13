@@ -38,7 +38,7 @@ import {
 } from "./manifest.service.js";
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
-import { writeSelfDevice, resolveGraftedPath } from "../storage/devices.service.js";
+import { writeSelfDevice, resolveGraftedPath, readPeerSupersededCids } from "../storage/devices.service.js";
 import {
   getStoragePinned,
   readMappedDirsForRoot,
@@ -71,8 +71,9 @@ import { track } from "../progress/progress.registry.js";
 import { WorkNote, yieldToLoop } from "../progress/work-note.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
-import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
-import { noteSupersededCid } from "./superseded-cids.service.js";
+import { pinsetHasContent } from "./cid-equivalence.service.js";
+import { recordCidCorrection } from "./cid-correction.js";
+import { noteSupersededCid, supersededPairs, adoptSupersededCids } from "./superseded-cids.service.js";
 import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
 import { responsiveBudget } from "../../shared/concurrency.js";
 import { bumpTopicThrottled, bumpTopicsThrottled, DEVICES_TOPIC } from "../events/state-events.service.js";
@@ -312,12 +313,19 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
             // Writing it back made two computers with different profiles overwrite each other's entry on
             // every single pass: a real conflict on a real payload file, every cycle, forever, which is what
             // kept the company backbone in a permanent merge/retry loop (cid-equivalence.service.ts).
-            noteCidEquivalence(existing.cid, already);
+            //
+            // UNLESS THE RECORDED CID IS NOT A FILE. A wrapper directory is not a second add profile, and
+            // an equivalence for one is the pair that made this machine stop looking (cid-correction.ts):
+            // the reconciler's probe is satisfied through the map, so nothing ever corrects it again.
+            const verdict = await recordCidCorrection(existing.cid, already, { path: rel });
+            if (verdict === "superseded") existing.cid = already; // the one repair that reaches the peers
             setPinClaim(existing, t.label, true);
             counts.skipped++;
             log.info(
               "pin",
-              `Adopted existing foreign-profile pin for ${rel} -> ${already} (no duplicate add; manifest CID ${existing.cid} left as recorded).`,
+              verdict === "superseded"
+                ? `Adopted existing pin for ${rel} -> ${already} and replaced the wrapper-directory CID the manifest recorded.`
+                : `Adopted existing foreign-profile pin for ${rel} -> ${already} (no duplicate add; manifest CID ${existing.cid} left as recorded).`,
             );
             return;
           }
@@ -786,6 +794,25 @@ function reportGitProblem(prefix: string, id: string, remote: string | null, r: 
   log.warn("pin", `${prefix}storage ${id} git: ${r.problem}`);
 }
 
+/**
+ * FOLD THE FLEET'S WRAPPER-CID PROOFS TOGETHER, in the one place that both reads a storage's device files
+ * and is about to write our own (`writeSelfDevice`): take on what the peers proved, then hand back the whole
+ * local map to publish.
+ *
+ * A pair only ever comes from a walk that resolved, and only the computer holding the wrapper's blocks can
+ * do that walk — so without this the proof stays on one machine and every other one keeps re-publishing a
+ * CID nobody can `cat`, which is the manifest ping-pong measured on charlie-kirk (cid-correction.ts). Both
+ * halves are best-effort: an unreadable peer file, or a map we cannot write, must never fail a storage pass.
+ */
+function fleetSupersededCids(root: string): Record<string, string> {
+  try {
+    adoptSupersededCids(readPeerSupersededCids(root));
+  } catch (e) {
+    log.warn("pin", `adopting peers' wrapper-CID corrections at ${root} failed: ${(e as Error).message}`);
+  }
+  return supersededPairs();
+}
+
 async function pinStorageUnitInner(id: string, onPhase?: PhaseNote): Promise<void> {
   const row = getStorageRow(id);
   if (!row || row.type === "local" || row.type === "repo") return;
@@ -831,7 +858,7 @@ async function pinStorageUnitInner(id: string, onPhase?: PhaseNote): Promise<voi
   // (pin_process.mdx §1), so it is never gated the way byte work is. This also gives path resolution the
   // graft to read below. Committed + pushed by the Git cycle at the end of this function.
   try {
-    writeSelfDevice(root);
+    writeSelfDevice(root, { supersededCids: fleetSupersededCids(root) });
   } catch (e) {
     log.warn("pin", `writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
   }
@@ -990,7 +1017,7 @@ async function syncStorageTextInner(id: string, tag: string, onPhase?: PhaseNote
   // 2. WRITE/UPDATE this device's own file (self-owned). Runs even without a backbone so the local file
   //    stays current and is ready to travel the moment the user turns Git on.
   try {
-    writeSelfDevice(root);
+    writeSelfDevice(root, { supersededCids: fleetSupersededCids(root) });
   } catch (e) {
     log.warn("pin", `${tag} writeSelfDevice for storage ${id} failed: ${(e as Error).message}`);
   }
@@ -1616,16 +1643,23 @@ async function pullMissingInner(
       // 2026-08-10: 30 such files on Bryan_Laptop, every one already on disk, stuck for a week.
       //
       // Adding the LOCAL bytes pins them (Kubo `add` pins recursively) with no network at all. When the
-      // resulting CID differs from the manifest's — two add profiles over identical content — that is
-      // recorded as a CID equivalence, exactly as the regular pin pass's adopt path does, so the pair is
-      // never re-added on the next run.
+      // resulting CID differs from the manifest's the difference gets classified rather than assumed
+      // (cid-correction.ts): a second add profile is remembered locally, a wrapper DIRECTORY is corrected
+      // in the shared record. Assuming "profile" here is what poisoned pc-10 — the wrapper CID went into
+      // the equivalence map, `pinsetHasContent` answered true through it ever after, and this machine
+      // republished a CID no computer could `cat` against a peer that kept correcting it, for days.
       if (fs.existsSync(abs) && !pinset.has(ipfs.canonicalCid(entry.cid))) {
         note.detail(rel, "the bytes are already here — pinning locally");
         const localCid = await ipfs.addFile(abs);
         pinset.add(ipfs.canonicalCid(localCid));
-        pinset.add(ipfs.canonicalCid(entry.cid));
-        if (ipfs.canonicalCid(localCid) !== ipfs.canonicalCid(entry.cid)) {
-          noteCidEquivalence(entry.cid, localCid);
+        const verdict = await recordCidCorrection(entry.cid, localCid, { path: rel });
+        if (verdict === "superseded") {
+          entry.cid = localCid;
+          healedCids.set(rel, localCid); // persisted to the tracking manifest after the fan-out
+        } else {
+          // The recorded CID names these same bytes (or we cannot yet say it does not), so a later pass
+          // must not treat it as missing and re-fetch what we just pinned.
+          pinset.add(ipfs.canonicalCid(entry.cid));
         }
         log.info("pin", `Pinned ${rel} in place (bytes already on disk) <- ${localCid}`);
         recordPullTracking(repoRoot, rel, abs, entry, by, !!opts.compress);

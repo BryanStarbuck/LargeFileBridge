@@ -59,6 +59,31 @@ export function equivalentCid(recordedCid: string): string | null {
   return load().pairs[canonicalCid(recordedCid)] ?? null;
 }
 
+/** Every recorded CID this map speaks for — the audit set (reconciler.service.ts `auditCidEquivalences`). */
+export function equivalenceKeys(): string[] {
+  return Object.keys(load().pairs);
+}
+
+/**
+ * Forget a pair. The ONE caller is the audit that finds a key which is not a file at all, and a pair like
+ * that is worse than no pair: `pinsetHasContent` answers true through it, so every path that would have
+ * re-examined the recorded CID — the reconciler's probe, the pull-down count — is satisfied forever and the
+ * wrapper CID is never corrected. Dropping it re-opens the question; the normal repair then answers it with
+ * a proof (`recordCidCorrection`), which is the standard `superseded_cids.yaml` holds itself to.
+ */
+export function dropCidEquivalence(recordedCid: string): boolean {
+  const doc = load();
+  const key = canonicalCid(recordedCid);
+  if (!(key in doc.pairs)) return false;
+  delete doc.pairs[key];
+  try {
+    writeYaml(FILE(), doc as unknown as Record<string, unknown>);
+  } catch (e) {
+    log.warn("pin", `could not persist cid equivalence removal: ${(e as Error).message}`);
+  }
+  return true;
+}
+
 /** Is this recorded CID pinned here — either directly, or as a known content-identical local CID? */
 export function pinsetHasContent(pinset: Set<string>, recordedCid: string): boolean {
   if (pinset.has(canonicalCid(recordedCid))) return true;

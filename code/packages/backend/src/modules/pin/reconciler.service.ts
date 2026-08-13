@@ -55,8 +55,9 @@ import { readRepoTrackingManifest, writeRepoTrackingManifest } from "./manifest.
 import { mergeManifests } from "../storage/tracking-sync.service.js";
 import { reconcile as reconcileDecisionEnum } from "../storage/decisions.service.js";
 import { pinnedCidSet, setPinClaim, type PinReport } from "./pin.service.js";
-import { noteCidEquivalence, pinsetHasContent } from "./cid-equivalence.service.js";
+import { dropCidEquivalence, equivalenceKeys, pinsetHasContent } from "./cid-equivalence.service.js";
 import { noteSupersededCid } from "./superseded-cids.service.js";
+import { recordCidCorrection } from "./cid-correction.js";
 import { withUnitLock, unitLockBusy } from "./unit-lock.js";
 import { bumpTopics } from "../events/state-events.service.js";
 import { joinRelConfined } from "../../shared/rel-path.js";
@@ -78,6 +79,14 @@ const BOOT_DELAY_MS = Number(process.env.LFB_RECONCILE_BOOT_MS) || 5 * 60_000;
  *  and a repo full of them would spend the whole pass proving the same thing over and over. */
 const MAX_CID_PROBES = Number(process.env.LFB_RECONCILE_CID_PROBES) || 25;
 
+/** Equivalence pairs re-examined per pass (see `auditCidEquivalences`). One `files/stat` each. */
+const MAX_EQUIVALENCE_AUDIT = Number(process.env.LFB_RECONCILE_EQUIV_AUDIT) || 200;
+
+/** …and a SHORT cap on each of those, because the audit's question is only ever answerable from blocks we
+ *  already hold. A CID whose node is not here reads as "cannot say", which is the safe answer anyway — so
+ *  waiting the full RPC timeout for it would just make the pass long for no extra knowledge. */
+const EQUIVALENCE_STAT_MS = Number(process.env.LFB_RECONCILE_EQUIV_STAT_MS) || 5_000;
+
 export interface ReconcileCounts {
   /** Manifest entries examined. */
   checked: number;
@@ -85,6 +94,8 @@ export interface ReconcileCounts {
   claimsDropped: number;
   /** Our own claim added — we DO hold the bytes and had not said so. */
   claimsAdded: number;
+  /** Our own claim LEFT ALONE because this pass could not settle whether we hold the bytes (see STEP 2). */
+  claimsUnverified: number;
   /** Entries deleted outright: our dropped claim was the last one on them. */
   entriesRemoved: number;
   /** A recorded CID that is not a file was replaced with one that is. */
@@ -103,6 +114,7 @@ const zero = (): ReconcileCounts => ({
   checked: 0,
   claimsDropped: 0,
   claimsAdded: 0,
+  claimsUnverified: 0,
   entriesRemoved: 0,
   cidsHealed: 0,
   equivalences: 0,
@@ -117,7 +129,9 @@ function add(a: ReconcileCounts, b: ReconcileCounts): ReconcileCounts {
   return out;
 }
 
-/** True when this pass changed anything worth telling an open page about. */
+/** True when this pass changed anything worth telling an open page about. `claimsUnverified` is NOT one:
+ *  leaving a record exactly as we found it is the absence of a change, and counting it would rewrite both
+ *  manifests (and commit them) every pass on any repo big enough to exhaust the probe budget. */
 function changed(c: ReconcileCounts): boolean {
   return c.claimsDropped + c.claimsAdded + c.entriesRemoved + c.cidsHealed + c.equivalences > 0;
 }
@@ -241,30 +255,38 @@ async function reconcileEntry(
   //    one of THOSE is in the pinset. `add --only-hash` stores nothing and pins nothing; it is a read.
   //    Bounded per repo because it reads the whole file.
   let held = heldHere;
-  if (!held && onDisk && ctx.probes.left > 0) {
-    ctx.probes.left--;
-    try {
-      note.detail(entry.path, "checking whether these bytes are already pinned here");
-      const found = await ipfs.contentPinnedCidDetailed(abs, pinset);
-      if (found) {
-        // WHICH RECORD IS WRONG decides which repair travels. A differing FILE CID is a legitimate second
-        // add profile: the fleet's record stays as the fleet wrote it and the pair is remembered locally
-        // (§5.1 Layer 3). A DIRECTORY CID is not a spelling of this file at all — no computer can `cat` it
-        // — so an equivalence would fix only THIS machine while every peer kept a CID it cannot use. On the
-        // one computer that holds the bytes, replacing it is the single repair that reaches the others.
-        if ((await ipfs.dagNodeType(entry.cid)) === "directory") {
-          noteSupersededCid(entry.cid, found.cid); // so the wire merge cannot hand the folder CID back
-          entry.cid = found.cid;
-          counts.cidsHealed = 1;
-        } else {
-          noteCidEquivalence(entry.cid, found.cid);
-          counts.equivalences = 1;
+  // Did we actually ESTABLISH the answer? "Not in the pinset" is only half of it while the file is sitting
+  // right there and the probe that would settle it did not run — see the claim rule below.
+  let heldKnown = true;
+  if (!held && onDisk) {
+    if (ctx.probes.left <= 0) {
+      heldKnown = false; // out of budget this pass; the file is here and we never looked
+    } else {
+      ctx.probes.left--;
+      try {
+        note.detail(entry.path, "checking whether these bytes are already pinned here");
+        const found = await ipfs.contentPinnedCidDetailed(abs, pinset);
+        if (found) {
+          // WHICH RECORD IS WRONG decides which repair travels, and `recordCidCorrection` owns that one
+          // decision for all three callers that reach it (cid-correction.ts). A wrapper DIRECTORY is
+          // replaced here — on the one computer that holds the bytes, that is the single repair that
+          // reaches the others; a second add profile leaves the fleet's record exactly as written.
+          const verdict = await recordCidCorrection(entry.cid, found.cid, { path: entry.path });
+          if (verdict === "superseded") {
+            entry.cid = found.cid;
+            counts.cidsHealed = 1;
+          } else if (verdict === "equivalent") {
+            counts.equivalences = 1;
+          }
+          pinset.add(ipfs.canonicalCid(found.cid));
+          held = true;
         }
-        pinset.add(ipfs.canonicalCid(found.cid));
-        held = true;
+      } catch (e) {
+        // The probe is how we know; a probe that threw leaves us not knowing, which is NOT the same as
+        // "these bytes are not here". Recorded as unknown so the claim rule below leaves the record alone.
+        heldKnown = false;
+        log.debug("pin", `reconcile: content probe failed for ${entry.path}: ${(e as Error).message}`);
       }
-    } catch (e) {
-      log.debug("pin", `reconcile: content probe failed for ${entry.path}: ${(e as Error).message}`);
     }
   }
 
@@ -272,10 +294,18 @@ async function reconcileEntry(
   //    these bytes pinned" and nothing else — not "the file is here", not "we intend to". A claim we cannot
   //    back tells a teammate a second copy exists when it does not; a pin we hold but never claimed tells
   //    them the opposite. This is the same rule `runUnitPin` applies, extended to every unit and both ways.
-  if (claimed !== held) {
+  //
+  //    ONLY ON A SETTLED ANSWER, THOUGH. Dropping a claim is a WRITE to the shared manifest, and the pin
+  //    pass re-adds it the moment its own (unbudgeted) adopt path recognises the bytes — so a claim dropped
+  //    on "we did not check" is not a correction, it is one half of a loop. Measured on the live `all` repo:
+  //    three entries alternating `pinned_by: []` / `[bryan-mac-pro]` across consecutive backbone commits,
+  //    all day. Adding a claim needs no such caution: `held` is only ever true because we saw the pin.
+  if (claimed !== held && (held || heldKnown)) {
     setPinClaim(entry, label, held);
     if (held) counts.claimsAdded = 1;
     else counts.claimsDropped = 1;
+  } else if (claimed && !held && !heldKnown) {
+    counts.claimsUnverified = 1;
   }
 
   // ── STEP 3 · AN ENTRY NOBODY CLAIMS AND NO ONE HAS. Only reachable by having just disproved OUR OWN last
@@ -442,6 +472,7 @@ async function reconcileRepoInner(folder: string, report?: PinReport): Promise<R
   log.info(
     "pin",
     `reconcile ${folder}: ${counts.checked} checked — dropped ${counts.claimsDropped} claim(s), added ${counts.claimsAdded}, ` +
+      `left ${counts.claimsUnverified} unverified, ` +
       `removed ${counts.entriesRemoved} entry(ies), healed ${counts.cidsHealed} CID(s), recorded ${counts.equivalences} ` +
       `equivalence(s), ${counts.unresolvableCids} CID(s) need re-adding elsewhere, re-projected ${counts.decisionsFixed} ` +
       `decision(s), ${counts.failed} failed.`,
@@ -450,6 +481,46 @@ async function reconcileRepoInner(folder: string, report?: PinReport): Promise<R
 }
 
 // ── The pass ─────────────────────────────────────────────────────────────────
+
+/**
+ * RE-EXAMINE WHAT THE EQUIVALENCE MAP CLAIMS, because a wrong pair there is permanent and silent.
+ *
+ * `pinsetHasContent` answers true through the map, and that answer satisfies every path that would ever
+ * have looked at the recorded CID again — this pass's own probe first among them. So a pair recorded for a
+ * CID that is not a file at all cannot be found by the code that repairs those; the machine holding it goes
+ * on publishing a wrapper CID no computer can `cat`, while the peers that DID prove it keep correcting it
+ * back. That is the charlie-kirk loop in one sentence (cid-correction.ts has the measurements), and it
+ * outlives the fix that stops new pairs being written, because the bad pairs are already on disk.
+ *
+ * Dropping the pair is the whole repair: it re-opens the question, and the entry's next pass through
+ * `reconcileEntry` answers it properly — with the walk `superseded_cids.yaml` demands. Nothing is invented
+ * here, and a CID the node cannot describe is left exactly as it is.
+ */
+async function auditCidEquivalences(): Promise<number> {
+  let dropped = 0;
+  const all = equivalenceKeys();
+  const keys = all.slice(0, MAX_EQUIVALENCE_AUDIT);
+  // Never let a cap read as "all clear" (performance.mdx P-37): say what was left for the next pass.
+  if (all.length > keys.length) {
+    log.info("pin", `equivalence audit: checking ${keys.length} of ${all.length} pair(s) this pass`);
+  }
+  for (const key of keys) {
+    try {
+      if ((await ipfs.dagNodeType(key, EQUIVALENCE_STAT_MS)) !== "directory") continue;
+      if (dropCidEquivalence(key)) {
+        dropped++;
+        log.info(
+          "pin",
+          `equivalence for ${key} dropped — it is a wrapper directory, not a second spelling of the file; ` +
+            `the entries that record it will be corrected and the correction published`,
+        );
+      }
+    } catch (e) {
+      log.debug("pin", `equivalence audit skipped ${key}: ${(e as Error).message}`);
+    }
+  }
+  return dropped;
+}
 
 /**
  * Reconcile every registered repo. Serial across repos on purpose: each one takes its unit lock and the
@@ -468,6 +539,10 @@ export async function runReconcile(opts: { folders?: string[] } = {}): Promise<R
     await track("pin", "checking your files match IPFS", async (report) => {
       let doneRepos = 0;
       report({ done: 0, total: folders.length, unit: "repos" });
+      // BEFORE the repos, so a pair dropped here is re-answered by this same pass rather than in six hours.
+      await auditCidEquivalences().catch((e) =>
+        log.warn("pin", `reconcile: equivalence audit failed: ${(e as Error).message}`),
+      );
       for (const folder of folders) {
         try {
           total = add(total, await reconcileRepo(folder, report));
