@@ -17,7 +17,7 @@ import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
-import sharp from "sharp";
+import sharp from "../../shared/sharp-runtime.js";
 import { resolveStateDir, ensureDir } from "../../config/state-dir.js";
 import { log } from "../../shared/logging.js";
 import { hasFfmpeg } from "./transcode.service.js";

@@ -385,10 +385,23 @@ export function flushLogs(): void {
 // Wire flush-on-shutdown ONCE (idempotent). These handlers flush ONLY (they do not call process.exit)
 // so they compose with the app's own SIGINT/SIGTERM shutdown in main.ts — both listeners fire; the
 // flush is synchronous and runs before the app's async server.close()→exit completes.
-let shutdownWired = false;
+//
+// THE GUARD LIVES ON `process`, NOT IN A MODULE VARIABLE. A `let shutdownWired` here is scoped to ONE
+// INSTANTIATION of this module, while the listeners it guards are added to the ONE SHARED `process`
+// object — so any second instantiation (vitest gives each test file its own module registry; an ESM/CJS
+// dual-load or a re-import does the same) starts from `false` and stacks another four listeners onto a
+// process that already had them. That is a real listener leak, and Node reported it during the suite:
+//   "MaxListenersExceededWarning: 11 uncaughtException listeners added to [process]".
+// Keying the guard to the same object that owns the listeners makes the idempotence claim above true in
+// every environment rather than only in the single-graph one.
+const WIRED = Symbol.for("lfb.logging.shutdownFlushWired");
+type Wirable = typeof process & { [WIRED]?: boolean };
+
 export function installLogShutdownFlush(): void {
-  if (shutdownWired) return;
-  shutdownWired = true;
+  const p = process as Wirable;
+  if (p[WIRED]) return;
+  // Non-enumerable so it never shows up in a dump/serialization of `process`.
+  Object.defineProperty(p, WIRED, { value: true, configurable: true });
   process.on("beforeExit", flushLogs);
   process.on("SIGINT", flushLogs);
   process.on("SIGTERM", flushLogs);

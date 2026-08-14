@@ -19,28 +19,15 @@ import { spawn, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import sharp from "sharp";
+import sharp from "../../shared/sharp-runtime.js";
 import { bmvbhash } from "blockhash-core";
 import { PerceptualFingerprintSchema, type PerceptualFingerprint } from "@lfb/shared";
 import { log } from "../../shared/logging.js";
 
-// ── libvips memory settings for a LONG-RUNNING process (memory.mdx — the 4 GB RSS incident) ───────────
-// sharp's defaults are tuned for a short-lived CLI, not a daemon that must sit quietly on a laptop for
-// weeks. Two of them cost us resident memory that `heapUsed` cannot see (it is native, outside V8):
-//
-//  * cache(false) — libvips keeps an operation/file cache (50 MB + 20 open files by default). We hash each
-//    file ONCE and never touch it again, so the cache has a 0% hit rate here: it is pure retained bytes.
-//  * concurrency(1) — libvips runs a thread pool PER PIPELINE sized to the core count, and each worker
-//    carries its own tile buffers and malloc arena (which macOS does not hand back). We already fan out at
-//    the JOB level (the queue's core budget), so per-pipeline threading only multiplies arenas by cores
-//    for work that is, after the 512px shrink-on-load, a few hundred microseconds of pixels.
-//
-// Measured over 40 real images × 25 passes at 16-wide concurrency: RSS plateaus at 389 MB with the
-// defaults and 281 MB with these two lines — ~110 MB of permanently resident native memory removed, with
-// no measurable change in throughput (the decode is bounded to ~1 MB of pixels either way) and NO change
-// to any hash value: neither setting touches the pixels, only how libvips schedules and retains them.
-sharp.cache(false);
-sharp.concurrency(1);
+// The libvips memory settings this module used to apply (cache(false) / concurrency(1)) now live in
+// shared/sharp-runtime.ts and arrive with the import above. They were always PROCESS-GLOBAL, so applying
+// them here only bounded the other sharp users when something happened to pull this module in first —
+// see that file's header for the measurement and for why the placement is the fix.
 
 // blockhash `bits:16` -> 16^2 = 256-bit hash = 64 hex chars (the per-file sidecar size target, §5).
 const BLOCKHASH_BITS = 16;

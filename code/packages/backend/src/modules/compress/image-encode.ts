@@ -22,12 +22,14 @@
 // It also runs IN PROCESS: no fork per file, no argv quoting, and errors arrive as exceptions instead of a
 // scraped stderr tail.
 //
-// sharp's global `concurrency(1)` / `cache(false)` are set once by media/perceptual.service.ts and are
-// deliberately NOT changed here: the compress queue already fans many single-threaded jobs out to the core
-// budget, and mutating a process-global mid-flight would race the fingerprinting running alongside us.
+// sharp's global `concurrency(1)` / `cache(false)` arrive with the shared/sharp-runtime.js import below —
+// that module is the only place sharp is configured, so these no longer depend on some other module having
+// been imported first (they used to, and silently did not apply when it was not). They are deliberately NOT
+// changed here: the compress queue already fans many single-threaded jobs out to the core budget, and
+// mutating a process-global mid-flight would race the fingerprinting running alongside us.
 import fs from "node:fs";
 import path from "node:path";
-import sharp from "sharp";
+import sharp from "../../shared/sharp-runtime.js";
 import { redeflatePng } from "./png-redeflate.js";
 
 // LOCKED (compression.mdx §2.1 R1). Every lossy image this app writes stores its colour planes at FULL

@@ -78,12 +78,52 @@ export function copyTrackedFile(src: string, dst: string, rel: string): boolean 
   return true;
 }
 
-/** Are these two files byte-identical? A read failure answers "no", so the copy still happens. */
+/** Are these two files byte-identical? A read failure answers "no", so the copy still happens.
+ *
+ *  BOUNDED ON PURPOSE (memory.mdx — resident memory). This used to be
+ *  `fs.readFileSync(a).equals(fs.readFileSync(b))`, which pulls BOTH files fully into memory. On this
+ *  product that is the wrong shape by construction: the tracked files ARE the large ones — a pair of 2GB
+ *  videos meant 4GB of live Buffers, and this runs for every tracked file of every mirrored repo on every
+ *  backbone pass. Two files that differ in the first byte cost the same 4GB as two that are identical.
+ *
+ *  Now: a size check settles the common case for free, and the byte comparison streams through a fixed
+ *  CHUNK-sized pair of buffers, so peak memory is constant no matter how large the files are. It is also
+ *  faster in the mismatch case, which is the case that actually triggers a copy — it stops at the first
+ *  differing chunk instead of reading both files to the end. */
+const SAME_BYTES_CHUNK = 1024 * 1024; // 1 MiB per side; the whole comparison is bounded at ~2 MiB
+
 function sameBytes(a: string, b: string): boolean {
+  let fdA: number | null = null;
+  let fdB: number | null = null;
   try {
-    return fs.readFileSync(a).equals(fs.readFileSync(b));
+    const sa = fs.statSync(a);
+    const sb = fs.statSync(b);
+    // Different lengths cannot be equal — the overwhelmingly common answer, and it costs two stats.
+    if (sa.size !== sb.size) return false;
+    if (sa.size === 0) return true;
+
+    fdA = fs.openSync(a, "r");
+    fdB = fs.openSync(b, "r");
+    const bufA = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
+    const bufB = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
+    let offset = 0;
+    while (offset < sa.size) {
+      const want = Math.min(SAME_BYTES_CHUNK, sa.size - offset);
+      const readA = fs.readSync(fdA, bufA, 0, want, offset);
+      const readB = fs.readSync(fdB, bufB, 0, want, offset);
+      // A short/failed read means we cannot PROVE equality; answering "no" copies, which is the safe side.
+      if (readA !== want || readB !== want) return false;
+      if (Buffer.compare(bufA.subarray(0, want), bufB.subarray(0, want)) !== 0) return false;
+      offset += want;
+    }
+    return true;
   } catch {
     return false;
+  } finally {
+    // Never leak a descriptor on the error paths above — this runs per tracked file per pass, so a leaked
+    // fd here would exhaust the process's file-descriptor table long before anything else complained.
+    if (fdA !== null) try { fs.closeSync(fdA); } catch { /* already gone */ }
+    if (fdB !== null) try { fs.closeSync(fdB); } catch { /* already gone */ }
   }
 }
 

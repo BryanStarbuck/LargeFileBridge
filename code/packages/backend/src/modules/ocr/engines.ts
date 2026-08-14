@@ -248,9 +248,64 @@ async function tessSchedulerFor(lang: string): Promise<TessScheduler> {
 /** Terminate the pooled workers (process shutdown / tests). Safe to call when the pool is empty.
  *  `scheduler.terminate()` terminates every worker it holds, so there is no separate worker list to track. */
 export async function shutdownOcrWorkers(): Promise<void> {
+  stopIdleTimer();
   const schedulers = [...schedulerPool.values()];
   schedulerPool.clear();
   await Promise.allSettled(schedulers.map(async (p) => (await p).terminate()));
+}
+
+// ── IDLE RETIREMENT (memory.mdx — resident memory on an idle process) ────────────────────────────────
+//
+// THE BUG THIS FIXES. The pool above is built lazily and, until now, was NEVER torn down: `shutdownOcrWorkers`
+// existed but had no callers anywhere in the tree. So a SINGLE OCR pass that fell back to tesseract left
+// `tessPoolSize()` workers alive for the entire life of the process — and this process is a background daemon
+// meant to sit quietly on a laptop for weeks. Each worker is a WASM instance with its own heap plus a loaded
+// ~4MB language model (budgeted at TESS_WORKER_HEAP_BYTES = 200MB above), and that memory lives in the worker,
+// so it is invisible to `heapUsed` and to `external` — it shows up only as RSS. That is exactly the shape of
+// the production warning in error.err: "rss=10548MB ... heapUsed=92MB, external=10MB ... children=0" while
+// nothing at all was in flight.
+//
+// Retiring the pool when it goes idle costs one cold start (a few seconds, already the normal first-use path)
+// the next time OCR runs, and returns the whole reservation in between. The workers are rebuilt lazily by
+// `tessSchedulerFor` exactly as they were the first time, so nothing else has to change.
+const POOL_IDLE_MS = Math.max(60_000, Number(process.env.LFB_OCR_POOL_IDLE_MS) || 5 * 60_000);
+const IDLE_CHECK_MS = 30_000;
+
+/** In-flight `recognize` calls. Retirement is only safe at ZERO — terminating a scheduler mid-job would
+ *  reject the caller's work, and a memory optimisation must never lose an OCR result. */
+let activeJobs = 0;
+let lastJobEndedAt = Date.now();
+let idleTimer: ReturnType<typeof setInterval> | null = null;
+
+function stopIdleTimer(): void {
+  if (idleTimer) clearInterval(idleTimer);
+  idleTimer = null;
+}
+
+/** Start (once) the sweep that retires an idle pool. unref()'d so it can never hold the process open. */
+function armIdleTimer(): void {
+  if (idleTimer || schedulerPool.size === 0) return;
+  idleTimer = setInterval(() => {
+    if (activeJobs > 0 || schedulerPool.size === 0) return;
+    if (Date.now() - lastJobEndedAt < POOL_IDLE_MS) return;
+    const langs = [...schedulerPool.keys()];
+    void shutdownOcrWorkers()
+      .then(() => log.info("ocr", `retired idle tesseract.js pool (lang=${langs.join(",")}) after ${Math.round(POOL_IDLE_MS / 1000)}s idle — it is rebuilt on the next OCR job`))
+      .catch((e) => log.debug("ocr", `idle pool retirement failed (harmless, will retry): ${(e as Error).message}`));
+  }, IDLE_CHECK_MS);
+  idleTimer.unref?.();
+}
+
+/** Run `fn` as a tracked OCR job, so the idle sweep above can never terminate the pool underneath it. */
+async function withPoolJob<T>(fn: () => Promise<T>): Promise<T> {
+  activeJobs += 1;
+  armIdleTimer();
+  try {
+    return await fn();
+  } finally {
+    activeJobs -= 1;
+    lastJobEndedAt = Date.now(); // the clock starts when the LAST job ends, not when the first began
+  }
 }
 
 const tesseract: OcrEngine = {
@@ -261,24 +316,29 @@ const tesseract: OcrEngine = {
     // NOTE: tesseract.js has no first-class fast/accurate switch (§3.1's table), so this adapter ignores
     // `level`. The two-speed rule is still honored where it actually matters — a video is SAMPLED at a 15s
     // stride rather than fully decoded — so the fallback is slower per frame but never asymptotically wrong.
-    const scheduler = await tessSchedulerFor(tesseractLang(language));
-    // ImageLike accepts a path in Node, so unlike Vision there is no read to do here. `addJob` queues onto
-    // the pool and resolves on whichever worker took it — the caller's wide fan-out actually runs wide.
-    const { data } = await scheduler.addJob("recognize", absImage);
-    // v7 has NO `data.words`: the hierarchy is blocks → paragraphs → lines → words, and `blocks` is null
-    // unless block output is enabled. We publish LINE-level blocks — the granularity a reader actually wants
-    // — and no bbox: tesseract's boxes are in PIXELS and `Page` carries no image dimensions to normalize
-    // against, and §5.1 publishes normalized boxes or none. Never a pixel box mislabelled as normalized.
-    const blocks: OcrBlock[] = (data.blocks ?? [])
-      .flatMap((b) => b.paragraphs ?? [])
-      .flatMap((p) => p.lines ?? [])
-      .map((l) => ({
-        text: (l.text ?? "").trim(),
-        confidence: typeof l.confidence === "number" ? l.confidence / 100 : null,
-        bbox: null,
-      }))
-      .filter((b) => b.text !== "");
-    return { text: (data.text ?? "").trim(), blocks };
+    //
+    // withPoolJob spans BOTH the build and the job on purpose: the idle sweep must not be able to retire a
+    // pool between `tessSchedulerFor` resolving and `addJob` being queued onto it.
+    return withPoolJob(async () => {
+      const scheduler = await tessSchedulerFor(tesseractLang(language));
+      // ImageLike accepts a path in Node, so unlike Vision there is no read to do here. `addJob` queues onto
+      // the pool and resolves on whichever worker took it — the caller's wide fan-out actually runs wide.
+      const { data } = await scheduler.addJob("recognize", absImage);
+      // v7 has NO `data.words`: the hierarchy is blocks → paragraphs → lines → words, and `blocks` is null
+      // unless block output is enabled. We publish LINE-level blocks — the granularity a reader actually wants
+      // — and no bbox: tesseract's boxes are in PIXELS and `Page` carries no image dimensions to normalize
+      // against, and §5.1 publishes normalized boxes or none. Never a pixel box mislabelled as normalized.
+      const blocks: OcrBlock[] = (data.blocks ?? [])
+        .flatMap((b) => b.paragraphs ?? [])
+        .flatMap((p) => p.lines ?? [])
+        .map((l) => ({
+          text: (l.text ?? "").trim(),
+          confidence: typeof l.confidence === "number" ? l.confidence / 100 : null,
+          bbox: null,
+        }))
+        .filter((b) => b.text !== "");
+      return { text: (data.text ?? "").trim(), blocks };
+    });
   },
 };
 

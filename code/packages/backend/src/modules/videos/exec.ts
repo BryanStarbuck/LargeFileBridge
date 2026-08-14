@@ -9,7 +9,7 @@
 import { spawn } from "node:child_process";
 import crypto from "node:crypto";
 import fs from "node:fs";
-import sharp from "sharp";
+import sharp from "../../shared/sharp-runtime.js";
 import { toolOnPath } from "../ocr/frames.js";
 import { registerChildProcess, unregisterChildProcess } from "../../shared/heap-watch.js";
 

@@ -305,7 +305,7 @@ The two-budget admission test — count AND bytes — belongs in code:
 
 ---
 
-## 3. New performance-catalog entries (P-28 … P-34)
+## 3. New performance-catalog entries (P-28 … P-42)
 
 These append to [performance.mdx](./performance.mdx)'s catalog and follow its format exactly.
 
@@ -460,6 +460,111 @@ The terminal-record handoff from the live registry to the durable log belongs in
 
 ---
 
+### 🔴 P-39 — A process-global native setting was applied by a module side effect · memory
+
+- **Where:** `sharp.cache(false)` / `sharp.concurrency(1)` were executed at module load of
+  `code/packages/backend/src/modules/media/perceptual.service.ts`. Three other sharp users —
+  `modules/media/poster.service.ts`, `modules/compress/image-encode.ts`, `modules/videos/exec.ts` —
+  imported the `sharp` package directly, and two of them carried comments **asserting** the globals
+  were "set once by perceptual.service.ts."
+- **Symptom:** Nothing enforced that assertion. These are **process-global libvips settings**, so
+  whether they applied to a given process depended entirely on whether something had already pulled
+  `perceptual.service` into the module graph — and `poster.service` does not import it. A process that
+  served posters without ever fingerprinting anything ran libvips on **full defaults**: a 50 MB
+  operation cache with a ~0% hit rate, and a per-pipeline worker pool sized to the core count (16 on
+  a 24-core box), each worker carrying a malloc arena macOS does not hand back. Measured on 12 real
+  photos through the actual poster path, 4 passes: **RSS 71 → 324 MB with the defaults and still
+  324 MB after idle + GC**, against 71 → 173 MB configured (plateauing ~210 MB over 20 passes) —
+  **~46% of resident memory, with `heapUsed` at 8 MB throughout.** Invisible to the heap warning by
+  construction, and the exact shape of the production line in `error.err`.
+- **Fix (architecture):** **One module owns the package.** A leaf `shared/sharp-runtime.ts` imports
+  `sharp`, applies both globals, and re-exports the configured instance; every production sharp user
+  imports **that**. The placement is the fix — a call site cannot be forgotten if there is only one,
+  and it cannot be defeated by import order if the configuration travels with the import. A guard
+  spec fails the build if any module imports `"sharp"` directly, and also asserts both settings are
+  still present in the owner (deleting either line would otherwise restore the leak silently).
+
+The single configured sharp instance and its guard live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.ts` — the module body (`sharp.cache(false)` / `sharp.concurrency(1)`), guarded by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.import-guard.spec.ts`
+
+### 🔴 P-40 — The OCR worker pool was built lazily and never released · memory
+
+- **Where:** `code/packages/backend/src/modules/ocr/engines.ts` — `schedulerPool` /
+  `tessSchedulerFor()`. The teardown function `shutdownOcrWorkers()` existed and was exported, with a
+  doc comment naming its callers ("process shutdown / tests") — and had **zero callers anywhere in
+  the tree**.
+- **Symptom:** A **single** OCR pass that fell back to tesseract left `tessPoolSize()` WASM workers
+  alive for the entire life of the process. Each is a WASM instance with its own heap plus a loaded
+  ~4 MB language model, budgeted in that same file at `TESS_WORKER_HEAP_BYTES` = 200 MB. That memory
+  lives **inside the workers**, so it is invisible to both `heapUsed` and `external` and shows up only
+  as RSS — and this process is a background daemon meant to sit quietly on a laptop for weeks. The
+  pool being correctly *sized* (P-28's lesson, applied here) did nothing about it never being
+  *released*.
+- **Fix (architecture):** **Idle retirement.** A sweep terminates the pool after a quiet window
+  (`POOL_IDLE_MS`, 5 min default, `LFB_OCR_POOL_IDLE_MS`) and clears the map so the next OCR job
+  rebuilds it lazily, exactly as the first job did. The cost is one cold start on the next use — a
+  path that already exists — in exchange for returning the whole reservation in between. Retirement
+  is gated on an **in-flight job count**, and the tracked span covers both the pool build and the
+  job, so the sweep can never terminate a scheduler out from under queued work: **a memory
+  optimisation must never cost an OCR result.** The timer is `unref()`'d so it cannot hold the
+  process open.
+
+The idle-retirement sweep and its in-flight gate live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `armIdleTimer()` / `withPoolJob()` / `shutdownOcrWorkers()`
+
+### 🟠 P-41 — A byte-for-byte compare read both whole files into memory · memory
+
+- **Where:** `code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `sameBytes()`, the
+  plain-copy fallback of `copyTrackedFile()`:
+  `fs.readFileSync(a).equals(fs.readFileSync(b))`.
+- **Symptom:** The wrong shape by construction on **this** product: the tracked files *are* the large
+  ones. A pair of 2 GB videos meant **4 GB of live Buffers**, and by its own comment this path "runs
+  for every tracked file of every mirrored repo on every backbone pass." Two files differing in their
+  first byte cost exactly as much as two identical ones. This is invariant 2 ("no path may hold a full
+  media payload in more than one representation") violated on a path nobody thought of as a payload
+  path.
+- **Fix (architecture):** **Bound the window.** A `size` check settles the overwhelmingly common
+  answer for two stats, then the comparison streams through a fixed 1 MiB buffer per side — peak
+  memory is constant regardless of file size, and it stops at the first differing chunk, which makes
+  it *faster* in exactly the case that goes on to copy. Descriptors close in a `finally` (this runs
+  per file per pass; a leaked fd would exhaust the table long before anything else complained).
+  Behaviourally covered rather than assumed: a tail off-by-one here reports "identical", skips the
+  copy, and **loses the user's newer bytes** — data loss, not a slow path.
+- **The precedent that makes this avoidable (cf. §1.5):** a **correct** streaming `sameBytes()` already
+  existed in this codebase — `config/migrate-sdl-lfbridge.ts` compares in 64 KB chunks, guarded by a
+  size check, under a comment reading *"never slurp a conflicting media file just to compare it."* The
+  migration path got it right; the per-pass path did not. Two private helpers with the same name and
+  opposite memory behaviour is the smell — if a third appears, it should be one shared utility.
+
+The bounded compare lives in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `sameBytes()`, covered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/same-bytes.spec.ts`
+
+### 🟠 P-42 — An idempotence guard scoped to the module, for listeners owned by the process · memory
+
+- **Where:** `code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` guarded by a
+  module-level `let shutdownWired`; and `code/packages/backend/src/modules/ipfs/foreign-pin.service.ts`
+  — a bare import-time `process.once("exit", …)`.
+- **Symptom:** The guard was scoped to **one instantiation of the module**, while the listeners it
+  guarded were added to the **one shared `process` object**. Any second instantiation — vitest gives
+  each test file its own module registry, and an ESM/CJS dual-load does the same — starts from
+  `false` and stacks another four listeners onto a process that already had them. Node was already
+  reporting it on every suite run: `MaxListenersExceededWarning: Possible EventEmitter memory leak
+  detected. 11 uncaughtException listeners added to [process]`, and the same for `beforeExit`,
+  `SIGINT`, `SIGTERM` and `exit`. The comment above it read "Wire flush-on-shutdown ONCE
+  (idempotent)" — the claim was simply not true in the environment that stressed it.
+- **Fix (architecture):** **Key the guard to the object that owns the thing being guarded.** A
+  `Symbol.for()` flag defined non-enumerably on `process` makes the idempotence hold in every
+  environment rather than only in the single-module-graph one. General rule for this codebase: an
+  import-time registration against a **process-global** (a listener, a native setting, a timer) must
+  guard on that global, never on a module variable — the same root cause as P-39, in a different
+  currency.
+
+The process-scoped guards live in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()`, and
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — the import-time exit-flush registration
+
+---
+
 ## 4. Settings surface
 
 The memory budget gets a knob **alongside** the core budget's, and it is read **live at admission** —
@@ -516,6 +621,19 @@ Read live at admission and served/edited over the settings surface, in code:
 11. **The memory watchdog watches RSS, not only `heapUsed`.** `heapUsed` cannot see V8's committed-
     but-idle pages, external/ArrayBuffer bytes, or native allocations, and a daemon on a laptop is
     killed on RSS. See §5.1.
+12. **A process-global resource is configured and guarded at process scope, never module scope.** A
+    native library's global settings, an import-time `process` listener, or any once-per-process
+    registration must be owned by exactly ONE module that everything else imports, or guarded by a
+    flag on the global itself. A module-level `let wired` guards one instantiation; the thing it
+    guards belongs to the process. A comment asserting another module set it is not a mechanism —
+    if the invariant matters, a guard test enforces it. See §5.2, P-39 and P-42.
+13. **Every pool of native/worker resources has a release path WITH A CALLER.** An exported
+    `shutdown*()` that nothing calls is not a release path. A pool that can be built lazily must be
+    able to go away when idle, and the retirement must be gated on in-flight work so it can never
+    cost a result. Sizing a pool correctly is not releasing it. See §5.2, P-40.
+14. **No comparison, hash, or copy reads a whole tracked file into memory.** These files ARE the
+    large ones. Any path that touches file *contents* streams through a fixed window with a stated
+    ceiling; peak memory is a function of the window, never of the file. See §5.2, P-41.
 
 ---
 
@@ -570,8 +688,55 @@ macOS never returns) held ~75 MB of permanently resident native memory that `hea
 `cache(false)` + `concurrency(1)` remove it with no change to any hash value — we already fan out at
 the job level, and the decode is bounded to ~1 MB of pixels either way.
 
-*Set at module load in*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts`.
+*Originally set at module load in* `modules/media/perceptual.service.ts`. **That placement was itself a
+defect** — see §5.2 / P-39 — and the settings now live in*
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.ts`, *which every sharp
+user imports.*
+
+---
+
+### 5.2 The 10 GB idle-RSS sweep of 2026-08-14 — invariants 12, 13, 14
+
+**What happened.** `error.err` carried the same WARN every five minutes for hours while the app was
+doing **nothing**:
+
+```
+rss=10548MB (warn at 1536MB) with heapUsed=92MB, heapTotal=97MB, external=10MB
+queued=0 running=0 runningDescribe=0 runningTranscribe=0 ... childRssMB=0 children=0
+```
+
+Ten gigabytes resident, a 92 MB object graph, no jobs, no children. §5.1's RSS threshold (invariant
+11) is what made this visible at all — the heap warning cannot fire on these numbers by construction.
+
+**What the shape ruled out.** `heapUsed` flat at ~92 MB across hours says **no JS object graph is
+growing**, so the whole class of "unbounded Map/Set/array" leaks was not the cause — and an audit
+confirmed the existing caches are bounded, TTL'd and explicitly invalidated. `external=10MB` says it
+is not `Buffer`/`ArrayBuffer` accumulation either. That leaves **native allocations and
+worker/WASM memory**, which is where all four defects were found (P-39 … P-42).
+
+**Root causes.** Four independent defects, one theme — *a process-global resource configured or
+released by something whose scope was smaller than the resource*:
+
+1. **P-39** — libvips' global cache/concurrency settings applied as a side effect of importing an
+   unrelated module, so any process that used `sharp` without importing that module ran on full
+   defaults. Measured at **+46% RSS**, none of it visible in `heapUsed`.
+2. **P-40** — the tesseract WASM worker pool was built lazily and **never released**; its teardown
+   function had zero callers. One OCR fallback pass pinned up to `tessPoolSize()` × ~200 MB until
+   restart.
+3. **P-41** — `sameBytes()` read **both** whole files into memory to compare them, on the path that
+   walks every tracked file of every mirrored repo — unbounded by design on a large-file product.
+4. **P-42** — module-scoped idempotence guards for listeners registered on `process`, stacking four
+   listeners per module instantiation. Node had been reporting this on every test run.
+
+**Honest limits of this postmortem.** The four fixes are real and independently verified, but they are
+**not proven to account for the full 10 GB**. The reproduction of P-39 reached 324 MB, not gigabytes;
+scaling to production volumes is plausible and unproven. Working **against** a pure-leak reading: the
+logs show RSS falling **10,548 → 8,894 → 6,132 MB as the machine's free memory dropped**, with the
+process doing no work throughout. Memory lost to a malloc leak cannot be reclaimed like that, so a
+meaningful share of that 10 GB is likely **reclaimable mapped / file-backed pages** (libvips maps its
+inputs) rather than leaked bytes. Attributing the remainder needs `vmmap` / `footprint` against a live
+process that has reached an elevated RSS — **that measurement has not been taken**, and this section
+must not be read as claiming it was.
 
 ---
 
@@ -606,6 +771,22 @@ the job level, and the decode is bounded to ~1 MB of pixels either way.
 11. **The knob works live.** Changing `performance.max_memory_fraction` in Settings changes the
     admitted concurrency on the **next** job with **no restart**, and the resolved GB / files-in-flight
     figures update in the UI.
+12. **Only one module imports `sharp`.** A grep for `from "sharp"` across `packages/backend/src`
+    returns exactly one production hit (`shared/sharp-runtime.ts`); the guard spec fails the build
+    otherwise. Importing **any** single sharp-using module in isolation and reading the globals back
+    yields `concurrency() === 1` and a cache with all-zero maxima — verified for `poster.service`,
+    which does not import `perceptual.service`.
+13. **The OCR pool goes away when idle.** After an OCR run that used the tesseract fallback, the pool
+    is terminated within `POOL_IDLE_MS` of the last job and process RSS returns to roughly its
+    pre-OCR level; the next OCR job rebuilds it and succeeds. A run with jobs in flight across the
+    idle deadline never loses a result.
+14. **The tracked-file compare is bounded.** Comparing two multi-GB files through `copyTrackedFile()`
+    holds peak memory in the low megabytes, not the size of the files. Boundary behaviour is unit
+    tested: chunk-aligned sizes, a difference in the final partial chunk, a difference exactly on a
+    chunk boundary, empty files, and a missing destination.
+15. **No `MaxListenersExceededWarning` anywhere.** A full `vitest run` of the backend suite emits
+    **zero** MaxListeners warnings (`grep -c MaxListenersExceeded` returns 0). Their reappearance
+    means an import-time registration has regressed to a module-scoped guard (invariant 12).
 
 ---
 
@@ -621,7 +802,13 @@ the job level, and the decode is bounded to ~1 MB of pixels either way.
   crash-restart. This spec prevents and predicts the OOM; that one makes it survivable.
 * [transactions_log.mdx](./transactions_log.mdx) — where the heartbeat memory sample, the per-batch
   high-water mark, and the P-34 terminal records land.
-* [performance.mdx](./performance.mdx) — the catalog P-28…P-34 append to.
+* [performance.mdx](./performance.mdx) — the catalog P-28…P-42 append to.
+* [ocr.mdx](./ocr.mdx) — the tesseract fallback engine, its vendored-language / no-network posture,
+  and the pool whose sizing is budgeted there and whose **release** is P-40 here.
+* [compression.mdx](./compression.mdx) / [images.mdx](./images.mdx) — the other sharp consumers now
+  reached by `shared/sharp-runtime.ts` (P-39).
+* [git_backbone.mdx](./git_backbone.mdx) — the mirrored-repo pass that calls `copyTrackedFile()` on
+  every tracked file, which is what made P-41's unbounded read a per-pass cost.
 
 <!--
   CANONICAL spec for the MEMORY BUDGET — the second half of concurrency, missing until the
@@ -645,4 +832,36 @@ the job level, and the decode is bounded to ~1 MB of pixels either way.
   KNOB: performance.max_memory_fraction default 0.5, live at admission, alongside max_core_fraction.
   Keep in sync with parallelization.mdx §1/§3, job_queue.mdx §3, ai_description.mdx §12.6,
   crash_recovery.mdx, transactions_log.mdx, performance.mdx catalog, settings.mdx.
+
+  §5.2 + P-39..P-42 (2026-08-14) — the 10GB IDLE-RSS sweep. Signature: rss=10548MB / heapUsed=92MB /
+  external=10MB / children=0 / nothing queued or running, repeating for hours. heapUsed flat => NOT a
+  JS object-graph leak (the existing Map/Set caches audited clean: bounded, TTL'd, invalidated);
+  external flat => not Buffers. => native + worker/WASM memory. FOUR defects, ONE theme: a
+  process-global resource configured/released by something scoped SMALLER than the resource.
+  P-39 🔴 sharp.cache(false)/concurrency(1) were a side effect of importing perceptual.service, while
+  poster.service/image-encode/videos-exec imported "sharp" directly (two with comments ASSERTING the
+  globals were set); poster.service does NOT import perceptual => full libvips defaults (50MB cache,
+  concurrency 16/24-core). MEASURED 12 photos x4 poster passes: 71->324MB and STILL 324MB idle+GC vs
+  71->173MB configured (~210MB @20 passes) = ~46% RSS, heapUsed 8MB throughout. FIX = leaf
+  shared/sharp-runtime.ts owns the package + import-guard.spec fails the build on any direct import.
+  P-40 🔴 tesseract WASM pool built lazily, NEVER released — shutdownOcrWorkers() had ZERO callers;
+  one fallback pass pinned tessPoolSize() x ~200MB for the life of a weeks-long daemon. FIX = idle
+  retirement (POOL_IDLE_MS 5min, LFB_OCR_POOL_IDLE_MS) gated on an in-flight count spanning build+job
+  (never terminate under queued work), timer unref'd.
+  P-41 🟠 sameBytes() = readFileSync(a).equals(readFileSync(b)) on the path that walks every tracked
+  file of every mirrored repo — a pair of 2GB videos = 4GB live Buffers. FIX = size check + 1MiB
+  streaming window, fds closed in finally. Tail off-by-one here = SKIPPED COPY = DATA LOSS, so it is
+  behaviourally tested (chunk boundary, final partial chunk, empty, missing dst).
+  P-42 🟠 module-scoped `let shutdownWired` guarding listeners added to the SHARED process object =>
+  4 more listeners per module instantiation (vitest per-file registry / ESM-CJS dual load); Node was
+  already printing "11 uncaughtException listeners added to [process]" every suite run. FIX = guard
+  on a Symbol.for() flag on process itself (logging.ts + foreign-pin.service.ts).
+  NEW INVARIANTS 12 (process-globals guarded at process scope; a comment is not a mechanism),
+  13 (every native/worker pool has a release path WITH A CALLER; sizing != releasing),
+  14 (never read a whole tracked file into memory — stream a fixed window).
+  VERIFIED: 106 files/889 tests pass, tsc clean, 0 MaxListeners warnings, twice consecutively.
+  NOT ESTABLISHED — do not claim otherwise: the 10GB is NOT fully attributed. Repro reached 324MB;
+  and RSS fell 10548->8894->6132MB as free memory dropped WITH THE PROCESS IDLE, which a malloc leak
+  cannot do => much of it is likely reclaimable mapped/file-backed pages (libvips maps its inputs).
+  vmmap/footprint on a live elevated-RSS process is the missing measurement.
 -->

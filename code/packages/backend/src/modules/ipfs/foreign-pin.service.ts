@@ -216,7 +216,17 @@ export function flushForeignPinStores(): void {
 }
 
 // A crash/exit must not lose a whole scan's worth of discovery work. writeFileSync is legal in "exit".
-process.once("exit", () => flushForeignPinStores());
+//
+// Guarded on `process` rather than by a module-local flag: this runs at IMPORT time, and a module can be
+// instantiated more than once (vitest gives each test file its own registry; an ESM/CJS dual-load does the
+// same) while `process` is shared — so an unguarded registration stacks a listener per instantiation and
+// trips Node's "MaxListenersExceededWarning: 11 exit listeners added to [process]". See the same pattern
+// and the fuller note in shared/logging.ts.
+const EXIT_FLUSH_WIRED = Symbol.for("lfb.foreignPin.exitFlushWired");
+if (!(process as typeof process & { [EXIT_FLUSH_WIRED]?: boolean })[EXIT_FLUSH_WIRED]) {
+  Object.defineProperty(process, EXIT_FLUSH_WIRED, { value: true, configurable: true });
+  process.once("exit", () => flushForeignPinStores());
+}
 
 // ── the discovery context: the kept-set + the size-prune index, built ONCE per scan ───────────────────
 export interface DiscoveryCtx {
