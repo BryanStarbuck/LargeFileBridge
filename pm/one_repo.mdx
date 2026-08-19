@@ -17,7 +17,7 @@ The **One repo** screen is where the work happens. You reach it by clicking a re
    "how many will pin, how many will not, and which ones I still need to decide on."
 
 The One-repo screen is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` component
 
 This spec builds on the siblings and does not repeat them:
 
@@ -236,11 +236,11 @@ row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
     panels (all green zeros) already say "all clear".
 
   Which button shows, and which popup it opens, is decided in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
   `scanIsStale()` (the 2-week staleness gate) and `topRecommendation()` (the worst-first pick); wired into
-  the header in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` —
+  the header in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` —
   `OneRepoPage` (`scanDue` / `topRec`). `lastScanAt` is carried on `RepoDetail` from
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
 
 * **Pin now** — no longer the header primary. It moves into the **page action-links row** (and stays in
   the `⋮` more menu). It still **prioritizes this repo but runs the full pin pass**: this repo is pinned
@@ -250,7 +250,7 @@ row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
   repo's IPFS-pinning toggle on (§3.3), and must **never** be a silent no-op — its toast reports what
   happened, not a fixed "complete"
   ([pin_process.mdx §6](./pin_process.mdx#6-never-a-silent-no-op--report-truthfully-locked-learned-from-a-defect)).
-  Handled in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+  Handled in code: `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
   `POST /api/repos/:repoId/pin` (calls `pinRepoFolder(folder, only, { manual: true })` then `pinAll({ priorityDone: folder })`).
   * **It is SELECTION-AWARE, like every other link on that row** ([page_actions.mdx §1.1](./page_actions.mdx)):
     checked rows pin exactly those files, nothing checked pins the whole repo — and the label carries the
@@ -262,7 +262,7 @@ row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
     then **replaced in place** by the honest counts, and the progress dock shows a live per-file card named
     with the scope. Silence for minutes is indistinguishable from a menu item that never fired.
     Handled in code:
-    `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `pinNow`
+    `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `pinNow`
     mutation's `onMutate` (one stable `PIN_TOAST_ID`) and `pinSummary()`.
 
 * **Page action-links row** (directly under the page title — a visible horizontal row of blue text
@@ -292,17 +292,17 @@ row 2 │ ~/BGit/Bryan_git/Movies/Our_Movies/2026/renders/final_delivery/master
   are already here) and *Rescan · Pin now · the producing trio*, which the action-links row already offers
   in richer, selection-aware form.
   The merged menu is handed to the row in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
   (the `useRepoActions(…, { omit })` catalog passed as `PageActions`' `overflow` prop).
 
 The two-row header — the content-sized title that never loses, and the path on its own full-width line — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader`
 (row 1's title is `min-w-0 max-w-[50%] shrink truncate whitespace-nowrap`, so it is sized to its content
 and capped at half the row while the actions slot shrinks first; row 2's path is
 `mt-0.5 w-full truncate whitespace-nowrap` — its own full-width one-line row, ellipsized, with the full
 text in the `title` tooltip).
 The tab strip inside row 1's actions slot, and the overflow chevron that absorbs whatever does not fit, are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` — `TaskTabs`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` — `TaskTabs`.
 
 ### 3.2 The metrics strip never wraps — and the explanation lives in the left bar (LOCKED)
 
@@ -342,16 +342,16 @@ hover-info panel at the BOTTOM OF THE LEFT BAR** — the reserved white block ab
   (`setHoverDefault` / `useHoverDefault`) — one output panel.
 
 The full-width, never-wrapping strip is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
 (the `flex w-full flex-nowrap … overflow-x-auto` row of `shrink-0` `MetricPanel`s).
 The hover text is published and forwarded in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
 `setHoverInfo()` (the module-level publish API), `setHoverDefault()` / `useHoverDefault()` (the at-rest
 hint, called by `MetricsStrip`) and `HoverInfoBridge` (the render-nothing forwarder, mounted ONCE globally
-in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`), into
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` —
+in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`), into
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` —
 `useHoverInfoPublisher` and rendered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` —
 `HoverInfoPanel` (the `"text"` block kind).
 
 #### 3.2.1 Metric tile labels carry meaningful casing — and `Describable` is now `AI Describable` (LOCKED)
@@ -365,9 +365,9 @@ in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShe
   rule would fight.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
 `METRIC_CATALOG` (`describable.label`), rendered verbatim by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`.
 
 #### 3.2.2 The Undecided tile is gone — two decision tiles, one per axis (LOCKED)
 
@@ -400,12 +400,12 @@ its own count and its own scoped popup:
   `N Pin · N Undecided · N Ignore · N Pinned locally` (§4.1).
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `MetricId`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `MetricId`,
 `METRIC_CATALOG`, `metricCount()` and `gitIgnoreCandidates()` (the shared predicate);
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `buildAddToIpfsWarning()`, `buildGitIgnoreWarning()`, `buildMetricWarning()`, `topRecommendation()`; the
 per-tab tile lists in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`.
 
 #### 3.2.3 The `Deleted here` tile — the only surface a deleted-but-still-synced file has (LOCKED)
 
@@ -429,11 +429,11 @@ appeared to do nothing, with no screen able to explain why.
 * **It appears on the All and IPFS tabs**, alongside the other pin-axis tiles.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `buildDeletedHereWarning()`, fed by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
 `deletedHereFor()` (`RepoDetail.deletedHere`), whose records the pin pass maintains in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/orphans.service.ts` — `classifyAbsent()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/orphans.service.ts` — `classifyAbsent()`.
 
 ### 3.3 Status / settings strip
 
@@ -452,7 +452,7 @@ schedule) is the **Scans** left-bar page, not this strip. This strip's toggle is
 participation in it.
 
 The repo's live status/settings strip values are computed by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`
 
 ---
 
@@ -497,11 +497,11 @@ whenever it is > 0.
 > the triage popup's target list, the repos-list `Undecided` column, the `needs_review` rollup, and the
 > to-do batch engine's `pin` recommendation (it recommends only the still-owed git-ignore axis for them).
 > Counted in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+> `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 > `countDecisions` and `computeTaskMetrics` (popup filter mirrored in
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+> `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 > `buildAddToIpfsWarning` — the renamed two-axis triage popup, §3.2.2; batch seam in
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts`).
+> `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts`).
 
 **Every segment is a quick filter on the Pin (IPFS) facet — and only that facet.** All three counts read
 the **IPFS axis** ([tables.mdx §2.4.1](./tables.mdx#241-the-two-facets-fixed-vocabulary-locked)); none of
@@ -627,10 +627,10 @@ own layout and is the one file table **without** this icon block ([tables.mdx §
 Pagination: **default 500** ([Repos §3.3](./repos.mdx)); the **file count** shows left of the pager.
 
 Each table row (one `FileRow` per discovered candidate, joined with its decision + manifest CID) is composed by the backend and served to this table in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows` (served via `reposRouter` → `GET /api/repos/:repoId/files`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows` (served via `reposRouter` → `GET /api/repos/:repoId/files`)
 
 The trailing per-row file kebab is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `rowMenu` (mounts `EntityKebab`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `rowMenu` (mounts `EntityKebab`)
 
 ### 4.7 Row / cell navigation (per file) — LOCKED
 
@@ -676,14 +676,14 @@ itself is owned by **[tables.mdx §4d](./tables.mdx)**; this page is one of its 
 not §3.6, because §3.6 already means "Sort obeys the axis split too" and other specs cite that anchor.)
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`
 (the `rowHref` prop; the row's `onClick` modifier branches and its `onAuxClick` middle-click branch), and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (`rowHref`, building `<viewerRouteForName(name)>?path=<abs>`).
 
 Row-click navigation — routing each file to its viewer (`/image` · `/video` · `/audio`) or the
 properties page (`/file`) by kind, on the file's absolute path — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `onRowClick` (uses `viewerRouteForName` from `@lfb/shared`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` `onRowClick` (uses `viewerRouteForName` from `@lfb/shared`)
 
 The **File** row's kebab (and right-click) is the **file** catalog ([menus.mdx §5.3](./menus.mdx#53-file)):
 View file · Open containing folder · Add to IPFS / Remove from IPFS · Set pin ▸ · Pin now ·
@@ -725,9 +725,9 @@ fileIds to routes that match on repo-relative paths, so the server matched nothi
 so no call site can re-derive it wrongly.
 
 Mapping the checked set to each route's path form is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()`
 (pin + decisions) / `selectedAbsPaths()` (compress + the producing trio), used by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 bulk menu (mutated via `setDecision` / `pinNow`).
 
 ### 4.5.1 The two decision-toggle columns — Pin + Ignore (LOCKED)
@@ -750,7 +750,7 @@ to set each axis; the full visual grammar (four render states — OFF white/grey
   It never deletes local bytes and it stops click propagation (never navigates).
 
 The Pin/Ignore toggle columns are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`; write via `setDecision`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `pin` and `ignore` `LfbColumn`s mounting `DecisionToggle`; write via `setDecision`).
 
 ### 4.5 The Decision select (per row) — SUPERSEDED by the Pin icon
 
@@ -776,7 +776,7 @@ Changing a decision never deletes the user's local file — it only changes what
 it.
 
 Writing a per-file decision (single or bulk) to the repo's `config.yaml` is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/files`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/files`
 
 ### 4.6 Transfer status pill (LOCKED)
 
@@ -796,7 +796,7 @@ Writing a per-file decision (single or bulk) to the repo's `config.yaml` is hand
 | `na` | Decision is Ignore/Undecided — nothing to transfer. | `—`, muted |
 
 Each file's `transfer` value (pinned / pending / na, derived from its decision, CID, and peer pins) is computed by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor` (called by `composeFileRows`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor` (called by `composeFileRows`)
 
 ### 4.8 Decision provenance — who decided, and when (team-aware)
 
@@ -842,10 +842,10 @@ better than none:
   dock note summarizes it ([decisions.mdx §11](./decisions.mdx)); it never deletes local or pinned bytes.
 
 The per-row `decidedBy` / `decidedAt` (joined from the folded shared ledger) that this tooltip and filter read are added to each `FileRow` by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows` (joins `foldLedger()` from `storage/decisions.service.ts`); rendered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows` (joins `foldLedger()` from `storage/decisions.service.ts`); rendered in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`.
 
 The **Decided by** facet itself is a **new** surface (the rail has no provenance facet today); it is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (a `decidedBy` `LfbColumn` facet over `FileRow.decidedBy`, rendered on the shared facet rail in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (a `decidedBy` `LfbColumn` facet over `FileRow.decidedBy`, rendered on the shared facet rail in `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`).
 
 ### 4.9 The Pin icon is THREE-STATE — decision × live pin reality (LOCKED)
 
@@ -871,7 +871,7 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
   pinned the CID and was then interrupted before writing the bytes was red on its row and invisible in the
   tile (one entry of 2091 on `charlie-kirk`). The count now qualifies a file when **either** record says no,
   which is what §4.10 has always said this row does ("Counts toward Pull down ALWAYS"). *Counted in:*
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
   `missingPinnedFromPeers()` ([warnings.mdx §10.8.12 A](./warnings.mdx)).
 * **`pinnedHere` is a LIVE, CANONICAL read of this node's pinset — never a per-file hash on the read path.**
   The blue↔red split is driven by `FileRow.pinnedHere`, computed by testing the file's recorded manifest CID
@@ -908,14 +908,14 @@ file they *chose* to sync has actually **arrived and pinned here yet**. So the i
   until that machine pulls the bytes, then **blue**.
 
 Computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 `composeFileRows` (sets `pinnedHere` from the threaded canonical pinset, and `pinnedForeign` from the
 recorded foreign-pin index via `foreignPinByAbsPath`), fed by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `repoDetailWithPins`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `repoDetailWithPins`
 (fetches `ipfs.canonicalPinnedSet()` once per detail response). Rendered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (the `pin` `LfbColumn`, four-state via `TaskIconCell` with red/green `doneColor` overrides), through the shared
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`.
 
 ### 4.10 Remote-only rows — a file in this list that is not on this computer (LOCKED)
 
@@ -964,10 +964,10 @@ and behaves around one:
   (All and IPFS, never the analysis tabs) is [task_tabs.mdx §4.8](./task_tabs.mdx#48-remote-only-rows-belong-on-all-and-ipfs-only-locked).
 
 Composing remote-only rows — appending reconciled manifest entries that have no local candidate and no local file, with `presence`, `transcribe`/`describe`/`ocr` forced to `na`, and their exclusion from the space / compression / git-ignore / analysis metrics — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` and `computeTaskMetrics()`, with the type in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`; rendered (red pin, tooltip, disabled task icons) by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, with the metric counts in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `metricCount()` / `gitIgnoreCandidates()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` and `computeTaskMetrics()`, with the type in
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`; rendered (red pin, tooltip, disabled task icons) by
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, with the metric counts in
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `metricCount()` / `gitIgnoreCandidates()`.
 
 ### 4.11 The file list refreshes itself when the server changes (LOCKED)
 
@@ -1011,12 +1011,12 @@ states only what **this page** subscribes to and what the user sees.
   falls back to an interval.
 
 Subscribing this page to its topics and invalidating `["repo", repoId]` on a bump is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`, consumed by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, over the shared reader
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`, consumed by
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`, over the shared reader
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
 
 The server-side bumps this page listens for are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileMirroredRepos()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `writeRepoManifest()` / `writeRepoStatus()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()`, called from `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileMirroredRepos()` and `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `writeRepoManifest()` / `writeRepoStatus()`.
 
 ---
 
@@ -1028,7 +1028,7 @@ released or the pointer leaves the row. Remote-only rows are excluded — their 
 computer (§4.10). The full behavior, geometry, and grant-gated byte source are specified in
 [option_image_preview.mdx](./option_image_preview.mdx).
 This table opts in via the DataTable `hoverPreview` prop, wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `hoverPreview` prop on `DataTable`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (the `hoverPreview` prop on `DataTable`).
 
 ---
 
@@ -1056,7 +1056,7 @@ This table opts in via the DataTable `hoverPreview` prop, wired in code:
   answer lands, exactly as §7 of [repos.mdx](./repos.mdx) requires of its own list.
 
 The detail stream and the reducer that folds it back into the page's existing query cache are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/:repoId/detail/stream` handler; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoDetail()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/:repoId/detail/stream` handler; `~/repos/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoDetail()`
 
 * **A METRIC IS ALSO PROVISIONAL WHILE A BACKGROUND PASS IS RUNNING (performance.mdx P-38, LOCKED).** The
   rule above covers the page's own fetch, which is over in seconds. It does not cover the work that lands
@@ -1084,7 +1084,7 @@ The detail stream and the reducer that folds it back into the page's existing qu
     only to one that is loading.
 
 Whether a count is still being worked out is decided in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()` / `useCensusPending()`; rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()` / `useCensusPending()`; rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`
 
 * **The ⊘ Git-ignore axis is THREE-VALUED — ignored / not ignored / NOT DETERMINED (LOCKED).**
   `git check-ignore` is the source of truth for this column, and there are two real situations where it has
@@ -1097,10 +1097,10 @@ Whether a count is still being worked out is decided in code:
   whose verdict merely hasn't arrived.
 
 The three-valued ⊘ cell (and the shared inert icon state it uses) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `gitignore` column's `cell`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (`state: "na"` ⇒ faint glyph, inert)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `gitignore` column's `cell`; `~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (`state: "na"` ⇒ faint glyph, inert)
 
 The verdict itself, and the `unknown` set that means "git could not answer", are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerboseAsyncDetailed()`; applied to rows by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerboseAsyncDetailed()`; applied to rows by `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`
 
 * **IPFS node unreachable:** a banner at the top of the content; Pin now and per-row transfers are
   disabled, but decisions can still be edited (they queue for when the node returns).

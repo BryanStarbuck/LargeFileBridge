@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The CLI (`lfb`)
-description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. Bare `lfb` with no arguments is the zero-setup default: it lists EVERY file under the current directory recursively — all file types, whether the directory is a tracked repo or not — so the command is useful with zero flags anywhere; help moves behind `lfb help` / `-h` / `--help`. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines; --everything switches to the bare-`lfb` full listing. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. The second family is per-file artifacts (§9): `lfb transcription|description|ocr FILE` prints the absolute path of the file's derived-text sidecar (locate is the safe default; `--create` makes it via the backend when missing, `--overwrite` regenerates, `--text` prints the content). Anything slow shows a live spinner + elapsed-seconds progress line on stderr (TTY only) so the CLI never looks hung. CLI code lives in ~/BGit/Bryan_git/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
+description: The user-facing command-line interface for Large File Bridge. A deliberately THIN wrapper — every calculation, scan, categorization, and action lives in the web app backend, and the CLI reaches it over the localhost REST API using a locally generated shared API secret in ~/.credentials/. If the web app is not running, the CLI first brings it up itself (the same setup/build/run work the root justfile does — it does not require the justfile, it does the justfile's job) and waits for /api/health before issuing its call. Bare `lfb` with no arguments is the zero-setup default: it lists EVERY file under the current directory recursively — all file types, whether the directory is a tracked repo or not — so the command is useful with zero flags anywhere; help moves behind `lfb help` / `-h` / `--help`. The flagship command family is "get file list" (lfb files): given a scope (a repo, a personal path, a directory — recursive by default, or --all for every tracked root), return the files matching one or more task categories — compressible, should-be-git-ignored, pull-down (present on other computers but missing here), not-backed-up, transcribable, AI-describable, OCR-able. With no category flags it prints EVERY category that has matches, each under a title header, categories separated by two blank lines; --everything switches to the bare-`lfb` full listing. Output is full absolute paths by default, or a `tree`-style hierarchy of only the matching set with --tree. The second family is per-file artifacts (§9): `lfb transcription|description|ocr FILE` prints the absolute path of the file's derived-text sidecar (locate is the safe default; `--create` makes it via the backend when missing, `--overwrite` regenerates, `--text` prints the content). Anything slow shows a live spinner + elapsed-seconds progress line on stderr (TTY only) so the CLI never looks hung. CLI code lives in ~/repos/LargeFileBridge/cli/ (entry at the top, implementation under cli/code/), and the root `just build` / `just run` also build the CLI so it is never stale.
 ---
 
 # LargeFileBridge — The CLI (`lfb`)
@@ -43,10 +43,10 @@ LargeFileBridge/
 └── justfile
 ```
 
-* **`~/BGit/Bryan_git/LargeFileBridge/cli/`** — the top level of the CLI. Whatever the user (or
+* **`~/repos/LargeFileBridge/cli/`** — the top level of the CLI. Whatever the user (or
   the justfile, or a shell alias) needs to *call* lives here: the entry script / built single-file
   artifact / bin shim. It is the callable surface.
-* **`~/BGit/Bryan_git/LargeFileBridge/cli/code/`** — the large number of files that *implement*
+* **`~/repos/LargeFileBridge/cli/code/`** — the large number of files that *implement*
   the CLI (command parsing, REST client, credential bootstrap, output renderers, server
   bring-up) all go under here. Nothing implementation-shaped sits loose at `cli/` top level.
 * **Charter amendment.** The repo charter previously said `code/` is the only place application
@@ -76,7 +76,7 @@ a Node entry point; no shell-script core. It may share types with the backend (e
   arguments passed through. This is in addition to — not instead of — the root-level contract:
   *root build/run ⇒ CLI current*.
 
-Root recipes implemented in: `~/BGit/Bryan_git/LargeFileBridge/justfile` — recipes `build`,
+Root recipes implemented in: `~/repos/LargeFileBridge/justfile` — recipes `build`,
 `run`, `setup` (extend these to cover `cli/`).
 
 ### 1.4 Relationship to the existing worker CLI
@@ -85,7 +85,7 @@ The backend already ships an *internal, headless worker* entry — `scan`/`pin`/
 install for launchd — which is **not** this CLI and is unchanged by this spec.
 
 Worker entry implemented in:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()` (scan | pin |
+`~/repos/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()` (scan | pin |
 install-agent | uninstall-agent).
 
 The new `lfb` CLI is the **user-facing** tool. Over time `lfb` may grow verbs that *wrap* the
@@ -116,10 +116,10 @@ Every `lfb` invocation that needs the API begins with a **liveness preflight**:
    non-zero. Never silently fall back to computing answers locally — there is no local compute
    path (§1.1).
 
-Bring-up behavior mirrored from: `~/BGit/Bryan_git/LargeFileBridge/justfile` — recipes `run`,
+Bring-up behavior mirrored from: `~/repos/LargeFileBridge/justfile` — recipes `run`,
 `stop`, `status` (port-wait loop, health check, log-tail-on-failure). Health endpoint served by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/`.
-CLI side implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/bringup.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/health/`.
+CLI side implemented in: `~/repos/LargeFileBridge/cli/code/src/bringup.ts` —
 `ensureServerUp()` (prefers `just run` when `just` is installed; falls back to direct
 `pnpm install` + backgrounded `pnpm dev` through the launcher log), `failWithLogTail()`.
 
@@ -179,12 +179,12 @@ read because they share the local filesystem.
   visibility as the browser session; no privilege escalation, no bypass of allow-listing).
 
 Verification implemented in:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` —
 `apiKeyUser()` (loopback + local-mode + constant-time check, runs FIRST inside `identify()`).
 Key bootstrap implemented in:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` —
 `ensureApiSecret()` / `loadApiSecret()` (called at boot from `main.ts` `bootstrapState()`).
-CLI-side mirror implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/credentials.ts` —
+CLI-side mirror implemented in: `~/repos/LargeFileBridge/cli/code/src/credentials.ts` —
 `ensureApiSecret()`; sent per-call by `client.ts` — `apiGet()`.
 
 ---
@@ -221,7 +221,7 @@ no reading of help:
 * No header is printed above the everything listing (there is only one block — headers exist to
   separate categories); `--tree` and the stderr count behave as in §4.3/§4.4.
 
-Default routing implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` —
+Default routing implemented in: `~/repos/LargeFileBridge/cli/code/src/main.ts` —
 `main()` (bare/flag/path dispatch), `cmdFiles()` (`defaultEverything`).
 
 ### 4.1 Scope — what part of the filesystem
@@ -255,7 +255,7 @@ which ones the user cares about:
 
 Rules:
 
-* **Flags are additive.** `lfb files ~/BGit/Bryan_git/charlie-kirk --compress --ocr` returns the
+* **Flags are additive.** `lfb files ~/repos/charlie-kirk --compress --ocr` returns the
   union, grouped per category (§4.4). Any subset of the seven may be combined.
 * **No category flags →** **all seven categories** are evaluated and every category **with at
   least one match** is printed, each under its header. Categories with zero matches are omitted
@@ -312,17 +312,17 @@ Example (default, no category flags, scoped to a directory):
 
 ```
 Should be git-ignored:
-/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/rally_full.mp4
-/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/press_raw.mov
+/Users/bryan/repos/charlie-kirk/videos/rally_full.mp4
+/Users/bryan/repos/charlie-kirk/videos/press_raw.mov
 
 
 AI describable:
-/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4
+/Users/bryan/repos/charlie-kirk/videos/_QwGo0LyZ3I.mp4
 … (14 paths)
 
 
 Transcribable:
-/Users/bryan/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4
+/Users/bryan/repos/charlie-kirk/videos/_QwGo0LyZ3I.mp4
 ```
 
 ### 4.5 The REST call underneath
@@ -340,14 +340,14 @@ One endpoint powers the whole family — a **query, not an action** (it changes 
   performance notes in [performance.mdx](./performance.mdx)).
 
 Server side implemented in:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/files-query/files-query.service.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/files-query/files-query.service.ts`
 — `listFilesByCategory()` (scope resolution, category predicates over `FileRow`) and
 `listEverything()` (the §4.0/§4.2 full walk over `collectFilesRecursive` + the scanner's shared
 skip filters), route in `files-query.router.ts` (`GET /api/files/list`), mounted at `/api/files`
 in `src/main.ts`.
-CLI side implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` — `cmdFiles()`,
+CLI side implemented in: `~/repos/LargeFileBridge/cli/code/src/main.ts` — `cmdFiles()`,
 renderers in `render.ts` — `renderFlat()` / `renderTree()`.
-Response types in: `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` —
+Response types in: `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` —
 `FilesListCategoryKey`, `FilesListCategory`, `FilesListResult`.
 
 ### 4.6 Coverage by unit kind (v1)
@@ -387,7 +387,7 @@ shows a live indication that it is working — never a silent, hung-looking paus
 * Elapsed time is the honest signal (we do not know a percentage and must not fake one); the
   phase text names what we are waiting on so a stuck phase is diagnosable at a glance.
 
-Implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/code/src/progress.ts` — class `Spinner`
+Implemented in: `~/repos/LargeFileBridge/cli/code/src/progress.ts` — class `Spinner`
 (`start()` / `stop()`); wired around the health wait in `bringup.ts` — `ensureServerUp()` and
 around the list call in `main.ts` — `cmdFiles()`.
 
@@ -397,7 +397,7 @@ around the list call in `main.ts` — `cmdFiles()`.
 
 The `cli/` directory goes on the user's `PATH` so `lfb` works from any directory:
 
-* The callable is the shim at `~/BGit/Bryan_git/LargeFileBridge/cli/lfb.mjs` — a small self-building
+* The callable is the shim at `~/repos/LargeFileBridge/cli/lfb.mjs` — a small self-building
   wrapper that compiles `cli/code/` when `dist/` is missing or stale, then runs it. Because the
   shim self-builds, a freshly cloned repo works with zero setup steps. Two one-line entry points sit
   beside it so the CLI is callable from any shell on any platform: `cli/lfb` (POSIX, `./lfb …`) and
@@ -406,7 +406,7 @@ The `cli/` directory goes on the user's `PATH` so `lfb` works from any directory
   `PATH="$HOME/BGit/Bryan_git/LargeFileBridge/cli:$PATH"` (installed once; the shim is the only
   executable in that directory, so the PATH entry stays clean).
 
-Shim implemented in: `~/BGit/Bryan_git/LargeFileBridge/cli/lfb.mjs` — staleness check `needsBuild()`.
+Shim implemented in: `~/repos/LargeFileBridge/cli/lfb.mjs` — staleness check `needsBuild()`.
 
 ---
 
@@ -440,7 +440,7 @@ built action family** is the per-file artifact family — `lfb transcription` / 
 * The CLI logs its own invocations (command, scope, categories, duration, outcome) through the
   backend's client-log channel so CLI usage appears in the same rotating logs in
   `~/T/_large_files_bridge/` — never its own log file in `/tmp` (charter logging policy).
-  Client-log seam: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/clientlog/`.
+  Client-log seam: `~/repos/LargeFileBridge/code/packages/backend/src/modules/clientlog/`.
 
 ---
 
@@ -531,10 +531,10 @@ existing explicit-user-action single-file routes:
 | `ocr` | `/api/ocr/file` | `/api/ocr/file` | `ocrPath` |
 
 Routes implemented in:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts`,
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts`,
 `…/modules/describe/describe.router.ts`, `…/modules/ocr/ocr.router.ts` (each: `GET /file`,
 `POST /file`). CLI side implemented in:
-`~/BGit/Bryan_git/LargeFileBridge/cli/code/src/main.ts` — `cmdArtifact()` (kind table
+`~/repos/LargeFileBridge/cli/code/src/main.ts` — `cmdArtifact()` (kind table
 `ARTIFACT_KINDS`, aliases `ARTIFACT_ALIASES`); POST transport in `client.ts` — `apiPost()`.
 
 * **No client-side timeout on create.** The single-file create endpoints answer only when the

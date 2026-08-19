@@ -77,9 +77,9 @@ fills it solid (ON) — confirming the suggestion. Clicking a solid (ON) toggle 
 > **identical across all five** columns; only the filled ON swatch differs per axis.
 
 The token set and the `<DecisionToggle>` render states are defined in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
 `DecisionToggle` (renders one axis) and `DecisionToggles` (renders the pair); tokens in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/index.css` (`--lfb-toggle-off-edge`, `--lfb-decision-on`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/index.css` (`--lfb-toggle-off-edge`, `--lfb-decision-on`).
 
 ### 1.0 Each toggle shows REALITY, not the recorded intent (LOCKED)
 
@@ -99,9 +99,9 @@ when* — and as the travelling team record. It is **not** the display source fo
 > the ledger does or does not contain. Reality wins over intent, every time.
 
 Deriving the git-ignore axis from git for every file row is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 `composeFileRows()` (one batched `checkIgnore()` per repo), using
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnore()`,
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnore()`,
 the same helper (and therefore the same definition of *ignored*) the File-System badges use.
 
 ### 1.1 Sizing, hit-target, and pairing
@@ -138,7 +138,7 @@ The rule is: **never render a click that would silently do nothing.** If OFF can
 toggle must say why. `FileRow.gitignoreLocked` + `FileRow.gitignoreRule` carry this per row.
 
 The LOCKED-vs-DISABLED render split is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` —
 `DecisionToggle` (the `locked` prop: full opacity, `cursor-default`, `aria-disabled`, explanatory `title`).
 
 ---
@@ -179,7 +179,7 @@ is team-shared and union-merged, a teammate who already decided this file's axis
 arrives **already ON/OFF**, not RECOMMENDED — nobody is re-asked ([decisions.mdx §5](./decisions.mdx#5-team-dynamics--the-merge-model-locked-think-team-of-ten)).
 
 Writing the single-axis decision event from a toggle click reuses the one decision write path in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision(axis, …)`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision(axis, …)`
 (exposed by `PATCH /api/repos/:repoId/files`, [decisions.mdx §19](./decisions.mdx#19-the-write-api--one-endpoint-two-accepted-bodies-locked)).
 
 ### 2.0a The click must SAY what it did — turning the IPFS axis on starts real byte work (LOCKED)
@@ -197,9 +197,9 @@ nothing but an icon changing colour — which is indistinguishable from a click 
   than waiting on the live-stream bump — the card must appear while the click still feels connected to it.
 
 Answering the click and waking the dock are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `setAxes`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `setAxes`
 mutation's `onSuccess` (keyed by the `axis` the user clicked), against the server-side pin registered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
 `PATCH /:repoId/files` (`track("pin", …, report)`).
 
 ### 2.1 Bulk clicks and directories still open the pop-over (LOCKED)
@@ -252,7 +252,7 @@ The **Add-to-IPFS** toggle has **no** such restriction — any large file can be
 video shows **one** toggle (pin); a repo video shows **two** (pin + ignore).
 
 Deciding whether a given path is under a repo (and which repo's `.gitignore` an ignore-toggle would write) is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `repoRootFor(path)`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `repoRootFor(path)`
 (null ⇒ the ignore toggle is N/A for that row).
 
 ---
@@ -326,11 +326,11 @@ The row still expresses the **two axes directly** as toggles:
   only the *column* that is gone.)
 
 The Pin/Ignore icon columns (the first two of the five leading icon control columns, [tables.mdx §4c](./tables.mdx)), wired to the same `setDecision` mutation, are rendered in code through the shared `StatusActionIcon`:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (the `pin` and `ignore` `LfbColumn`s, `tight` + icon-only `headerCell`, mounting `StatusActionIcon` via the `TaskStatusCell` kit).
 
 Splitting these into **two** rail facets with the §2.4.1 vocabulary (the removed col-3c `<select>` used to carry the IPFS-axis filter) is a **new** surface; it is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`filterOptions` on the `pin` and `ignore` `LfbColumn`s, removed from the `decision` column), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the facet rail).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`filterOptions` on the `pin` and `ignore` `LfbColumn`s, removed from the `decision` column), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the facet rail).
 
 ---
 
@@ -349,7 +349,7 @@ In the [File System](./directories.mdx) column browser and the Full-paths table:
   toggle flips, the corresponding badge updates on the next render.
 
 Adding the decision-toggle cell to File System file/directory rows (repo-scoped ignore, pop-over on directory ignore) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/` — the column-browser and Full-paths row renderers (mount `DecisionToggles`, gate the ignore axis on `repoRootFor`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/` — the column-browser and Full-paths row renderers (mount `DecisionToggles`, gate the ignore axis on `repoRootFor`).
 
 ---
 
@@ -408,7 +408,7 @@ the tile split so each axis has its **own** tile and its **own scoped popup**
   include/exclude checkbox. The per-row three-axis grammar above (§7) is the batch/compress popup shape.
 * **The `Git Ignore` tile's count and its popup's list are ONE predicate** — never two parallel filters, so
   the number and the list can never disagree.
-  *Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+  *Implemented in:* `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
   `gitIgnoreCandidates()`; popups in `.../pages/repos/metricWarningDefs.tsx` — `buildAddToIpfsWarning()` /
   `buildGitIgnoreWarning()`.
 * **Nothing about the stored values changed.** `sync` / `ignore` / `undecided` remain **frozen wire values**
@@ -478,8 +478,8 @@ Both are **control cells** — click stops propagation and never navigates; the 
 action (background job), the **Done** state views the output.
 
 Rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon`
-and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon`
+and `~/repos/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon`.
 
 <!--
   These are the inline UI for the two-axis decision (decisions.mdx). TWO toggles per row: Add-to-IPFS

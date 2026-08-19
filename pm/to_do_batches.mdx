@@ -56,7 +56,7 @@ a file under `~/BGit/xyz/` (a repo) goes in `repo_xyz_2_do.yaml`; a loose `~/Mov
 
 The `<account-slug>` / `<repo-slug>` are lowercased, filesystem-safe, and **collision-resolved** so two
 storages never share a file name (a `-2` suffix is appended on collision), computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `batchFileName(storage)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `batchFileName(storage)`.
 
 ---
 
@@ -90,7 +90,7 @@ regenerated every scan. They therefore live under the **local state root**, not 
   (the To-Do page shows neither, [to_do.mdx §4](./to_do.mdx)).
 
 `resolveTodoBatchesDir()` (the `_do_batches/` path under the state root) is to be added in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`.
 
 ---
 
@@ -190,7 +190,7 @@ Dismiss is a *"not now"*, never a decision about the files themselves — the fi
 they had in the shared ledger.
 
 Setting/clearing `dismissed` (and the materially-changed reset) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `dismissBatch(id)` and `TodoBatchCalcEngine.reconcileDismissed()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `dismissBatch(id)` and `TodoBatchCalcEngine.reconcileDismissed()`.
 
 ### 3.4 Where a `pull_down` item comes from — a peer computer's mirrored manifest (LOCKED)
 
@@ -236,7 +236,7 @@ input.
   `pin` or `git_ignore` — one file, one recommendation, in the highest-value category.
 
 Emitting `pull_down` items from the reconciled manifest is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `recalcRepo()` (the `pull_down` block, first and `seen`-marking), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `recalcRepo()` (the `pull_down` block, first and `seen`-marking), fed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
 
 ---
 
@@ -287,7 +287,7 @@ This keeps the batch a **pure projection of current reality**: the source of tru
 decisions ledger; the batch is a cache the To-Do page and warnings read.
 
 The whole-file atomic replace (temp file + rename) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `writeBatch(batch)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` — `writeBatch(batch)`.
 
 ---
 
@@ -302,7 +302,7 @@ The whole-file atomic replace (temp file + rename) is handled in code:
 | `POST /api/todo/transcribe-scan?scope=<id>` | Runs the [transcribe engine](./transcribe_calc_engine.mdx) for a scope (or all) and writes its transcribe batches. |
 
 These routes are served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `todoRouter`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `todoRouter`.
 
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Repo → Company / Personal mapping
-description: How every git repo LFB knows about is mapped to an OWNER — a company or the user's Personal storage — so repos group under their owner in the left bar and the Repos list. The mapping is DERIVED, offline, from the git remote origin URL: LFB parses host + owner + repo out of the URL shapes (git@github.com:ORG/repo.git, https://github.com/ORG/repo.git, plus gitlab.com, bitbucket.org, codeberg.org, git.sr.ht), then applies a heuristic — a known forge whose owner segment is NOT one of the user's configured personal accounts defaults to a COMPANY named after that org; no forge / no owner / an owner that IS a personal account defaults to PERSONAL (the existing catch-all Personal storage). Deriving a company auto-creates a company storage so it appears as its own child under Storages; because org slugs are cryptic, the user opens that company's settings to set a friendly DISPLAY NAME shown everywhere. The user can always REASSIGN a repo between company and personal (manual override wins over the heuristic) and can maintain a "my personal accounts" list so their own github user repos are never miscategorized. The limitation is documented honestly: a plain github.com/<owner>/<repo> cannot be perfectly told apart org-vs-personal from the URL alone, and LFB never calls a network API to resolve it (local-first) — it defaults per the heuristic and lets the user correct it. The derived owner is also BOUND to a real company storage row (§6.1) — a companyId, not just a slug string — and that binding is what lets ownership decide the SYNC-REPO TARGET (§7.3): the owning storage is the one the repo's REMOTE ORG binds to, with path containment only as the fallback, so a repo like ~/BGit/Bryan_git/charlie-kirk (remote github.com/ACT3ai/charlie-kirk) resolves to the ACT3ai company rather than Personal even though it lives outside that company's directory; the mirror target is that storage's configured sync repo else its own git root auto-adopted, and it now defaults ON (storage_company.mdx §8.4.2, superseding §7.2's "default OFF"). Covers the new repo `owner` field and its persistence, the settings controls, non-default cases (multiple remotes, no remote, local-path remote, SSH vs HTTPS forms, ambiguous owner, renamed org, repo moved between owners, monorepo submodules), and error cases. Sibling of storages.mdx, storage_company.mdx, storage_personal.mdx, repos.mdx, repo_settings.mdx, left_bar.mdx, devices.mdx.
+description: How every git repo LFB knows about is mapped to an OWNER — a company or the user's Personal storage — so repos group under their owner in the left bar and the Repos list. The mapping is DERIVED, offline, from the git remote origin URL: LFB parses host + owner + repo out of the URL shapes (git@github.com:ORG/repo.git, https://github.com/ORG/repo.git, plus gitlab.com, bitbucket.org, codeberg.org, git.sr.ht), then applies a heuristic — a known forge whose owner segment is NOT one of the user's configured personal accounts defaults to a COMPANY named after that org; no forge / no owner / an owner that IS a personal account defaults to PERSONAL (the existing catch-all Personal storage). Deriving a company auto-creates a company storage so it appears as its own child under Storages; because org slugs are cryptic, the user opens that company's settings to set a friendly DISPLAY NAME shown everywhere. The user can always REASSIGN a repo between company and personal (manual override wins over the heuristic) and can maintain a "my personal accounts" list so their own github user repos are never miscategorized. The limitation is documented honestly: a plain github.com/<owner>/<repo> cannot be perfectly told apart org-vs-personal from the URL alone, and LFB never calls a network API to resolve it (local-first) — it defaults per the heuristic and lets the user correct it. The derived owner is also BOUND to a real company storage row (§6.1) — a companyId, not just a slug string — and that binding is what lets ownership decide the SYNC-REPO TARGET (§7.3): the owning storage is the one the repo's REMOTE ORG binds to, with path containment only as the fallback, so a repo like ~/repos/charlie-kirk (remote github.com/ACT3ai/charlie-kirk) resolves to the ACT3ai company rather than Personal even though it lives outside that company's directory; the mirror target is that storage's configured sync repo else its own git root auto-adopted, and it now defaults ON (storage_company.mdx §8.4.2, superseding §7.2's "default OFF"). Covers the new repo `owner` field and its persistence, the settings controls, non-default cases (multiple remotes, no remote, local-path remote, SSH vs HTTPS forms, ambiguous owner, renamed org, repo moved between owners, monorepo submodules), and error cases. Sibling of storages.mdx, storage_company.mdx, storage_personal.mdx, repos.mdx, repo_settings.mdx, left_bar.mdx, devices.mdx.
 ---
 
 # LargeFileBridge — Repo → Company / Personal mapping
@@ -79,7 +79,7 @@ export interface RepoOwner {
   remote is github.com/ACT3ai/…"*) and to let a rescan **re-derive** an `auto` owner when the remote changes.
 
 The `owner` block is composed onto each repo row/detail in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()` / `computeRepoDetail()` (call `resolveRepoOwner(cfg)` after reading the unit config).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()` / `computeRepoDetail()` (call `resolveRepoOwner(cfg)` after reading the unit config).
 
 ---
 
@@ -114,7 +114,7 @@ export function parseRemoteOwner(remoteUrl: string | null): RemoteOwnerParse { /
 ```
 
 Parsing host/owner/repo out of the remote URL (all URL shapes, no networking) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner(remoteUrl)`, built beside the existing `classifyRemote()` / `classifyRemoteVisibility()` (which share the same forge-host regex).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner(remoteUrl)`, built beside the existing `classifyRemote()` / `classifyRemoteVisibility()` (which share the same forge-host regex).
 
 ### 2.1 The org level IS the company — a company storage is 1:1 with an organization (LOCKED)
 
@@ -141,7 +141,7 @@ what it means **here** is that the mapping this spec defines is a **grouping**, 
   another company's repo, and the org in the URL is what enforces it.
 
 Grouping the discovered repos by their remote's org (offline, off `.git/config`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (and its pure core `buildCandidates()`), over the parse from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (and its pure core `buildCandidates()`), over the parse from `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner()`.
 
 ---
 
@@ -166,7 +166,7 @@ sits under your own files); a false "Company" spawns a stray company in the left
 creates a company, and only from a **known forge** with a **non-personal** owner.
 
 Deriving the `auto` owner from the parse + personal-accounts list is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `deriveOwnerForRemote(remote)` (calls `parseRemoteOwner`, checks the personal-accounts list, and on case 3 calls `ensureCompanyForOwner(slug)` — §6).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `deriveOwnerForRemote(remote)` (calls `parseRemoteOwner`, checks the personal-accounts list, and on case 3 calls `ensureCompanyForOwner(slug)` — §6).
 
 ### 3.1 The honest limitation (LOCKED)
 
@@ -229,7 +229,7 @@ The test is **local, cheap, and decisive**:
   correctable one.
 
 Applying the authored-commit membership test and the personal-account exclusion when proposing companies is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (groups by org, then filters by the authored-commit test and `personal_accounts`), with the pure, testable core in `buildCandidates(repos, opts)`; the personal-account match itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `isPersonalAccount()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (groups by org, then filters by the authored-commit test and `personal_accounts`), with the pure, testable core in `buildCandidates(repos, opts)`; the personal-account match itself is `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `isPersonalAccount()`.
 
 ---
 
@@ -260,7 +260,7 @@ personal_accounts:
   surface and offer, never act unasked).
 
 Persisting and matching the personal-accounts list is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig().personalAccounts` (read) / `setPersonalAccounts()` (write), matched by `isPersonalAccount(host, owner)` in `storage.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig().personalAccounts` (read) / `setPersonalAccounts()` (write), matched by `isPersonalAccount(host, owner)` in `storage.service.ts`.
 
 ---
 
@@ -333,7 +333,7 @@ owner_override:                 # ABSENT unless the user reassigned (source beco
   `companyId` → 400.
 
 Resolving the effective owner (override else derivation) and persisting the override is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveRepoOwner(cfg)` (override-or-derive) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/owner`. When the chosen owner is a **company with a sync repo**, the same endpoint also **asserts** the ownership into the company sync repo (and tombstones it on un-assign) via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `assertCompanyOwnership()` / `withdrawCompanyOwnership()` ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx)).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `resolveRepoOwner(cfg)` (override-or-derive) and `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/owner`. When the chosen owner is a **company with a sync repo**, the same endpoint also **asserts** the ownership into the company sync repo (and tombstones it on un-assign) via `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `assertCompanyOwnership()` / `withdrawCompanyOwnership()` ([repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx)).
 
 ---
 
@@ -373,7 +373,7 @@ Three rules follow, and none of them changes the mapping above:
   ([storage_settings.mdx §4d](./storage_settings.mdx#4d-new-company-storages--the-proposal-surface-and-the-parent-directory-locked)).
 
 Ensuring (creating-if-absent) the company storage for a derived/assigned owner slug is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (returns the company id; creates the `storage.yaml` via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()` as a company row.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (returns the company id; creates the `storage.yaml` via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()` as a company row.
 
 ### 6.1 Binding the slug to a real company storage row (LOCKED)
 
@@ -406,10 +406,10 @@ ownership assertion ([repo_owner_propagation.mdx](./repo_owner_propagation.mdx))
   [storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes).
 
 Resolving a slug to its company storage row (and recording the binding) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner()` (explicit `owner_slugs` claim → normalized name match → lone-company adoption, with write-back via `recordOwnerSlug()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner()` (explicit `owner_slugs` claim → normalized name match → lone-company adoption, with write-back via `recordOwnerSlug()`).
 
 Deriving the owner (the step that still leaves `companyId` unjoined) and the best-effort match the settings page uses are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)` (returns `companyId: null` — the remaining gap) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `ownerMatchesCompany(owner, row)` (exact `companyId` for a manual override, normalized slug/name comparison for an auto owner), consumed by `getOwnedRepos(storageId)` in the same file.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)` (returns `companyId: null` — the remaining gap) and `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `ownerMatchesCompany(owner, row)` (exact `companyId` for a manual override, normalized slug/name comparison for an auto owner), consumed by `getOwnedRepos(storageId)` in the same file.
 
 ---
 
@@ -462,7 +462,7 @@ and the sync-repo→storage mapping, were disconnected; ownership is the joint.
   storage its **remote org** binds to (§3, §6.1). Only when there is no forge org to bind — no remote, a
   local-path or self-hosted remote, or an owner on the personal-accounts list (§3 cases 1/2/4/5) — does
   physical containment inside a storage's directory decide.
-* **Why the order matters, concretely.** `~/BGit/Bryan_git/charlie-kirk` has remote
+* **Why the order matters, concretely.** `~/repos/charlie-kirk` has remote
   `github.com/ACT3ai/charlie-kirk` but does **not** live inside the `ACT3ai` company storage's directory. A
   containment-first test resolves it to **Personal** — the wrong storage, and therefore the wrong sync repo,
   and therefore a manifest that travels to nobody who needs it. A repo's **remote** is the thing its
@@ -479,7 +479,7 @@ and the sync-repo→storage mapping, were disconnected; ownership is the joint.
   already describes; §7.3 only makes the *auto* path resolve the same way the manual path already does.
 
 Resolving the owning storage from the repo's remote before any containment test, and returning its sync repo, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` (today matches only by mapped dirs or the Personal catch-all — the containment-first behavior this section corrects), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner()` / `deriveOwnerForRemote()` and consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` (today matches only by mapped dirs or the Personal catch-all — the containment-first behavior this section corrects), fed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `parseRemoteOwner()` / `deriveOwnerForRemote()` and consumed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`.
 
 ---
 
@@ -564,7 +564,7 @@ Resolving the owning storage from the repo's remote before any containment test,
 8c. **Ownership decides the sync-repo target, resolved REMOTE-ORG FIRST** (§7.3, authority
    [storage_company.mdx §8.4.2](./storage_company.mdx#842-the-company-sdl-is-the-sync-repo-and-the-mirror-is-on-by-default-locked)):
    the owning storage is the one the repo's **remote org** binds to, with **path containment only as the
-   fallback** for repos with no forge org — so `~/BGit/Bryan_git/charlie-kirk` (remote
+   fallback** for repos with no forge org — so `~/repos/charlie-kirk` (remote
    `github.com/ACT3ai/charlie-kirk`) resolves to the **ACT3ai** company, not Personal, despite living outside
    that company's directory. The target is that storage's configured sync repo, else its **own git root
    auto-adopted**, and the additive mirror **defaults ON** (the per-repo toggle in

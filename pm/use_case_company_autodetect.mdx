@@ -62,7 +62,7 @@ lands in the right bucket without manual filing, while staying **correctable**.
 
 Parsing the remote owner/host, classifying org-vs-personal from local config, and reading/writing the
 company registry are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `parseRemoteOwner(remote)` / `classifyOwner(owner, host)` / `readCompanies()` / `upsertCompany()` / `assignRepoCompany(repoKey, companyId)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `parseRemoteOwner(remote)` / `classifyOwner(owner, host)` / `readCompanies()` / `upsertCompany()` / `assignRepoCompany(repoKey, companyId)`.
 
 ---
 
@@ -124,7 +124,7 @@ Opening the **AcmeCorp** child shows a company view listing its repos — curren
 
 Deriving a company from a repo's remote on add (auto-create when the owner classifies as an org, tag the
 repo, insert the Storages child) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `onRepoAdded(repo)` (calls `company-mapping.service.ts` `classifyOwner()` then `upsertCompany()` + `assignRepoCompany()`); the runtime Storages children are assembled in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` from the discovered companies.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `onRepoAdded(repo)` (calls `company-mapping.service.ts` `classifyOwner()` then `upsertCompany()` + `assignRepoCompany()`); the runtime Storages children are assembled in `~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` from the discovered companies.
 
 **What we double-check (Step 1):**
 * The remote owner `AcmeCorp` is parsed and classified **org** from **local config only** (no forge API
@@ -161,7 +161,7 @@ match ([storage_company.mdx §2](./storage_company.mdx)).
 
 Renaming a company (updating `display_name`, never `source.org`) and re-labeling the Storages child are
 handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `renameCompany(companyId, displayName)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `renameCompany(companyId, displayName)`.
 
 **What we double-check (Step 2):**
 * Only `display_name` changes; `source.org` is untouched.
@@ -223,7 +223,7 @@ repo_company:
 
 Classifying an owner as ambiguous, defaulting to Personal, and surfacing/dismissing the promote offer are
 handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `classifyOwner()` returns `{ kind: "ambiguous" }`; the offer state (`owner_ambiguous`, `offer_dismissed`) rides the per-repo tag written by `assignRepoCompany()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `classifyOwner()` returns `{ kind: "ambiguous" }`; the offer state (`owner_ambiguous`, `offer_dismissed`) rides the per-repo tag written by `assignRepoCompany()`.
 
 **What we double-check (Steps 3 & 4):**
 * A repo whose owner is a **known personal handle** classifies **Personal** with **no** company created.
@@ -259,7 +259,7 @@ company, or a new one, regardless of what auto-detect guessed — the guess is o
 
 Reassigning a repo's company (including creating a hand-named company with `source: null`) is handled in
 code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/company` (via `company-mapping.service.ts` `assignRepoCompany()` / `upsertCompany()`); the Company control renders in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/company` (via `company-mapping.service.ts` `assignRepoCompany()` / `upsertCompany()`); the Company control renders in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
 
 **What we double-check (Step 5):**
 * Reassigning `dotfiles` to Acme Marketing re-tags it (tag change only, no relocation) and it regroups in
@@ -328,7 +328,7 @@ sync repo governs only the **tracking** mirror, never content placement. (See
 
 Materializing a company storage on sync-repo configuration and mirroring its repos' Local-Storage tracking
 are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `setCompanySyncRepo(companyId, path)` (writes the company `storage.yaml` via `storage.service.ts` and updates `companies.yaml`); the mirror target is resolved by `tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns the company's `<syncRepo>/repos/<repoKey>/` for a company-mapped repo) and written by `tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `setCompanySyncRepo(companyId, path)` (writes the company `storage.yaml` via `storage.service.ts` and updates `companies.yaml`); the mirror target is resolved by `tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns the company's `<syncRepo>/repos/<repoKey>/` for a company-mapped repo) and written by `tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 **What we double-check (Step 6):**
 * Setting the sync repo materializes a real company storage (`storage.yaml`, `type: company`,

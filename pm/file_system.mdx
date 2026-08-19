@@ -152,9 +152,9 @@ any image ≥3MB" pass. The detection reuses the existing classifiers so the voc
   honored), matching the size filter in [directories.mdx §1.4](./directories.mdx).
 
 Determining each **column-browser** directory row's interest level (the primary place — the `/fs` tree) is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()` (the bounded subtree walk, mtime+TTL cache, early-exit on the first big file, and the truncation floor of §3.3), called per directory child by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDir()` (which shares **one** `interestBudget` across every child in the column so a huge sibling can't pin the thread).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()` (the bounded subtree walk, mtime+TTL cache, early-exit on the first big file, and the truncation floor of §3.3), called per directory child by `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDir()` (which shares **one** `interestBudget` across every child in the column so a huge sibling can't pin the thread).
 The **entity-detail / View-one-directory** rollup computes the same value as a by-product of its category walk in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (emits `interest`) · both paths share the classifiers `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `VIDEO_EXT` / `IMAGE_UNCOMPRESSED_EXT`. The value rides on each directory entry in the shared type `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry` (`interest?: FolderInterest`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (emits `interest`) · both paths share the classifiers `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `VIDEO_EXT` / `IMAGE_UNCOMPRESSED_EXT`. The value rides on each directory entry in the shared type `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry` (`interest?: FolderInterest`).
 
 ### 3.3 Performance — computed on the walk, cached, never blocking (LOCKED)
 
@@ -198,20 +198,20 @@ plain glyph. Even a `_Mirror` with only videos (no big file) is guaranteed **at 
 rule the moment a video is seen.
 
 Sharing the per-listing budget as a per-child cap plus a total ceiling (so no single sibling can starve the rest), and yielding the event loop as heavy children consume it, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (`INTEREST_PER_CHILD` / `INTEREST_TOTAL`; per-child `childBudget`, `interestPool` draw-down, and `sinceYield += consumed`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (`INTEREST_PER_CHILD` / `INTEREST_TOTAL`; per-child `childBudget`, `interestPool` draw-down, and `sinceYield += consumed`).
 
 Returning the best-known floor on budget exhaustion (yield the already-found video/image rather than discarding it, and leave that truncated floor uncached so a later full walk can upgrade it to `"big"`) is enforced in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()` (the `truncatedFloor()` helper at each `budget.left <= 0` return) · mirrored for the entity-detail rollup in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (the `interestVideo`/`interestImage` branches taken before the `walkTruncated → undefined` branch).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()` (the `truncatedFloor()` helper at each `budget.left <= 0` return) · mirrored for the entity-detail rollup in `~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (the `interestVideo`/`interestImage` branches taken before the `walkTruncated → undefined` branch).
 
 The filesystem discovery scan that keeps the big-file / candidate data fresh runs **out-of-process and cooperatively async** (it yields to the event loop every few hundred entries so it never freezes the web app) on a schedule of **at least every 2 hours** (`scan_process.interval_hours`, default **2**), implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (the `yieldToLoop()` cadence) · scheduled via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `intervalFor()` → the launchd `StartInterval`. The default lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `scan_process.interval_hours` (default **2**).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (the `yieldToLoop()` cadence) · scheduled via `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `intervalFor()` → the launchd `StartInterval`. The default lives in `~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `scan_process.interval_hours` (default **2**).
 
 Existing installs are migrated forward so the new cadence takes effect without user action. The old stored default (4h) is healed to 2h when config loads, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` (rewrites `scan_process.interval_hours === 4 → 2`; a value the user deliberately set is left alone). The already-installed launchd plist still fires on its baked-in `StartInterval` until re-rendered, so at boot any drift between the plist's interval and the configured interval is reconciled (the plist is rewritten and reloaded, and only for workers the user already installed) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()` (reads the installed interval via `SchedulerInstaller.installedIntervalSeconds()`, implemented for macOS in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts`), called once from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` (rewrites `scan_process.interval_hours === 4 → 2`; a value the user deliberately set is left alone). The already-installed launchd plist still fires on its baked-in `StartInterval` until re-rendered, so at boot any drift between the plist's interval and the configured interval is reconciled (the plist is rewritten and reloaded, and only for workers the user already installed) in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()` (reads the installed interval via `SchedulerInstaller.installedIntervalSeconds()`, implemented for macOS in `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts`), called once from `~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`.
 
 Mapping the `interest` value to the folder glyph's `color`/`fill` is done in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `<Folder>` at the folder-glyph line; replace the hardcoded `text-slate-500` with a `folderGlyphStyle(entry.interest)` lookup) · shared helper `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/folderInterest.ts` — `folderGlyphStyle()` (returns `{ color, fill }` from the token pairs in §2), reused by every other folder glyph listed in §3.1.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `<Folder>` at the folder-glyph line; replace the hardcoded `text-slate-500` with a `folderGlyphStyle(entry.interest)` lookup) · shared helper `~/repos/LargeFileBridge/code/packages/frontend/src/components/fs/folderInterest.ts` — `folderGlyphStyle()` (returns `{ color, fill }` from the token pairs in §2), reused by every other folder glyph listed in §3.1.
 
 ---
 
@@ -262,9 +262,9 @@ glyph** instead of a folder glyph, so the row reads as a special shortcut; (2) t
 of the column, above all folders and files. The mark drives presentation; it never gates behavior.
 
 Surfacing the mounts on the home column — build one `dir` row per mount, sorted to the top — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir(dirAbs)` block; `compareEntries()` floats `cloud` rows first) · the "am I the home column?" test is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `isHomeDir()` (raw-path then realpath compare, so a firmlinked home still matches).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir(dirAbs)` block; `compareEntries()` floats `cloud` rows first) · the "am I the home column?" test is `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `isHomeDir()` (raw-path then realpath compare, so a firmlinked home still matches).
 The row's cloud glyph + friendly label render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `entry.cloud` branch draws a `<Cloud>` glyph, tinted by `interest` when set, else a sky accent) · the marker rides on the shared type `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry.cloud` (`CloudRootMark` / `CloudProvider`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the `entry.cloud` branch draws a `<Cloud>` glyph, tinted by `interest` when set, else a sky accent) · the marker rides on the shared type `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FsEntry.cloud` (`CloudRootMark` / `CloudProvider`).
 
 ### 4.3 Discovery — where the mounts are, and how they're named (LOCKED shape)
 
@@ -290,7 +290,7 @@ Rules that make discovery robust (all LOCKED):
   The feature is additive and platform-guarded; it can never break the browser elsewhere.
 
 Enumerating `~/Library/CloudStorage/` and classifying each mount by vendor naming (Dropbox / `GoogleDrive-<email>` / iCloud), skipping non-directories, with the deterministic vendor-grouped ordering, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (and `cloudStorageDir()` for the mount-point path).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (and `cloudStorageDir()` for the mount-point path).
 
 ### 4.4 De-duplication — the legacy symlink collision (LOCKED)
 
@@ -305,7 +305,7 @@ never every row. A genuine, unrelated file like `~/Dropbox alias` (a Finder alia
 the mount) is left untouched. Net result: **exactly one** Dropbox row, presented as the cloud shortcut.
 
 De-duplicating a legacy `~/Dropbox`-style symlink against the surfaced mounts (realpath the symlink entries only, drop the ones that resolve to a cloud mount, re-add as cloud rows) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `cloudReal` set + the `kind === "symlink"` splice loop).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `cloudReal` set + the `kind === "symlink"` splice loop).
 
 ### 4.5 The interest tint carries straight through
 
@@ -318,7 +318,7 @@ exits on the first big file, and honors the truncation **floor** — so a huge, 
 least the level it has already proven, never a false plain glyph.
 
 Computing each surfaced mount's `interest` from the shared per-child budget (so a huge cloud mount can't starve the ordinary siblings, and the truncation floor still applies) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the cloud-row `computeDirInterest()` call sharing `interestPool`) · the walk itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the cloud-row `computeDirInterest()` call sharing `interestPool`) · the walk itself is `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeDirInterest()`.
 
 ### 4.6 Independence from the Sync-List backbones (LOCKED separation)
 
@@ -373,7 +373,7 @@ typing the path, and nothing under the secret denylist (`~/.ssh`, `~/.credential
 served — cloud mount or not.
 
 Adding the detected cloud mounts to the browse allow-roots (so browsing into a mount that resolves outside home still passes confinement) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts` — `rawRoots()` (the `for (const cr of detectCloudRoots())` addition), consumed by `assertAllowedPath()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts` — `rawRoots()` (the `for (const cr of detectCloudRoots())` addition), consumed by `assertAllowedPath()`.
 
 ### 4.9 Growth opportunities (CPO/CTO backlog — not yet built)
 
@@ -427,7 +427,7 @@ Git ignore · Track / Pin this directory**
   the **containment guarantee locked in §5.1** below.
 
 The row is rendered in code (shared component, fed the File System scope):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` · consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (passes the **deepest open column** — `currentDir = stack[stack.length - 1]` — as the scope `root`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` · consumed by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (passes the **deepest open column** — `currentDir = stack[stack.length - 1]` — as the scope `root`).
 
 ### 5.1 Scope containment — the deepest selected column, downward only (LOCKED)
 
@@ -467,10 +467,10 @@ The rules that make this unambiguous (all LOCKED):
    to walking the home directory or the filesystem root.
 
 Determining the deepest-column scope root (the tail of the open-column stack) is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (`currentDir = stack[stack.length - 1]`, passed as `{ root: currentDir }`; an unopened stack yields `{}`, which the server rejects rather than widening).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (`currentDir = stack[stack.length - 1]`, passed as `{ root: currentDir }`; an unopened stack yields `{}`, which the server rejects rather than widening).
 
 Enforcing downward-only containment of the recursive walk (descend into children only, skip hidden/tracking/heavy dirs, never ascend to a parent) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` → `resolveCandidates()` → `walkMedia()` (recurses into child directories of `root` only; the mirror walk for descriptions is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` → `resolveCandidates()` → `walkMedia()` (recurses into child directories of `root` only; the mirror walk for descriptions is `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()`).
 
 ### 5.2 Decision toggles on file rows — act on a big file without opening a repo (LOCKED reference)
 
@@ -497,7 +497,7 @@ only notes that they ride on the rows it hubs.
   two toggle columns appear there — the editable counterpart of its `P` / `I` badge columns.
 
 Rendering the two inline toggles is owned by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggles`; the under-a-repo test that gates the ⊘ toggle is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitService.repoRootFor()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggles`; the under-a-repo test that gates the ⊘ toggle is `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitService.repoRootFor()`.
 
 ### 5.3 Create Transcriptions / AI descriptions on a selected sub-directory or file (LOCKED)
 
@@ -527,7 +527,7 @@ sibling pages carry ([menus.mdx §5.2/§5.3](./menus.mdx)); this file only notes
 rows and honor the deepest-column scope-containment guarantee (§5.1).
 
 The directory/file entity menu's producing items opening the scoped batch popup are built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `create-transcriptions` / `create-descriptions` items call `openTranscribeBatch` / `openDescribeBatch` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`); the action-links row's producing pair is built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `create-transcriptions` / `create-descriptions` items call `openTranscribeBatch` / `openDescribeBatch` from `~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`); the action-links row's producing pair is built in `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
 
 ### 5.4 Option-key floating image preview (LOCKED reference)
 
@@ -537,7 +537,7 @@ the instant the key is released or the pointer leaves the row. Directories and n
 preview. The full behavior, geometry, and grant-gated byte source are specified in
 [option_image_preview.mdx](./option_image_preview.mdx).
 The rows publish their hover target in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (calls `setOptionPreviewTarget`), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — the row `<tr>` handlers.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (calls `setOptionPreviewTarget`), and `~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — the row `<tr>` handlers.
 
 ---
 

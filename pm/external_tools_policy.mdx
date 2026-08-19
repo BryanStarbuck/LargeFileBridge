@@ -15,7 +15,7 @@ This is a **product directive**, not an implementation preference. It already ex
 scoped to one feature — [ocr.mdx §3](./ocr.mdx) states it outright, and the code says so in its own
 charter comment:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — header charter:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — header charter:
 *"THE ENGINE IS A LIBRARY, NOT A `brew install` … there is no tool for the user to provision, no
 consent dialog, no 'Re-check' button, and no broken-PATH support surface. That is the whole reason
 this feature can be run over an entire tree."*
@@ -135,7 +135,7 @@ that races a brew LaunchAgent) and the one whose bug the **user is hitting today
 **Why it is unusually tractable here:** we already do **not** shell out to the `ipfs` CLI for real work.
 `ipfs.service.ts` is **pure HTTP** against the Kubo RPC:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `apiBase()` / `rpc()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `apiBase()` / `rpc()`
 (`fetch` → `http://127.0.0.1:5001/api/v0`; header: *"Uses fetch, never `curl`"*)
 
 Every caller goes through `pinAdd` / `pinRm` / `isPinned` / `addFile` / `health` / `repoStat`. **That
@@ -246,7 +246,7 @@ ffprobe rows permanently**. That page shrinks — it does not disappear.
 Worth separating from the packaging question: **the current encoder settings are already the
 highest-quality choice**, and the speed/memory opportunity is a **different decision**.
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()` (the `VIDEO_TARGETS` table + `videoCrf()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()` (the `VIDEO_TARGETS` table + `videoCrf()`)
 
 * **Today:** `libx264` / `libx265` with **`-crf`** — *software* encoding. This is the **best
   quality-per-byte** available, and CRF is the right knob for it. **Keep this as the default.**

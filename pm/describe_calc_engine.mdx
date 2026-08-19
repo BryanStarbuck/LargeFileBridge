@@ -79,8 +79,8 @@ leaves them alone (they are a distinct `kind`); the user re-runs the link to ref
 on-demand posture as [transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked).
 
 Triggering the on-demand scan is served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/describe-scan`, calling
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `WhatCanBeDescribedCalcEngine.scanStorage(storage)` / `scanAll()` (mirror of `transcribe-scan.engine.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/describe-scan`, calling
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `WhatCanBeDescribedCalcEngine.scanStorage(storage)` / `scanAll()` (mirror of `transcribe-scan.engine.ts`).
 
 ---
 
@@ -110,7 +110,7 @@ popup, a prior slug) is therefore already excluded.
 > "describable" in running prose it means the *property* (an image or a video), not the tile's label.
 
 Deciding "describable and not yet described" (artifact existence check via the same kind-resolved placement resolver the feature uses — so it looks under `.lfbridge/` in a working repo and at the **root** in a dedicated LFB file repo (SDL), never a hard-coded `.lfbridge` join; [artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `isUndescribed(file)` (reuses `analysisOutputs()` from `storage/tracking.service.ts` — the same `.ai_description`-presence check that lights the storage-table indicator and the Describe status icon, [ai_description.mdx §2.2/§11.2](./ai_description.mdx)).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — `isUndescribed(file)` (reuses `analysisOutputs()` from `storage/tracking.service.ts` — the same `.ai_description`-presence check that lights the storage-table indicator and the Describe status icon, [ai_description.mdx §2.2/§11.2](./ai_description.mdx)).
 
 ### 2.1 Provider capability is NOT part of the candidate test (LOCKED)
 
@@ -143,10 +143,10 @@ identical per-storage fan-out the transcribe engine uses
 ([transcribe_calc_engine.mdx §3](./transcribe_calc_engine.mdx#3-per-storage-batching-locked)).
 
 The recommendable categories and the batch kind these batches use are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `RecommendableCategory` gains `describe_image` / `describe_video` (alongside `transcribe_video` / `transcribe_audio`), and `BatchKind` gains `"describe"` (alongside `"todo"` / `"transcribe"`).
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `RecommendableCategory` gains `describe_image` / `describe_video` (alongside `transcribe_video` / `transcribe_audio`), and `BatchKind` gains `"describe"` (alongside `"todo"` / `"transcribe"`).
 
 The on-demand per-storage / all-storage walk (describable-and-no-artifact candidate test, one `kind: describe` batch written per storage) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — class `WhatCanBeDescribedCalcEngine`, methods `scanStorage()` / `scanAll()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/describe-scan.engine.ts` — class `WhatCanBeDescribedCalcEngine`, methods `scanStorage()` / `scanAll()`.
 
 ---
 
@@ -188,7 +188,7 @@ next run of this engine — the slug shrinks and eventually disappears (self-cle
 transcribe slugs).
 
 The describe popup (80% modal, default-checked list, "Describe N files" apply → enqueue, provider gate + cost caution) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup` (mirror of `TranscribeBatchPopup`; apply calls `POST /api/todo/batches/:id/apply`, which fans out to the `describe` queue) and `ShowDescribableLink` (the "Show what could be AI-described" trigger); the popup's `onApply` is wrapped in `withDescribeReady()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup` (mirror of `TranscribeBatchPopup`; apply calls `POST /api/todo/batches/:id/apply`, which fans out to the `describe` queue) and `ShowDescribableLink` (the "Show what could be AI-described" trigger); the popup's `onApply` is wrapped in `withDescribeReady()` from `~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts`.
 
 ---
 

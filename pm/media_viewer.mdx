@@ -22,7 +22,7 @@ everything that is not a viewable medium (and is always reachable from a viewer 
 a cell click the same way ([directories.mdx](./directories.mdx)), and the entity menus offer **View
 image / View video / View audio** ([menus.mdx §5.3](./menus.mdx#53-file)). The single shared rule that
 picks the route from a filename is `viewerRouteForName` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts`.
+`~/repos/LargeFileBridge/code/packages/shared/src/media.ts`.
 
 Siblings this builds on and does not repeat:
 
@@ -95,7 +95,7 @@ The Duplicates / Subsets review column is the first consumer ([duplicates.mdx
 §4.3a](./duplicates.mdx)): poster first, and the real player mounts only when the user clicks ▶.
 
 Poster generation and its cache are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/poster.service.ts` — `ensurePoster()` / `posterKindFor()` / `normalizePosterWidth()`; the route (same `verifyGrant()` gate as `/raw`) is `media.router.ts` — `GET /poster`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/poster.service.ts` — `ensurePoster()` / `posterKindFor()` / `normalizePosterWidth()`; the route (same `verifyGrant()` gate as `/raw`) is `media.router.ts` — `GET /poster`.
 
 **Grant.** `t = HMAC-SHA256( `path`\n`expMs`\n`sessionId`, MEDIA_SECRET )`, hex — the **minting
 session** is signed in too (security audit finding 10), so a tampered `s` changes the signature and a
@@ -108,7 +108,7 @@ letting its media start 403-ing.
 
 Minting and verifying the short-lived HMAC-signed grant is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `mintGrant` / `verifyGrant` functions
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `mintGrant` / `verifyGrant` functions
 
 **Raw.** Re-derives + constant-time-compares the HMAC, checks `expMs` is in the future, re-stats the path
 (must be an existing **regular file** — never a directory), sets `Content-Type` from a small extension→MIME
@@ -121,7 +121,7 @@ map, `Accept-Ranges: bytes`, `Content-Disposition: inline`, and:
 
 Verifying the token, parsing the HTTP `Range`, and streaming the byte slice (200 / 206 / 416) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` — the `GET /raw` route (with `parseRange` from `media.service.ts`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` — the `GET /raw` route (with `parseRange` from `media.service.ts`)
 
 **Probe** (`MediaProbe`, `@lfb/shared`). A **best-effort, local-only, no-shell** sniff (charter forbids
 shell/ffprobe). It reads a bounded head (and, for videos, a bounded tail) and reports what it can:
@@ -150,7 +150,7 @@ media loads from the grant URL regardless of what probe returns.
 
 The local, no-shell container/codec/dimensions sniff (bounded header + tail read) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `probeMedia` function
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `probeMedia` function
 
 ---
 
@@ -161,7 +161,7 @@ normal `max-w-6xl` centered column for these three routes so the content uses th
 to the left bar, with no side gutters. This gives the action bar (§4) the entire width to lay out
 buttons before folding any into **More**. Widening only the viewer routes is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`max-w-none` for `/image` · `/video` · `/audio`, `max-w-6xl` otherwise)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`max-w-none` for `/image` · `/video` · `/audio`, `max-w-6xl` otherwise)
 
 One column, **six bands stacked top → bottom**. The order is deliberate: the small identifying text
 is at the top, the **media is the star in the middle**, and the analysis panels sit at the bottom. The
@@ -253,7 +253,7 @@ default.
 The shared viewer-first layout — the six-band stack (path · name · overflow action bar · property grid ·
 bounded media stage · analysis tabs) — is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `PropertyGrid` and `ViewerSurface`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaViewer` component (with `PropertyGrid` and `ViewerSurface`)
 
 > **Reused by the action-popup preview.** The same `object-contain`, aspect-preserving, best-fit media
 > render (and the Space-to-play transport) is what the wide warning / To-Do batch popup shows in its
@@ -290,7 +290,7 @@ buttons: **Never publish via IPFS** (flag toggle), **Do not compress** (flag tog
 The width-measuring overflow bar (fit the highest-priority buttons, fold the rest into **More**) is
 handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar` (with the `fit()` greedy solver + `MoreButton`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar` (with the `fit()` greedy solver + `MoreButton`)
 
 > **The analysis trio sits together, in the locked order (LOCKED).** **Transcribe (60) → AI description (58)
 > → OCR (55)** are adjacent priorities on purpose: the trio's order is
@@ -383,7 +383,7 @@ POST /api/entity/delete  { path: <abs> }                → { trashed: true, res
   confirms first ("Move to LFBridge trash? — recoverable").
 
 Moving (guarded rename) and deleting (recoverable move-to-trash, never `unlink`) a single file are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `moveEntity` / `deleteEntity` functions (routed by `entity.router.ts` `POST /move` · `POST /delete`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `moveEntity` / `deleteEntity` functions (routed by `entity.router.ts` `POST /move` · `POST /delete`)
 
 ### 4.6 Where the action bar is built
 
@@ -392,10 +392,10 @@ Transcribe · **AI description** · OCR · Copy path · View properties · Move)
 publish via IPFS · Do not compress · Copy CID · Delete), and rendering them through the overflow bar, is
 handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (with `IpfsPrimary` / `OpenCompound`) rendering `OverflowActionBar`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (with `IpfsPrimary` / `OpenCompound`) rendering `OverflowActionBar`
 
 The bar's **AI-description** item — the image+video guard, priority 58, the Describe… / Re-describe / Describing… label, and the shared `["description", path]` read — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (the `describe` `BarItem` and its `onDescribe` handler)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (the `describe` `BarItem` and its `onDescribe` handler)
 
 **The `onSettled` contract (LOCKED — a spinner-safety rule, not a detail).** The launcher
 `runDescribeFile()` takes an **`onSettled`** callback that fires on **EVERY terminal outcome** — success,
@@ -403,11 +403,11 @@ The bar's **AI-description** item — the image+video guard, priority 58, the De
 it from `onSettled`, never from `onDone`:** `onDone` fires only on success, so a refused or failed run would
 leave the control stuck reading **"Describing…"**, disabled, forever — with no way to retry short of a
 reload. This mirrors the identical, already-documented rule for `runOcrFile`.
-Implemented in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile` (`opts.onSettled`, called in both the `success` and `error` arms).
+Implemented in code: `~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile` (`opts.onSettled`, called in both the `success` and `error` arms).
 
 The `Open` / `Open folder` "in browser · on {label}" compound control is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `OpenCompound` (OS half via `runOsOpen` in `code/packages/frontend/src/lib/os.ts`; see [os_open.mdx](./os_open.mdx))
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `OpenCompound` (OS half via `runOsOpen` in `code/packages/frontend/src/lib/os.ts`; see [os_open.mdx](./os_open.mdx))
 
 ---
 
@@ -460,7 +460,7 @@ and no radio buttons to switch between them.**
   `<trackingBase>/<rel-dir>/<name.ext>.ai_description` — and a hollow outline when it's empty. The base is
   keyed on **storage kind** ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)): a
   **working git repo** keeps its hidden `.lfbridge/`
-  (`~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/x.mp4.transcription`), while a **dedicated LFB file repo**
+  (`~/repos/charlie-kirk/.lfbridge/videos/x.mp4.transcription`), while a **dedicated LFB file repo**
   (a Personal / Company / Community SDL) has **no `.lfbridge/` at all** and the mirror hangs off the **root**
   (`~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription`). The marker resolves the
   path through the shared resolver, so it never misses an artifact by hard-coding a `.lfbridge` segment.
@@ -477,7 +477,7 @@ and no radio buttons to switch between them.**
 The side-by-side analysis panel (left = AI description, right = Transcription; availability ✓; content vs.
 Generate; single-column for audio/image; stack on narrow screens) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (a two-column grid of `AnalysisColumn`, with `AnalysisBody` / `GeneratePane`; launcher `runDescribeFile` in `lib/describe.ts` and the `useTranscribeFile` hook)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (a two-column grid of `AnalysisColumn`, with `AnalysisBody` / `GeneratePane`; launcher `runDescribeFile` in `lib/describe.ts` and the `useTranscribeFile` hook)
 
 See [ai_description.mdx](./ai_description.mdx) for the provider adapters, the per-kind prompt files, the
 storage YAML, and the settings (Tools) surface; see [Transcribe.mdx](./Transcribe.mdx) for the transcript
@@ -497,7 +497,7 @@ loop for a customer:
 **Copy transcript / Copy description** are pure clipboard actions (no backend, no bytes altered) — small
 buttons per analysis panel, not new catalog entries. **Download compressed copy** is a media-only bar
 action that appears once a compressed variant exists. None is implemented yet, so no code pointer; when
-built the two Copy buttons live in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx`
+built the two Copy buttons live in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx`
 — `MediaAnalysis` (the `AnalysisColumn` headers), and **Download compressed copy** is a new `BarItem` in
 the same file's `ActionBar` (§4.6). These are the media viewer's own promoted actions, not the shared
 file-list action-links row ([page_actions.mdx §0](./page_actions.mdx)).

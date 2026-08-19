@@ -28,7 +28,7 @@ function stateDir(): string {
  * the CLI could not bring the app up on the one platform where it is most likely to be asked to. Going
  * through `cmd.exe` with `/s` (strip exactly the outer quote pair, run the rest verbatim) is the quoting
  * form that survives paths containing spaces. Kept in lockstep BY HAND with
- * `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/proc.mjs` — `spawnTool()`, the authority; this package
+ * `~/repos/LargeFileBridge/scripts/dev/proc.mjs` — `spawnTool()`, the authority; this package
  * compiles standalone and cannot import it.
  */
 function toolCommand(name: string, args: string[]): { bin: string; argv: string[]; verbatim: boolean } {

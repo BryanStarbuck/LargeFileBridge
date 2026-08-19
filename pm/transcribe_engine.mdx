@@ -61,7 +61,7 @@ guarantees**, and **parallel calibration**. Nothing here changes where the trans
 The engine abstraction (a common interface each concrete engine implements — `available()` /
 `transcribeToFile(onProgress)` — so the caller is engine-agnostic) and the ordered selector are implemented
 in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (returns the best engine for this machine) + `transcribeWithEngine()` (the speech → mac → qwen runtime fallback chain).
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (returns the best engine for this machine) + `transcribeWithEngine()` (the speech → mac → qwen runtime fallback chain).
 
 ---
 
@@ -94,7 +94,7 @@ SpeechAnalyzer.
   inherently covers the full duration; Whisper and Qwen are verified per §4.2.
 
 The three concrete engines + the selector are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/speech-analyzer.ts` — class `SpeechAnalyzerTranscriber` (compiles/drives the Swift helper) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (Whisper **Small**, MPS→CPU) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — class `Qwen3AsrTranscriber` (drives `mlx-qwen3-asr`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` + the speech → mac → qwen fallback wrapper. The Swift helper is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/speech/SpeechAnalyzerCLI.swift`.
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/speech-analyzer.ts` — class `SpeechAnalyzerTranscriber` (compiles/drives the Swift helper) · `~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber` (Whisper **Small**, MPS→CPU) · `~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — class `Qwen3AsrTranscriber` (drives `mlx-qwen3-asr`) · `~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` + the speech → mac → qwen fallback wrapper. The Swift helper is `~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/speech/SpeechAnalyzerCLI.swift`.
 
 ### 2.1 Auto-fallback `speech → mac → qwen` (LOCKED)
 
@@ -123,7 +123,7 @@ and must **not** pretend it used the best engine. Instead it:
   the next run — no other configuration.
 
 Detection of the macOS product-version gate + the `needsOsUpdate` warning are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `macOSMajorVersion()` / `speechAnalyzerSupported()` / `speechAnalyzerNeedsOsUpdate()`, surfaced on `GET /api/transcribe/engine` (`speech.needsOsUpdate`) and rendered by the Settings Transcription panel (§6).
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `macOSMajorVersion()` / `speechAnalyzerSupported()` / `speechAnalyzerNeedsOsUpdate()`, surfaced on `GET /api/transcribe/engine` (`speech.needsOsUpdate`) and rendered by the Settings Transcription panel (§6).
 
 ---
 
@@ -167,7 +167,7 @@ Before any transcribe runs, the engine reports a **readiness** for the heavyweig
   that cannot finish.
 
 Readiness detection + the (ballpark → stored) disk estimate are computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `describeReadiness()` (returns `{ state, installedBytes, estimateBytes, freeDiskBytes }`; the stored measurement lives in the app config under `transcribe.model`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `describeReadiness()` (returns `{ state, installedBytes, estimateBytes, freeDiskBytes }`; the stored measurement lives in the app config under `transcribe.model`).
 
 > **Detection must survive a thin `PATH` (hardened).** `describeReadiness()` checks the `mlx-qwen3-asr` CLI
 > with `commandExists()` and the weights with a direct filesystem read of the Hugging Face cache
@@ -185,7 +185,7 @@ Readiness detection + the (ballpark → stored) disk estimate are computed in co
 
 > **Every failure path here logs — never a silent catch (LOCKED).** A `describeReadiness()` /
 > `provision()` / `healthCheck()` / `repair()` / `removeModel()` / `recordConsent()` failure always writes a
-> reason to `error.err` via the shared `log` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`)
+> reason to `error.err` via the shared `log` (`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts`)
 > before returning/throwing — e.g. a broken `statfsSync` (free-disk check silently disabled for that request),
 > a `pipx`/`brew` bootstrap failure during `installCli()`, or a config-write failure in `recordConsent()` that
 > would otherwise make the popup nag again with no trail of why. This applies equally to the
@@ -207,7 +207,7 @@ show a **one-time permission popup**:
   nag on every file; the user can change it later in **Settings → Transcription** (§6).
 
 The permission popup + the remembered decision are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeModelConsentDialog.tsx` — `TranscribeModelConsentDialog` (opened via the same global request bus the storage wizard uses, `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/TranscribeModelConsentDialog.tsx` — `TranscribeModelConsentDialog` (opened via the same global request bus the storage wizard uses, `~/repos/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts`).
 
 ### 3.3 Two progress UIs — download, then install/configure (LOCKED)
 
@@ -226,7 +226,7 @@ shows an inline state ("Setting up the transcription model…") so the user know
 waiting.
 
 The two-phase provisioning job (download then install/configure, each a registry op) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `provision()` (registers `track("download", …)` then `track("install", …)` from `modules/progress/progress.registry.ts`), served by `POST /api/transcribe/engine/provision` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `provision()` (registers `track("download", …)` then `track("install", …)` from `modules/progress/progress.registry.ts`), served by `POST /api/transcribe/engine/provision` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts`.
 
 ### 3.4 Health check & repair — half-installed or outdated (LOCKED)
 
@@ -243,7 +243,7 @@ An install can be interrupted (a killed download, a machine sleep, a partial pip
   `outdated` and the same flow runs as an **upgrade** (with the user's ok).
 
 The verify-then-repair health check (checksum + import + smoke test; per-step repair) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `healthCheck()` / `repair()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts` — `healthCheck()` / `repair()`.
 
 ### 3.5 Skip the popup when already installed (LOCKED)
 
@@ -269,7 +269,7 @@ cases, both required:
 
 The distinction is a **pending intent** captured before provisioning starts (`confirmed` vs `offered`) and
 replayed after. The pending-intent capture + replay is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `withModelReady(intent, run)` (records the intent, awaits `provision()`, then either enqueues the confirmed set or re-opens the offer popup on the originating route).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `withModelReady(intent, run)` (records the intent, awaits `provision()`, then either enqueues the confirmed set or re-opens the offer popup on the originating route).
 
 > **`withModelReady` gates every transcribe launcher — no exceptions (hardened).** Both frontend entry
 > points that start a single-file transcription — the Media Viewer button/tab
@@ -342,7 +342,7 @@ Chunking is **transparent** — the output is a single stitched transcript; the 
 coverage. It is used when needed, not always (a short file runs in one pass).
 
 The duration-coverage verification, the no-timeout long spawn, and the chunk-and-stitch path are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — `transcribeToFile()` (Whisper; coverage check via `parseSegmentEndSec()` vs `probeDurationSec()`, MPS→CPU on a short/garbled result), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — `Qwen3AsrTranscriber.transcribeToFile()` (drives `mlx-qwen3-asr`; coverage verified against `probeDurationSec()`). The `engine.ts` wrapper applies the shared chunk-and-stitch and the `qwen→mac` auto-fallback.
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — `transcribeToFile()` (Whisper; coverage check via `parseSegmentEndSec()` vs `probeDurationSec()`, MPS→CPU on a short/garbled result), and `~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` — `Qwen3AsrTranscriber.transcribeToFile()` (drives `mlx-qwen3-asr`; coverage verified against `probeDurationSec()`). The `engine.ts` wrapper applies the shared chunk-and-stitch and the `qwen→mac` auto-fallback.
 
 ---
 
@@ -409,7 +409,7 @@ transcription workers busy."*
 > it (§5.2); that clamp never applies to `speech`/`mac`.
 
 The transcribe concurrency calibration (the clamp, the RAM/GPU terms, the min-bar routing) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (draws `coreBudget()`/`logicalCores()` from `shared/concurrency.ts`, clamps by measured `modelRamPerJob` + `usableRAM` + `gpuStreams`), read by the queue's `transcribe` admission bucket in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (draws `coreBudget()`/`logicalCores()` from `shared/concurrency.ts`, clamps by measured `modelRamPerJob` + `usableRAM` + `gpuStreams`), read by the queue's `transcribe` admission bucket in `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`.
 
 ---
 
@@ -428,7 +428,7 @@ The transcribe concurrency calibration (the clamp, the RAM/GPU terms, the min-ba
   next to the shared **Parallelism** slider ([parallelization.mdx §4](./parallelization.mdx)).
 
 The Transcription settings panel is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `TranscriptionSettingsSection` (reads `GET /api/transcribe/engine`, drives provision/repair/remove).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `TranscriptionSettingsSection` (reads `GET /api/transcribe/engine`, drives provision/repair/remove).
 
 ---
 

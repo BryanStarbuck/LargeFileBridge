@@ -50,8 +50,8 @@ Every run ends with an **atomic replace** of each touched storage's `_2_do.yaml`
 ([to_do_batches.mdx §5](./to_do_batches.mdx#5-recalculate-and-replace-locked)).
 
 Hooking the engine as the recalc stage after discovery/classification is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — after classification, calls
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.recalcAll()` / `recalcForStorage(storage)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — after classification, calls
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.recalcAll()` / `recalcForStorage(storage)`.
 
 ---
 
@@ -91,7 +91,7 @@ Files that are **already decided** in the shared ledger are **skipped** for the 
 ([menus.mdx §6.6](./menus.mdx)) — are **excluded** from the corresponding category (§3.2).
 
 The per-file category evaluation is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.categorize(file, ctx)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.categorize(file, ctx)`.
 
 ### 2.1 The recommendation becomes a RECOMMENDED toggle
 
@@ -151,7 +151,7 @@ under** ([to_do_batches.mdx §1](./to_do_batches.mdx#1-one-batch-per-storage-loc
   their slug does not show.
 
 Resolving a path to its owning storage (deepest repo → Dropbox → each Google Drive → Personal) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `owningStorageFor(path)` (reuses `git.service.ts` `repoRootFor` + the storage roots from `storages`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `owningStorageFor(path)` (reuses `git.service.ts` `repoRootFor` + the storage roots from `storages`).
 
 ---
 

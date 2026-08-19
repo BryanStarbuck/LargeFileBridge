@@ -64,7 +64,7 @@ LFBridge has **several kinds of storage**, and this spec is only the first — *
   | **Local** | `local` | `~/T/_large_files_bridge/` (settings/config; no `storage.yaml`) | **this file** — [storage_local.mdx](./storage_local.mdx) |
   | **Repo** | `repo` | any Git repo, e.g. `~/BGit/xyz/` (tracking in `~/BGit/xyz/.lfbridge/`) | [storage_repo.mdx](./storage_repo.mdx) |
   | **Personal** | `personal` | `~/BGit/Bryan_git/personal_large_files_bridge/` | [storage_personal.mdx](./storage_personal.mdx) |
-  | **Company** | `company` | e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` (one per company) | [storage_company.mdx](./storage_company.mdx) |
+  | **Company** | `company` | e.g. `~/repos/act3_large_files_bridge/` (one per company) | [storage_company.mdx](./storage_company.mdx) |
   | **Community** | `community` | one per community the user helps/downloads/shares | [storage_community.mdx](./storage_community.mdx) |
 
 * The umbrella that ties them together — the **Storages** left-bar tab, the shared **`storage.yaml`**
@@ -119,7 +119,7 @@ repo; they live here under `repos/<repoKey>/` (§2.2b) and travel — when enabl
 
 Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir` function
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir` function
 
 ---
 
@@ -197,7 +197,7 @@ There are three tiers, and one of them is unusual on purpose:
 * Only storages **with work** keep a file; clean storages have none (their To-Do slug does not show).
 
 The `_do_batches/` path under the state root is resolved by `resolveTodoBatchesDir()` (honoring `LFB_STATE_DIR`) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`; read/written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`; read/written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts`.
 
 ### 2.2b `repos/<repoKey>/` — the per-repo tracking directory, the ALWAYS-home (LOCKED)
 
@@ -253,7 +253,7 @@ transcripts / AI descriptions — ever lives committed in the working repo's own
 
 The per-repo state-root directory is resolved by a helper beside `resolveStateDir()` /
 `resolveTodoBatchesDir()` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`; this directory is returned as the always-home by `resolveTrackingRoot()`, and the optional additive mirror root by `resolveStateSyncRepo()`, in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` (the mirror performed by `tracking-sync.service.ts` — `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`; this directory is returned as the always-home by `resolveTrackingRoot()`, and the optional additive mirror root by `resolveStateSyncRepo()`, in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` (the mirror performed by `tracking-sync.service.ts` — `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`).
 
 ### Why YAML for config + manifests
 
@@ -343,7 +343,7 @@ settings.
 
 Reading and updating the app-level `config.yaml` (with first-run default scanner roots) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig` / `updateAppConfig` functions
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig` / `updateAppConfig` functions
 
 ---
 
@@ -411,9 +411,9 @@ tables:
 file_system:
   columns:                                       # open column chain, root → deepest, left to right
     - /Users/bryan
-    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm
+    - /Users/bryan/repos/LargeFileBridge/pm
   selection:                                     # the 1+ entries highlighted when the user left
-    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm/directories.mdx
+    - /Users/bryan/repos/LargeFileBridge/pm/directories.mdx
   filters:                                       # the §1.4 header checkboxes (all default ON)
     only_large: true                             # hide all but big files + the dirs that lead to them
     videos: true                                 # show videos even under the threshold
@@ -449,7 +449,7 @@ trigger — lives in [sessions.mdx](./sessions.mdx).
 
 Reading and lazily updating each user's personal `config.yaml` is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig` / `updateUserConfig` functions
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig` / `updateUserConfig` functions
 
 ---
 
@@ -519,7 +519,7 @@ updated_at: 2026-07-02T14:32:15.123Z
 # Identity (written by the scanner; the source of truth for what this unit is)
 repo:
   name: largefilebridge
-  path: ~/BGit/Bryan_git/LargeFileBridge      # working-tree root on THIS computer
+  path: ~/repos/LargeFileBridge      # working-tree root on THIS computer
   remote: https://github.com/BryanStarbuck/LargeFileBridge.git
 
 # THE IPFS-pinning opt-in for this repo (NOT a "managed vs. unmanaged" gate — LFB knows every repo
@@ -560,7 +560,7 @@ access:
 
 Registering a discovered repo as a `pin/r/<repo_name>/` unit (validating it is a git working tree, sanitizing/disambiguating the folder name, seeding `pinned: false`) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo` function
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo` function
 
 ### 6.3 `pin/r/<repo_name>/manifest.yaml`
 
@@ -593,7 +593,7 @@ process (§13).
 
 Walking the scanner roots to discover repos, register each unit, and build the computer-unit mask is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll` function
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll` function
 
 ---
 
@@ -647,7 +647,7 @@ computers can fetch the current list — see §9.3. `status.yaml` holds last-sca
 The computer unit is pinned as part of **every full pass** ([pin_process.mdx §2](./pin_process.mdx)),
 through the same generic core as repos (its files carry absolute paths; the IPNS publish is a
 follow-up), in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinComputerUnit()` (shares `runUnitPin`; called by `pinAll`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinComputerUnit()` (shares `runUnitPin`; called by `pinAll`)
 
 ---
 
@@ -747,7 +747,7 @@ the product, and **they must not disagree** — the rule locked in
   believed.
 
 Reading the one manifest that both the pull-down list and the pull action agree on, and keeping the two manifests in step, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers(repoRoot)` and `pullMissing(repoRoot, paths, opts)` (both via `readRepoTrackingManifest`), over `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `repoTrackingManifestPath()` / `readRepoTrackingManifest()` / `writeRepoTrackingManifest()`; the pin-unit copy is read/written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `getRepoManifest(folder)` / `writeRepoManifest(folder, manifest)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers(repoRoot)` and `pullMissing(repoRoot, paths, opts)` (both via `readRepoTrackingManifest`), over `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `repoTrackingManifestPath()` / `readRepoTrackingManifest()` / `writeRepoTrackingManifest()`; the pin-unit copy is read/written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `getRepoManifest(folder)` / `writeRepoManifest(folder, manifest)`.
 
 ### 9.3 Computer manifests travel via IPNS
 
@@ -811,7 +811,7 @@ that peer republishes ([sync_list §5.1](./sync_list.mdx#51-local-claims-are-ver
 
 Reading the live IPFS pinset once per pin and reconciling each `pinned_by` claim against it (re-pinning lost CIDs still decided `sync`) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder` function (via `setPinClaim`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder` function (via `setPinClaim`)
 
 ---
 
@@ -859,7 +859,7 @@ the next sign-in**; existing session records keep whatever ceiling they were cre
 
 Setting the 10-month session lifetime policy and wiring the on-disk signing secret + `FileSessionStore` into OpenAuthFederated is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `constructAuthFrontend` function
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `constructAuthFrontend` function
 
 **Credentials file — schema, read order, and the setup UI.** The file is read by
 `config/credentials-file.ts` and passed to OpenAuthFederated (`auth-frontend.ts`). Its exact shape:
@@ -889,7 +889,7 @@ values) — and the UI renders it (`CredentialsSetupCard`) on the **sign-in scre
 
 Serving the non-secret `credentialsFile` block (`GET /api/health/auth-config`) and rendering the setup card the fresh computer sees is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the `GET /auth-config` route (via `authConfig()`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CredentialsSetupCard.tsx` — `CredentialsSetupCard` component.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the `GET /auth-config` route (via `authConfig()`), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/components/CredentialsSetupCard.tsx` — `CredentialsSetupCard` component.
 
 > **Now authoritative in [authentication.mdx](./authentication.mdx).** The full auth flow, the
 > restart/re-login root cause, and the **implemented** fix (the boot gate now shows "Reconnecting…"
@@ -930,10 +930,10 @@ the right build**:
 The persistence, TTLs, and cookie flags live in `auth-frontend.ts` (§10 above); the client-side pieces to
 change are in code:
 
-* Proactive refresh + the reactive `401` fallback: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor (`reloadSession()` on `401`) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `registerAuthBridge(getToken, load)`, backed by `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.getToken()` (caches until ~10 s before `exp`; a scheduled re-mint must be added here).
-* Cookie/redirect origin + the 16-port band: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `allowedRedirectOrigins()` and the `cookiePrefix`/`secure`/`SameSite` settings.
-* Fail-closed vs. migrate: `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/frontend.ts` — `readSession()` (the `sessionStoreMigrate` branch).
-* The silent-secret-rotation footgun: `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts` — `loadOrCreateSecret()` (returns a **per-process** secret if the state dir is unwritable — every restart then rotates it; guard by ensuring the state dir is writable and shared).
+* Proactive refresh + the reactive `401` fallback: `~/repos/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor (`reloadSession()` on `401`) and `~/repos/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `registerAuthBridge(getToken, load)`, backed by `~/repos/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.getToken()` (caches until ~10 s before `exp`; a scheduled re-mint must be added here).
+* Cookie/redirect origin + the 16-port band: `~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `allowedRedirectOrigins()` and the `cookiePrefix`/`secure`/`SameSite` settings.
+* Fail-closed vs. migrate: `~/repos/OpenAuthFederated/code/packages/auth-backend/src/frontend.ts` — `readSession()` (the `sessionStoreMigrate` branch).
+* The silent-secret-rotation footgun: `~/repos/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts` — `loadOrCreateSecret()` (returns a **per-process** secret if the state dir is unwritable — every restart then rotates it; guard by ensuring the state dir is writable and shared).
 
 > **Bottom line:** the durable server-state fix the user asked for is **already in the spec and the code**
 > (§10). What remains is **client-side**: proactive token refresh (kills the "timeouts"), a **stable
@@ -970,7 +970,7 @@ peers:
 
 Reading `peers.yaml`, removing a peer, and projecting the peer rows the UI shows is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/peers.service.ts` — `getPeers` / `peerRows` / `removePeer` functions
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/peers.service.ts` — `getPeers` / `peerRows` / `removePeer` functions
 
 ---
 
@@ -994,7 +994,7 @@ Two append-only flat files **directly at the state root** (no `logs/` subdirecto
 
 Writing the two rolling logs (everything to `log.log`; WARN/ERROR/FATAL also to `error.err`; rotation; never throwing) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `log` object
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `log` object
 
 ---
 
@@ -1027,7 +1027,7 @@ The web app (first priority per `CLAUDE.md`) provides transparency and control:
 
 Reconciling installed vs on/off against the real launchd state and install/uninstall/enable/disable from the web app is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState` / `control` functions
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState` / `control` functions
 
 > **The run mechanics live in [pin_process.mdx](./pin_process.mdx).** This section owns the
 > *transparency contract* (installed vs. on/off, surfaced + controlled from the web app). What a run
@@ -1113,7 +1113,7 @@ change; services never touch the filesystem directly.
 
 Atomic write-temp-then-rename, the per-file mutex, defaults-on-absence, and schema-validate-on-read are handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml` / `writeYaml` / `updateYaml` functions
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml` / `writeYaml` / `updateYaml` functions
 
 ---
 

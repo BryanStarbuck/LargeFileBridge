@@ -56,7 +56,7 @@ Siblings this builds on and does not repeat:
    * **Scope: this governs the OUTPUT FILE — not every `resize()` in the codebase.** "Never downscale"
      means **a user's file must never lose resolution**. The **perceptual fingerprint** downscales
      **internally, before decode** (`sharp.resize(512, 512, { fit: "inside" })` in
-     `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` —
+     `~/repos/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` —
      `decodeForHash()`), to bound the pixel buffer it hashes. That downscale **touches no output**, is
      internal to the hash's own decode, and is **invisible to the user** — the throwaway buffer is
      discarded once the hash exists. **These do not conflict**
@@ -92,7 +92,7 @@ missing tool degrades the relevant operation with a clear "install X" message (n
 per file from what's installed.
 
 Detecting installed tools (which of ffmpeg/ffprobe/magick/oxipng/cwebp/cjpeg/jpegoptim are on PATH) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `detectTools`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `detectTools`.
 
 ---
 
@@ -201,12 +201,12 @@ mozjpeg was used for JPEG; the code detected `cjpeg` and `jpegoptim` and then **
 falling through to plain ImageMagick. It is now genuinely used — in-process, via `sharp`, which bundles it.
 
 Implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `jpegQuality()` and `videoCrf()` (the two ladders), `pickImageTarget()` (R4/R6 target selection), and the
 gate chain inside `compressFile()` (R1 resolution + chroma, R3 floors). The encoders themselves live in
 `.../modules/compress/image-encode.ts` — `encodeImage()`, `encodeJpeg()`, `encodePng()` — and the strict
 lossless PNG path in `.../modules/compress/png-redeflate.ts` — `redeflatePng()`. Defaults in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts`.
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts`.
 
 ---
 
@@ -292,7 +292,7 @@ handling) is specified in its own part spec: **[images.mdx](./images.mdx)**. Thi
 Building the per-file plan (source kind → tool + target codec + quality, honoring allow/deny prefs, the
 `convert_types` / `skip_exts` conversion settings, and the HEIC-family → JPEG compatibility conversion with
 its `formatConvert` size-gain exemption) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickImageTarget()` (images) and `pickVideoTarget()` (video), assembled by `checkFile()`. HEIC/HEIF/AVIF are treated as convertible (not "already done") in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `compressBadge()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickImageTarget()` (images) and `pickVideoTarget()` (video), assembled by `checkFile()`. HEIC/HEIF/AVIF are treated as convertible (not "already done") in `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `compressInfo()` / `compressBadge()`.
 
 ---
 
@@ -325,7 +325,7 @@ optionally in a **better file format** (PNG → JPEG, an old video codec → H.2
 same pixel resolution**, and swaps the new file in **only after proving the new file is valid** (§5); the
 original is moved to a **recoverable trash**. It is **always explicit** — never automatic. Everything the
 action does — from the click to the replaced file — is orchestrated by one backend function:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `compressFile()`.
 
 ### 4.2 One page that "utilizes" compression — View-one-file
@@ -336,10 +336,10 @@ codec** it uses, and offers the **Compress** button. Before acting, it reads a *
 the plan and any warning (e.g. "this would lose transparency") **without touching the file**.
 
 * The page shell + action band are in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` and
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` and
   `MediaViewer.tsx` (`ActionBar` = the **Compress** button; `PropertyGrid` = the Codec + Compressed cells).
 * The no-side-effect dry-run (plan + alpha safety) runs in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
   `checkFile()`, served at `compression.router.ts` — `GET /api/compress/check`.
 
 ### 4.3 One action link, on many different pages
@@ -360,7 +360,7 @@ and *which options* they pass.
 | **Media viewer "Convert to H.264…"** offer | this one video (forced codec, §8.1) | `~/…/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` convert button |
 
 Every one of those links resolves to one of five REST calls, all allow-list-gated, all in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts`.
 
 * `GET  /api/compress/tools`   — which brew tools are installed.
 * `GET  /api/compress/settings`, `PATCH /api/compress/settings` — the codec + quality prefs.
@@ -380,7 +380,7 @@ This is the **most important correctness rule** of the whole feature. Compressin
 **untouched**.
 
 The checks, in the **exact order** they run inside `compressFile()`
-(`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts`):
+(`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts`):
 
 1. **Tool exit + non-empty.** The transcode must exit `0` and produce a file with **bytes > 0**. Else
    fail, delete temp, keep original.
@@ -425,7 +425,7 @@ truncated JPEG returns non-zero from `magick identify` (so `imageDims → null`)
 readable but the **output's are not**, the output is corrupt → **block and keep the original**. A 134-byte
 file can no longer decode to `640×480`, so it is now caught and the original is preserved. The fix is in
 code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `compressFile()`'s output-integrity gate (the `if (inDims && !outDims)` block, added 2026-07-14).
 
 **Two facts that keep this honest:**
@@ -482,7 +482,7 @@ Most delivery codecs have **no** alpha; a few do. We check the source's pixel fo
   alpha in WebM), in which case we use that.
 
 Running the alpha safety check (PNG `%[opaque]`; video `pix_fmt` vs. target codec alpha capability) before any compression is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `checkFile()`, using `imageAlphaUsed()` (image `%[opaque]`) and `pixFmtHasAlpha()` (video `pix_fmt`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `checkFile()`, using `imageAlphaUsed()` (image `%[opaque]`) and `pixFmtHasAlpha()` (video `pix_fmt`).
 
 ---
 
@@ -518,7 +518,7 @@ Global toggles: **preserve resolution** (LOCKED on — §5) and **replace-origin
 on).
 
 Reading/writing the per-media codec allow/deny + quality preferences is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts` — `GET/PATCH /api/compress/settings` (persisted in the app `config.yaml` `compression` block).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts` — `GET/PATCH /api/compress/settings` (persisted in the app `config.yaml` `compression` block).
 
 ---
 
@@ -579,10 +579,10 @@ fingerprint.
   event.
 
 Capturing the pre-compression hash/size/fingerprint before the transcode and the post values after, and appending the sidecar `compress`/`convert` event, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (calls `perceptual.service.ts` `fingerprintImage`/`fingerprintVideo` before + after, and `file-sidecar.service.ts` `appendFileEvent`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (calls `perceptual.service.ts` `fingerprintImage`/`fingerprintVideo` before + after, and `file-sidecar.service.ts` `appendFileEvent`).
 
 Running the tool to a temp file, verifying, and doing the recoverable replace is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the compression record is written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new), which resolves its `analysis/<relpath>/compression.yaml` destination through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot()` (the Local-Storage `repos/<repoKey>/` root, never the working repo) and mirrors it to the sync repo (when enabled) via `tracking-sync.service.ts` — `mirrorToSyncRepo()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile` (single) / `compressBatch` (many); the compression record is written via `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `writeCompressionRecord()` (new), which resolves its `analysis/<relpath>/compression.yaml` destination through `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot()` (the Local-Storage `repos/<repoKey>/` root, never the working repo) and mirrors it to the sync repo (when enabled) via `tracking-sync.service.ts` — `mirrorToSyncRepo()`.
 
 ### 8.1 Forced-codec convert (browser/upload compatibility)
 
@@ -593,7 +593,7 @@ optional **forced video codec**, which overrides the user's preferred-codec list
 universal-safe target, [codecs.mdx §5](./codecs.mdx)). It is otherwise an ordinary compress run
 (explicit-click, confirm-gated, recoverable replace). Honoring the forced codec is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile(input, forceVideoCodec)` / `pickVideoTarget` (the `force` parameter), routed by `compression.router.ts` `POST /file` (optional `videoCodec`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile(input, forceVideoCodec)` / `pickVideoTarget` (the `force` parameter), routed by `compression.router.ts` `POST /file` (optional `videoCodec`).
 
 ### 8.2 Per-run originals disposition (bulk Compress inside)
 
@@ -609,7 +609,7 @@ back to the global setting. Disposal still runs **only after** verify + size-gai
 part-way keeps its original either way (§5). And because a bulk run may be hundreds of files, the heavy
 transcode now runs via an **async** `spawn` so a background batch **never blocks the event loop** (quick
 probes stay synchronous). Both are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `compressFile()` (`const disposition = o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard")`)
 and `runAsync()` (the `child_process.spawn` runner for the heavy tool).
 
@@ -646,10 +646,10 @@ The mechanism is a single optional field the queue sets and the engine plumbs in
   decision stays in **one** place (the queue's live Core Budget), never hardcoded here.
 
 Accepting and threading the per-job cap into each tool is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `CompressFileOpts.threads` (the optional cap), applied in `compressFile()`'s ffmpeg build (`-threads`) and in
 `imageCommand()` (oxipng `--threads`, `cwebp` `-mt`, `magick -limit thread`); omitted → the tool's all-core
-default. The queue that supplies the cap per media bucket is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`.
+default. The queue that supplies the cap per media bucket is `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` drawing `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`.
 
 ### 8.4.0 A file is compressed AT MOST ONCE — the three sources (LOCKED)
 
@@ -711,7 +711,7 @@ quality 85, 4:2:0); **v2** is the current one. A v1 file is still honoured as "a
 > gain". Stamping is now a separate post-encode step that does not care which encoder ran.
 
 Implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compress-marker.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compress-marker.ts` —
 `readImageMarker()` / `stampImageMarker()` (pure buffer walks, no child process) — and
 `.../modules/compress/compress-ledger.ts` — `ledgerSaysDone()`, `writeLedger()`, `buildRecord()`. The gate
 itself is `alreadyHandled()` in `.../modules/compress/compression.service.ts`.
@@ -728,7 +728,7 @@ accumulated **146 orphans totalling 11 GB**, which is also a record of how often
   that an in-flight job's candidate can never be touched — logging the count and bytes reclaimed.
 
 Implemented in `.../modules/compress/compression.service.ts` — `sweepCompressTemp()`, called from
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` `bootstrapState()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/main.ts` `bootstrapState()`.
 
 ### 8.4 The "already-compressed" marker — durable, in-file, mesh-wide skip (LOCKED)
 
@@ -796,16 +796,16 @@ an in-place-compressed video stops counting as "compressible" — and, because t
 marker, a **§8.4 marker skip now backfills the record** on the machine that skipped: a file whose marker
 rode in over IPFS converges in that machine's metrics after its first (skipped) compress pass.
 Reading the record into the status verdict is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` —
 `analysisOutputs()` (probes Local Storage, the sync-repo mirror, and legacy tracking-base placements;
 `compressionRecordFresh()` is the staleness gate), consumed by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `compressStatusFor()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `compressStatusFor()`.
 Still a follow-up: wiring the record into `walkCompressible()` so a bulk run **drops known-compressed files
 from the batch entirely** — a speed optimization on top of the authoritative in-file marker, not a
 correctness requirement.
 
 Detecting the marker before compressing, and stamping it during the encode, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `readMarker()` (ffprobe `format_tags=comment` for video, `magick identify %c` for images), whose
 `MARKER_PREFIX` test runs inline at the top of `compressFile()` so a marked file returns `skipped` **before**
 any transcode (covering one-off **and** batched runs) — the skip path also **backfills the compression
@@ -823,7 +823,7 @@ The [media viewer](./media_viewer.mdx) shows, per file, **which codec it is comp
 "should" compress and the media type is enabled). This is the read-out side of everything above.
 
 Surfacing the codec + compressed-state and the Compress action per file is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `PropertyGrid` (Codec / Compress cells) + `ActionBar` (Compress button).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `PropertyGrid` (Codec / Compress cells) + `ActionBar` (Compress button).
 
 ---
 
@@ -935,10 +935,10 @@ definition in [task_tabs.mdx §6](./task_tabs.mdx#6-the-compress-status-icon--sa
 
 The tab's default sort puts the orange "could" rows first, then **Size desc** so the biggest reclaimable
 file leads. The icon is a control cell (stops propagation, never navigates). The verdict per file reuses the
-single source of truth `compressInfo(name)` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts`.
+single source of truth `compressInfo(name)` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts`.
 
 The Compress status icon is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon` (state from the new `FileRow.compress` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` — `CompressStatusIcon` (state from the new `FileRow.compress` field composed in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
 
 ---
 
@@ -963,7 +963,7 @@ The trigger must **never** fire a bare `window.confirm` — a jarring hard dialo
   focused by default so the batch is never one stray **Enter** away.
 
 The dialog is a **web modal, not a native prompt**, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideDialog.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideDialog.tsx` —
 `CompressInsideDialog` (the fixed `bg-black/40` overlay + centered card, `stopPropagation`, Esc-to-cancel).
 
 ### 12.2 How the dialog is opened (one shared bus)
@@ -978,12 +978,12 @@ wires the modal itself:
    what the user asked for.
 
 Opening the dialog from anywhere is a single bus call (path + which kinds start checked), handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/compressInside.ts` — `openCompressInside()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/compressInside.ts` — `openCompressInside()`
 / `onCompressInsideRequested()` (the single-slot bus), consumed by the once-mounted
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideProvider.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideProvider.tsx`
 — `CompressInsideProvider` (mounted at the app root in `.../frontend/src/main.tsx`). The directory catalog
 item calls the bus instead of the old confirm:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` —
 `buildActions()` (the `compress-dir` action's `onSelect` → `openCompressInside(v.path, { images: true, videos: true })`);
 the page-level links call it with a single kind via `.../frontend/src/lib/pageActions.ts` —
 `compressAllVideos()` / `compressAllImages()`.
@@ -1033,7 +1033,7 @@ The controls, in order, all LOCKED:
 
 The four inputs, the conditional red PNG warning, the default-on recursive box, and the delete-defaulted
 radio are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideDialog.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/compress/CompressInsideDialog.tsx`
 — `CompressInsideDialog` (state: `images`/`videos`/`recursive`/`deleteOriginal`; the PNG warning gated on
 `images`; Continue gated on `images || videos`).
 
@@ -1057,13 +1057,13 @@ it **never deletes an original that did not successfully compress**:
 
 This safety is structural: disposal lives at the very end of the single-file path in the engine, reached
 only after verify + gain (§5). It is enforced in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `compressFile()` (the disposition block runs only after the integrity/resolution/gain checks; on any
 earlier failure it returns a `blocked`/`failed` result **without** touching the original). The per-op
 override the radio drives is the `deleteOriginal` field of `CompressFileOpts` (`"hard"` → `fs.unlinkSync`,
 `"trash"` → `trashOriginal`). The batch's per-file isolation (catch a task's throw, record it against the
 batch, move on) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
 `runTask()` (the `compress` branch: `track(...)` around `compressFile`, then `recordBatchResult()`;
 `compressed`/`skipped` count as OK, `blocked`/`failed` are recorded as errors; a thrown task is still
 counted so the batch always finishes) and `recordBatchResult()` (appends `{ path, reason }` to the batch's
@@ -1084,7 +1084,7 @@ The reconciliation:
 * The dialog's **default is Hard delete**; the user can switch to the recoverable trash for any run.
 
 The per-run override winning over the global default is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `compressFile()` (`const disposition = o.deleteOriginal ?? (settings.replaceOriginalToTrash ? "trash" : "hard")`).
 
 ### 12.6 Continue → background batch, return immediately (LOCKED)
@@ -1121,12 +1121,12 @@ navigating other tabs while the batch drains ([processing.mdx](./processing.mdx)
 
 `POST /api/compress/inside` with body `{ root, images, videos, recursive, deleteOriginal }` returns the
 `CompressInsidePlan`, implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.router.ts` —
 `POST /inside` (rejects a no-kind selection with `400`) →
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `enqueueCompressInside()` / `walkCompressible()`, which creates the batch via `jobqueue.service.ts` —
 `createBatch()` and enqueues through `enqueue()`. The client method is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `compressInside()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `compressInside()`.
 
 ### 12.7 The notification (LOCKED wording)
 
@@ -1145,7 +1145,7 @@ When the batch **finishes**, the user is told the outcome and, if any errored, p
 
 The Continue toast is emitted from the plan in `CompressInsideDialog.tsx` (`onContinue` toasts the returned
 `queued`); the finish summary + the error list live in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx`.
 
 <!--
   Compression engine for IMAGE + VIDEO (audio later). Explicit user action only (one / checked / whole

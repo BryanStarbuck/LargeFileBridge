@@ -65,7 +65,7 @@ this file owns the *row* that opens it.
 > git-ignored** tile. None of this changes this row: the action-links are unchanged, and the popup they
 > open is the same one those tiles open.
 > Tile labels live in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — the metric
+> `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — the metric
 > definitions (`"Add to IPFS"` · `"Git Ignore"` · `"Transcribable"` · `"AI Describable"` · `"OCRable"`).
 
 Siblings this builds on and does not repeat:
@@ -121,8 +121,8 @@ does not have to select-all first. (This mirrors the way a shell glob or a "Run 
 > files the page already shows. This keeps the action's *considered* count equal to what the page
 > displays — a repo page showing 4 videos must never queue 8 because `build/` mirrored them.
 > The walk and its skip set live in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `walkMedia()` / `SKIP_DIRS` (twin: `describe.service.ts` — `walkDescribable()`), sharing
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`.
+> `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `walkMedia()` / `SKIP_DIRS` (twin: `describe.service.ts` — `walkDescribable()`), sharing
+> `~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`.
 
 > Example (LOCKED walk-through). A repo page shows **40** files, **none checked**. The user clicks
 > **Create Transcriptions**. The set to consider is **all 40** (recursive). Had **30** been checked, the
@@ -164,7 +164,7 @@ home-expanded before this resolution (Transcribe.mdx §3.6).
 
 The plan's `needsSetup` / `setupPath` fields, the all-eligible-need-setup detection, and the page action
 routing to the wizard are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `enqueueTranscribe()` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` · `~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()`.
 
 Producing actions further honour the two sticky flags ([menus.mdx §6.6](./menus.mdx)) where relevant: a
 **Do not compress** flag excludes a file from a Compress-all; **Never IPFS** excludes it from an
@@ -289,7 +289,7 @@ everything else.
 > styling is shared** — the row's links and its More ▾ are one family of quiet text affordances, distinct
 > from the page's single boxed primary button.
 > The always-in-More entity set rides `PageActions`' `overflow` prop in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` (overflow items render through the shared grouped `MenuList`/`MenuPortal`).
+> `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` (overflow items render through the shared grouped `MenuList`/`MenuPortal`).
 
 **Distinct from the `⋮` bulk menu.** The table's existing selection **`⋮` bulk menu** (set decision
 Add to IPFS (pin)/Ignore/Undecided across checked rows, [one_repo.mdx §4.4](./one_repo.mdx)) stays where it is, in the
@@ -297,7 +297,7 @@ control row above the table, and only appears when rows are checked. The action-
 page-level home and is always present. The two never duplicate an item.
 
 The action-links row (always present on a list page, producing-item labels reflecting the checked count) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` component (rewritten from the old dropdown into the inline links row; fed a `scope` = a root path + the checked paths, and an action list), rendered beneath the title by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader` (its below-title `actions` slot).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` component (rewritten from the old dropdown into the inline links row; fed a `scope` = a root path + the checked paths, and an action list), rendered beneath the title by `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/PageHeader.tsx` — `PageHeader` (its below-title `actions` slot).
 
 ### 3.1 One measured row, overflow into `More ▾` (LOCKED)
 
@@ -326,7 +326,7 @@ does not fit rolls into the more, and the more is on the right."* Concretely:
   behave identically whether inline or under `More ▾`.
 
 Measuring the available width, splitting the actions into an inline set + an overflow set, and rendering the right-pinned `More ▾` popover only when the overflow set is non-empty are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` (a `ResizeObserver` on the row container drives a `useLayoutEffect` fit pass that computes `inline[]` / `overflow[]` from each item's measured width + the `·` separators + the reserved `More ▾` width; the popover renders only when `overflow.length > 0`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions` (a `ResizeObserver` on the row container drives a `useLayoutEffect` fit pass that computes `inline[]` / `overflow[]` from each item's measured width + the `·` separators + the reserved `More ▾` width; the popover renders only when `overflow.length > 0`).
 
 ---
 
@@ -378,7 +378,7 @@ bar ([media_viewer.mdx](./media_viewer.mdx)), not this page row. (View-one-file'
 The producing actions **open the batch popup** (§0.1, [dialogs.mdx §5–§6](./dialogs.mdx)) — they no longer
 enqueue-then-toast on click. The click resolves the scope and opens the popup; the popup's Confirm enqueues
 and toasts. Wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (now call `openTranscribeBatch` / `openDescribeBatch` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`, which fetch the `/plan` preview and open the popup whose Apply calls `api.transcribeEnqueue` / `api.describeEnqueue` and toasts `willProcess`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (now call `openTranscribeBatch` / `openDescribeBatch` from `~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts`, which fetch the `/plan` preview and open the popup whose Apply calls `api.transcribeEnqueue` / `api.describeEnqueue` and toasts `willProcess`).
 
 ### 4.1 "Show what could be transcribed" — a calc-engine action (LOCKED)
 
@@ -406,7 +406,7 @@ batch** ([to_do_batches.mdx §4](./to_do_batches.mdx#4-transcribe-batches--a-sib
   the transcribe slug(s) it produces (or a calm "nothing untranscribed here").
 
 The link triggers the on-demand engine rather than the enqueue path in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `showWhatCanBeTranscribed()` (calls `POST /api/todo/transcribe-scan?scope=<id>`, [transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `showWhatCanBeTranscribed()` (calls `POST /api/todo/transcribe-scan?scope=<id>`, [transcribe_calc_engine.mdx §1](./transcribe_calc_engine.mdx#1-when-it-runs-locked)), served by `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`.
 
 ---
 
@@ -442,13 +442,13 @@ export interface EnqueuePlan {
   output; the default is `false` (skip-already-done).
 
 The enqueue planners (walk-or-take the set, drop already-done + unsupported, push the remainder onto the queue, return the plan) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `planDescribe()` / `enqueueDescribe()`; both push through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `planDescribe()` / `enqueueDescribe()`; both push through `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`.
 
 The **plan/preview** endpoints (same Rules 1+2 walk, but return the candidate list instead of queuing — the batch popup's data source, [dialogs.mdx §5.2](./dialogs.mdx)) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()`; routes `POST /plan` on `transcribe.router.ts` / `describe.router.ts`; client methods `api.transcribePlan` / `api.describePlan`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()`; routes `POST /plan` on `transcribe.router.ts` / `describe.router.ts`; client methods `api.transcribePlan` / `api.describePlan`.
 
 The routes are mounted on the existing feature routers:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `POST /enqueue` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `POST /enqueue`; API client methods `api.transcribeEnqueue` / `api.describeEnqueue` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `POST /enqueue` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `POST /enqueue`; API client methods `api.transcribeEnqueue` / `api.describeEnqueue` in `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
 
 ---
 

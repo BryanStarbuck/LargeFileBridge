@@ -29,7 +29,7 @@ The row is the hover target — anywhere on the row counts, not just the file-na
 
 Reference — image classification is `fileTypeForName()` (the same discriminator the File-type facet and
 the media viewer use), in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName`.
+`~/repos/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName`.
 
 ## 2. Placement — the four-corner geometry test (LOCKED)
 
@@ -58,7 +58,7 @@ Two refinements the geometry carries:
   the current cursor position (and flips corners when crossing the middle of the screen).
 
 The corner test is a pure function (unit-tested), in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/preview/OptionImagePreview.tsx` — `bestPreviewPlacement()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/preview/OptionImagePreview.tsx` — `bestPreviewPlacement()`.
 
 ## 3. What it looks like
 
@@ -76,7 +76,7 @@ The preview loads the file through the **same short-lived signed media grant** t
 session-bound. No new endpoint, no wider exposure; a preview is exactly as private as opening the file.
 
 Reference — grant minting and the raw stream are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `mintGrant` / grant verification.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `mintGrant` / grant verification.
 
 ## 5. Surfaces (LOCKED)
 
@@ -90,9 +90,9 @@ in by publishing its hover target:
 * **File System — the Full paths tab**: hovering an image row in the flat table.
 
 Reference — the layer + the row-target publisher are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/preview/OptionImagePreview.tsx` — `OptionImagePreviewLayer` / `setOptionPreviewTarget`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/preview/OptionImagePreview.tsx` — `OptionImagePreviewLayer` / `setOptionPreviewTarget`.
 Mounted once in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`.
 
 ## 6. Acceptance criteria
 

@@ -28,7 +28,7 @@ That posture was argued for in the code itself. The argument is still sitting in
 ```
 
 The reasoning that a restart makes the backlog moot is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module header comment (lines 8–10)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module header comment (lines 8–10)
 
 **That reasoning is wrong, and this spec says so plainly.** It rests on two unstated assumptions, and the
 2026-07-15 incident (§2) broke both:
@@ -83,13 +83,13 @@ Six defects, each independent, each with its own locked fix:
 user's trust is D2 — a tool that loses work and *says so* is a tool you can still plan around.
 
 The in-memory FIFO backlog that the crash vaporized is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pending: QueueTask[]` (line ~93) / `enqueue()` (~109)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pending: QueueTask[]` (line ~93) / `enqueue()` (~109)
 
 The in-flight dedup set and per-bucket slot counts that vanished with it are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `inflight: Set<string>` (~94) / `running: Record<Bucket, number>` (~95)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `inflight: Set<string>` (~94) / `running: Record<Bucket, number>` (~95)
 
 The progress registry that dies with the same process (an in-memory Map, deleted on completion) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `jobs = new Map()` (10) / `track()` (43) / `end()` (29)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `jobs = new Map()` (10) / `track()` (43) / `end()` (29)
 
 ---
 
@@ -99,11 +99,11 @@ The backlog becomes **durable state on disk**, living where every other durable 
 the state root, `~/T/_large_files_bridge/`.
 
 The state root the journal is written under is resolved in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()`
 
 The precedent for durable machine-local subdirectories under that root (the TO DO batches, the per-repo
 state) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveTodoBatchesDir()` / `resolveRepoStateDir(repoKey)`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveTodoBatchesDir()` / `resolveRepoStateDir(repoKey)`
 
 ### 3.1 The file and the format
 
@@ -144,12 +144,12 @@ reconstruct the task from nothing**, because on restore there is no memory to co
 
 These fields are exactly the existing task shape plus an identity and an attempt counter. The task shape the
 `enq` record serializes is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `QueueTask` interface (~27)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `QueueTask` interface (~27)
 
 **Nothing derived is journaled.** The admission bucket, the thread cap, and the concurrency budget are all
 recomputed live at admission time from the task's `op` + `mediaKind` — journaling them would freeze a stale
 budget across a restart. Derived at admission in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `bucketOf()` / `capFor()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `bucketOf()` / `capFor()`
 
 ### 3.3 The write discipline — where the commit points are (LOCKED)
 
@@ -189,11 +189,11 @@ whose `id` has no `end`.
   surfaced refusal, never a silent truncation (§9 and the never-fail-silent doctrine of
   [backbone_resilience.mdx §1](./backbone_resilience.mdx#1-the-guarantee-locked)).
 * This mirrors the house rotation policy — nothing under the state root grows unbounded (the charter's
-  logging section; `RollingFileWriter` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`).
+  logging section; `RollingFileWriter` in `~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts`).
 
 The journal writer (single-append enqueue, synchronous terminal/attempt appends, fold, and atomic
 temp+rename compaction) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` — `appendEnqueued(tasks)` / `appendAttempt(id, n)` / `appendTerminal(id, result)` / `foldLiveSet()` / `compact()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` — `appendEnqueued(tasks)` / `appendAttempt(id, n)` / `appendTerminal(id, result)` / `foldLiveSet()` / `compact()`
 
 ### 3.5 What is NOT journaled
 
@@ -203,9 +203,9 @@ temp+rename compaction) is to be implemented in code:
   a batch the user is still watching. A restored task keeps its `batchId` so a **new** batch can be
   reconstituted for the restored set (§4.2), but the old `ProcessingBatch` object is not resurrected.
   The batch registry and its retention window are in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `batches: Map` (~142) / `BATCH_RETENTION_MS` (~143) / `createBatch()` / `recordBatchResult()` / `listBatches()` (~145–190)
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `batches: Map` (~142) / `BATCH_RETENTION_MS` (~143) / `createBatch()` / `recordBatchResult()` / `listBatches()` (~145–190)
 * **`recentFailures`.** A 30-minute display buffer, capped at 500. In code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recentFailures` / `listRecentFailures()` (~212–226)
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recentFailures` / `listRecentFailures()` (~212–226)
 
 ---
 
@@ -222,7 +222,7 @@ filters it, and re-admits what is genuinely unfinished.**
    already exists. **This is what makes replay safe**, and it is cheap — a stat-and-read of a small sidecar,
    not a re-run.
    The describe op's skip-already-done check (returns `skipped` when the description exists) is in code:
-   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` → `readDescription(abs)` (~175); `transcribeOne()` has the equivalent guard
+   `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` → `readDescription(abs)` (~175); `transcribeOne()` has the equivalent guard
 3. **Drop the vanished.** A candidate whose `path` no longer exists is dropped (the user deleted or moved it
    overnight) and counted as such.
 4. **Quarantine the poison.** A candidate whose `attempts` has reached the strike limit is **not re-admitted**
@@ -233,7 +233,7 @@ filters it, and re-admits what is genuinely unfinished.**
 6. **Compact** the journal to the restored live set, so the next crash's fold starts clean.
 
 The restore pass, run once at boot before the queue serves any request, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (the same boot hook that starts the watchdog, [backbone_resilience.mdx §3](./backbone_resilience.mdx#3-the-in-process-watchdog--the-always-on-backstop-locked))
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`, called from `~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (the same boot hook that starts the watchdog, [backbone_resilience.mdx §3](./backbone_resilience.mdx#3-the-in-process-watchdog--the-always-on-backstop-locked))
 
 **Restore never blocks the port.** The fold is O(journal lines) and the existence checks are O(candidates)
 stats — at 1,440 files, milliseconds. But it runs **async** and the backend binds :8787 first regardless: a
@@ -262,7 +262,7 @@ slow restore must never make the app look dead while it recovers from looking de
   were pending."** That is the difference between an app that knows what happened and one that shrugs.
 
 The restore banner is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `session` from `useProgress()`; renders the restore banner above Running now, per [processing.mdx §4](./processing.mdx))
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `session` from `useProgress()`; renders the restore banner above Running now, per [processing.mdx §4](./processing.mdx))
 
 ### 4.3 Crash-loop protection — quarantine the poison task (LOCKED)
 
@@ -279,7 +279,7 @@ prevents every other task from ever running**. That would be strictly worse than
 * **A quarantined task is surfaced, not swallowed.** It appears as a **Failed row** on the Processing table
   with the reason **"Quarantined — this file crashed Large File Bridge twice and was not retried."** The
   user can retry it explicitly (which resets its counter) or leave it. It rides the existing failure feed:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordFailure()` → `listRecentFailures()` (~212–226), surfaced per [processing.mdx §4.3.1](./processing.mdx#4311-the-four-item-states-locked)
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordFailure()` → `listRecentFailures()` (~212–226), surfaced per [processing.mdx §4.3.1](./processing.mdx#4311-the-four-item-states-locked)
 * **Two strikes, not five.** A file that reproducibly aborts the runtime is not going to succeed on attempt
   three, and each attempt costs the user another crash. **Bias hard toward quarantine.**
 * **Honesty about the incident.** The 2026-07-15 crash was an **aggregate** memory failure, not a poison
@@ -340,10 +340,10 @@ GET /api/progress → {
 ```
 
 The `session` block is folded into the one polled payload in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (alongside the existing `queued` / `queuedByOp` / `batches` / `workers` folds)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (alongside the existing `queued` / `queuedByOp` / `batches` / `workers` folds)
 
 The pending backlog count that must never again stand alone as a bare zero is produced in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()` (~127) / `queueDepthByOp()` (~132)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()` (~127) / `queueDepthByOp()` (~132)
 
 ---
 
@@ -366,7 +366,7 @@ it is perfectly silent."* The doctrine there is already the right one; it simply
 API server itself.
 
 The dev launcher that starts `pnpm dev` detached with no restart-on-exit is in:
-`~/BGit/Bryan_git/LargeFileBridge/scripts/dev/launch.mjs` — the supervisor that spawns `pnpm dev` and
+`~/repos/LargeFileBridge/scripts/dev/launch.mjs` — the supervisor that spawns `pnpm dev` and
 pipes it into the rotating sink (`app.on("exit")` just records the exit and stops)
 
 ### 6.2 The fix, in both modes
@@ -375,13 +375,13 @@ pipes it into the rotating sink (`app.on("exit")` just records the exit and stop
   with `KeepAlive` (crash-restart) and `ThrottleInterval`, so the OS restarts it. This is the mechanism the
   repo **already uses** for the scan/pin workers — the plist writer and the bootout/bootstrap install are in
   code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` and
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/installer.ts` — the plist render + `bootout` / `bootstrap` reload
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` and
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/installer.ts` — the plist render + `bootout` / `bootstrap` reload
 * **Dev mode → a supervisor loop in the launcher.** `just run` wraps `pnpm dev` in a **restart-on-exit**
   loop: when the child exits for **any** reason other than a `just stop`-initiated signal, log the exit code
   and relaunch. The loop belongs in the launcher process, which already owns the child and the rotating-log
   sink, so the pid/port discipline `stop` depends on is preserved:
-  `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/launch.mjs` — the `app.on("exit")` handler.
+  `~/repos/LargeFileBridge/scripts/dev/launch.mjs` — the `app.on("exit")` handler.
 * **Backoff (LOCKED).** Restarts back off — **1s, 2s, 4s, 8s, 16s, capped at 60s** — resetting the delay
   after the child has stayed up for **≥ 60s**. A process that dies instantly on boot must **not** spin: a
   crash loop that pegs a core and floods `launcher.log` is a second incident on top of the first. After
@@ -394,7 +394,7 @@ pipes it into the rotating sink (`app.on("exit")` just records the exit and stop
   ([backbone_resilience.mdx §3](./backbone_resilience.mdx#3-the-in-process-watchdog--the-always-on-backstop-locked))
   runs **inside** the backend and backstops the *OS trigger*. It cannot restart the process that hosts it.
   Supervision is the missing outer ring:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` / `tick()` (in-process; explicitly **not** a supervisor)
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` / `tick()` (in-process; explicitly **not** a supervisor)
 
 ---
 
@@ -414,14 +414,14 @@ The rules:
 * **`just status` must not lead with the web port.** Today it prints the web app's port first and the
   backend second, which invites reading the first line and stopping. The backend line is the **authority**;
   the recipe reports an overall verdict driven by :8787.
-  `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/dev.mjs` — `cmdStatus()` (the backend health probe is the load-bearing check; the port lookup behind it is `proc.mjs` `isListening` / `pidsOnPort`, which answer on all three platforms)
+  `~/repos/LargeFileBridge/scripts/dev/dev.mjs` — `cmdStatus()` (the backend health probe is the load-bearing check; the port lookup behind it is `proc.mjs` `isListening` / `pidsOnPort`, which answer on all three platforms)
 * **Listening is not healthy.** The probe is an **HTTP request to the health endpoint**, not a port check. A
   process wedged behind a blocked event loop still holds its port open — exactly the failure
   [processing.mdx §4.4](./processing.mdx#44-performance-at-scale--thousands-of-items-without-a-slow-page-locked)
   and [performance.mdx P-27](./performance.mdx) describe — so an unanswered probe **within a timeout** is a
   failure.
   The probe target is in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /` (returns `{ status: "ok", ipfs }`)
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /` (returns `{ status: "ok", ipfs }`)
 * **The UI tells the truth when the API is unreachable.** When the poll fails repeatedly, the frontend must
   render **"Large File Bridge's backend is not responding."** — not an idle Processing page, not a stale
   render, not silence. **An unreachable backend is a known state, and it is not "nothing is processing."**
@@ -429,7 +429,7 @@ The rules:
   ([authentication.mdx §5–6](./authentication.mdx)) — a blip shows *Reconnecting*, a sustained outage shows
   the truth.
   Rendered in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (surfaces a sustained poll failure as an explicit unreachable state, not as an empty payload)
+  `~/repos/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (surfaces a sustained poll failure as an explicit unreachable state, not as an empty payload)
 
 ---
 
@@ -443,9 +443,9 @@ The rules:
   they must also write a **FATAL** record into the transactions log so the death has a durable, structured
   trace next to the BOOT/SHUTDOWN markers.
   The handlers are in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `process.on("uncaughtException")` / `process.on("unhandledRejection")` (lines 217–218)
+  `~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `process.on("uncaughtException")` / `process.on("unhandledRejection")` (lines 217–218)
   The synchronous drain that already hooks the same signals so `error.err` survives a crash is in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` (226)
+  `~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` (226)
 * **`--heapsnapshot-near-heap-limit=1`.** Node writes a heap snapshot as the limit is approached, **before**
   the abort. This is the only artifact that would have explained the 22:13 death from the inside, and it
   belongs to the memory work ([memory.mdx](./memory.mdx)) — cited here because it is the forensic answer to

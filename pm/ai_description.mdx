@@ -89,7 +89,7 @@ calc engine, the placement radios, the shared launcher, the shared types — the
 
 The symmetry is asserted in code by the parallel module trees `modules/transcribe/` ↔ `modules/describe/`,
 `lib/transcribe.ts` ↔ `lib/describe.ts`, `TranscribeStatusIcon.tsx` ↔ `DescribeStatusIcon.tsx`, and the
-paired fields on `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` (`TaskMetrics`,
+paired fields on `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` (`TaskMetrics`,
 `FileRow`, `DescribeResult`/`DescribeBatchResult` mirroring `TranscribeResult`/`TranscribeBatchResult`).
 
 ---
@@ -123,7 +123,7 @@ At the bottom of the media viewer (band 6) sits an analysis panel with up to **t
   exist. The user's explicit tab click then wins for the rest of the session.
 
 The two-tab panel, the ✓ presence markers, and the transcription-preferring default-tab logic are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` component.
 
 ---
 
@@ -143,7 +143,7 @@ the owning root's own tracking area**, in a **path-mirrored hierarchy**, under t
 >
 > | Storage kind | Example root | The description lands at |
 > | --- | --- | --- |
-> | **`repo`** — a working git repo (Git Storage) | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description` |
+> | **`repo`** — a working git repo (Git Storage) | `~/repos/charlie-kirk/` | `<root>/.lfbridge/<rel-dir>/<name.ext>.ai_description` |
 > | **`personal` / `company` / `community`** — an SDL file repo | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<rel-dir>/<name.ext>.ai_description` (**no** `.lfbridge/`) |
 
 ```
@@ -246,14 +246,14 @@ same retirement transcription made for `*.transcription`); the small text artifa
 with the repo, while the multi-GB media stays git-ignored and rides IPFS.
 
 Resolving the description path via the shared ordered placement rule, reading back a done description, and writing the `.ai_description` artifact under the resolved tracking base are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (artifact path via `lfbridgeArtifactPath(root, rel, ext)` = `join(trackingBaseDir(root), rel) + AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`, where `AI_DESCRIPTION_EXT` is **appended**, not substituted).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` / `readDescription()` / `describeOne()` (artifact path via `lfbridgeArtifactPath(root, rel, ext)` = `join(trackingBaseDir(root), rel) + AI_DESCRIPTION_EXT` in `storage/artifact-placement.service.ts`, where `AI_DESCRIPTION_EXT` is **appended**, not substituted).
 Deciding the base that path hangs off — `<root>/.lfbridge` for kind `repo`, `<root>` itself for an SDL — is the single choke point every LFB writer resolves through (none joins `LFBRIDGE_DIR` directly), implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
 Migrating a pre-existing SDL `.lfbridge/` up to the root (with a read-fallback to the old path until migrated, so no description is reported missing or re-generated — and re-billed to a provider — mid-migration) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`.
 
 The storage-table indicator that detects the `.ai_description` artifact is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
 
 ### 2.3 When the provider REFUSES — `.ai_description_rejected` (NEW, LOCKED)
 
@@ -320,19 +320,19 @@ durable on disk and invisible in the product, and the user had no way to tell *"
 and an **Ask the provider again** button (an explicit overwrite, the one sanctioned way to reconsider).
 
 Reading the record back for the UI is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readRejection()`, surfaced through `readDescription()` as the `DescribeView.rejection` field.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readRejection()`, surfaced through `readDescription()` as the `DescribeView.rejection` field.
 Rendering the unavailable-with-a-reason state is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — the analysis band's `descriptionColumn`, with `describeRejectionLabel()` turning the provider's reason code into a readable phrase.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — the analysis band's `descriptionColumn`, with `describeRejectionLabel()` turning the provider's reason code into a readable phrase.
 
 Capturing every detail of a refusal and deciding which empty response IS one are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ProviderRejection` / `attachRejection()` / `rejectionOf()` / `isRefusalFinishReason()` (the `gemini` adapter's `describe()` builds the evidence; `classifyProviderFault()` reads the object, never the prose).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ProviderRejection` / `attachRejection()` / `rejectionOf()` / `isRefusalFinishReason()` (the `gemini` adapter's `describe()` builds the evidence; `classifyProviderFault()` reads the object, never the prose).
 Writing the record, superseding it on a later success, and never re-offering a settled refusal are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `writeRejection()` / `resolveDescriptionPath()` (returns `rejectedPath`) / `isRejected()`, with the drop-already-settled guard in `previewDescribe()` / `enqueueDescribe()` / `describeOne()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `writeRejection()` / `resolveDescriptionPath()` (returns `rejectedPath`) / `isRejected()`, with the drop-already-settled guard in `previewDescribe()` / `enqueueDescribe()` / `describeOne()`.
 The extension itself is the single source of truth in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `AI_DESCRIPTION_REJECTED_EXT`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `AI_DESCRIPTION_REJECTED_EXT`.
 Counting a refusal as `done` rather than `failed` is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTaskInner()` (the `describe` branch).
-Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTaskInner()` (the `describe` branch).
+Regression-covered in `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
 
 ### 2.4 Cross-computer delivery — a description is not DONE until the other computers can see it (LOCKED)
 
@@ -347,9 +347,9 @@ pullable**; the healing / scoped-delivery / ff-only-convergence chain that guara
 [backbone_resilience.mdx §6.4](./backbone_resilience.mdx).
 
 Delivery is scheduled by the artifact write itself and convergence by page loads in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `maybeConvergeWorkingRepo()` (fired via `sync-trigger.service.ts` `noteArtifactWritten()` and `repos.router.ts` page loads).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `maybeConvergeWorkingRepo()` (fired via `sync-trigger.service.ts` `noteArtifactWritten()` and `repos.router.ts` page loads).
 Each debug-export analysis row carries the per-op probe (expected path, exists, layout, committed, pushed) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `makeArtifactProber()` / `artifactGitContext()` (the `artifacts` field; unit rollup in `artifact_health`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `makeArtifactProber()` / `artifactGitContext()` (the `artifacts` field; unit rollup in `artifact_health`).
 
 ---
 
@@ -391,7 +391,7 @@ video/images with **no extra setup**. The full credential-resolution + the missi
 dedicated **[ai_credentials.mdx](./ai_credentials.mdx)**.
 
 Reading the shared Gemini key file (prefer `apiKey`, else `4k_apiKey`; absent/placeholder/invalid → no key) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/google-apikey-file.ts` — `loadGoogleApiKey()`; wired into the `gemini` adapter's `apiKey()` in `adapters.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/google-apikey-file.ts` — `loadGoogleApiKey()`; wired into the `gemini` adapter's `apiKey()` in `adapters.ts`.
 
 ### 3.3 The inline cap & compress-to-fit (LOCKED)
 
@@ -436,7 +436,7 @@ nothing.
 
 The compress-to-fit pipeline (the 17.5MB target, the resolution ladder, the CRF passes, and the two-pass
 guarantee — all to a temp file, never the original) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (with `fitVideoUnderLimit()` / `fitImageUnderLimit()` / `resolutionLadder()`); invoked from `describeOne()` in `describe.service.ts` right before the adapter call, with the temp copy cleaned up in a `finally`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (with `fitVideoUnderLimit()` / `fitImageUnderLimit()` / `resolutionLadder()`); invoked from `describeOne()` in `describe.service.ts` right before the adapter call, with the temp copy cleaned up in a `finally`.
 
 ### 3.3.2 The two-pass fit is a GUARANTEE — a fixed floor must never outvote the byte budget (LOCKED)
 
@@ -487,7 +487,7 @@ needed 3.8× the whole cap), and the 11-min clip that already worked still fits 
 bitrate, because degraded audio freed budget for the picture.
 
 The budget allocation, the audio/fps ladders, the measure-and-correct retry, and the doomed-ladder skip are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitVideoUnderLimit()` (the `ladderIsPlausible` skip + the correcting two-pass loop), `audioKbpsFor()`, `fpsFor()`, and `encodeTwoPass()` (which takes the audio bitrate and fps).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitVideoUnderLimit()` (the `ladderIsPlausible` skip + the correcting two-pass loop), `audioKbpsFor()`, `fpsFor()`, and `encodeTwoPass()` (which takes the audio bitrate and fps).
 
 ### 3.3.1 Compress-to-fit runs ASYNC — it must NEVER block the event loop (LOCKED)
 
@@ -521,13 +521,13 @@ backend blocks the Node event loop**) and is the describe-side sibling of the co
 "heavy transcode is async" rule ([job_queue.mdx §3](./job_queue.mdx)).
 
 The async compress-to-fit + async base64 read (no synchronous child process on the describe hot path) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (the `spawn` runner) with `async` `fitMediaUnderLimit` / `fitVideoUnderLimit` / `fitImageUnderLimit` / `probeVideo` / `encodeCrf` / `encodeTwoPass`, `tmpPath()` via `randomUUID()`; and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in both `gemini.describe()` and `chatVisionAdapter.describe()`. The sibling async transcode runner it mirrors is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `runAsync()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (the `spawn` runner) with `async` `fitMediaUnderLimit` / `fitVideoUnderLimit` / `fitImageUnderLimit` / `probeVideo` / `encodeCrf` / `encodeTwoPass`, `tmpPath()` via `randomUUID()`; and `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in both `gemini.describe()` and `chatVisionAdapter.describe()`. The sibling async transcode runner it mirrors is `~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `runAsync()`.
 
 The adapter set, per-kind support, key resolution (config → env), `selectAdapter` precedence, the inline base64 read with the 18MB cap, and `providerStatus` are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ADAPTERS` (gemini / openai / grok), `selectAdapter(kind, requested)`, `readBase64Capped()`, `providerStatus()`, `mimeForMedia()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `ADAPTERS` (gemini / openai / grok), `selectAdapter(kind, requested)`, `readBase64Capped()`, `providerStatus()`, `mimeForMedia()`.
 
 The provider config schema (`provider` default `"auto"`; each of gemini/grok/openai `{ api_key, model }`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ai` block of `AppConfigSchema`.
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ai` block of `AppConfigSchema`.
 
 ### 3.4 Model lifecycle & deprecation self-heal (LOCKED)
 
@@ -553,13 +553,13 @@ a fixed model. Two further mechanisms keep even a pinned config working across r
 
 The single source of truth for the current default + the retired-model set (so the adapter and the config
 loader agree) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/models.ts` — `DEFAULT_GEMINI_MODEL`, `RETIRED_GEMINI_MODELS`, `looksLikeModelRetired()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/models.ts` — `DEFAULT_GEMINI_MODEL`, `RETIRED_GEMINI_MODELS`, `looksLikeModelRetired()`.
 
 The auto-heal of a pinned retired model on config load is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` (rewrites `ai.gemini.model` when it is in `RETIRED_GEMINI_MODELS`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` (rewrites `ai.gemini.model` when it is in `RETIRED_GEMINI_MODELS`).
 
 Rewriting a provider 404 into the actionable, model-naming error is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `explainModelError()` (applied around every provider `postJson()` call in `gemini.describe()` and `chatVisionAdapter.describe()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `explainModelError()` (applied around every provider `postJson()` call in `gemini.describe()` and `chatVisionAdapter.describe()`).
 
 ### 3.5 A transient failure is NOT a verdict — bounded retry with backoff (NEW, LOCKED)
 
@@ -646,10 +646,10 @@ failure); two forced empty-`200`s → described on attempt 3 (old code: permanen
 on attempt 1 in 0.1s with no wasted retries.
 
 The transient/permanent split, the jittered backoff, the `Retry-After` honor, the size-scaled deadline, and the honest timeout message are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (the retry loop) with `isTransient()`, `retryAfterMs()`, `timeoutForBytes()`, and `postJsonOnce()` (one attempt + the honest timeout rename); applied around `adapter.describe()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`. Shared by **all** adapters, since every provider call funnels through that one seam.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (the retry loop) with `isTransient()`, `retryAfterMs()`, `timeoutForBytes()`, and `postJsonOnce()` (one attempt + the honest timeout rename); applied around `adapter.describe()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`. Shared by **all** adapters, since every provider call funnels through that one seam.
 
 The refusal-vs-blip split of the empty `200` is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error and attaches the refusal evidence, and `classifyProviderFault()` sorts any structured refusal to **`permanent`** (rule 2 above — attempt 1, no repeat of the identical request). Regression-covered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `gemini` adapter's `describe()` names the `finishReason` in the thrown error and attaches the refusal evidence, and `classifyProviderFault()` sorts any structured refusal to **`permanent`** (rule 2 above — attempt 1, no repeat of the identical request). Regression-covered in `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/provider-faults.spec.ts`.
 
 #### 3.5.1 The ONE deliberate `RECITATION` re-ask (NEW, LOCKED)
 
@@ -672,7 +672,7 @@ total** instead of the 4-plus-backoff `error.err` recorded. If the re-ask is ref
 escapes on attempt 1 exactly as rule 2 requires and earns its `.ai_description_rejected`.
 
 Deciding which refusals are re-askable, and the re-ask itself, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isRecitationFinishReason()` and `RECITATION_REASK_SUFFIX`, applied in the `gemini` adapter's `describe()`. Regression-covered (with `fetch` stubbed — **no live provider call**) in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/recitation-reask.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isRecitationFinishReason()` and `RECITATION_REASK_SUFFIX`, applied in the `gemini` adapter's `describe()`. Regression-covered (with `fetch` stubbed — **no live provider call**) in `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/recitation-reask.spec.ts`.
 
 ---
 
@@ -726,7 +726,7 @@ refusal (§3.5), zero timeouts, wall 23s, peak event-loop lag 485ms** — agains
 The one failure is a genuine model refusal, not a stall.
 
 The fresh-dispatcher-per-call rule is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` —
 `freshProviderDispatcher()`, applied in `postJsonOnce()` (passed as `dispatcher`, torn down in `finally`).
 Shared by **all** adapters, since every provider call funnels through that one seam.
 
@@ -754,7 +754,7 @@ time of every batch and ~676k thinking tokens on a 483-file run.
    Self-healing beats a pin someone has to notice and edit — the same reasoning that chose the alias in §3.4.
 
 The zero thinking budget and its self-healing fallback are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` —
 `NO_THINKING` + `looksLikeThinkingRejected()`, applied in the `gemini` adapter's `describe()`.
 
 ---
@@ -814,7 +814,7 @@ writes edited override text; **Reset** deletes the override and reverts to the s
 touches the network — it only resolves *which text* is passed to an adapter.
 
 Resolving the in-use prompt (per-computer override if present, else shipped default) and the customize / save / reset flow are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/prompts.ts` — `getPrompt()` / `promptView()` / `customizePrompt()` / `savePrompt()` / `resetPrompt()`; shipped defaults `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/prompts/image.md` and `video.md`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/prompts.ts` — `getPrompt()` / `promptView()` / `customizePrompt()` / `savePrompt()` / `resetPrompt()`; shipped defaults `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/prompts/image.md` and `video.md`.
 
 ---
 
@@ -847,13 +847,13 @@ In `DescribeBatchResult` these fold into **four counts that sum**: `described` +
 (incl. `needs_setup`) + `failed` === `results.length`. **`rejected` is its own count, never folded into
 `skipped`** — "skipped" means *we* didn't ask, and a refused file was asked and answered
 ([processing_batches.mdx §4.2](./processing_batches.mdx)). Locked by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe-counts.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe-counts.spec.ts`.
 
 The describe REST surface (providers / read / generate / prompt read-customize-save-reset) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `describeRouter`, mounted at `/api/describe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.router.ts` — `describeRouter`, mounted at `/api/describe` in `~/repos/LargeFileBridge/code/packages/backend/src/main.ts`.
 
 The frontend launcher and API client methods are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.describeProviders` / `description` / `describeFile` / `describeBatch` / `describeTree` / `describeEnqueue` / `describePrompt` / `customizeDescribePrompt` / `saveDescribePrompt` / `resetDescribePrompt`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`; `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.describeProviders` / `description` / `describeFile` / `describeBatch` / `describeTree` / `describeEnqueue` / `describePrompt` / `customizeDescribePrompt` / `saveDescribePrompt` / `resetDescribePrompt`.
 
 ### 5.1 The page action — "Create AI descriptions" (selected-or-all, background-queued)
 
@@ -878,7 +878,7 @@ click, never automatic — and a video with no Gemini key still surfaces the cre
 ([ai_credentials.mdx](./ai_credentials.mdx)) via the failing dock cards, named in the toast up front.
 
 The batch/tree services, the "Create AI descriptions" page action, its plan/skip/queue, and the toast are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeMany()` / `describeTree()` / `planDescribe()` / `enqueueDescribe()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createDescriptions()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeMany()` / `describeTree()` / `planDescribe()` / `enqueueDescribe()` · `~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createDescriptions()`.
 
 ---
 
@@ -896,7 +896,7 @@ feature — which providers are usable, and the prompt text:
   button (writes the override), and a **Reset to default** button shown only when an override is in use.
 
 The provider-key status list and the per-kind prompt editor (Save / Reset) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` — `AiDescriptionSection` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` — `AiDescriptionSection` component.
 
 ---
 
@@ -919,7 +919,7 @@ or OpenAI. That is unavoidable for a hosted vision model, so it is fenced by str
 * **No key → no upload.** With no provider configured, nothing can be sent (the action is disabled, §8).
 
 The adapter module is annotated as the one deliberate outbound path, and the upload happens only inside an explicit generate, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `describe()` methods (called only from `describeOne()` in `describe.service.ts` on an explicit request).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — the `describe()` methods (called only from `describeOne()` in `describe.service.ts` on an explicit request).
 
 ---
 
@@ -945,9 +945,9 @@ The adapter module is annotated as the one deliberate outbound path, and the upl
   the bad model and the recommended one (§3.4). **Every failure is written to `error.err`** — the app's
   fault trail at `<stateDir>/error.err` (WARN/ERROR/FATAL), tagged `[describe]` with the file,
   `provider=`, and `kind=` for diagnosis. Logged by `describeOne()`'s `catch` via `log.error` in
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`;
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`;
   the two rolling logs (`log.log` all-levels, `error.err` faults) are written by
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts`.
 * **Already described** — without `overwrite`, a second generate returns **`skipped` ("already
   described")**; **Regenerate** passes `overwrite` to replace it.
 
@@ -978,7 +978,7 @@ carries a **Describe…** button. This mirrors the Transcribe button/`Generate t
   for a provider **key** rather than a CLI binary.
 
 The instant pending state, the Describe action-bar button, and the credentials-missing branch are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` / `MediaAnalysis` (calls `api.describeFile` / `api.description`, opens `CredentialsMissingDialog` on `no_provider`), driven by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` / `MediaAnalysis` (calls `api.describeFile` / `api.description`, opens `CredentialsMissingDialog` on `no_provider`), driven by `~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile()`.
 
 ### 9.2 One file — the ⋮ kebab / right-click (LOCKED)
 
@@ -1005,7 +1005,7 @@ come back as a `DescribeBatchResult` with honest `described` / `skipped` / `no_p
   over the whole storage.
 
 These mirror **Transcribe all files…** at each scale ([Transcribe.mdx §2.4](./Transcribe.mdx)). The kebab/menu items are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
 
 ### 9.5 The page action (cross-reference)
 
@@ -1028,11 +1028,11 @@ Two failure modes are LOCKED closed:
   **Create AI descriptions** appears **beside it**, wired to `openDescribeBatch(...)` the same way
   `openTranscribeBatch(...)` is. The reported bug — a repo row's ⋮ opened Transcribe's popup but "Create AI
   descriptions" was **missing entirely** — was exactly this asymmetry. Enforced in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab`
+  `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab`
   (the `create-transcriptions` **and** `create-descriptions` actions), and
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` —
+  `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` —
   `buildActions()` (both actions for a file **and** a directory target). The launchers live in
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` —
+  `~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` —
   `openDescribeBatch()` / `openTranscribeBatch()`.
 
 * **(b) The preview must be NON-FATAL per candidate (LOCKED).** The popup opens off the result of
@@ -1042,11 +1042,11 @@ Two failure modes are LOCKED closed:
   **single** un-resolvable file under a directory used to sink the entire scan and the popup never appeared.
   The fix: per-candidate resolution is **wrapped so one bad file is skipped, never fatal** — the file is
   still offered rather than dropping the whole scan. Implemented in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
   `previewDescribe()` (the try/caught `resolveDescriptionPath` / `readDescription` block) and
   `enqueueDescribe()` (the same guard so **Confirm** likewise can't 400 on one bad file). The identical
   hardening is mirrored on the transcription side in
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` —
   `previewTranscribe()` / the transcribe enqueue.
 
 An **empty** scope is **not** a failure: `previewDescribe` returns zero files and the popup still opens in
@@ -1088,7 +1088,7 @@ withDescribeReady(intent, run):
   distinction `withModelReady` captures.
 
 `withDescribeReady()` (readiness probe, pending-intent capture, credentials-dialog interpose, replay-after-fix) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `withDescribeReady(intent, run)` (mirror of `lib/transcribe.ts` `withModelReady`); the dialog is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/describe/CredentialsMissingDialog.tsx`, opened via the shared global request bus `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts` — `requestAiCredentials()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `withDescribeReady(intent, run)` (mirror of `lib/transcribe.ts` `withModelReady`); the dialog is `~/repos/LargeFileBridge/code/packages/frontend/src/components/describe/CredentialsMissingDialog.tsx`, opened via the shared global request bus `~/repos/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts` — `requestAiCredentials()`.
 
 ### 10.2 The two "not-ready" cases, and how they differ from transcription (LOCKED)
 
@@ -1128,7 +1128,7 @@ mirror.
 > **`onSettled`** — which fires on **every** terminal outcome (success, `no_provider`, `needs_setup`, thrown
 > error) — and **never** from `onDone`, which fires on success only and would strand the control at a
 > disabled "Describing…" after a refusal. Mirrors the same rule for `runOcrFile`. Implemented in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile`.
+> `~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts` — `runDescribeFile`.
 
 ### 11.1 The tab (LOCKED)
 
@@ -1172,10 +1172,10 @@ with a **blue** "done" fill because it is a status/action indicator, not a store
   * **Not applicable →** inert.
 
 The Describe status icon (three states, click-to-describe / click-to-view) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/DescribeStatusIcon.tsx` — `DescribeStatusIcon` (mirror of `TranscribeStatusIcon.tsx`; state from the new `FileRow.describe` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`, joining each image/video row against the `.ai_description` presence check of `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/DescribeStatusIcon.tsx` — `DescribeStatusIcon` (mirror of `TranscribeStatusIcon.tsx`; state from the new `FileRow.describe` field composed in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`, joining each image/video row against the `.ai_description` presence check of `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`).
 
 The new per-file field is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.describe` (a `TaskStatus`, alongside the existing `FileRow.transcribe` / `FileRow.compress`).
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.describe` (a `TaskStatus`, alongside the existing `FileRow.transcribe` / `FileRow.compress`).
 
 ### 11.3 The Describe icon is now a PERSISTENT LEADING column on every file table (LOCKED — see [tables.mdx §4c](./tables.mdx))
 
@@ -1210,7 +1210,7 @@ that the Describe icon now also rides on **every other** file table alongside it
   ([tables.mdx §4c.3](./tables.mdx)).
 
 The shared icon-column block, its one visual grammar, the icon-only header, and the hover explanation are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, teal `--lfb-describe-done` for describe's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the describe row carries the header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the hover text is PUBLISHED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` and RENDERED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`, connected by the single global `HoverInfoBridge` mounted in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pinned`, `gitignore`, `transcribe`, `describe`, `ocr`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, teal `--lfb-describe-done` for describe's done fill); the reusable task-icon kit `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the describe row carries the header glyph and the plain-English hover string); the column typing `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the hover text is PUBLISHED by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` and RENDERED by `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`, connected by the single global `HoverInfoBridge` mounted in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`; and the per-tab column order `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pinned`, `gitignore`, `transcribe`, `describe`, `ocr`).
 
 ---
 
@@ -1247,10 +1247,10 @@ Both panels are health-tinted and, at zero-work, show the calm green-zero state
 state (§11.2), carried on `RepoDetail.taskMetrics`.
 
 The tile's user-facing label (and the rule that labels render verbatim, not `capitalize`d) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `METRIC_CATALOG.describable.label` (`"AI Describable"`), rendered as-is by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `METRIC_CATALOG.describable.label` (`"AI Describable"`), rendered as-is by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel`.
 
 The paired metric fields are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `TaskMetrics.describable` / `TaskMetrics.described` (added alongside `transcribable` / `transcribed`), rolled up in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `TaskMetrics.describable` / `TaskMetrics.described` (added alongside `transcribable` / `transcribed`), rolled up in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail`.
 
 > **Where the tile lives now.** On the View-One-Repo page the metric tiles **no longer wrap**, and the tile's
 > hover explanation is **no longer** a region docked beside the strip — it now fills the **panel at the bottom
@@ -1287,7 +1287,7 @@ lists are long:
 > the solid-blue "N files" confirm, the background enqueue, and the Processing watch are **identical**.
 
 The describe metric popup (~80% modal, default-checked list, "Describe N files" apply → enqueue) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `handle()`, which opens `m.warning.popup` in a `WarningPopup` whenever the metric HAS a popup (the panel's `onOpen` is only the FALLBACK for a metric with no popup — it is wired in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` to `openMetric(id)`, which just re-tunes the view to that task tab). The describe popup's own content — the default-checked list, the Videos/Images kind filters, and the Apply that enqueues — is built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning`, and rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `handle()`, which opens `m.warning.popup` in a `WarningPopup` whenever the metric HAS a popup (the panel's `onOpen` is only the FALLBACK for a metric with no popup — it is wired in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` to `openMetric(id)`, which just re-tunes the view to that task tab). The describe popup's own content — the default-checked list, the Videos/Images kind filters, and the Apply that enqueues — is built in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning`, and rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup`.
 
 ### 12.3 The blue "Describe ›" header recommendation (LOCKED)
 
@@ -1301,7 +1301,7 @@ does not appear — the header shows whatever the worst task's primary is. one_r
 the ranking and the button; this file only names the describe entry in it.
 
 The describe recommendation's contribution to the header primary is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — the `describable` entry in `topRecommendation()` (worst-first, alongside the `transcribable` entry), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`topRec`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — the `describable` entry in `topRecommendation()` (worst-first, alongside the `transcribable` entry), consumed by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`topRec`).
 
 ### 12.4 The popup Apply ENQUEUES — never runs descriptions inline (LOCKED)
 
@@ -1329,7 +1329,7 @@ rather than silently queuing nothing. The inline `/api/describe/batch` endpoint 
 deliberate** batch call, but **no bulk popup Apply may use it**.
 
 The metric-tile / header-primary describe popup's Apply enqueues (never inline) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()` `apply` (calls `api.describeEnqueue({ paths: checkedPaths })`, mirror of `buildTranscribeWarning()` which calls `api.transcribeEnqueue`); the unified batch popup's Apply in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` (also `api.describeEnqueue`). The server enqueue is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` → `jobqueue.service.ts` `enqueue()` (op `describe`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()` `apply` (calls `api.describeEnqueue({ paths: checkedPaths })`, mirror of `buildTranscribeWarning()` which calls `api.transcribeEnqueue`); the unified batch popup's Apply in `~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` (also `api.describeEnqueue`). The server enqueue is `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `enqueueDescribe()` → `jobqueue.service.ts` `enqueue()` (op `describe`).
 
 ### 12.4.1 The popup's **Videos / Images** kind filter (NEW, LOCKED)
 
@@ -1377,15 +1377,15 @@ generic capability lives in the popup, not in describe ([warnings.mdx §4.5.4](.
 
 The kind filter (the "Filter:" checkbox row, the visible-set narrowing, and the visible∩checked apply set) is
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup()`
 (the `kindsOn` state, the `visible` / `filtered` memos, and the `effectiveChecked` set handed to `apply()`),
 over the `kindFilters` / `WarningTarget.kind` model in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts` —
 `initialKindFilters()` / `visibleTargetIds()`.
 
 The two describe popups declare the Videos/Images filter and tag each candidate's kind in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` ·
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` ·
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDescribeWarning()`
 (both use `DESCRIBE_KIND_FILTERS` + `mediaKindForName()` from `@lfb/shared`).
 
 ### 12.5 An already-described file is NEVER re-offered and NEVER re-described (LOCKED)
@@ -1417,7 +1417,7 @@ later commit can never disagree:
   never as a side effect of confirming the batch popup.
 
 Both the preview and the enqueue apply the identical drop-already-described filter in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` —
 `previewDescribe()` and `enqueueDescribe()` (the
 `if (!overwrite && !dp.needsSetup && (readDescription(abs) || exists(dp.rejectedPath))) { alreadyDone++; continue; }`
 guard in each). **Note the `|| exists(dp.rejectedPath)` clause** — it is the whole point of the bullet above, and the
@@ -1480,7 +1480,7 @@ trickling a few files through a core budget.
 * Transcribe and compress keep their narrow core-budgeted caps — **only** describe fans wide.
 
 The per-bucket concurrency (describe = the generous fixed cap, transcribe/compress = core-budgeted) is set in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` —
 `DESCRIBE_CONCURRENCY` (env-overridable) returned by `capFor()` for the `describe` bucket, alongside the
 core-budgeted `transcribe` / `compress:image` / `compress:video` caps. Policy: [parallelization.mdx §3](./parallelization.mdx).
 
@@ -1511,7 +1511,7 @@ The rule this locks in general: **a queue cap may only be called "network-bound"
 is network-bound.** One conditional CPU branch inside an "I/O bucket" is enough to starve the box.
 
 The transcode gate (wide network fan-out, core-budgeted encodes) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (the semaphore) held across `fitVideoUnderLimit()` / `fitImageUnderLimit()` inside `fitMediaUnderLimit()`, sized from `coreBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (the semaphore) held across `fitVideoUnderLimit()` / `fitImageUnderLimit()` inside `fitMediaUnderLimit()`, sized from `coreBudget()` in `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
 
 ### 12.7 The 2,000-file run — async end-to-end, watchable, never a server freeze (LOCKED)
 
@@ -1575,7 +1575,7 @@ repo — that model is retired; tracking state always lives in Local Storage.) T
   segment ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)).
 
 Resolving a `.ai_description` path through the shared placement policy is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` / `lfbridgeArtifactPath(root, rel, ext)` / `artifactPathForPlacement(root, rel, ext, placement)` (appends `AI_DESCRIPTION_EXT` to `trackingBaseDir(root)`-based paths), the **same** resolver transcription's `resolveTranscriptPath()` calls.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` / `lfbridgeArtifactPath(root, rel, ext)` / `artifactPathForPlacement(root, rel, ext, placement)` (appends `AI_DESCRIPTION_EXT` to `trackingBaseDir(root)`-based paths), the **same** resolver transcription's `resolveTranscriptPath()` calls.
 
 ---
 

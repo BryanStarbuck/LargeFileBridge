@@ -88,7 +88,7 @@ header **`⋮` bulk menu** (which acts on the *selected set*, [one_repo.mdx §4.
 row kebab is the **last cell of each row**, the bulk menu is in the **control row above the table**.
 
 The trailing control column that carries every row's ⋮ kebab is rendered by the shared table in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `rowMenu` trailing cell).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `rowMenu` trailing cell).
 
 > **Orientation (LOCKED).** The kebab is always the **vertical** three-dot glyph **`⋮`** — three dots
 > stacked **up-and-down**, never the horizontal **`⋯`**. This holds for the **row** kebab and for the
@@ -125,7 +125,7 @@ The trailing control column that carries every row's ⋮ kebab is rendered by th
   without navigating the row.
 
 The vertical ⋮ kebab button (stops row-click propagation, opens a portaled popover) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `KebabButton` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `KebabButton` component.
 
 ### 3.1 Right-click opens the same menu (LOCKED)
 
@@ -142,7 +142,7 @@ the right-click is the power-user shortcut. They are two triggers for **one** me
 * Right-click never *navigates* and never *selects* — it only opens the menu (the kebab discipline, §3).
 
 The pointer-positioned menu (same catalog, clamped on-screen, closes on Esc / outside-click) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMenuAt` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMenuAt` component.
 
 ### 3.2 The menu is ISOLATED from the row underneath it (LOCKED)
 
@@ -170,10 +170,10 @@ navigation.
   `click` / `dblclick` at the popover root.
 
 Menu isolation (the popover root stops `click`/`dblclick` so a portaled item can never fire the row's `onClick`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `MenuPortal` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `MenuPortal` component.
 
 The row `onClick` that this isolates the menu from is applied in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the body `<tr>`, which also hosts the `rowMenu` kebab cell).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the body `<tr>`, which also hosts the `rowMenu` kebab cell).
 
 ### 3.3 A copy action copies — and says what really happened (LOCKED)
 
@@ -196,10 +196,10 @@ never touches a file.
   copy-pasted across a dozen surfaces.
 
 The one clipboard write (awaits the write, `execCommand` fallback, toasts the true outcome) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/clipboard.ts` — `writeClipboard()` (no toast; for surfaces with their own inline ✓) and `copyText()` (writes + toasts the real result).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/clipboard.ts` — `writeClipboard()` (no toast; for surfaces with their own inline ✓) and `copyText()` (writes + toasts the real result).
 
 The menu's copy actions (Copy path / Copy CID), which only copy and never navigate, are built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()`, the local `copy()` helper.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()`, the local `copy()` helper.
 
 ---
 
@@ -244,7 +244,7 @@ Opening it shows the **same catalog** as that entity's row kebab — because the
   you are already on the page), it is simply **omitted/disabled**, not a different list.
 
 The single-entity page's top-right **More ▾** button, rendering the same catalog as the row kebab, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` function.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` function.
 
 ### 4.1 What the "More" button LOOKS like (LOCKED)
 
@@ -275,7 +275,7 @@ LOCKED) and the **page trigger stays the word More + chevron**. They open the *s
 are *not* the same control, and their looks must keep saying so.
 
 The word-plus-chevron, blue-text, border-less trigger is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` function (renders `More` + a `ChevronDown`, `text-[var(--lfb-primary)] hover:underline`, no border/ring class).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityMore` function (renders `More` + a `ChevronDown`, `text-[var(--lfb-primary)] hover:underline`, no border/ring class).
 
 ---
 
@@ -301,7 +301,7 @@ don't resolve to a local entity. Each is used verbatim by that entity's **row ke
 | Danger | **Remove repo (unregister)** | mutate ⚠ | Unregisters from LFB only. **Never deletes the folder or any local file** (§6.2); confirm required. |
 
 The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unregisters only) is built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` component.
 
 ### 5.2 Directory (non-repo)
 
@@ -321,7 +321,7 @@ The repo action catalog (Open / Work / Config / Copy, and Remove-repo that unreg
 | Copy | **Copy path** | copy | Absolute directory path. |
 
 The directory action catalog (its Open / Work / Flag groups and the Never IPFS / Do not compress toggles) is rendered by the same path-driven menu in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityKebab` component (via `buildActions()` over the directory's `EntityView`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `EntityKebab` component (via `buildActions()` over the directory's `EntityView`).
 
 ### 5.3 File
 
@@ -365,10 +365,10 @@ The directory action catalog (its Open / Work / Flag groups and the Never IPFS /
 > a **label** change only.
 
 The file action catalog (Add/Remove IPFS, the three-state pin submenu, Compress, Stop pinning) is built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` function.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` function.
 
 The **Set pin ▸** submenu's rename (today built as the `Decision` group's `Set decision ▸` item) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the submenu's group + labels; its `setDecision` payload values are unchanged).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the submenu's group + labels; its `setDecision` payload values are unchanged).
 
 #### 5.3.1 The **Create** group — the locked trio, and which kinds get which (LOCKED)
 
@@ -406,7 +406,7 @@ one file as the sole checked candidate — never a bare `window.confirm`, never 
 (§6.1).
 
 The three Create items and their per-kind eligibility (including the PDF branch that admits OCR alone) are built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `mediaKindForName()` tests for transcribe/describe, and the `mkind === "image" || mkind === "video" || isPdfName(v.name)` test for `create-ocr-text`), with `isPdfName()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `mediaKindForName()` tests for transcribe/describe, and the `mkind === "image" || mkind === "video" || isPdfName(v.name)` test for `create-ocr-text`), with `isPdfName()` from `~/repos/LargeFileBridge/code/packages/shared/src/media.ts`.
 
 ### 5.4 Peer (a user's other computer)
 
@@ -417,7 +417,7 @@ The three Create items and their per-kind eligibility (including the PDF branch 
 | Danger | **Remove peer** | mutate ⚠ | Forget this computer from `peers.yaml`; confirm required. Does not touch remote content. |
 
 The peer action catalog (Copy Peer ID, Remove peer) is built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PeerKebab` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PeerKebab` component.
 
 ### 5.5 IPFS pin (a pinned CID) — LOCKED
 
@@ -437,7 +437,7 @@ rows are not a file/dir/repo/peer, so they use this **pin catalog**, so the row 
 | Danger | **Unpin from this computer** | mutate ⚠ | `ipfs pin rm` on this node — stops this machine serving the CID and lets GC reclaim it. **Never deletes any local file** (the bytes on disk, if any, are untouched, §6.2); confirm required. This is the pin-level twin of the file catalog's **Stop pinning** (§5.3). |
 
 The pin catalog for pinned-CID rows with no local entity (Import into tracking, Copy CID, Unpin) is built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component.
 
 Guardrail: unpinning is only ever "stop serving *our own* CID on *this* machine." It never turns the
 node into a public gateway (§6.5) and never deletes local bytes (§6.2).
@@ -492,8 +492,8 @@ wherever files are listed. The relationship is deliberate and **additive**:
   here), keeping the fast path and the policy consistent.
 
 The inline toggles and their menu twins share the one decision-write path in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggle`
-(the row/popup toggle) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggle`
+(the row/popup toggle) and `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()`
 (the menu's Add/Remove-IPFS + Git-ignore items) both call the same `setDecision` mutation
 ([decisions.mdx §19](./decisions.mdx#19-the-write-api--one-endpoint-two-accepted-bodies-locked)).
 
@@ -522,7 +522,7 @@ through the progress dock as its `compress` / `ignore` op ([webapp.mdx §11](./w
 > dialogs ([dialogs.mdx §3](./dialogs.mdx) catalogs every converted site).
 
 The explicit-click Compress OFFER with its `confirmModal` step (never compresses a file on its own, never a native `window.confirm`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler (uses `confirmModal()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/modals.ts`); the **Move…** destination uses `promptModal()` from the same module.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` `compress` handler (uses `confirmModal()` from `~/repos/LargeFileBridge/code/packages/frontend/src/lib/modals.ts`); the **Move…** destination uses `promptModal()` from the same module.
 
 > **Directory compress is no longer a native confirm (§5.2).** The old bare browser confirm for
 > **Compress videos/images inside…** is **superseded** by the pop-over configuration dialog in
@@ -578,10 +578,10 @@ apply to **either a file or a directory**. They are the user's standing "leave t
   mutating action — write immediately and can be flipped back at any time.
 
 The two sticky per-entity toggles — Never IPFS and Do not compress — are built and written in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `flags` mutation via `api.setEntityFlags`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `flags` mutation via `api.setEntityFlags`).
 
 Whether a file earns the pin **`P`** badge (and Never IPFS suppressing it) is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsPinned()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsPinned()`.
 
 ---
 

@@ -365,7 +365,7 @@ function AddRepoDialog({ onClose }: { onClose: () => void }) {
           value={path}
           onChange={(e) => setPath(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && path && add.mutate()}
-          placeholder="~/BGit/Bryan_git/LargeFileBridge"
+          placeholder="~/repos/LargeFileBridge"
           className="lfb-input w-full px-2 py-1.5 text-sm focus:border-[var(--lfb-primary)]"
         />
         <div className="mt-4 flex justify-end gap-2">

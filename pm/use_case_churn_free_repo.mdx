@@ -78,7 +78,7 @@ working-tree action itself, not tracking state.)
 
 Resolving the always-in-Local-Storage tracking root for a repo (and the optional additive company sync-repo
 mirror) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (always returns `~/T/_large_files_bridge/repos/<repoKey>/`, never the working repo) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (always returns `~/T/_large_files_bridge/repos/<repoKey>/`, never the working repo) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`).
 
 ---
 
@@ -146,7 +146,7 @@ churn is free and private to the machine.
 
 Seeding a repo's Local-Storage `repos/<repoKey>/` directory and its `repo_storage.yaml` on enlist (and never
 touching the working tree) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (seeds under the Local-Storage root from `tracking-root.service.ts` — `resolveTrackingRoot()`; it no longer git-ignores anything, since nothing churny is written into the working repo).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (seeds under the Local-Storage root from `tracking-root.service.ts` — `resolveTrackingRoot()`; it no longer git-ignores anything, since nothing churny is written into the working repo).
 
 **What we double-check (Week 1):**
 * `~/BGit/act3/render-farm/` has **no `.lfbridge/` directory** and `git status` is **clean** — enlist wrote
@@ -183,7 +183,7 @@ repo_storage:
 
 Re-stamping the Local-Storage `repo_storage.yaml` on each scan (never touching the working repo) is handled
 in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (writes under `resolveTrackingRoot()`, which always returns the Local-Storage root).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (writes under `resolveTrackingRoot()`, which always returns the Local-Storage root).
 
 **What we double-check (Week 2):**
 * The Local-Storage `repo_storage.yaml` re-stamped `counts` and `last_scan` **in place** — same file, new
@@ -236,7 +236,7 @@ edit, because git-ignoring a file *is* an edit to that file, requested by the us
 
 Appending the decision/pin events to a per-file sidecar (and re-stamping the Local-Storage `repo_storage`
 counts) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `appendFileEvent(repoRoot, relPath, event)` (path resolved via `tracking-root.service.ts` — `resolveTrackingRoot()`, always the Local-Storage root).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `appendFileEvent(repoRoot, relPath, event)` (path resolved via `tracking-root.service.ts` — `resolveTrackingRoot()`, always the Local-Storage root).
 
 **What we double-check (Week 3):**
 * The repo's working tree gains **only** the `.gitignore` edit — **no** `.lfbridge/`, **no**
@@ -357,7 +357,7 @@ keep or delete.
 
 Deleting the Local-Storage `repos/<repoKey>/` tree on repo removal (and never mutating the repo working tree
 on remove) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `removeRepo(repoId)` (calls `rm -rf` on the `resolveTrackingRoot()` directory; a repo that merely went **missing**, e.g. an unmounted drive, retains its directory).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `removeRepo(repoId)` (calls `rm -rf` on the `resolveTrackingRoot()` directory; a repo that merely went **missing**, e.g. an unmounted drive, retains its directory).
 
 **What we double-check (Week 6):**
 * `~/T/_large_files_bridge/repos/<repoKey>/` is **gone** after removal — no orphaned Local-Storage tracking
@@ -419,7 +419,7 @@ carries **content**, Local Storage carries **bookkeeping**, and the two never mi
 
 Writing a Category-A transcript into the repo's committed `.lfbridge/` (via the placement radio) while
 leaving Category-B tracking untouched in Local Storage is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` (delegates to `artifact-placement.service.ts` — `artifactTargetPath()`, the Category-A placement radio); the Category-B writers continue to route through `tracking-root.service.ts` — `resolveTrackingRoot()` (Local Storage), unaffected by the content write.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` (delegates to `artifact-placement.service.ts` — `artifactTargetPath()`, the Category-A placement radio); the Category-B writers continue to route through `tracking-root.service.ts` — `resolveTrackingRoot()` (Local Storage), unaffected by the content write.
 
 **What we double-check (the transcript):**
 * The transcript is written to the repo's committed `.lfbridge/renders/shot_02.mov.transcription`, and it is
@@ -452,12 +452,12 @@ Storage stays the authoritative working copy on each machine; the sync repo is t
 computer sees the same `repo_storage.yaml`, sidecars, `decisions.yaml`, and `manifest.yaml`:
 
 ```
-# with a company sync repo ~/BGit/Bryan_git/act3_large_files_bridge/ configured + the per-repo toggle ON:
+# with a company sync repo ~/repos/act3_large_files_bridge/ configured + the per-repo toggle ON:
 ~/T/_large_files_bridge/repos/a1b2c3d4e5f6/           ← ALWAYS written here (authoritative)
 ├── repo_storage.yaml
 └── files/renders/…
 
-~/BGit/Bryan_git/act3_large_files_bridge/repos/a1b2c3d4e5f6/   ← ALSO mirrored here (travels to other computers)
+~/repos/act3_large_files_bridge/repos/a1b2c3d4e5f6/   ← ALSO mirrored here (travels to other computers)
 ├── repo_storage.yaml
 └── files/renders/…
 
@@ -470,7 +470,7 @@ mirror is purely additive. A sync pass reconciles the two (append-only sidecars/
 
 Mirroring the always-in-Local-Storage `repos/<repoKey>/` subtree into the company sync repo (and reconciling
 a pulled one back) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (the sync-repo root comes from `tracking-root.service.ts` — `resolveStateSyncRepo()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (the sync-repo root comes from `tracking-root.service.ts` — `resolveStateSyncRepo()`).
 
 ### 9.3 The keep-`.lfbridge/` consent gates the CONTENT, not the tracking
 

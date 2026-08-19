@@ -76,7 +76,7 @@ the Confirm button **red** (`--lfb-bad`) when `danger` and **blue** (`--lfb-prim
 click, `Esc`, and Cancel all dismiss without acting.
 
 Rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/ConfirmDialog.tsx` — `ConfirmDialog`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/ConfirmDialog.tsx` — `ConfirmDialog`.
 
 ### 2.2 `PromptDialog` — the single-text-input ask (NEW)
 
@@ -87,7 +87,7 @@ disabled while the field is empty**, `Enter` submits, `Esc`/backdrop/Cancel retu
 typed string or `null`.
 
 Rendered in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PromptDialog.tsx` — `PromptDialog`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/PromptDialog.tsx` — `PromptDialog`.
 
 ### 2.3 The imperative bridge — `confirmModal()` / `promptModal()` + one `ModalHost` (NEW, LOCKED)
 
@@ -119,7 +119,7 @@ promptModal(opts: {
   ever on screen (a second request replaces/queues — single-slot).
 
 Implemented in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/modals.ts` — `confirmModal()` / `promptModal()` / `onModalRequested()` (the bus) · the provider `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/ModalHost.tsx` — `ModalHost` (mounted once in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/App.tsx`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/modals.ts` — `confirmModal()` / `promptModal()` / `onModalRequested()` (the bus) · the provider `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/ModalHost.tsx` — `ModalHost` (mounted once in `~/repos/LargeFileBridge/code/packages/frontend/src/App.tsx`).
 
 ---
 
@@ -155,7 +155,7 @@ its right column. (Line numbers are indicative — match on the message text.)
 > "great pop-up") and it subsumes the old confirm.
 
 Converting each site is verified in code by the empty grep (§9) and the per-file edits under
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/` listed above.
+`~/repos/LargeFileBridge/code/packages/frontend/src/` listed above.
 
 ---
 
@@ -206,7 +206,7 @@ It is the **`WarningPopup`** ([warnings.mdx §4](./warnings.mdx)) fed a **transc
 
 The transcribe / describe `WarningDef` builders (checked-by-default targets, "Transcribe/Describe N files"
 button, gated background enqueue) already exist for the repo-scoped tiles in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildTranscribeWarning()` / `buildDescribeWarning()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildTranscribeWarning()` / `buildDescribeWarning()`.
 
 ### 5.2 The candidate list comes from a plan/preview, not the enqueue count (LOCKED)
 
@@ -229,11 +229,11 @@ exactly as enqueue does, but **without queuing anything** — and builds the sam
 
 The plan endpoints (walk the scope, drop already-done + unsupported, return the candidate list without
 queuing) are implemented in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()` (reuses `resolveCandidates()` + the already-transcribed filter, returns the list) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()`; routes `POST /plan` on `transcribe.router.ts` / `describe.router.ts`; client methods `api.transcribePlan` / `api.describePlan` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()` (reuses `resolveCandidates()` + the already-transcribed filter, returns the list) · `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()`; routes `POST /plan` on `transcribe.router.ts` / `describe.router.ts`; client methods `api.transcribePlan` / `api.describePlan` in `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts`.
 
 The scope→WarningDef builders that fetch the plan and construct the popup for a directory/FS/storage scope
 are implemented in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openTranscribeBatch(scope)` / `openDescribeBatch(scope)` (fetch the plan, build the transcribe/describe `WarningDef` with the previewed files as checked targets, and open it via the popup host §5.3).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openTranscribeBatch(scope)` / `openDescribeBatch(scope)` (fetch the plan, build the transcribe/describe `WarningDef` with the previewed files as checked targets, and open it via the popup host §5.3).
 
 ### 5.2.1 The excluded already-done count is STATED, not just applied (NEW, LOCKED)
 
@@ -259,10 +259,10 @@ glance**, and it turns "is this thing redoing my work?" into a question the popu
 * Both producing actions obey it: transcriptions and AI descriptions.
 
 Stating the excluded count in the popup sub line is implemented in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `excludedClause(alreadyDone, noun)`, appended to the `sub` built by `openTranscribeBatch()` / `openDescribeBatch()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `excludedClause(alreadyDone, noun)`, appended to the `sub` built by `openTranscribeBatch()` / `openDescribeBatch()`.
 
 The server-side skip this clause reports is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()` (the `readDescription(abs)` → `alreadyDone++; continue;` branch) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `previewDescribe()` (the `readDescription(abs)` → `alreadyDone++; continue;` branch) · `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `previewTranscribe()`.
 
 ### 5.3 One global popup host so any launcher can open it (NEW, LOCKED)
 
@@ -273,7 +273,7 @@ The metric tile opens the popup because `MetricsStrip` **mounts its own** `Warni
 `openDescribeBatch` (§5.2) call it after building the def.
 
 Implemented in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `requestBatchPopup()` / `onBatchPopupRequested()` (bus) · the provider `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost` (mounted once in `App.tsx`, renders `WarningPopup` for the requested def and refetches on apply).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `requestBatchPopup()` / `onBatchPopupRequested()` (bus) · the provider `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost` (mounted once in `App.tsx`, renders `WarningPopup` for the requested def and refetches on apply).
 
 ### 5.4 The "Opening window…" spinner while the plan walks (NEW, LOCKED)
 
@@ -312,11 +312,11 @@ Additional rules:
   spinner *and* a popup on screen at once, and the swap is seamless.
 
 Implemented in code (NEW):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — the bus carries a
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — the bus carries a
 `loading | popup | null` state; `openTranscribeBatch()` / `openDescribeBatch()` emit the **loading** state
 (with a generation token) **before** awaiting `api.{transcribe,describe}Plan`, then emit the **popup** state
 (guarded by the token) when it resolves · the loading modal + swap render in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost`
 (renders a spinner "Opening window…" card for the loading state, the `WarningPopup` for the popup state).
 
 ---
@@ -334,7 +334,7 @@ enqueue+toast anymore.
 > Ignore** also absorbed the old **Big, not git-ignored** tile. Whichever tile the user clicks, the popup
 > contract in this file is unchanged.
 > Tile labels live in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — the metric
+> `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — the metric
 > definitions (`label: "Add to IPFS"` · `"Git Ignore"` · `"Transcribable"` · `"AI Describable"` · `"OCRable"`).
 
 | Entry point | Where | Opens |
@@ -363,7 +363,7 @@ first-time-storage-setup gate ([page_actions.mdx §1.2](./page_actions.mdx)) sti
 enqueue the popup's Apply calls).
 
 Wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (rewritten to call `openTranscribeBatch` / `openDescribeBatch` instead of enqueue-then-toast), still mounted through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` / `createDescriptions()` (rewritten to call `openTranscribeBatch` / `openDescribeBatch` instead of enqueue-then-toast), still mounted through `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
 
 ### 6.4 The ⋮ kebab / right-click menu item opens the popup (LOCKED)
 
@@ -380,7 +380,7 @@ This is the product owner's ask: *"Right-click or triple-dot menu → Create Tra
 great Transcriptions pop-up,"* and the same for **Create AI descriptions**.
 
 Wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the new `create-transcriptions` / `create-descriptions` items in the directory + file groups call `openTranscribeBatch` / `openDescribeBatch`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the new `create-transcriptions` / `create-descriptions` items in the directory + file groups call `openTranscribeBatch` / `openDescribeBatch`).
 
 ---
 

@@ -69,7 +69,7 @@ export interface SpecialClass {
 ```
 
 The one classifier — reusing `isMediaFile`, `mediaKindForName`, the payload rule, `compressInfo`, and the pinset read rather than re-deriving them — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/special-file.service.ts` — `classifySpecial(file, ctx)` (returns `SpecialClass`; `ctx` carries the effective threshold, git-ignore state, and the IPFS pinset).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/special-file.service.ts` — `classifySpecial(file, ctx)` (returns `SpecialClass`; `ctx` carries the effective threshold, git-ignore state, and the IPFS pinset).
 
 ---
 
@@ -130,7 +130,7 @@ Being special is the gate for the rest of the product's per-file machinery:
   `transcribable` → the transcription action ([warnings.mdx §10](./warnings.mdx)).
 
 Filling `repo_storage.yaml → counts:` and the Repos-table counts from `classifySpecial` over the repo's files is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (folds `classifySpecial` results into the rollup; writes to the Local-Storage `repos/<repoKey>/` root resolved by `tracking-root.service.ts` — `resolveTrackingRoot()`, never the working repo).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts(repoRoot)` (folds `classifySpecial` results into the rollup; writes to the Local-Storage `repos/<repoKey>/` root resolved by `tracking-root.service.ts` — `resolveTrackingRoot()`, never the working repo).
 
 ---
 

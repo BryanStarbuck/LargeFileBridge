@@ -49,7 +49,7 @@ We think of codecs as an **array**, each with: which **container(s)** it lives i
 
 The backend's cheap, no-shell probe already labels container + codec for the property grid — the
 first-known visual sample-entry fourcc (`avc1`/`hvc1`/`av01`/`vp09`/`ap4h`…) or Matroska CodecID —
-in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `probeMedia` / `sniffVideo`.
+in `~/repos/LargeFileBridge/code/packages/backend/src/modules/media/media.service.ts` — `probeMedia` / `sniffVideo`.
 
 ---
 
@@ -71,7 +71,7 @@ Native `<video>` decode support (desktop, 2024–2026):
 **Safe-everywhere set:** H.264 (8-bit yuv420p), VP8, VP9. AV1/HEVC are conditional (hardware). Everything
 else is a coin flip or a hard no. The code's playability gate treats **H.264 (8-bit 4:2:0) / VP8 / VP9 /
 AV1** as browser-decodable video and **AAC / MP3 / Opus / Vorbis / FLAC** as browser-decodable audio, in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — the `SAFE_VCODEC` / `SAFE_PIXFMT` / `SAFE_ACODEC` sets used by `planStream`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — the `SAFE_VCODEC` / `SAFE_PIXFMT` / `SAFE_ACODEC` sets used by `planStream`.
 
 ### 2.1 The ".mp4 says H.264 but won't play" gotcha — the five real causes
 
@@ -137,7 +137,7 @@ the CRF range (**CRF 21** H.264/AV1, **CRF 24** HEVC) **at the source resolution
 (the LOCKED middle-quality hard requirement, [compression.mdx §2.1](./compression.mdx)); for **a
 compatibility/upload copy** we force **H.264** (§9) and — unlike storage compression — that upload copy
 **may** downscale to a max width (§5), because its purpose is upload compatibility, not archival fidelity. The forced-codec override lives in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickVideoTarget` (the `force` parameter) via `compressFile(input, forceVideoCodec)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `pickVideoTarget` (the `force` parameter) via `compressFile(input, forceVideoCodec)`.
 
 ---
 
@@ -189,7 +189,7 @@ their **own** browser — **not** an IPFS gateway/relay (charter). It shells out
 like the compression engine; the no-shell rule applies only to the quick probe.
 
 The route (grant verify → hand to the streamer) is in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` — the `GET /stream` route.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/media.router.ts` — the `GET /stream` route.
 
 ### 6.2 The decision tree (cheapest path wins)
 
@@ -211,7 +211,7 @@ frag_keyframe+empty_moov+default_base_moof -f mp4 pipe:1` (`empty_moov` emits th
 
 The ffprobe-driven plan, the ffmpeg argument builders, the spawn/pipe, and killing ffmpeg when the
 browser disconnects are all in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — `planStream` (decision) · `ffmpegArgs` (builders) · `streamPlayable` (spawn + pipe + cleanup).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/transcode.service.ts` — `planStream` (decision) · `ffmpegArgs` (builders) · `streamPlayable` (spawn + pipe + cleanup).
 
 ### 6.3 Known limitation & alternatives
 
@@ -275,7 +275,7 @@ On the `/video` page ([media_viewer.mdx §5](./media_viewer.mdx)):
    to the OS** and, for video, **Convert to H.264 (MP4)…** (§9).
 
 The native→stream→fail state machine and the compatibility-mode badge are in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ViewerSurface` (the `videoFallback` state, `streamSrc`, the `<video onError>` handler) and `DecodeFailure`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ViewerSurface` (the `videoFallback` state, `streamSrc`, the `<video onError>` handler) and `DecodeFailure`.
 
 ---
 
@@ -288,7 +288,7 @@ so the result both plays in every browser and uploads to TikTok/X/YouTube/Instag
 compression engine (recoverable replace: original → LFBridge trash), confirm-gated.
 
 The convert offer + confirm and the forced-H.264 request are in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `runConvertOffer` (calls `api.compressFile(path, { videoCodec: "h264" })`); the engine honors the forced codec in `compression.service.ts` — `compressFile` / `pickVideoTarget`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `runConvertOffer` (calls `api.compressFile(path, { videoCodec: "h264" })`); the engine honors the forced codec in `compression.service.ts` — `compressFile` / `pickVideoTarget`.
 
 ---
 

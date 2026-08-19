@@ -121,7 +121,7 @@ this section records the two keys so nothing in this spec reads as if there were
   union by path, union `pinned_by`, newer `modified_at` wins, absence is **never** a delete.
 
 Deriving the two keys — the path-keyed Local-Storage directory and the remote-keyed mirror subtree — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `repoKeyFor(root)` / `repoStateDir(root)` (path-keyed, Local Storage) and `repoUidFor(root)` / `resolveStateSyncRepo(root)` (remote-keyed, the `<syncRepo>/repos/<repoUid>/` mirror, null when the repo has no remote), the remote normalized by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `normalizeRemoteKey()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `repoKeyFor(root)` / `repoStateDir(root)` (path-keyed, Local Storage) and `repoUidFor(root)` / `resolveStateSyncRepo(root)` (remote-keyed, the `<syncRepo>/repos/<repoUid>/` mirror, null when the repo has no remote), the remote normalized by `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `normalizeRemoteKey()`.
 
 The full data-category placement policy (Local Storage always; company sync repo also when enabled; the
 working repo never) is authoritative in [artifact_placement_policy.mdx](./artifact_placement_policy.mdx).
@@ -132,7 +132,7 @@ default on): it governs whether transcripts/AI-descriptions may be written into 
 
 Seeding a repo's Local-Storage `repos/<repoKey>/` directory and its `repo_storage.yaml` (plus `history/`,
 `files/`) when a repo is enlisted is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (seeds under the Local-Storage tracking root resolved by `tracking-root.service.ts` — `resolveTrackingRoot()`); it no longer git-ignores anything, since nothing churny is written into the working repo.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (seeds under the Local-Storage tracking root resolved by `tracking-root.service.ts` — `resolveTrackingRoot()`); it no longer git-ignores anything, since nothing churny is written into the working repo.
 
 ---
 
@@ -196,7 +196,7 @@ candidates + the decision ledger, not read back from this file — this rollup i
 the UI's source of truth.)
 
 Reading, seeding, and updating `repo_storage.yaml` (single `repo_storage` root key; deterministic YAML; written to the Local-Storage tracking root, optionally mirrored to the company sync repo) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `readRepoStorage(repoRoot)` / `writeRepoStorage(repoRoot, doc)` / `refreshCounts(repoRoot)` (each derives its directory from `tracking-root.service.ts` — `resolveTrackingRoot()`, which returns the Local-Storage `repos/<repoKey>/` root and never the working repo).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `readRepoStorage(repoRoot)` / `writeRepoStorage(repoRoot, doc)` / `refreshCounts(repoRoot)` (each derives its directory from `tracking-root.service.ts` — `resolveTrackingRoot()`, which returns the Local-Storage `repos/<repoKey>/` root and never the working repo).
 
 ---
 
@@ -321,7 +321,7 @@ and `by`** (the allow-listed email, or the sentinel `not-lfbridge` when somethin
   sticky "reviewed, leave it" that stops the warning coming back ([decisions.mdx §2](./decisions.mdx)).
 
 Appending an event to a per-file sidecar (create-on-first-special, mirror the path, append-only, stamp at/on_device/by; written to the Local-Storage tracking root, optionally mirrored to the sync repo) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `sidecarPath(repoRoot, relPath)` / `appendFileEvent(repoRoot, relPath, event)` / `readSidecar(repoRoot, relPath)` (path resolved via `tracking-root.service.ts` — `resolveTrackingRoot()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/file-sidecar.service.ts` — `sidecarPath(repoRoot, relPath)` / `appendFileEvent(repoRoot, relPath, event)` / `readSidecar(repoRoot, relPath)` (path resolved via `tracking-root.service.ts` — `resolveTrackingRoot()`).
 
 ### 3.3 Provenance — actions taken OUTSIDE LargeFileBridge (LOCKED)
 
@@ -337,7 +337,7 @@ app. LFB must **notice and record** that without pretending it did it.
 * `not-lfbridge` is a **reserved sentinel** in the `by` field.
 
 Detecting already-pinned / already-compressed state during a scan and recording it as an `observed`/`not-lfbridge` event (idempotent — recorded once) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `reconcileExternalState(repoRoot, file)` (queries the IPFS node's pinset + the compression baseline, appends via `file-sidecar.service.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `reconcileExternalState(repoRoot, file)` (queries the IPFS node's pinset + the compression baseline, appends via `file-sidecar.service.ts`).
 
 ---
 
@@ -390,7 +390,7 @@ block) with a UTC date-time stamp, then what happened.** When one action spans s
   structured record is the sidecar (§3). The history log is the **legible, per-machine paper trail**.
 
 Appending to the per-computer history log (own-file only, UTC stamp, per-file indent when outcomes differ; written to the Local-Storage tracking root, optionally mirrored to the sync repo) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/history-log.service.ts` — `historyPath(repoRoot, deviceName)` / `appendHistory(repoRoot, entry)` (path via `tracking-root.service.ts`; device name from `devices.service.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/history-log.service.ts` — `historyPath(repoRoot, deviceName)` / `appendHistory(repoRoot, entry)` (path via `tracking-root.service.ts`; device name from `devices.service.ts`).
 
 ---
 

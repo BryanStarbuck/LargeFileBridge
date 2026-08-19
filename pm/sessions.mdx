@@ -50,7 +50,7 @@ These two are **different things** and must never be conflated.
 
 The "Last pinned" value (newest of the scheduled worker's run and every repo's `status.yaml`) is computed in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `lastPinAt()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `lastPinAt()`
 
 The web session exists **only** to answer one question well: *"Is the user starting fresh on a machine
 that might be stale?"* Keep it that small.
@@ -68,7 +68,7 @@ route change). The backend folds every ping into a single **open** session (the 
 
 The browser render/navigation ping (throttled, first render always reported) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useSessionPing.ts` — `useSessionPing()` hook
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useSessionPing.ts` — `useSessionPing()` hook
 
 * If an **open** session exists and the gap since its `last_activity_at` is **≤ 4 hours**, the ping
   **extends** it: set `last_activity_at = now`. Same session — the user is still going.
@@ -81,11 +81,11 @@ reported**, so a fresh return is detected immediately.
 
 Folding each ping into the open session (extend, or close-and-start-new) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `recordActivity()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `recordActivity()`
 
 The activity ping endpoint the frontend posts to is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.router.ts` — `POST /api/sessions/activity`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.router.ts` — `POST /api/sessions/activity`
 
 ### 2.2 Discontinuing a session — the 4-hour idle timer, back-dated end
 
@@ -108,7 +108,7 @@ that session** — a later ping always begins a new one.
 
 The 4-hour idle timer and the back-dated (last-render) session close are handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `armIdleTimer()` / `closeIdleSession()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `armIdleTimer()` / `closeIdleSession()`
 
 ---
 
@@ -130,7 +130,7 @@ now − lastPinnedAt > 48 hours   ?   →   kick off a pin pass
 
 The >48h staleness check that runs only on a new session start is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `recordActivity()` (via `isStale()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `recordActivity()` (via `isStale()`)
 
 ### 3.1 Non-blocking — never stall the UI
 
@@ -146,7 +146,7 @@ The auto-pin is **fire-and-forget**:
 
 The non-blocking, single-guarded auto-pin (fire-and-forget, never awaited by the request) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `triggerAutoPin()` (fires `pinAll()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/sessions/sessions.service.ts` — `triggerAutoPin()` (fires `pinAll()`)
 
 This is the whole payoff: **a user who opens LFB on a machine that has been dark for two days is
 silently brought current, with no click and no wait.**

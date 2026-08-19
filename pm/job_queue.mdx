@@ -80,7 +80,7 @@ narrow). The producer stamps it from the file's extension when it plans the batc
   rely on.
 
 The FIFO queue, `enqueue()`, and the in-flight dedup set are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` / the module-level `pending[]` + `inflight` Set.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` / the module-level `pending[]` + `inflight` Set.
 
 ### 2.1 A task can leave the queue **without ever running** — `halted` (LOCKED)
 
@@ -110,7 +110,7 @@ The rest of this section is about the distinction between the two exits that are
   transactions ledger show the batch **stopped**, not that N files broke.
 
 Draining the doomed tasks and recording the distinct terminal state is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), called from `pump()`; the wire shape is `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), called from `pump()`; the wire shape is `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
 
 ---
 
@@ -158,7 +158,7 @@ The `compress` op is **media-aware** because the two media kinds have opposite t
   queue. Each runner already returns a truthful status rather than throwing for expected outcomes.
 
 The media-aware, core-budgeted worker loops (take next runnable task by admission bucket, dispatch to the runner, catch-and-continue) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `runTask()` / `capFor()` + `bucketOf()` (the live per-bucket caps drawn from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`; buckets `transcribe` / `describe` / `compress:image` / `compress:video`); the dispatch maps `op` → `transcribeOne` / `describeOne` / `compressFile` (the last wrapped in `track("compress", …)`, passed the per-job `threads` cap, and on return `recordBatchResult()` against its `batchId` — §4a).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `runTask()` / `capFor()` + `bucketOf()` (the live per-bucket caps drawn from `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`; buckets `transcribe` / `describe` / `compress:image` / `compress:video`); the dispatch maps `op` → `transcribeOne` / `describeOne` / `compressFile` (the last wrapped in `track("compress", …)`, passed the per-job `threads` cap, and on return `recordBatchResult()` against its `batchId` — §4a).
 
 ---
 
@@ -180,7 +180,7 @@ to nothing as the backlog drains. No card is fabricated for a not-yet-started it
 "a queued item simply has no card yet") — `queued` is just a number.
 
 The `queued` count is exposed by the queue and folded into the progress payload in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()`; read by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (adds `queued` to `ProgressListResult`). The dock footer renders it in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()`; read by `~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (adds `queued` to `ProgressListResult`). The dock footer renders it in `~/repos/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx`.
 
 ---
 
@@ -215,7 +215,7 @@ owns only the **registry mechanism** the queue provides.
   leaves **running** tasks to finish ([processing_batches.mdx §6.2](./processing_batches.mdx)).
 
 The batch registry is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` / `stopBatch()` (and the retention prune). The producers that open a batch are `compression.service.ts` — `enqueueCompressInside()` ([compression.mdx §12.6](./compression.mdx)) and the `transcribe` / `describe` / `ocr` enqueue endpoints ([page_actions.mdx §5](./page_actions.mdx)), each adopting its manifest's `batchId`; the surface that renders the batches is the [Processing page](./processing.mdx)'s batches table (processing.mdx §4.1).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `createBatch()` / `recordBatchResult()` / `listBatches()` / `stopBatch()` (and the retention prune). The producers that open a batch are `compression.service.ts` — `enqueueCompressInside()` ([compression.mdx §12.6](./compression.mdx)) and the `transcribe` / `describe` / `ocr` enqueue endpoints ([page_actions.mdx §5](./page_actions.mdx)), each adopting its manifest's `batchId`; the surface that renders the batches is the [Processing page](./processing.mdx)'s batches table (processing.mdx §4.1).
 
 ## 4b. TO DO batch Apply is a queue producer (LOCKED)
 
@@ -247,7 +247,7 @@ batch fans out **compress + transcribe + pin/fetch** tasks in one Apply — all 
 watchable together on the Processing page.
 
 The To-Do batch Apply that fans decisions out into `enqueue()` is served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (maps each checked recommendation to a `QueueTask` — `compress` / `transcribe` — or a pin/fetch, then calls `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`), from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (maps each checked recommendation to a `QueueTask` — `compress` / `transcribe` — or a pin/fetch, then calls `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()`), from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
 
 ---
 
@@ -300,9 +300,9 @@ hours ([crash_recovery.mdx §2](./crash_recovery.mdx)). No log in the app's own 
   deliberate upload is the runner's concern ([ai_description.mdx §7](./ai_description.mdx)), not the queue's.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` (the journal + `appendTerminal()`),
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` (boot restore), and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `admitRestored()` / `memoryFits()` / `recordQuarantined()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` (the journal + `appendTerminal()`),
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` (boot restore), and
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `admitRestored()` / `memoryFits()` / `recordQuarantined()`.
 
 ---
 

@@ -75,7 +75,7 @@ spec asks of storage_local: `config.yaml → computer` must carry a **minted `id
 `ipfs_peer_id`**, and the web app must let the user edit the **id** and the **label**.
 
 Minting the stable device UUID on first boot (separate from the IPFS PeerID) and letting the user rename the id + label from the web app is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()` (mint `computer.id` when absent), exposed through the global Settings routes.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()` (mint `computer.id` when absent), exposed through the global Settings routes.
 
 ---
 
@@ -94,7 +94,7 @@ An SDL is a **dedicated LFB file repo** — a repo whose entire reason to exist 
 there is **no `.lfbridge/` to hide the registry under**; the SDL root *is* the `.lfbridge` area
 ([artifact_placement_policy.mdx §0/§0.1](./artifact_placement_policy.mdx)). The base directory is resolved
 by storage **kind**, never by a path or a name, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (`<root>/.lfbridge` for kind `repo`; `<root>` itself for an SDL). An SDL written by an older LFB that still has a `.lfbridge/devices/` is migrated to the root by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`, with a read-fallback to the old path until it is.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (`<root>/.lfbridge` for kind `repo`; `<root>` itself for an SDL). An SDL written by an older LFB that still has a `.lfbridge/devices/` is migrated to the root by `~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`, with a read-fallback to the old path until it is.
 
 Because the registry lives **in the SDL**, it **travels with the storage** — so every computer that
 pulls the storage sees the full set of devices, their schedules, and their grafts. This is how a
@@ -197,7 +197,7 @@ graft:
 * **`graft`** has one entry per mapped directory (keyed by `mapped_dirs.yaml`'s `key`, §4).
 
 Writing this device's own file (id, name, schedule, graft) into every storage's `devices/` (resolved through `trackingBaseDir()` — the SDL root, §2) and reading the full registry, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)` (new module; self-owned write, whole-registry read).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)` (new module; self-owned write, whole-registry read).
 
 ---
 
@@ -225,7 +225,7 @@ Each device's graft turns those into **this computer's absolute paths**.
   says — the core of walkthrough step 7.
 
 Resolving a tracked file's machine-independent (mapped-dir key + relpath) identity to this device's absolute local path via the graft, and **materializing** the fetched bytes there, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, wired into the pin pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` (via `resolveStorageAbs`, the storage unit's `resolveAbs` in `runUnitPin`; the unit runs in `pinAll` gated by the per-storage `pinned` opt-in). The fetch step of `runUnitPin` now pins the CID **and** writes the bytes to the resolved local path via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile(cid, destPath)` (atomic temp-then-rename, parent dirs created). A mapped dir this device has **not** grafted resolves to `null` and is left **known-but-absent** — never fetched or placed here.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `resolveGraftedPath(storageRoot, mappedKey, relPath)`, wired into the pin pass by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` (via `resolveStorageAbs`, the storage unit's `resolveAbs` in `runUnitPin`; the unit runs in `pinAll` gated by the per-storage `pinned` opt-in). The fetch step of `runUnitPin` now pins the CID **and** writes the bytes to the resolved local path via `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile(cid, destPath)` (atomic temp-then-rename, parent dirs created). A mapped dir this device has **not** grafted resolves to `null` and is left **known-but-absent** — never fetched or placed here.
 
 ---
 
@@ -301,7 +301,7 @@ a rail — they stay in the `⛛` popover as `contains`
 ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
 
 The Kind column's `filterOptions` (`laptop` / `desktop` / `server`) exist today as a `<select>` in the filter popover; rendering them as rail checkboxes is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the `id: "kind"` column), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the `id: "kind"` column), against the new facet-rail region of `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ### 6.2 The Device cell — name + a rolled-up descriptor (LOCKED)
 
@@ -315,7 +315,7 @@ Because the hardware columns are gone (§6.1), the **Device** cell carries two l
   be their own columns are now shown right under the name.
 
 Building the descriptor is **pure logic** shared so the backend, the table, and the View-one-device page all agree:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts` — `deviceDescriptor(hardware)` (returns the ordered, unknown-skipping fact list); rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the two-line Device cell).
+`~/repos/LargeFileBridge/code/packages/shared/src/device-naming.ts` — `deviceDescriptor(hardware)` (returns the ordered, unknown-skipping fact list); rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the two-line Device cell).
 
 ### 6.3 Owner = the logged-in OS user (LOCKED)
 
@@ -325,7 +325,7 @@ computer right now*. It falls back to `device.owner` (the allow-listed email) on
 unknown (a bare peers-only row with no fingerprint).
 
 Sourcing the self row's owner from the fingerprint username is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self row `owner = hardware.username`); the column's fallback (`hardware.username || owner`) is in `DevicesPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self row `owner = hardware.username`); the column's fallback (`hardware.username || owner`) is in `DevicesPage.tsx`.
 
 ### 6.4 IPFS Peer ID — truncated + click-to-copy (LOCKED)
 
@@ -334,7 +334,7 @@ A full Peer ID is far too long for a column and would fix the whole page wide. I
 fixed-width** column. **Clicking the cell copies the full id to the clipboard** (with a toast); the
 click is stopped from also opening the row.
 
-The truncation helper is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/format.ts` — `truncatePeerId(id)`; the click-to-copy cell is in `DevicesPage.tsx` — `DevicesPage` (`copyPeerId`).
+The truncation helper is `~/repos/LargeFileBridge/code/packages/frontend/src/lib/format.ts` — `truncatePeerId(id)`; the click-to-copy cell is in `DevicesPage.tsx` — `DevicesPage` (`copyPeerId`).
 
 ### 6.5 Row click → View one device (LOCKED)
 
@@ -363,9 +363,9 @@ kebab ([menus.mdx](./menus.mdx)); this page is not a file-list page, so it carri
 rather than the shared file action-links row ([page_actions.mdx §0](./page_actions.mdx)).
 
 The existing three actions render in the `PageHeader` `actions` slot, right-aligned, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage` (the `actions={…}` header slot: Copy Peer ID / Open in File System / Remove peer).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage` (the `actions={…}` header slot: Copy Peer ID / Open in File System / Remove peer).
 
-The page is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage`, routed at `/device/$deviceId` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx`. It reads one device by id from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices/:id`, backed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRow(id)` (built on `deviceRows()` so it shows the same disambiguated label + union).
+The page is `~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/ViewOneDevicePage.tsx` — `ViewOneDevicePage`, routed at `/device/$deviceId` in `~/repos/LargeFileBridge/code/packages/frontend/src/router.tsx`. It reads one device by id from `~/repos/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices/:id`, backed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRow(id)` (built on `deviceRows()` so it shows the same disambiguated label + union).
 
 ### 6.6 Self always present, never an empty table
 
@@ -377,12 +377,12 @@ device **id**. If the user has only ever run LFB on one machine, the table still
 "no devices" state.
 
 Aggregating the device rows the page shows — inject self from config, union `peers.yaml` and each storage's `devices/` registry by id, and disambiguate — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self-seed + union), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices`. The table itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the disambiguated **Device** column comes from `disambiguateDevices()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (self-seed + union), served by `~/repos/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` — `GET /api/devices`. The table itself is `~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage` (the disambiguated **Device** column comes from `disambiguateDevices()` in `~/repos/LargeFileBridge/code/packages/shared/src/device-naming.ts`).
 
 ### 6.7 Every table is a TanStack table (charter)
 
 Per the charter (*"All tables are TanStack tables. No exceptions."*) every table in the repo is built on
-`@tanstack/react-table`: the shared house table `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (used by Devices, Repos, Storages, Communities, IPFS, and the directory view) and the one bespoke instance `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (its own `useReactTable` for the streamed flat walk). The Devices table's fixed-width columns use the `width` field on `LfbColumn` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`), which makes `DataTable` emit a `<colgroup>` + `table-fixed` layout.
+`@tanstack/react-table`: the shared house table `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (used by Devices, Repos, Storages, Communities, IPFS, and the directory view) and the one bespoke instance `~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (its own `useReactTable` for the streamed flat walk). The Devices table's fixed-width columns use the `width` field on `LfbColumn` (`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`), which makes `DataTable` emit a `<colgroup>` + `table-fixed` layout.
 
 ### 6.8 Page actions — the Devices / Peers header (proposed)
 
@@ -397,9 +397,9 @@ header), not the shared file action-links row ([page_actions.mdx](./page_actions
 | **Refresh peers / re-announce** | Re-reads `peers.yaml` + each storage's `devices/` registry and re-announces this device, refreshing `last_seen` health colours without waiting on the pin pass. | Header, right-aligned. | **proposed** |
 
 Neither is implemented yet, so no code pointer. When built, they render in the `PageHeader` `actions`
-slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` —
+slot of `~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` —
 `DevicesPage`, driving the aggregation already served by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/peers/devices.router.ts` —
 `GET /api/devices` (§6.6). These are page-level actions, distinct from any per-row `⋮` kebab
 ([menus.mdx](./menus.mdx)).
 
@@ -435,7 +435,7 @@ The rules for what a remote-only row is, what it counts toward, and what it may 
 — this section only fixes **where the device label in it comes from**.
 
 Resolving a device id to the nice name shown in peer-attributed UI is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `readDevices()` / `deviceRows()`, consumed when composing the row in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `readDevices()` / `deviceRows()`, consumed when composing the row in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`.
 
 ---
 
@@ -503,13 +503,13 @@ stale for long — but they are **excluded from the change test** that decides w
 them, and that is real news worth a commit.
 
 Excluding the addresses from the change test is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`, passing `volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"]` to `writeYamlIfChanged()`; the same paths are re-declared for the backbone's commit gate in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `volatileYamlPathsFor()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`, passing `volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"]` to `writeYamlIfChanged()`; the same paths are re-declared for the backbone's commit gate in `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `volatileYamlPathsFor()`.
 
 Re-reading the volatile half (addresses, git identity, home account) is done in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectVolatileHardware()` / `freshVolatileHardware()`, overlaid onto the cached fingerprint at the device write in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`. They surface on the Devices table (IP column) and the View-one-device Identity block in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` and `.../ViewOneDevicePage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectVolatileHardware()` / `freshVolatileHardware()`, overlaid onto the cached fingerprint at the device write in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`. They surface on the Devices table (IP column) and the View-one-device Identity block in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` and `.../ViewOneDevicePage.tsx`.
 
 Collecting the fingerprint locally (os/fs + guarded `sysctl`/`system_profiler`, cached, no network) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()` / `getHardware()`, with the model→marketing/year/screen lookup in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware-models.ts`. Seeding `config.yaml → computer.hardware` (and the default nice name) on first run is done in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()` / `getHardware()`, with the model→marketing/year/screen lookup in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/hardware-models.ts`. Seeding `config.yaml → computer.hardware` (and the default nice name) on first run is done in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`.
 
 ---
 
@@ -533,7 +533,7 @@ moves only when the user upgrades, so the single commit it costs is real news ("
 fix"), and it is the one field here that *should* travel promptly.
 
 Publishing the build, and naming peers that are behind, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD`; written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`; compared across the fleet by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `stalePeersAcrossStorages()` / `stalePeerMessage()`.
+`~/repos/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD`; written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`; compared across the fleet by `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `stalePeersAcrossStorages()` / `stalePeerMessage()`.
 
 ### 7.3 The wrapper CIDs this computer has DISPROVED (LOCKED, learned from a defect)
 
@@ -556,9 +556,9 @@ parse as CIDs is skipped rather than trusted. Like `app_build` it is SUBSTANTIVE
 pair is a new proof — so it costs a commit only when there is something to say.
 
 Published with this device's own file, and folded in from the peers on the same pass, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()` / `readPeerSupersededCids()`;
-the local map and the adoption rule live in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/superseded-cids.service.ts` — `supersededPairs()` / `adoptSupersededCids()`,
-called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `fleetSupersededCids()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()` / `readPeerSupersededCids()`;
+the local map and the adoption rule live in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/superseded-cids.service.ts` — `supersededPairs()` / `adoptSupersededCids()`,
+called from `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `fleetSupersededCids()`.
 
 ---
 
@@ -590,7 +590,7 @@ machines, the UI must tell them apart *without* the user hand-labeling each.
   name with **no** suffix.
 
 Deriving the default name and the disambiguated display labels is pure logic in code (shared so the backend and any client agree):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/device-naming.ts` — `defaultDeviceName(hardware)` and `disambiguateDevices(devices)`. The built-in model→(marketing/year/screen) facts they lean on live in `hardware-models.ts` (§7). The human companion write-up of the attributes + the priority ladder is `~/BGit/Bryan_git/LargeFileBridge/knowledge/device_identification.md`.
+`~/repos/LargeFileBridge/code/packages/shared/src/device-naming.ts` — `defaultDeviceName(hardware)` and `disambiguateDevices(devices)`. The built-in model→(marketing/year/screen) facts they lean on live in `hardware-models.ts` (§7). The human companion write-up of the attributes + the priority ladder is `~/repos/LargeFileBridge/knowledge/device_identification.md`.
 
 ---
 
@@ -610,7 +610,7 @@ guarantees:
   `config.yaml → computer.id` (§1). Exactly one row is the self row; the rest are peers.
 
 Guaranteeing the self row (config-seeded) and self-writing into each storage's registry is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (config-seeded self) and `writeSelfDevice(storageRoot)` (called from `storage.service.ts` on storage create/index/pin).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `deviceRows()` (config-seeded self) and `writeSelfDevice(storageRoot)` (called from `storage.service.ts` on storage create/index/pin).
 
 ---
 
@@ -641,7 +641,7 @@ name / fingerprint to every other computer's Devices / Peers table.
 The registry does a second job nobody designed it for, and it is the more important one: **it proves the
 transport works.**
 
-* **The evidence.** In the ACT3 company SDL (`~/BGit/Bryan_git/act3_large_files_bridge`) **both** of the
+* **The evidence.** In the ACT3 company SDL (`~/repos/act3_large_files_bridge`) **both** of the
   user's computers — `bryan-mac-pro` (the Mac Tower) and `bryanstarbuck-macbook-pro` (the MacBook) — are
   already present in `<SDL>/devices/`, each self-written, committed, pushed, fetched and merged by the
   other machine. Two computers, one repo, real round trips, for months.
@@ -666,7 +666,7 @@ transport works.**
   written) or downstream (nothing was reconciled) — never in the middle.
 
 Auto-adopting the SDL's own git root as the backbone — the behaviour that made the registry travel — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (§11.2.1), the same resolution the tracking mirror now follows via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (§11.2.1), the same resolution the tracking mirror now follows via `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
 
 ---
 
@@ -740,7 +740,7 @@ the Act3 company repo — so we are allowed to check in and git push on that."*
   before a remote is wired up.
 
 Resolving the Git backbone remote — the explicit dedicated-repo backing first, then the company/personal-root auto-adopt fallback — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (falls back to the storage root when a company/personal storage's `<root>/.git` exists), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner()` and `ensureDeviceRegisteredInner()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)` (falls back to the storage root when a company/personal storage's `<root>/.git` exists), consumed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner()` and `ensureDeviceRegisteredInner()`.
 
 ### 11.3 The strict order — always pull before modifying, always push after (LOCKED)
 
@@ -767,13 +767,13 @@ runs `git` on a given repo's working copy at a time (concurrent `add`/`commit`/`
 corrupts the index). Different storages still run concurrently.
 
 The dedicated every-10-minute device worker — its transparency contract (installed / on-off / last-run) and its `device_process` config block — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.device_process` (default `interval_minutes: 10`, `label: com.largefilebridge.device`, `auto_provisioned` latch); driven by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState("device")` / `control("device", …)` (install/enable/disable the launchd plist), surfaced on the Scans page by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `ScansPage` (the "Device registration" `WorkerCard`).
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.device_process` (default `interval_minutes: 10`, `label: com.largefilebridge.device`, `auto_provisioned` latch); driven by `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState("device")` / `control("device", …)` (install/enable/disable the launchd plist), surfaced on the Scans page by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `ScansPage` (the "Device registration" `WorkerCard`).
 
 Turning the worker **on by default** on first boot — auto-install + enable, latched once so a user's later opt-out sticks — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `ensureDeviceWorkerDefaultOn()`, called at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (before `reconcileWorkerSchedules()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `ensureDeviceWorkerDefaultOn()`, called at boot from `~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()` (before `reconcileWorkerSchedules()`).
 
 The pass itself — for every Git-backed storage, pull → write self device → commit → push, decoupled from the IPFS opt-in and serialized per storage — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pushDeviceBackbone()` (the whole pass, run by the `device` worker via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /api/internal/run/device`) and `ensureDeviceRegistered(id)` (one storage's pull → `writeSelfDevice(root)` → commit/push under `withStorageGitLock`). The same decoupling is applied to the regular Transfer pass so it, too, writes device info even when a storage is not IPFS-opted-in: `pinStorageUnit(id)` now runs the Git pull + `writeSelfDevice` + commit/push regardless of `pinned`, and gates only the byte reconcile behind it.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pushDeviceBackbone()` (the whole pass, run by the `device` worker via `~/repos/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /api/internal/run/device`) and `ensureDeviceRegistered(id)` (one storage's pull → `writeSelfDevice(root)` → commit/push under `withStorageGitLock`). The same decoupling is applied to the regular Transfer pass so it, too, writes device info even when a storage is not IPFS-opted-in: `pinStorageUnit(id)` now runs the Git pull + `writeSelfDevice` + commit/push regardless of `pinned`, and gates only the byte reconcile behind it.
 
 ---
 

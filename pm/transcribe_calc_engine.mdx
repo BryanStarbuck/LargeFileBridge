@@ -44,8 +44,8 @@ It is **never** part of the every-4h / every-15-min scan. Once its batches exist
 leaves them alone (they are a distinct `kind`); the user re-runs the link to refresh them.
 
 Triggering the on-demand scan is served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`, calling
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine.scanStorage(storage)` / `scanAll()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`, calling
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine.scanStorage(storage)` / `scanAll()`.
 
 ---
 
@@ -64,7 +64,7 @@ Absence of a transcript is the whole test — a file that already has a `.transc
 appears (mirroring the [page-action skip-already-done rule](./page_actions.mdx#1-scope--skip-already-done--background-queue-locked)).
 
 Deciding "transcribable and not yet transcribed" (sidecar existence check via the ordered resolver) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `isUntranscribed(file)` (reuses `Transcribe` sidecar resolution).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `isUntranscribed(file)` (reuses `Transcribe` sidecar resolution).
 
 ---
 
@@ -117,7 +117,7 @@ As each file's transcription completes, its `.transcription` sidecar appears, so
 next run of this engine — the slug shrinks and eventually disappears.
 
 The transcribe popup (80% modal, default-checked list, "Transcribe N files" apply → enqueue) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (apply calls `POST /api/todo/batches/:id/apply`, which fans out to the transcription queue).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (apply calls `POST /api/todo/batches/:id/apply`, which fans out to the transcription queue).
 
 ---
 

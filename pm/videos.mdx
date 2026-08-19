@@ -87,7 +87,7 @@ IPFS, above Scans** in the rendered list. The app bar order becomes:
   nothing new here.
 
 Rendering the Videos item and its static children from the yaml is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (the generic `staticChildren` disclosure path — any yaml item with fixed `children:`; Storages keeps its runtime-composed list). The `/videos` → `/videos/duplicates` redirect lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `videosRoute`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (the generic `staticChildren` disclosure path — any yaml item with fixed `children:`; Storages keeps its runtime-composed list). The `/videos` → `/videos/duplicates` redirect lives in `~/repos/LargeFileBridge/code/packages/frontend/src/router.tsx` — `videosRoute`.
 
 ---
 
@@ -147,9 +147,9 @@ Both children render the same screen shape — **"the Repos page with a reserved
   [duplicates.mdx §3–§4](./duplicates.mdx); [subsets.mdx](./subsets.mdx) states its deltas.
 
 The 60/40 split view both pages mount is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (the full-width `controls` slot above the split, the table slot, and the independently-scrolling right column slot).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (the full-width `controls` slot above the split, the table slot, and the independently-scrolling right column slot).
 The shared page body both children configure (table, pop-up flow, live refresh, group selection) is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage`.
 
 ---
 

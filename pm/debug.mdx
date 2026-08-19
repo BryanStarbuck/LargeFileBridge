@@ -116,7 +116,7 @@ zero-sample document is still over — possible only with a pathological repo co
 (`limit_bytes`, `sample_per_metric`, `units_dropped`), so a trimmed export is never mistaken for a full one.
 
 Measuring the serialized document and shrinking it until it fits is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `fitToBudget()` (the ladder + the `budget` block), `summarizeMetrics()` (total · digest · sampled · sample), and `metricDigest()` (the pre-truncation membership checksum).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `fitToBudget()` (the ladder + the `budget` block), `summarizeMetrics()` (total · digest · sampled · sample), and `metricDigest()` (the pre-truncation membership checksum).
 
 ---
 
@@ -270,7 +270,7 @@ the user's own machines exactly as before.
 * The UI **names every destination before the click** (the surprise-write rule below applies per repo).
 
 Resolving the destination list (companies first, then personal) and writing the one document to each is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `resolveDebugTarget()` (returns `path` = primary and `paths` = all) and `exportDebugInfo()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `resolveDebugTarget()` (returns `path` = primary and `paths` = all) and `exportDebugInfo()`.
 
 Therefore:
 
@@ -301,7 +301,7 @@ different answers to "is personal storage connected?" inside one app is itself a
 the product's existing answer rather than inventing a stricter second one.
 
 The personal storage row this precondition resolves is read in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `getStorageRow("personal")` (`findRowById` → `discoverRows`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `getStorageRow("personal")` (`findRowById` → `discoverRows`)
 
 ### 3.1 Why the personal repo and never a company repo
 
@@ -352,10 +352,10 @@ Three rules, each load-bearing:
    would collapse into merge-resolution noise.
 
 The device label written into the path is the same one every manifest's `pinned_by` carries, resolved in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `computerLabel()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `computerLabel()`
 
 The storage-kind branch that keeps this path off `.lfbridge/` is decided in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `usesLfbridgeDir()` / `trackingBaseDir()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `usesLfbridgeDir()` / `trackingBaseDir()`
 
 ### 4.2 Replaced whole, every run (LOCKED)
 
@@ -368,7 +368,7 @@ The write is **atomic** (temp file + rename), so a reader — including a git co
 never observes a half-written document.
 
 Atomic YAML writes reuse the existing store helper in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml()`
 
 ### 4.3 The envelope — everything above `metrics:`
 
@@ -431,7 +431,7 @@ The product owner asked for **full file paths**, and full paths are what we writ
 **one field that cannot be compared directly across computers**:
 
 ```
-computer 1:  /Users/bryan/BGit/Bryan_git/charlie-kirk/videos/clip.mp4
+computer 1:  /Users/bryan/repos/charlie-kirk/videos/clip.mp4
 computer 2:  /Users/bryanstarbuck/BGit/Bryan_git/charlie-kirk/videos/clip.mp4
 ```
 
@@ -555,13 +555,13 @@ predicates including their **order-dependent early exits**:
 Getting either `continue` wrong produces a file whose lists disagree with the tiles — a defect (AC-10).
 
 The single composition path the export must bucket, rather than re-derive, is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` / `computeTaskMetrics()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` / `computeTaskMetrics()`
 
 The pull-down list, which is the one metric whose files are **not on this disk**, comes from a peer manifest in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`
 
 The image-vs-video split of a `compress === "could"` row reuses the product's single compress classifier (never a local extension set) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `bucketMetrics()`, delegating to `compressInfo()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `bucketMetrics()`, delegating to `compressInfo()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts`
 
 ### 5.6 Why `compressible_images` agrees across computers when `compressible_videos` does not
 
@@ -676,7 +676,7 @@ and phones nowhere home — the same hard local-only requirement the perceptual-
 ```yaml
 units:
   - repo: charlie-kirk
-    root: /Users/bryan/BGit/Bryan_git/charlie-kirk
+    root: /Users/bryan/repos/charlie-kirk
     remote: https://github.com/ACT3ai/charlie-kirk.git      # THE cross-computer repo identity
     owner: { kind: personal, company_id: null }
     storage_kind: repo
@@ -698,7 +698,7 @@ hash of the normalized remote — because `repo_id` is sha1(absolute path) and t
 same repo on each computer** (tower `bad3cd4187d03401` vs laptop `dbd9c2c05564a3fc` for one charlie-kirk).
 A cross-computer diff joins units on `repo_uid` (or `remote`), **never** on `repo_id`.
 Emitting both ids is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `exportOneUnit()` (unit `repo_uid`) and `buildDebugDocument()` (scope `repo_uid`), via `repo-identity.ts` — `repoUidFor()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `exportOneUnit()` (unit `repo_uid`) and `buildDebugDocument()` (scope `repo_uid`), via `repo-identity.ts` — `repoUidFor()`.
 
 `file_rows` vs the sum of the counts is itself a signal: a repo with 252 rows on one computer and 9 on the
 other has a **scan** problem, not a **sync** problem — and that distinction, visible in one line, redirects
@@ -712,7 +712,7 @@ subtracts the two structural gaps instead of suspecting the classifier:
 nothing about them travels and every other computer has **no row at all**; the 45-vs-70 charlie-kirk delta
 was 24 shared + 46 laptop-invisible-to-tower vs 24 + 11 remote-only + 10 tower-invisible-to-laptop).
 Computed per unit in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `compressVisibility()`, from the same composed rows the metrics bucket.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` — `compressVisibility()`, from the same composed rows the metrics bucket.
 
 **No file lists live here** (§5.1 rule 4). Counts only.
 
@@ -820,7 +820,7 @@ The commit message names the artifact, e.g. `debug: bryan-mac-pro state export`,
 timeline of exports.
 
 The artifact-written signal the export must fire is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()`
 
 ---
 
@@ -930,15 +930,15 @@ product owner it is a place we expect to **keep growing** what we record over ti
 
 | Concern | File | Key symbols |
 | --- | --- | --- |
-| **The export engine** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` | `exportDebugInfo(opts)` · `resolveDebugTarget()` · `buildDebugDocument()` · `bucketMetrics()` · `enrichEntry()` |
-| **The HTTP surface** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/debug/debug.router.ts` | `POST /api/debug/export` · `GET /api/debug/export/target` |
-| **Shared types** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` | `DebugExportTarget` · `DebugExportResult` |
-| **API client** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` | `api.debugExportTarget()` · `api.debugExport(scope)` |
-| **Settings surface** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` | the **Power tools** section (§2.1) |
-| **More ▾ trigger** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` | `PageActions` — its `overflow` prop renders the entity catalog under the row's More ▾ (§2.2.1 update) |
-| **Repo catalog (shared)** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` | `useRepoActions()` — the §5.1 catalog both triggers render (§2.2.2); `RepoKebab` is now a thin wrapper |
-| **More ▾ mount** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` passed as `<PageActions overflow={…}>` in the action-links row |
-| **Commit naming** | `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` | `composeCommitMessage()` — the `debug/` → `"debug export"` classifier (§10.1) |
+| **The export engine** | `~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug-export.service.ts` | `exportDebugInfo(opts)` · `resolveDebugTarget()` · `buildDebugDocument()` · `bucketMetrics()` · `enrichEntry()` |
+| **The HTTP surface** | `~/repos/LargeFileBridge/code/packages/backend/src/modules/debug/debug.router.ts` | `POST /api/debug/export` · `GET /api/debug/export/target` |
+| **Shared types** | `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` | `DebugExportTarget` · `DebugExportResult` |
+| **API client** | `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` | `api.debugExportTarget()` · `api.debugExport(scope)` |
+| **Settings surface** | `~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` | the **Power tools** section (§2.1) |
+| **More ▾ trigger** | `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` | `PageActions` — its `overflow` prop renders the entity catalog under the row's More ▾ (§2.2.1 update) |
+| **Repo catalog (shared)** | `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` | `useRepoActions()` — the §5.1 catalog both triggers render (§2.2.2); `RepoKebab` is now a thin wrapper |
+| **More ▾ mount** | `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` | `repoMoreActions` passed as `<PageActions overflow={…}>` in the action-links row |
+| **Commit naming** | `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` | `composeCommitMessage()` — the `debug/` → `"debug export"` classifier (§10.1) |
 
 **Growth policy.** New fields are **added**, never renamed or repurposed, and `schema_version` bumps when a
 reader would need to behave differently. A reader that meets an unknown key must ignore it; a reader that

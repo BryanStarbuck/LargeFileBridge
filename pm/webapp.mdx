@@ -50,7 +50,7 @@ of the router when the gate is closed.
 
 The auth gate that renders `<SignInPage/>` unless the caller is authenticated and allow-listed is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()` component
 
 The Sign-In page then asks a **second** question — *is the server even able to sign anyone in?* — via
 `GET /api/health/auth-config`, which returns:
@@ -62,7 +62,7 @@ The Sign-In page then asks a **second** question — *is the server even able to
 
 The `GET /api/health/auth-config` signal that drives the button vs. the panel is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /auth-config` (delegates to `authConfig()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /auth-config` (delegates to `authConfig()`)
 
 ---
 
@@ -79,7 +79,7 @@ the tagline **"Pin your large files across your own computers."**
 
 The entry-page component that switches between the sign-in button and the remediation panel is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/sign-in/SignInPage.tsx` — `SignInPage()` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/sign-in/SignInPage.tsx` — `SignInPage()` component
 
 ---
 
@@ -197,7 +197,7 @@ under `large_files_bridge` keeps LFB's block from colliding with theirs.
 
 Reading both accepted shapes (with invisible-whitespace repair) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `loadGoogleCreds()`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `loadGoogleCreds()`
 
 **This is a secret file.** It holds the OAuth **client secret** and therefore lives **out of the repo**
 and **out of the state store** — never checked in, never inside `~/T/_large_files_bridge/`
@@ -249,7 +249,7 @@ server reports; it never assumes defaults the server may have overridden.
 
 Reporting the resolved credentials path/filename/existence (without the secret values) is handled in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `credentialsFileInfo()`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `credentialsFileInfo()`
 
 ---
 
@@ -291,7 +291,7 @@ signal** while it runs (the current endpoints simply **block** — `POST /api/re
 
 The blocking handlers Part II reshapes into job-registering endpoints are today in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /rescan` and `POST /:repoId/pin`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /rescan` and `POST /:repoId/pin`
 
 We follow the pattern proven in the sister app **EmailDeliveryHero** ([pm/progress_ui.mdx](../../EmailDeliveryHero/pm/progress_ui.mdx)):
 put the "something is happening" feedback **at the bottom**, **bottom-left**, **clear of the left bar**,
@@ -351,7 +351,7 @@ reconfigured:
 
 The single `<Toaster>` mount this section repositions and enlarges is today in code:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `<Toaster position="bottom-right" richColors />` in the root render
+`~/repos/LargeFileBridge/code/packages/frontend/src/main.tsx` — `<Toaster position="bottom-right" richColors />` in the root render
 
 Implementation notes (non-normative, see §14):
 
@@ -533,7 +533,7 @@ already over. Those call sites hop one macrotask (`yieldToLoop()`) after reporti
 
 Composed by `WorkNote` (phase + in-flight items + per-item detail → one line, with a ~250 ms floor on
 byte ticks) in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts`, class
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts`, class
 `WorkNote`, method `compose()`; stored by `report()` in `modules/progress/progress.registry.ts`; rendered
 by `Card` in `frontend/src/components/ProgressDock.tsx` and by the Progress column in
 `frontend/src/pages/processing/ProcessingItemsTable.tsx`.
@@ -561,7 +561,7 @@ endpoint with no registry job keeps exactly the card it always had. This is why
 card uses.
 
 Decided by `mergeJobs()` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/merge-jobs.ts`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/progress/merge-jobs.ts`.
 
 ---
 
@@ -580,7 +580,7 @@ Decided by `mergeJobs()` in
 * **The `limit` now comes from the shared Core Budget, not a hardcoded number.** `mapLimit()` is only
   the low-level **runner** — it caps parallelism at whatever `limit` it is handed. That `limit` is no
   longer a small constant baked into each caller; it is drawn from the **Core Budget helpers** that live
-  **beside** `mapLimit` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`
+  **beside** `mapLimit` in `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`
   — `coreBudget()` for **mass-compute** work (compression / fingerprinting / batch transcode, ~90% of
   cores, tunable) or `responsiveBudget()` for work that runs **alongside** interactive use (the pin
   pass and scan/index walks, `cores − 2`). So a bulk operation scales to the machine it runs on: callers

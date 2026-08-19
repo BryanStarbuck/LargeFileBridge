@@ -146,7 +146,7 @@ The dashboard has four stacked regions: **hero**, **metric tiles**, **gateway pa
 card**. What renders depends on the node state (§6).
 
 The dashboard shell — hero, metric-tile grid, gateway panel, security card, and the install/progress/error states — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` component
 
 ### 5.1 The healthy, running layout
 
@@ -179,7 +179,7 @@ The dashboard shell — hero, metric-tile grid, gateway panel, security card, an
   **Details ›** link.
 
 The gateway posture/URL summary shown in this panel is read in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `gatewaySummary()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `gatewaySummary()`
 * **Security card** — the only-our-content posture ([§8](#8-security-posture-card)), identical model
   to the one already shipped, kept at the bottom as the trust line.
 
@@ -220,13 +220,13 @@ node-maintenance actions belong beside them:
 | **Re-provide now** | Re-announces this node's pinned CIDs to the DHT on demand (`ipfs routing reprovide`) so the user's other computers can find freshly-pinned files immediately, honoring the `pinned`/`Provide.Strategy` posture (§8) — never announcing more than our own content. | Header or Security-card menu, right-aligned. | **proposed** |
 
 The existing header/hero controls render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` —
 `IpfsDashboardPage` (Refresh + on/off), with the auto-start row and upgrade card in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` (`AutostartRow`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` (`AutostartRow`,
 `UpgradeCard`).
 
 **Run garbage collection** and **Re-provide now** are not implemented yet, so no code pointer. When
-built they are two new node ops on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts`
+built they are two new node ops on `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts`
 (a `runGc()` / `reprovide()` running `ipfs repo gc` / `ipfs routing reprovide`), exposed through
 `ipfs.router.ts` and surfaced as dashboard header buttons — each an explicit-click action (charter
 consent posture) that changes *what is cached/announced*, never *what is served* beyond only-our-content.
@@ -275,19 +275,19 @@ and **not restated here**.
   hover-info region anywhere in the product** — the explanation always lands in that one left-bar panel.
 
 The pinset table and its columns render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
 
 The four icons on this surface (Pin + the three analysis icons — no Ignore) render through the one shared visual grammar and the reusable task-icon kit:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`;
-and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`;
+and `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` —
 `TASK_ICON`, `TaskIconHeader`, `TaskStatusCell` (typed on `LfbColumn.headerCell` / `LfbColumn.tight` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`); the analysis states come from the pin's `analysis: string[]` field built in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `buildTrackedIndex` (via `analysisOutputs`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`); the analysis states come from the pin's `analysis: string[]` field built in `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `buildTrackedIndex` (via `analysisOutputs`).
 
 Hovering an icon PUBLISHES its explanation; the left-bar panel RENDERS it; a global bridge connects the two, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` (publishes into the module-level store; renders nothing);
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (the left-bar panel that actually renders the prose);
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` (publishes into the module-level store; renders nothing);
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (the left-bar panel that actually renders the prose);
 and `HoverInfoBridge` (also in `HoverInfoRegion.tsx`), mounted **once, globally** in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, which forwards the store into the panel on **every** page.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, which forwards the store into the panel on **every** page.
 
 ---
 
@@ -297,7 +297,7 @@ The page is a small state machine over two booleans — **installed** and **runn
 **install** / **starting** jobs.
 
 Deriving the installed/running booleans, live metrics, gateway summary, and compliance for the dashboard payload is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()`
 
 Which URL owns each state (§12 page split): a **running** node renders on **`/ipfs`**; every
 **not-running** state renders on **`/ipfs/off`**. `/ipfs` redirects to `/ipfs/off` the moment the node
@@ -319,11 +319,11 @@ stops the daemon (RPC `shutdown`); flipping **On** starts it (spawn `ipfs daemon
 Both are **jobs with progress** (§7.2) because starting a daemon isn't instant.
 
 Starting or stopping the daemon behind the on/off toggle (and, on start, optionally installing reboot auto-start) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()`
 
 Choosing which URL renders (running dashboard vs. off page) and redirecting between them is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` (running; redirects to `/ipfs/off` when down)
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` — `IpfsOffPage` (off; redirects to `/ipfs` when healthy)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` (running; redirects to `/ipfs/off` when down)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` — `IpfsOffPage` (off; redirects to `/ipfs` when healthy)
 
 ---
 
@@ -354,7 +354,7 @@ progress pattern (server-side job, polled — so navigating away and back **re-a
 run; closing the tab does not cancel it).
 
 Detecting the platform, choosing the installer command, and running the single-flight, re-attachable install job is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startInstall()` (platform/command via `installPlan()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startInstall()` (platform/command via `installPlan()`)
 
 * Phases: **detecting** (find package manager / platform) → **installing** (run the installer,
   streaming its output) → **initializing** (`ipfs init` if the repo is new) → **starting** (spawn the
@@ -390,7 +390,7 @@ the user **deliberately** flipped the public-gateway [setting](./settings.mdx) o
 it's an amber *acknowledged* note, not a red error.
 
 Restoring the only-our-content defaults behind the security card's **Fix** is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`
 
 **A third state sits between red and green: "Restart needed" (amber).** Kubo reads every one of these keys
 at daemon **startup** ([ipfs.mdx §3.1.1](./ipfs.mdx#311-a-written-setting-is-not-a-live-setting-locked-learned-from-a-defect)),
@@ -405,7 +405,7 @@ The job's steps show in the usual `ProgressView`, and a failure reports the real
 ([§14.2.1](#1421-the-cause-travels-with-the-job-and-needs_migrate-is-one-click-locked-learned-from-a-defect)).
 
 Rendering the restart-needed state and its one action is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `SecurityCard` (`node.restartRequired` → `onRestart`) over `restartIpfsAndWait()`, fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `compliancePendingRestart()` and carried out by `ipfs-node.service.ts` — `restartDaemon()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `SecurityCard` (`node.restartRequired` → `onRestart`) over `restartIpfsAndWait()`, fed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `compliancePendingRestart()` and carried out by `ipfs-node.service.ts` — `restartDaemon()`
 
 > **LOCKED — enforce writes the MODERN key.** Enforcing compliance must set **`Provide.Strategy`**, never
 > `Reprovider.Strategy`. On Kubo 0.42+ writing the deprecated `Reprovider.Strategy` **re-creates** the
@@ -426,7 +426,7 @@ Kubo exit immediately) was hidden behind a timeout. The rule is: **surface the r
 symptom.**
 
 The failure the daemon actually reports is read from the daemon log tail and classified into one of these causes in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `diagnoseStartFailure()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `diagnoseStartFailure()`
 
 | # | Failure | How we detect it | What we show | Primary action(s) |
 | --- | --- | --- | --- | --- |
@@ -476,7 +476,7 @@ because nothing will pin and they may not know why.
 * On the IPFS page itself the banner is **suppressed** (the page already carries the full story).
 
 The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hiding when healthy — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner` component
 
 ---
 
@@ -504,7 +504,7 @@ The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hidi
   navigation) — same discipline as the scan job.
 
 The dashboard's REST surface (`GET /node`, `POST /daemon`, `POST /install`, `GET /install/status`, `POST /autostart`) is defined in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter`
 
 ### 11.1 The `ipfs` binary is resolved to an ABSOLUTE path, never spawned by bare name (LOCKED)
 
@@ -525,7 +525,7 @@ did not exist a moment ago exists now, and a memoized "not found" would report a
 failure.
 
 Resolving the binary once to a stable absolute path is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-bin.ts` — `stableIpfsBin()`, `ipfsBinResolved()`, `resetIpfsBinCache()`; consumed by `ipfs-node.service.ts` (`ipfsInstalled()`, `ensureInit()`, `startDaemon()`), `ipfs-config-health.service.ts` (`cliVersion()`) and `ipfs-autostart.service.ts` (`resolveIpfsBin()`). Regression test: `code/packages/backend/src/modules/ipfs/ipfs-bin.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-bin.ts` — `stableIpfsBin()`, `ipfsBinResolved()`, `resetIpfsBinCache()`; consumed by `ipfs-node.service.ts` (`ipfsInstalled()`, `ensureInit()`, `startDaemon()`), `ipfs-config-health.service.ts` (`cliVersion()`) and `ipfs-autostart.service.ts` (`resolveIpfsBin()`). Regression test: `code/packages/backend/src/modules/ipfs/ipfs-bin.spec.ts`.
 
 ---
 
@@ -583,10 +583,10 @@ fixes.
   never set up reboot auto-start on our own; the user chooses it.
 
 The IPFS-off page — the two-button choice, the single-button fallbacks, the Install card, and the shared progress/error views — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` — `IpfsOffPage` component (`StoppedCard` = the two-button choice)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` — `IpfsOffPage` component (`StoppedCard` = the two-button choice)
 
 Reusable progress/error/security/auto-start building blocks shared with the running dashboard live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx`
 
 ---
 
@@ -695,19 +695,19 @@ Kubo path is deleted. Until that lands, §13.1–13.2 are the contract.
   serves.
 
 The reboot auto-start LaunchAgent — status, install (write plist + `launchctl bootstrap`/`enable`), and remove — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `autostartStatus()`, `installAutostart()`, `removeAutostart()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `autostartStatus()`, `installAutostart()`, `removeAutostart()`
 
 Reading launchd's REAL state (§13.1) — registered vs. actually ran, and the daemon's own failure line — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `readLaunchd()`, `isDisabled()`, `readFailureReason()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `readLaunchd()`, `isDisabled()`, `readFailureReason()`
 
 Detecting a foreign agent that already auto-starts an `ipfs daemon`, so we never become the second owner (§13.2), is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `findConflict()`, and the conflict guard at the top of `installAutostart()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `findConflict()`, and the conflict guard at the top of `installAutostart()`
 
 Installing reboot auto-start as part of a "turn on + keep on" start is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()` (the `autostart` option, phase `autostart`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()` (the `autostart` option, phase `autostart`)
 
 The running dashboard's *"Start on reboot"* toggle row is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `AutostartRow` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `AutostartRow` component
 
 ---
 
@@ -727,7 +727,7 @@ We read the node's config file (`$IPFS_PATH/config`, default `~/.ipfs/config`) a
 severity, a plain-language title, the exact keys involved, and whether we can **auto-fix** it.
 
 Reading `$IPFS_PATH/config`, parsing it, and classifying every issue (missing / unreadable / deprecated / non-compliant) into a health report is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `configHealth()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `configHealth()`
 
 | Issue class | Severity | Example / trigger | Auto-fixable? |
 | --- | --- | --- | --- |
@@ -751,10 +751,10 @@ port busy, lock held, or genuinely-slow/unknown. Only an **unclassified** stall 
 timeout — and even then we show the captured log tail.
 
 Classifying the daemon's own output (deprecated-config / migrate / port-in-use / lock-held / unknown) into a cause + suggested fix is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `diagnoseStartFailure()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `diagnoseStartFailure()`
 
 Wiring that diagnosis into the start/install jobs — so the job's `error` names the real cause and, when it's a config crash, hands off to the repair — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` / `startInstall()` / `controlDaemon()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` / `startInstall()` / `controlDaemon()`
 
 #### 14.2.1 The CAUSE travels with the job, and `needs_migrate` is ONE CLICK (LOCKED, learned from a defect)
 
@@ -771,7 +771,7 @@ rule that we never remove the way out by hand). `--migrate` is a **start** flag,
 whichever job failed — an install that got as far as the daemon leaves the same repo behind.
 
 Carrying the classified cause on the job, and offering the migration as the primary action, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `fail()` (stamps `IpfsInstallJob.cause`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ErrorPanel` and wired by `IpfsOffPage.tsx` (`onMigrate` → `api.ipfsDaemon({ action: "start", migrate: true })`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `fail()` (stamps `IpfsInstallJob.cause`), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ErrorPanel` and wired by `IpfsOffPage.tsx` (`onMigrate` → `api.ipfsDaemon({ action: "start", migrate: true })`)
 
 ### 14.3 The Config-health card — review, then fix (confirm-then-apply, LOCKED)
 
@@ -811,10 +811,10 @@ apply → verify**:
   reversible.
 
 Backing up the config and applying the confirmed repairs (remove deprecated keys, migrate values, recreate defaults, or run the repo migration), then re-verifying, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `repairConfig()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `repairConfig()`
 
 The Config-health card — the plain-language change list, the confirm-then-apply button, the manual disclosure, and the post-fix retry — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ConfigHealthCard` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ConfigHealthCard` component
 
 ### 14.4 Where config health appears
 
@@ -843,7 +843,7 @@ offers a guided upgrade — with the same **confirm-then-do** posture as everyth
   service just to nag — consistent with the app's local-first, no-surprise-network posture.
 
 Reading the installed version, comparing it to the recommended baseline, and (best-effort, local) asking the package manager whether a newer build exists is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `upgradeInfo()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts` — `upgradeInfo()`
 
 ### 15.2 The Upgrade card — willingness, then upgrade
 
@@ -869,10 +869,10 @@ Reading the installed version, comparing it to the recommended baseline, and (be
   the dist.ipfs.tech link — never a broken button.
 
 Running the package-manager upgrade as a single-flight job (stop → upgrade → restart → re-verify) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startUpgrade()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startUpgrade()`
 
 The Upgrade card is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `UpgradeCard` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `UpgradeCard` component
 
 ---
 
@@ -913,7 +913,7 @@ detail**.
   click away.
 
 The redesigned turn-on hero (status glyph + human sentence + phase + step chips) wrapping the collapsible terminal log is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ProgressView` (hero) + `LogBox` (collapsible detail)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `ProgressView` (hero) + `LogBox` (collapsible detail)
 
 ### 16.2 This applies everywhere a job runs
 
@@ -930,7 +930,7 @@ running**, or (3) **not set to restart on reboot**, the app should **guide them 
 that specific scenario. These are three distinct destinations with three distinct designs.
 
 How the app picks the scenario on entry — checking installed → running → autostart, in that priority order — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner` (chooses the nudge + destination) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` (the destination pages)
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner` (chooses the nudge + destination) and `~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsOffPage.tsx` (the destination pages)
 
 Priority order (the first true one wins): **not installed → not running → running but no reboot
 auto-start**. A machine that is installed + running + auto-starting is fully healthy → **no nudge at
@@ -978,7 +978,7 @@ all** (the charter's no-nagging rule holds).
   to its quiet "on ✓" status (§18). No daemon restart, no interruption.
 
 The dismissible, one-time auto-start encouragement (distinct from the blocking "can't pin" banner, shown only when running-but-not-auto-starting) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner`
 
 ---
 
@@ -1002,7 +1002,7 @@ and reduce it to a **quiet status line**.
   filled** button precisely because it's the encouraged path).
 
 The prominence switch — filled blue CTA when off vs. muted status line when on — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `AutostartRow` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `AutostartRow` component
 
 ---
 
@@ -1030,10 +1030,10 @@ to the app's **existing logging system**, so there is always a durable fault tra
   a timeout.
 
 The two-file logging system (`log.log` = everything, `error.err` = the WARN/ERROR/FATAL fault trail) IPFS code writes through is defined in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the exported `log`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the exported `log`
 
 The IPFS fault sites that must record to the trail (start-failure diagnosis, config repair, upgrade, autostart, compliance) log via `log.error` / `log.warn` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts`, `ipfs-node.service.ts`, `ipfs-autostart.service.ts`, and `ipfs.service.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-config-health.service.ts`, `ipfs-node.service.ts`, `ipfs-autostart.service.ts`, and `ipfs.service.ts`
 
 ---
 
@@ -1205,10 +1205,10 @@ transfer-urgency key ahead of `peers`. Until that is decided and built, the orde
 **pull it down** ([warnings.mdx §10.8.12a](./warnings.mdx#10812a-where-this-warnings-list-actually-comes-from--one-manifest-and-the-remote-only-row-locked)).
 
 The panels' counts come from the same `RepoDetail` the tab already reads, composed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends the remote-only rows) and `computeRepoDetail()` (`taskMetrics`), with the pull-down list itself from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends the remote-only rows) and `computeRepoDetail()` (`taskMetrics`), with the pull-down list itself from `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()`.
 
 The tab's default sort is declared in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS.ipfs.defaultSort` (`[{ id: "peers", desc: false }, { id: "size", desc: true }]`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS.ipfs.defaultSort` (`[{ id: "peers", desc: false }, { id: "size", desc: true }]`).
 
 <!--
   This is the IPFS DASHBOARD / node control-panel spec (the left-bar LANDING page at /ipfs), distinct

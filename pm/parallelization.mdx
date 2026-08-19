@@ -45,7 +45,7 @@ Which budget a consumer uses is a **deliberate choice per operation** (§3 table
 "for some things it's appropriate, for others not" the user called out.
 
 The two budgets and the logical-core count come from ONE shared helper, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `logicalCores()` /
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `logicalCores()` /
 `coreBudget(fraction?)` (mass-compute, reads `performance.max_core_fraction`) / `responsiveBudget()`
 (`cores − 2`), alongside the existing bounded-runner `mapLimit()` ([webapp.mdx §13](./webapp.mdx)).
 
@@ -79,7 +79,7 @@ thread cap is applied **only** when the queue is fanning many jobs out at once.
 
 The per-job thread cap plumbed into the compression tools (so a batched job stays inside its slice while a
 one-off job uses the whole machine) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `CompressFileOpts.threads` (fed to `ffmpeg -threads`, `oxipng --threads`, `cwebp` MT on/off, `magick -limit
 thread`); omitted for a one-off compress so the tool uses its own all-core default.
 
@@ -123,10 +123,10 @@ touching code:
   resolved number shown (e.g. *"≈ 14 of 16 cores"*).
 
 The setting field lives in the app config schema, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance`
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance`
 (`max_core_fraction`, default `0.9`); read by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()` and
-edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()` and
+edited from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
 
 ---
 

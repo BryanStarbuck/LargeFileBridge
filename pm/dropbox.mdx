@@ -46,7 +46,7 @@ account, not to any one repo. So it carries the **computer-scope** Sync List
 every non-repo `directories:` entry.
 
 Walking the whole-computer roots — every managed repo unit plus the non-repo computer unit that the computer-scope list covers — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
 
 It does **not** carry per-repo lists — those ride the **company sync repo** over git (not the working
 repo — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx),
@@ -132,7 +132,7 @@ The resolved backbone root is then `<account root>/LargeFileBridge/` (or whateve
 `settings.backbones.dropbox.enabled` — when `false`, LFB neither reads nor writes Dropbox at all.
 
 Resolving and validating a configured root path (tilde expansion, absolute-path resolution, and the existing-directory check that lets us mark a root unavailable rather than error) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `resolveDir()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `resolveDir()`
 
 ---
 
@@ -153,7 +153,7 @@ reject, **never trust blindly**.
 | **Foreign owner** | A peer list whose `origin.owner` is not an allow-listed user | **Never adopt it** ([hub §5.5](./sync_list.mdx#55-backbone-delivered-hazards-the-reader-must-expect)). It is the user's own Dropbox, but only allow-listed owners' lists are reconciled. |
 
 Skipping metadata / junk directories while walking a backbone subtree (the shared hard-skip set that keeps `.dropbox` / `.cache` and similar bookkeeping out of the walk) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
 
 ---
 
@@ -172,7 +172,7 @@ LFB learns that a peer's list changed two ways, both feeding the same reconcile 
   `LargeFilesBridge_SyncList.yaml`, and reconcile any whose mtime/size changed since last seen.
 
 Detecting which entries changed since the last poll by comparing each file against the previously recorded size/path set is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()`
 
 When a peer's file changes, LFB **reconciles it** — verifies local claims against the real filesystem
 + IPFS pinset ([hub §5.1](./sync_list.mdx#51-local-claims-are-verified-not-believed)), treats absences
@@ -310,7 +310,7 @@ read-only direction:
   reject rules of §4 apply only to the *backbone* reading the YAML list, not to a human browsing folders.
 
 The Dropbox mount is discovered and classified for the File System browser (the `provider: "dropbox"` row) in code, reusing the §3 location logic:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (the `Dropbox`-prefixed branch) · surfaced on the home column by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir` block + symlink de-dup).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (the `Dropbox`-prefixed branch) · surfaced on the home column by `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir` block + symlink de-dup).
 
 ---
 
@@ -352,11 +352,11 @@ the batch never enters Dropbox — only the YAML list does, per the LOCKED rule 
   [processing.mdx](./processing.mdx)).
 
 Producing the Dropbox batch during scan recalc, and naming/replacing its YAML, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
 `TodoBatchCalcEngine.recalcForStorage(storage)` writing via
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
 `batchFileName(storage)` (→ `dropbox_2_do.yaml`); the transcribe discovery walk is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
 
 ---
 

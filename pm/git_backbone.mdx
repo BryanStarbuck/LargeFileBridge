@@ -58,7 +58,7 @@ Two hard boundaries the charter imposes (§7):
   a fast-forwardable push; anything it cannot reconcile it **surfaces**, it does not overwrite (§3.3).
 
 The granted operation set, gated behind the per-storage "Git backbone enabled" flag, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` class (`fetch()`, `merge()`, `commitSelf()`, `push()`); the enable gate is read from the per-storage settings by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (`backing.dedicated_repo`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` class (`fetch()`, `merge()`, `commitSelf()`, `push()`); the enable gate is read from the per-storage settings by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (`backing.dedicated_repo`).
 
 ---
 
@@ -82,7 +82,7 @@ commands, including automatic merge"* — is met by delegating to git itself and
 `simple-git`.
 
 The `simple-git` dependency (added to the backend workspace) and the single wrapper that all Git operations flow through are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo(workingDir)` returns a configured `SimpleGit` instance (system-git, non-interactive env). Declared in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `dependencies.simple-git`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo(workingDir)` returns a configured `SimpleGit` instance (system-git, non-interactive env). Declared in `~/repos/LargeFileBridge/code/packages/backend/package.json` — `dependencies.simple-git`.
 
 ---
 
@@ -128,7 +128,7 @@ user-managed checkout (local path) or an LFB-managed cache clone (URL). §4–§
 working directory and do not care which shape it came from.
 
 Resolving the configured remote to a working directory — using the local path in place, or clone-on-first-use / open-thereafter for a URL — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)` (returns `{ dir, origin }`; clones a URL remote into `pin/s/<id>/git/` via `resolveStateDir()`, opens a local path directly). The remote itself (kind + value) is persisted per-storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)` (returns `{ dir, origin }`; clones a URL remote into `pin/s/<id>/git/` via `resolveStateDir()`, opens a local path directly). The remote itself (kind + value) is persisted per-storage by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()`.
 
 ---
 
@@ -188,7 +188,7 @@ The attribute lines LFB writes are bare filenames (`manifest.yaml`, `decisions.y
 segment would silently stop union-merging the mirror, and that is a defect to hunt for.
 
 The union-merge patterns (bare filenames, matched at any depth, so both `repos/<repoKey>/` and `repos/<repoUid>/` are covered) are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` written by `GitBackbone.ensureMergeAttributes()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` written by `GitBackbone.ensureMergeAttributes()`.
 
 ### 4.2.1 The sync repo's committed tracking payload must never be git-ignored (LOCKED, learned from a defect)
 
@@ -236,7 +236,7 @@ git-ignores the very tracking text a Git backbone exists to carry.
 > different places (code repo → `.lfbridge/`; SDL → the root) and carry different payloads.
 
 Ensuring the tracking text is committable on every backbone commit (strip any ignore over the SDL's root metadata / `devices/` / `repos/`, plus a legacy bare `.lfbridge/` line) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.ensureSdlCommittable()` (called from `commitAndPush()` alongside `ensureMergeAttributes()`). The complementary fix — LFB no longer **adds** an ignore over its own tracking text for **any** storage: a company/Personal **sync repo** must commit its root payload, and a `repo`-type **code repo** commits its Category-A `.lfbridge/` content while its Category-B tracking state is written to Local Storage instead of the repo — is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `reconcileLfbridgeIgnore(root, type)` (now `unignoreLfbridge` for every type; Category-B never lands in a working repo), called from `ensureStorage()` and `ensureBackingLocations()`. Which base directory a root's tracking text hangs off — and therefore what must stay committable — is resolved by storage **kind** in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.ensureSdlCommittable()` (called from `commitAndPush()` alongside `ensureMergeAttributes()`). The complementary fix — LFB no longer **adds** an ignore over its own tracking text for **any** storage: a company/Personal **sync repo** must commit its root payload, and a `repo`-type **code repo** commits its Category-A `.lfbridge/` content while its Category-B tracking state is written to Local Storage instead of the repo — is `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `reconcileLfbridgeIgnore(root, type)` (now `unignoreLfbridge` for every type; Category-B never lands in a working repo), called from `ensureStorage()` and `ensureBackingLocations()`. Which base directory a root's tracking text hangs off — and therefore what must stay committable — is resolved by storage **kind** in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
 
 > **The user-facing Git Ignore action honors this too (LOCKED).** The **Git Ignore dialog**
 > ([git_ignore.mdx](./git_ignore.mdx)) — the deliberate, user-driven way to git-ignore big files so they
@@ -306,7 +306,7 @@ table one-for-one:
   can rebuild from Local Storage.
 
 Classifying a conflicted path and applying its resolution is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolutionFor(path)` (the `regenerate` / `ours` / `union` / `null` classifier) and `GitBackbone.resolveConflicts()` (per-path application, returning `{ resolved, unresolved }`), with the by-hand union in `GitBackbone.unionMergeFile()`; the attribute patterns that make most of this unnecessary in the first place are `UNION_MERGE_PATHS` (§4.2).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolutionFor(path)` (the `regenerate` / `ours` / `union` / `null` classifier) and `GitBackbone.resolveConflicts()` (per-path application, returning `{ resolved, unresolved }`), with the by-hand union in `GitBackbone.unionMergeFile()`; the attribute patterns that make most of this unnecessary in the first place are `UNION_MERGE_PATHS` (§4.2).
 
 #### 4.3.2 A repo with no `origin` is a loud, standing fault (LOCKED)
 
@@ -324,10 +324,10 @@ their computers were in sync.
   does, the always-push-when-ahead rule (§6.1) delivers everything that piled up.
 
 Setting the no-origin problem (instead of returning silently) after a local commit is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `hasOrigin()` branch that now sets `result.problem` and logs a WARN).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `hasOrigin()` branch that now sets `result.problem` and logs a WARN).
 
 Performing the automatic merge (ort strategy, `--no-edit`), writing the `merge=union` `.gitattributes` when the backbone is enabled, and the abort-and-surface fallback on an unresolvable conflict, are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `merge()` (calls `git.merge(['--no-edit'])`, catches a conflict → `git.merge(['--abort'])` and returns a `GitConflict` the pass records) and `ensureMergeAttributes(dir)` (writes `.gitattributes`). The surfaced problem is written into the storage's `status.yaml` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `merge()` (calls `git.merge(['--no-edit'])`, catches a conflict → `git.merge(['--abort'])` and returns a `GitConflict` the pass records) and `ensureMergeAttributes(dir)` (writes `.gitattributes`). The surfaced problem is written into the storage's `status.yaml` by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)`.
 
 ---
 
@@ -362,7 +362,7 @@ spreading `process.env` keeps that spelling) rather than adding a second one the
 between.
 
 Binary resolution and the `simple-git` hand-off are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-bin.ts` — `stableGitBin()`, `isSimpleGitSafeBinary()`, `withGitOnPath()`; applied by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git-bin.ts` — `stableGitBin()`, `isSimpleGitSafeBinary()`, `withGitOnPath()`; applied by `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()`
 
 ## 5. Credentials for a URL remote — the OS git credential helper, never a prompt (LOCKED)
 
@@ -382,7 +382,7 @@ its own password prompt and **never** stores a plaintext password in its own con
   user stays in control of what LFB can reach.
 
 Running git with a non-interactive, credential-helper-backed environment and turning an auth failure into a surfaced storage problem (not a hang) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()` sets `GIT_TERMINAL_PROMPT=0` and inherits the OS credential helper; `push()` / `fetch()` classify an auth error into a `GitAuthProblem` surfaced by `pinStorageUnit(id)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `openRepo()` sets `GIT_TERMINAL_PROMPT=0` and inherits the OS credential helper; `push()` / `fetch()` classify an auth error into a `GitAuthProblem` surfaced by `pinStorageUnit(id)`.
 
 ### 5.2 An inherited ASKPASS variable must never reach a git child (LOCKED, learned from a defect)
 
@@ -445,11 +445,11 @@ device's own `devices/<self>.yaml` → commit → push — for every Git-backed 
 storage is opted into IPFS pinning. Its step 2 fetch+merge runs **every 10 minutes even when this computer
 has nothing to change**, so device edits made on another computer are pulled down. Because it and the
 15-minute pass share one process, both take a **per-storage lock** so they never run git on the same
-working copy at once (`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts`
+working copy at once (`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts`
 — `ensureDeviceRegistered(id)` under `withStorageGitLock`).
 
 Driving this ordered cycle for each Git-backed storage inside the full pass — fetch/merge before reconcile, commit/push after, with the non-fast-forward retry — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitPin(...)` and `GitBackbone.commitAndPush()` after, both from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest pin over IPFS alone.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` calls `GitBackbone.pull()` (fetch+merge) before `runUnitPin(...)` and `GitBackbone.commitAndPush()` after, both from `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` (`pull()`, `commitAndPush()` with the fetch-merge-push retry). Only storages whose `backing.dedicated_repo.enabled` is true run the cycle; the rest pin over IPFS alone.
 
 ### 6.0 The cycle must SAY which step it is on (added 2026-08-06)
 
@@ -467,13 +467,13 @@ rather than spinning.
 The hook is **optional at every call site**: a caller with no card passes nothing and the cycle behaves
 exactly as before — no cycle ever depends on being watched.
 
-*Reported in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+*Reported in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
 the `GitPhaseNote` callback threaded through `GitBackbone.pull()` / `pullInner()` / `pullReadOnly()` /
 `commitAndPush()` / `commitAndPushInner()`; *supplied by:*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
 `pinStorageUnit(id, onPhase)` / `syncStorageText(id, onPhase)`, whose `onPhase` writes into that storage's
 per-unit detail on the pass card (`pinAll()`), with `storageGitLockBusy(id)` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` supplying the
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` supplying the
 "waiting for the git cycle already running on this storage" line.
 
 ### 6.1 Always push when the branch is ahead — deliver stranded / foreign commits (LOCKED, learned from a defect)
@@ -500,7 +500,7 @@ that is ahead. This is the Git-layer half of the broader resilience contract in
 (and its §4 foreign-committer coexistence rule).
 
 Attempting the push whenever the branch is ahead of the remote — not only after a fresh local commit — via an ahead-count check is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`, treating a missing upstream ref as "push to establish it").
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`, treating a missing upstream ref as "push to establish it").
 
 ### 6.2 A mirror write nudges its SDL's backbone — debounced (LOCKED)
 
@@ -527,7 +527,7 @@ durable artifacts already use. Rule owned by
   `noteArtifactWritten()` a path outside the storage you mean.
 
 Announcing a mirror write to its SDL so the backbone commits + pushes it on a debounce is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (resolves the storage by root prefix via `storageIdForPath()`, which is why it is handed the SDL-side destination), invoked from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (passes `dst`, not the repo root).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (resolves the storage by root prefix via `storageIdForPath()`, which is why it is handed the SDL-side destination), invoked from `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (passes `dst`, not the repo root).
 
 ### 6.3 The push retry budget — three attempts with backoff (LOCKED)
 
@@ -558,7 +558,7 @@ is now **built**, and this section is where the engine states it.
   record in §6.4.
 
 The three-attempt push budget with backoff, its per-attempt re-pull, and its per-attempt logging are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `ATTEMPTS` loop, each iteration calling `GitBackbone.pull()` before the next attempt); the jittered wait itself is `pushRetryDelayMs()` in the same file.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `ATTEMPTS` loop, each iteration calling `GitBackbone.pull()` before the next attempt); the jittered wait itself is `pushRetryDelayMs()` in the same file.
 
 ---
 
@@ -582,11 +582,11 @@ exact drift LFBridge exists to prevent. So exhaustion is a **fact**, not a log l
   and Large File Bridge is still retrying.
 
 The durable record, the jittered re-arm and the self-clearing rule are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/push-health.service.ts` — `recordPushFailure()`, `armUnpushedRetry()` / `unpushedRetryDelayMs()`, and `recordPushSuccess()`; the git cycle calls them from `GitBackbone.noteUnpushed()` in `git.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/push-health.service.ts` — `recordPushFailure()`, `armUnpushedRetry()` / `unpushedRetryDelayMs()`, and `recordPushSuccess()`; the git cycle calls them from `GitBackbone.noteUnpushed()` in `git.service.ts`.
 
 Surfacing it to the user is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (the `backbonePush` field), rendered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `BackbonePushCard` / `unsharedNote()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (the `backbonePush` field), rendered by
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `BackbonePushCard` / `unsharedNote()`.
 
 **Why there is no cross-process file lock for the git cycle.** Only one Large File Bridge backend can run
 per computer (`shared/single-instance.ts`, `backend.lock`), and the launchd worker does no git of its own —
@@ -623,13 +623,13 @@ pull and push."* Three rules, each learned from a live failure on 2026-07-29:
    collision every pass** so it appears in the fault trail and in a debug export.
 
 Not re-writing an unchanged document is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()`, used by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()`, used by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
 
 Keeping the adopted CID out of the shared manifest is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/cid-equivalence.service.ts` — `noteCidEquivalence()` / `pinsetHasContent()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/cid-equivalence.service.ts` — `noteCidEquivalence()` / `pinsetHasContent()`, called from `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`.
 
 Naming two storages that share one backbone is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `warnOnDuplicateBackbones()`, called at the top of `pushDeviceBackbone()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `warnOnDuplicateBackbones()`, called at the top of `pushDeviceBackbone()`.
 
 ---
 
@@ -733,7 +733,7 @@ point with a second door in it is not a choke point. The checkpoint therefore ru
 commits only what survives it — while still leaving the tree clean, so the merge can always proceed.
 
 Applies the gate to the pre-merge checkpoint, and commits only the paths that survive it, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`, class
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`, class
 `GitBackbone`, methods `checkpointOwnWrites()` → `dropVolatileOnlyChanges()` → `stagedOwnPaths()`.
 Regression test: `code/packages/backend/src/modules/git/checkpoint-quiet-gate.spec.ts`.
 
@@ -757,16 +757,16 @@ about whether this computer has news to author; concluding a merge is about leav
 usable state. An unfinished merge is far worse than a redundant commit.
 
 Always concluding an in-progress merge is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.mergeInProgress()` (asked via `git rev-parse --git-path MERGE_HEAD`, never by joining `.git/`, so a linked worktree's gitlink file cannot hide it), consulted by both `dropVolatileOnlyChanges()` and the commit decision in `commitAndPushInner()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.mergeInProgress()` (asked via `git rev-parse --git-path MERGE_HEAD`, never by joining `.git/`, so a linked worktree's gitlink file cannot hide it), consulted by both `dropVolatileOnlyChanges()` and the commit decision in `commitAndPushInner()`.
 
 Not re-writing an unchanged document, canonically, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()` (which prepends `updated_at` to the caller's volatile list) and `canonicalize()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYamlIfChanged()` (which prepends `updated_at` to the caller's volatile list) and `canonicalize()`.
 
 Declaring the device file's volatile network fields is done in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`, passing `volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"]`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`, passing `volatile: ["device.hardware.primary_ip", "device.hardware.ip_addresses"]`.
 
 Refusing a commit whose whole diff is volatile is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` immediately after `git add -A`, with the per-document volatile registry in `volatileYamlPathsFor()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` immediately after `git add -A`, with the per-document volatile registry in `volatileYamlPathsFor()`.
 
 **The "last checked" marker of §6.6.1 is `repo_storage.last_scan`**, and it is the volatile field with the
 widest blast radius: every company/Personal SDL mirrors one `repos/<repoUid>/repo_storage.yaml` per tracked
@@ -778,10 +778,10 @@ machine carrying that build, so a peer on an older one re-stamps the real value,
 and the two ping-pong one commit per cycle until the whole fleet upgrades (§6.6.4).
 
 Scrubbing the scan heartbeat out of the mirrored copy is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `scrubVolatileRepoStorage()`, called from `mirrorToSyncRepo()`; the receive side restores this machine's own stamp in `reconcileFromSyncRepo()` so a pull never blanks it and re-triggers a stale-scan re-scan.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `scrubVolatileRepoStorage()`, called from `mirrorToSyncRepo()`; the receive side restores this machine's own stamp in `reconcileFromSyncRepo()` so a pull never blanks it and re-triggers a stale-scan re-scan.
 
 Refusing a commit whose whole diff is the scan heartbeat is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `volatileYamlPathsFor()`, returning `["repo_storage.last_scan"]` for any `repo_storage.yaml` path (`isRepoStorageYamlPath()`, which matches the current `repos/<repoUid>/` mirror and the legacy `.lfbridge/` shape alike).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `volatileYamlPathsFor()`, returning `["repo_storage.last_scan"]` for any `repo_storage.yaml` path (`isRepoStorageYamlPath()`, which matches the current `repos/<repoUid>/` mirror and the legacy `.lfbridge/` shape alike).
 
 #### 6.6.3 Policing it — quiet is a health property, so measure it
 
@@ -804,8 +804,8 @@ a commit count nobody is looking at. It regressed twice in one day. So it is **m
   changed lines are all one volatile key, it is churn by definition.
 * **Regression tests own this permanently.** The idle-cycle test must run the **real** commit path over a
   **real** git repo across **repeated** passes and assert the commit count never moves —
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/quiet-gate.spec.ts`, plus the
-  convergence tests in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.spec.ts`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/quiet-gate.spec.ts`, plus the
+  convergence tests in `~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.spec.ts`.
   A single-comparison unit test is **not** sufficient evidence — it is exactly what passed while the live
   repo took 348 commits a day.
 
@@ -887,10 +887,10 @@ not go stale on a 5-minute timescale, and 288 fetches a day would be exactly the
 traffic §6.6 is about removing.
 
 Knowing and publishing the build is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD` (bump it deliberately), written into the device file by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+`~/repos/LargeFileBridge/code/packages/shared/src/build.ts` — `APP_BUILD` (bump it deliberately), written into the device file by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
 
 Detecting staleness, fast-forwarding the checkout, and naming stale peers is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `buildState()` / `runningStaleCode()` / `runSelfUpdate()` / `stalePeersAcrossStorages()` / `stalePeerMessage()`, driven from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `checkOwnBuild()` on the existing watchdog tick, and reported by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /api/health`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/self-update.service.ts` — `buildState()` / `runningStaleCode()` / `runSelfUpdate()` / `stalePeersAcrossStorages()` / `stalePeerMessage()`, driven from `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `checkOwnBuild()` on the existing watchdog tick, and reported by `~/repos/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — `GET /api/health`.
 
 ### 6.8 The write switch — auto-commit can be turned OFF per computer
 
@@ -924,7 +924,7 @@ files instead, and the next cycle retries. Divergence — this computer holding 
 is the only state that earns the "reconciling would require a merge commit" wording.
 
 Reading the switch and the read-only pull are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `gitAutoCommitEnabled()` / `GitBackbone.pullReadOnly()` (clearing its own blockers via `GitBackbone.clearBlockingOwnFiles()`, retrying with `GitBackbone.tryFastForward()`), gating `GitBackbone.commitAndPush()`; artifact delivery honors it in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `convergeWorkingRepoFromOrigin()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `gitAutoCommitEnabled()` / `GitBackbone.pullReadOnly()` (clearing its own blockers via `GitBackbone.clearBlockingOwnFiles()`, retrying with `GitBackbone.tryFastForward()`), gating `GitBackbone.commitAndPush()`; artifact delivery honors it in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` / `convergeWorkingRepoFromOrigin()`.
 
 A commit or push is only ever as good as the worker that triggers it, so the switch's honest counterpart
 is the OS scheduler honoring `<worker>_process.enabled` — see [scan.mdx §3.0](./scan.mdx).
@@ -966,7 +966,7 @@ has the same shape of rule and the same default:
   the backbone at a discovered repo.
 
 Enforcing that Git operations only ever target a user-configured storage backbone (never a merely-discovered code repo) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote()` returns a backbone **only** for an explicit dedicated-repo backing OR a company/personal storage whose own `<root>/.git` exists (a `repo`-type code repo returns null); `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` is constructed only from that resolved remote, and there is no entry point that runs `push`/`fetch` on an arbitrary path.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote()` returns a backbone **only** for an explicit dedicated-repo backing OR a company/personal storage whose own `<root>/.git` exists (a `repo`-type code repo returns null); `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone` is constructed only from that resolved remote, and there is no entry point that runs `push`/`fetch` on an arbitrary path.
 
 ---
 

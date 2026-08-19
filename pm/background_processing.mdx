@@ -132,10 +132,10 @@ Two lifecycle rules that fall out of the table and are **LOCKED**:
   hopeful one.
 
 The eight-stage transit is driven in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` (planned→enqueued) / `takeRunnable()` (→admitted) / `start()` (→started) / `runTask()` (running→terminal→recorded)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` (planned→enqueued) / `takeRunnable()` (→admitted) / `start()` (→started) / `runTask()` (running→terminal→recorded)
 
 The dock card that makes `started`/`running` visible is registered per item in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `track(kind, target, body)` / `end()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `track(kind, target, body)` / `end()`
 
 ---
 
@@ -162,7 +162,7 @@ The line format, verbs, and required fields are **not** defined here — see
 highest-volume ops in the product and the exact ops the incident killed.
 
 The runners that must gain a START/BEGIN line are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158) · `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86)
 
 ### R2 — Never block the event loop
 
@@ -175,7 +175,7 @@ monitored.** A synchronous call at 24-way concurrency does not slow the page —
 the user loses the only instrument they had. Any new op inherits this rule on day one.
 
 The async transcode + base64 read on the describe hot path is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — the `spawn` + `fs.promises` path (formerly `spawnSync`/`readFileSync` — [performance.mdx P-27](./performance.mdx))
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — the `spawn` + `fs.promises` path (formerly `spawnSync`/`readFileSync` — [performance.mdx P-27](./performance.mdx))
 
 ### R3 — Admit by every scarce resource, not just cores
 
@@ -196,7 +196,7 @@ from the *core* budget and must not therefore be exempt from *all* budgets: 24 i
 unbounded on the axis nobody was counting.
 
 The count-only describe cap and the budget-aware admission scan that must gain a byte term are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `DESCRIBE_CONCURRENCY` (~57) / `capFor()` (~68) / `takeRunnable()` (~239)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `DESCRIBE_CONCURRENCY` (~57) / `capFor()` (~68) / `takeRunnable()` (~239)
 
 ### R4 — Isolate per item
 
@@ -215,7 +215,7 @@ items**; it offers **zero** protection against a **bad aggregate**. That is prec
 restatements of R4. **R4 is the reason a bad file is cheap; it is not a reason the queue is safe.**
 
 The per-item isolation and the non-thrown-failure ledger are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTask()` (~297) / `queueFailureLog()` (~293) / `start()` (~256, the `.finally()` slot release + re-pump)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `runTask()` (~297) / `queueFailureLog()` (~293) / `start()` (~256, the `.finally()` slot release + re-pump)
 
 ### R5 — Be idempotent and resumable
 
@@ -229,7 +229,7 @@ and 1,291 real jobs. Combined with the temp-then-rename rule (§3), an item is e
 or **fully absent** — never half. See [crash_recovery.mdx](./crash_recovery.mdx).
 
 The skip-already-done short-circuit that makes replay safe is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readDescription()` (~175), consulted by `describeOne()` before any work
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readDescription()` (~175), consulted by `describeOne()` before any work
 
 ### R6 — Report truthfully
 
@@ -245,7 +245,7 @@ are harmless; a missing line is not. Failures surface as **Failed rows** with th
 ([processing.mdx §4.3](./processing.mdx)).
 
 The queue-level truthful-failure recording is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordFailure()` (~215) / `listRecentFailures()` (~226, 30-min retention prune)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `recordFailure()` (~215) / `listRecentFailures()` (~226, 30-min retention prune)
 
 ### R7 — Be cancellable and bounded
 
@@ -262,7 +262,7 @@ a connection and never answers holds an admission slot — and, under R3's byte 
 memory reservation — **forever**. One hung upload is a slot; 24 are a dead queue that looks busy.
 
 The bounded-payload caps and the batch retention prune are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `listQueuedItems()` (~204) / `listBatches()` (~190, the 30-min prune)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `listQueuedItems()` (~204) / `listBatches()` (~190, the 30-min prune)
 
 ### R8 — Survive the process
 
@@ -282,7 +282,7 @@ value that means both *finished* and *destroyed* is a lie by omission, and it is
 the user woke up to.
 
 The in-memory-only backlog that must become durable is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module-level `pending: QueueTask[]` (~93) / `inflight` Set (~94) / `running` Record (~95)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module-level `pending: QueueTask[]` (~93) / `inflight` Set (~94) / `running` Record (~95)
 
 ---
 
@@ -307,7 +307,7 @@ how it **fails**, and what it **owes**.
   backlog not durable (R8).
 
 The describe runner and its producer/planner pair are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158) / `enqueueDescribe()` (~273) / `previewDescribe()` (~324)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158) / `enqueueDescribe()` (~273) / `previewDescribe()` (~324)
 
 ### 5.2 `transcribe` — the local op that eats the machine
 
@@ -325,7 +325,7 @@ The describe runner and its producer/planner pair are in code:
 * **Known gaps.** No start log (R1) · no per-item timeout (R7) · backlog not durable (R8).
 
 The transcribe runner and its producer/planner pair are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86) / `enqueueTranscribe()` (~176) / `previewTranscribe()` (~225)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86) / `enqueueTranscribe()` (~176) / `previewTranscribe()` (~225)
 
 ### 5.3 `compress` — the op that rewrites the user's data
 
@@ -342,7 +342,7 @@ The transcribe runner and its producer/planner pair are in code:
   gate are not conveniences here; they are the data-safety contract.
 
 The compress runner and its per-job thread cap are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()` (the `CompressFileOpts.threads` cap → `ffmpeg -threads`; the fail-closed dimension gate)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()` (the `CompressFileOpts.threads` cap → `ffmpeg -threads`; the fail-closed dimension gate)
 
 ### 5.4 The scheduled passes — scan, pin, fs index, sync
 
@@ -363,13 +363,13 @@ share the box with interactive use.
   is alive — the ~6-hour dead window is a gap it is positioned to close.
 
 The reference detached/single-flight/persisted background pass is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — the detached single-flight runner persisting to `status.yaml` (`~/…/modules/scanner/scanner.service.ts` — the unit walk)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — the detached single-flight runner persisting to `status.yaml` (`~/…/modules/scanner/scanner.service.ts` — the unit walk)
 
 The responsive-budget pin pass and the fs index are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` / `runPool()` / `ipfsLimiter` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` / `runPool()` / `ipfsLimiter` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts`
 
 The scheduled every-15-min runner and its watchdog are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` / `watchdog.service.ts` / `os/launchd.ts` / `installer.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` / `watchdog.service.ts` / `os/launchd.ts` / `installer.ts`
 
 ---
 
@@ -415,7 +415,7 @@ exhaustion, and admission is the **minimum** across all of them. `transcribe` al
 [memory.mdx](./memory.mdx). A bucket that names only one axis is asserting the others are infinite.
 
 The single-axis admission scan that must become multi-axis is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` (~68) / `takeRunnable()` (~239); the cores axis it draws from is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()` (~26)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` (~68) / `takeRunnable()` (~239); the cores axis it draws from is `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()` (~26)
 
 ---
 
@@ -452,7 +452,7 @@ epitaph — no handler runs. The only account of an OOM the app can ever produce
 **before** it died. That is not a nice-to-have; it is the only mechanism available.
 
 The rotating writers these obligations land in are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` / `log.*` / `logError()` (5 MiB × 5 generations, `error.err` written synchronously)
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` / `log.*` / `logError()` (5 MiB × 5 generations, `error.err` written synchronously)
 
 ---
 

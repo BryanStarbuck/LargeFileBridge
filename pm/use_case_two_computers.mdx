@@ -440,8 +440,8 @@ this section is the *walk*, that section is the *law*. Where they could disagree
 | | |
 | --- | --- |
 | **The file** | `videos/2079054276320440416.mp4` — 5.3 MB, **git-ignored** (`.gitignore` → `videos/`) |
-| **Working repo** | `~/BGit/Bryan_git/charlie-kirk` — remote `https://github.com/ACT3ai/charlie-kirk.git` |
-| **Company storage (SDL)** | `~/BGit/Bryan_git/act3_large_files_bridge` — remote `github.com/ACT3ai/act3_large_files_bridge` |
+| **Working repo** | `~/repos/charlie-kirk` — remote `https://github.com/ACT3ai/charlie-kirk.git` |
+| **Company storage (SDL)** | `~/repos/act3_large_files_bridge` — remote `github.com/ACT3ai/act3_large_files_bridge` |
 | **Computer A — "the Tower"** | device **`bryan-mac-pro`** — has the file, pinned it, CID `bafybeihf5o…k7tmi` |
 | **Computer B — "the MacBook"** | device **`bryanstarbuck-macbook-pro`** — has the repo cloned, **not** the file |
 
@@ -465,7 +465,7 @@ git-backed SDL is **auto-adopted** as the sync repo, and whose per-repo mirror i
 The mirror lands at:
 
 ```
-~/BGit/Bryan_git/act3_large_files_bridge/repos/<repoUid>/manifest.yaml
+~/repos/act3_large_files_bridge/repos/<repoUid>/manifest.yaml
         repoUid = shortHash("github.com/act3ai/charlie-kirk")   ← the NORMALIZED REMOTE
 ```
 
@@ -474,10 +474,10 @@ working repo does not live inside the SDL. And a path-hash key would have writte
 would never look in. **A machine-local value must never key machine-shared data.**
 
 Deriving the shared repo identity and the mirror subtree is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) / `resolveStateSyncRepo()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) / `resolveStateSyncRepo()`.
 
 Resolving the owning storage from the remote org and auto-adopting its SDL is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()`, consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()` / `mirrorToSyncRepo()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()`, consumed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()` / `mirrorToSyncRepo()`.
 
 ### 9.4 Step 3 — the SDL commits and pushes (and does it now, not in ten minutes)
 
@@ -487,7 +487,7 @@ decision the user just made leaves the Tower in seconds rather than on the next 
 ([storage_company.mdx §8.7](./storage_company.mdx#87-four-smaller-defects-this-use-case-also-closes)).
 
 Nudging the owning SDL's backbone after a tracking write is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (which must resolve an SDL for a path inside a **working repo**, not no-op).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` (which must resolve an SDL for a path inside a **working repo**, not no-op).
 
 ### 9.5 Step 4 — the MacBook fetches, merges, and reconciles per entry
 
@@ -503,7 +503,7 @@ The merge must land in **both** per-repo manifests the UI reads, or the MacBook 
 cannot show a row for ([storage_company.mdx §8.6](./storage_company.mdx#86-two-manifests-must-not-disagree)).
 
 Merging a pulled sync-repo subtree into Local Storage is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()`.
 
 ### 9.6 Step 5 — the red remote-only row appears in View One Repo
 
@@ -526,7 +526,7 @@ and say why, because there are no local bytes to work on
 ([storage_company.mdx §8.5](./storage_company.mdx#85-remote-only-rows--a-file-in-the-list-that-is-not-on-this-disk-locked)).
 
 Composing remote-only rows from the reconciled manifest is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`, with the field in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`, with the field in `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`.
 
 ### 9.7 Step 6 — it is counted, and it is offered
 
@@ -542,14 +542,14 @@ Showing the row is not enough; the user must be **told there is something to do*
   reclaim, shrink, ignore, or analyze.
 
 Reading the peers-have-it list and pulling it are handled in code (the **same** manifest for both, per §8.6):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()`.
 
 ### 9.8 Step 7 — the user pulls, and the row becomes ordinary
 
 The user clicks pull (from the row, the tile, or the To-Do batch). LFB pins the CID locally, which
 **fetches the bytes down over IPFS** to the grafted local path
 ([devices.mdx §4](./devices.mdx#4-the-graft--machine-independent-hierarchy--local-paths-locked)) — the
-MacBook's own `~/BGit/Bryan_git/charlie-kirk/videos/`, not the Tower's path. A `pull` + `ipfs_pin` event is
+MacBook's own `~/repos/charlie-kirk/videos/`, not the Tower's path. A `pull` + `ipfs_pin` event is
 appended `on_device: bryanstarbuck-macbook-pro`, the MacBook's own history log records it, and those writes
 mirror **back** into the SDL so the Tower learns the file is now on two computers.
 

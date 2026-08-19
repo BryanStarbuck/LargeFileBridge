@@ -22,7 +22,7 @@ The five kinds:
 | **Local** | `local` | `~/T/_large_files_bridge/` (settings/config; the DB replacement — **no** `storage.yaml`) | [storage_local.mdx](./storage_local.mdx) |
 | **Repo** | `repo` | any Git repo root, e.g. `~/BGit/xyz/` → LFB's files in `~/BGit/xyz/.lfbridge/` (**the only kind with a `.lfbridge/`** — §4) | [storage_repo.mdx](./storage_repo.mdx) |
 | **Personal** | `personal` | `~/BGit/Bryan_git/personal_large_files_bridge/` (an **SDL** — **no** `.lfbridge/`; LFB's files hang off the root) | [storage_personal.mdx](./storage_personal.mdx) |
-| **Company** | `company` | one per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` (an **SDL** — **no** `.lfbridge/`) | [storage_company.mdx](./storage_company.mdx) |
+| **Company** | `company` | one per company, e.g. `~/repos/act3_large_files_bridge/` (an **SDL** — **no** `.lfbridge/`) | [storage_company.mdx](./storage_company.mdx) |
 | **Community** | `community` | one per community the user helps / downloads / shares (an **SDL** — **no** `.lfbridge/`) | [storage_community.mdx](./storage_community.mdx) |
 
 Siblings this builds on and does not repeat:
@@ -118,10 +118,10 @@ box disabled. **Name** and **Path** are free text → the `⛛` popover as `cont
 ([tables.mdx §2.3](./tables.mdx#23-what-survives-in-the-filter--popover-locked)).
 
 The Type column's `filterOptions` (`personal` / `company` / `community`) exist today as a `<select>` in the filter popover; rendering them as rail checkboxes is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `StoragesPage` (the `id: "type"` column), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `StoragesPage` (the `id: "type"` column), against the new facet-rail region of `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 Building the Storages tab and its derived children (Personal · Companies · Repos link · Communities) from the discovered `storage.yaml` files is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` · rendered by the frontend `Sidebar` from `pm/left_bar.yaml`.
 
 ### 2.2 Organizations found in your repos — proposed company storages (LOCKED)
 
@@ -164,7 +164,7 @@ least one qualifying, unclaimed, undismissed org, **or** a non-zero skipped coun
   ([storage_settings.mdx §4d](./storage_settings.mdx#4d-new-company-storages--the-proposal-surface-and-the-parent-directory-locked)).
 
 Discovering the organizations, applying the membership test, and creating the checked ones are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (proposals + adopted + `skipped` / `skippedCount` + `parentDir` / `parentDirIsConfigured`), `createCompanyStorages(orgs)`, and `setOrganizationDismissed(org)`, exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/organizations` / `POST /api/storages/companies` and rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `OrganizationProposals`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (proposals + adopted + `skipped` / `skippedCount` + `parentDir` / `parentDirIsConfigured`), `createCompanyStorages(orgs)`, and `setOrganizationDismissed(org)`, exposed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/organizations` / `POST /api/storages/companies` and rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `OrganizationProposals`.
 
 ---
 
@@ -205,7 +205,7 @@ clones:
 * **`clones`** records where, if anywhere, this same hierarchy is mirrored on Google Drive / Dropbox (§5).
 
 Reading and writing `storage.yaml` (atomic, YAML, per-storage) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readDescriptor` / `writeDescriptor` (+ `ensureStorage`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readDescriptor` / `writeDescriptor` (+ `ensureStorage`).
 
 ---
 
@@ -224,7 +224,7 @@ root *is* the `.lfbridge` area**, so everything hangs off `<root>` directly. The
 
 | Storage kind | Example root | LFB's files land at | `.lfbridge/`? |
 | --- | --- | --- | --- |
-| **`repo`** — a user's working git repo (Git Storage) | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<rel>` | **YES** |
+| **`repo`** — a user's working git repo (Git Storage) | `~/repos/charlie-kirk/` | `<root>/.lfbridge/<rel>` | **YES** |
 | **`personal` / `company` / `community`** — a dedicated LFB file repo (SDL) | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<rel>` | **NO — never** |
 
 **Why.** In a working repo LFB is a **guest**, so it quarantines its files under one hidden directory that
@@ -232,7 +232,7 @@ is obviously not the user's content. An SDL is the opposite — a repo whose ent
 hold LFB's files, so a `.lfbridge/` inside it buys no separation and only adds a meaningless path segment.
 The split is keyed on the **resolved storage kind**, never on a path or a name, and the default is `repo`
 (§0.2 there); the choke point is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
 `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
 
 **Reserved names at the SDL root.** Because the SDL mirror hangs off the root, a **mapped dir**
@@ -308,7 +308,7 @@ it is committed to that storage's own **`<root>/files.yaml`** — at the **root*
 segment**, because an SDL has none (§4) — so the index **travels** with the purpose-built LFB repo to
 teammates and the user's other computers (storage_personal.mdx §1, storage_company.mdx §1). The kind is
 resolved leaf-safe in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
 `resolveStorageType()` / `tracksIndexInLocalStorage()`, consumed by `tracking.service.ts` `filesYamlPath()`.
 Whichever the location, `files.yaml` records, per file, enough
 to tell whether it changed since last seen: a **hash** (fingerprint), **size**, **created**, and
@@ -329,7 +329,7 @@ files:
 ```
 
 Writing the per-file fingerprint index (hash + size + dates; compressed/uncompressed variant hashes for media) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles`.
 
 **Building the index parallelizes the per-file fingerprinting.** A storage can hold thousands of large
 files, and each file's fingerprint is a **head+tail byte read + sha256** — independent, I/O-ish work. So
@@ -345,7 +345,7 @@ own Local-Storage `repos/<repoKey>/files.yaml`, so a re-index that spans several
 concurrently under the same budget rather than one storage after another.
 
 Parallelizing the per-file fingerprint (head+tail read + sha256) across files under the responsive budget, and parallelizing across storages when several are indexed, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles` (the walk collects the large-file paths, then `mapLimit(paths, responsiveBudget(), fingerprint)`), drawing `responsiveBudget()` + `mapLimit()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles` (the walk collects the large-file paths, then `mapLimit(paths, responsiveBudget(), fingerprint)`), drawing `responsiveBudget()` + `mapLimit()` from `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
 
 ### 4.1a The index is bounded — and when the bound bites, the product says so
 
@@ -378,16 +378,16 @@ product must not have**, so the bound obeys three rules.
   count **incomplete** rather than presenting a short number as final.
 
 Bounding the index, counting the exact shortfall, and persisting it in `files.yaml` is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles()` (`MAX_FILES` / `SOFT_NOTICE_FILES`, the `dropped` counter and the `dropped_files` write), read back by `storageIndexDroppedFiles()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `indexStorageFiles()` (`MAX_FILES` / `SOFT_NOTICE_FILES`, the `dropped` counter and the `dropped_files` write), read back by `storageIndexDroppedFiles()`.
 
 Carrying it to the client is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`indexDroppedFiles`) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `buildRow()` (`StorageRow.indexDroppedFiles`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`indexDroppedFiles`) and `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `buildRow()` (`StorageRow.indexDroppedFiles`).
 
 Showing the user that the numbers are short, and offering the rebuild, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildIndexTruncatedWarning()`, ranked at the top by `topRecommendation()`; the badge/banner in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildIndexTruncatedWarning()`, ranked at the top by `topRecommendation()`; the badge/banner in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` and `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx`.
 
 Rebuilding one repo's index on demand (the recommendation's action) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/index`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/index`.
 
 ---
 
@@ -461,7 +461,7 @@ Running the analysis passes and writing the per-file outputs — transcript/desc
 `<name.ext>.transcription` / `<name.ext>.ai_description` files directly under the storage's committed
 tracking area, visuals-by-time as YAML under that area's `analysis/`, and the Category-B compression record
 under Local Storage `repos/<repoKey>/analysis/` (never the repo) — is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile` (dispatches transcript / description / visuals-by-time by media kind), resolving the tracking area through `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()` (never joining `LFBRIDGE_DIR` directly).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/analysis.service.ts` — `analyzeFile` (dispatches transcript / description / visuals-by-time by media kind), resolving the tracking area through `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()` (never joining `LFBRIDGE_DIR` directly).
 
 ---
 
@@ -533,7 +533,7 @@ the **rail**:
    ([tables.mdx §2.4](./tables.mdx#24-one-facet--one-axis--pin-and-git-ignore-are-never-the-same-filter-locked)).
 
 Declaring the Kind vocabulary and pointing the accessor at the media kind the cell renders (today `accessor: (f) => f.compressible ?? ""` against a `mediaKindForName(...)` cell, with no `filterOptions`) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the `id: "kind"` column), whose vocabulary is the `MediaKind` triple returned by `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `mediaKindForName()` (`video` / `image` / `audio`, else `null`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the `id: "kind"` column), whose vocabulary is the `MediaKind` triple returned by `~/repos/LargeFileBridge/code/packages/shared/src/media.ts` — `mediaKindForName()` (`video` / `image` / `audio`, else `null`).
 
 ### 7.1 Page actions — the action-links row
 
@@ -555,7 +555,7 @@ skip-already-done, background queue, and the toast wording are all inherited fro
   page actions rather than as a loose button.
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to this storage's root).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to this storage's root).
 
 ### 7.2 The leading analysis icon columns — Transcribe · AI Description · OCR (LOCKED — subset of tables.mdx §4c)
 
@@ -584,7 +584,7 @@ violet `--lfb-ocr-done`) — is **owned by [tables.mdx §4c](./tables.mdx#4c-the
   content column reads (`T D V`) — the icon columns are its per-axis, actionable projection.
 
 Deriving each row's Transcribe / AI Description / OCR icon state from the file's `analysis[]` outputs plus the filename kind (via `analysisTaskStatuses`), and prepending the three analysis icon columns before the content columns, is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the leading `transcribe` / `describe` / `ocr` columns only — no `pin` / `ignore` here), built from the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell`, each cell rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`, marked `LfbColumn.tight` + `LfbColumn.headerCell` (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`) and publishing its hover explanation via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`, which the left-bar panel `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` renders via the one global `HoverInfoBridge` mounted in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` (the leading `transcribe` / `describe` / `ocr` columns only — no `pin` / `ignore` here), built from the reusable task-icon kit `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell`, each cell rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon`, marked `LfbColumn.tight` + `LfbColumn.headerCell` (`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`) and publishing its hover explanation via `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo`, which the left-bar panel `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` renders via the one global `HoverInfoBridge` mounted in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`.
 
 ---
 
@@ -643,7 +643,7 @@ keyed by the same stable **`repoKey`** Local Storage uses. Only the **Category-A
 ```
 
 Resolving the always-present Local-Storage tracking root and the optional additive sync-repo mirror root for a repo is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (returns the Local-Storage `repos/<repoKey>/` root, drawn from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir()`) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`); the mirror is performed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveTrackingRoot(repoRoot)` (returns the Local-Storage `repos/<repoKey>/` root, drawn from `~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir()`) and `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`); the mirror is performed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`.
 
 ### 8.2 Placement radios can target the sync repo
 
@@ -688,7 +688,7 @@ therefore **whose** sync repo (§8) its tracking state mirrors to.
   routing above is what makes the decision a team fact worth propagating.
 
 The owner→storage resolution the storages model consumes (already setting `companyName` per row from the remote's forge org, defaulting to Personal) — which the sync-repo resolver `resolveStateSyncRepo()` reuses to find whose sync repo a repo mirrors to — lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `classifyByConvention()` and `buildRow()` (sets `companyName`); the repo→owner mapping it reads is owned by [repo_company_mapping.mdx](./repo_company_mapping.mdx).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `classifyByConvention()` and `buildRow()` (sets `companyName`); the repo→owner mapping it reads is owned by [repo_company_mapping.mdx](./repo_company_mapping.mdx).
 
 ---
 
@@ -714,11 +714,11 @@ stateSyncRepo:
   the owning storage's machine-local settings ([storage_settings.mdx §4b](./storage_settings.mdx)),
   `ownedRepoCount` from the repo→owner mapping (§9).
 * This extends `StorageRow` / `StoragesPageData` — the shared types the Storages page already uses:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `StorageRow` (add
+  `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `StorageRow` (add
   `stateSyncRepo: StateSyncRepoDescriptor | null`) and the new `StateSyncRepoDescriptor` interface.
 
 Populating the per-storage `stateSyncRepo` descriptor when it splits the page into personal / companies / communities is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` (sets `stateSyncRepo` on each company + the Personal row from that storage's settings + the owner mapping), typed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `StorageRow` / `StoragesPageData`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `listStoragesPage()` (sets `stateSyncRepo` on each company + the Personal row from that storage's settings + the owner mapping), typed by `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `StorageRow` / `StoragesPageData`.
 
 ---
 

@@ -79,7 +79,7 @@ Menus.mdx needs a **storage** entity catalog (it currently defines repo / direct
 catalogs); its Config group carries the **Storage settings…** navigate item that opens this page.
 
 The gear on the storage detail header, the per-row gear in the Storages table, and the `Storage settings…` kebab item (all navigating to `/storages/$storageId/settings`) live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` settings button · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `StorageGear` (the row gear) and `StorageKebab` components · placed in the row's action cell by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `StoragesPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage` settings button · `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `StorageGear` (the row gear) and `StorageKebab` components · placed in the row's action cell by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StoragesPage.tsx` — `StoragesPage`.
 
 ---
 
@@ -167,7 +167,7 @@ repo: the **kind wins** over the presence of `.git/`
 ([artifact_placement_policy.mdx §0.2](./artifact_placement_policy.mdx)).
 
 The kind→base-directory decision this section renders lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (returns `<root>/.lfbridge` for kind `repo`, and `<root>` itself for an SDL) and its predicate `usesLfbridgeDir(type)`; every LFB writer resolves its base through it and none joins `LFBRIDGE_DIR` directly. The ensure-directory + git-ignore-on-init behavior the `repo`-only checkbox drives is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `ensureGitignore()`. Honoring a **relocated** `repo` `.lfbridge/` path (resolve against the machine-local config, not always `<root>/.lfbridge/`) is a change to `descriptorPath()` / the tracking-path resolvers in the same module, layered **over** `trackingBaseDir()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` (returns `<root>/.lfbridge` for kind `repo`, and `<root>` itself for an SDL) and its predicate `usesLfbridgeDir(type)`; every LFB writer resolves its base through it and none joins `LFBRIDGE_DIR` directly. The ensure-directory + git-ignore-on-init behavior the `repo`-only checkbox drives is `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` / `ensureGitignore()`. Honoring a **relocated** `repo` `.lfbridge/` path (resolve against the machine-local config, not always `<root>/.lfbridge/`) is a change to `descriptorPath()` / the tracking-path resolvers in the same module, layered **over** `trackingBaseDir()`.
 
 ### 3.1 The relocated-`.lfbridge/` control vs. the tracking-state placement policy
 
@@ -303,7 +303,7 @@ page is where the user sees it and where the one-click fix lives.
   shows disabled with a "connect Drive/Dropbox first" hint rather than erroring.
 
 Resolving the effective backing locations for a storage (default directory proposal per type + the machine-local enable flags) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `resolveBackingLocations()` (new module; reuses the Drive/Dropbox path helpers from `google_drive` / `dropbox`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `resolveBackingLocations()` (new module; reuses the Drive/Dropbox path helpers from `google_drive` / `dropbox`).
 
 ---
 
@@ -369,10 +369,10 @@ RESERVED at the SDL root — a mapped-dir key may not be any of:
   collision only exists because an SDL deliberately has no such segment.
 
 Reading/writing the shared mapped-directory list (add/remove rows → `mapped_dirs.yaml` at the SDL root) and this computer's per-row graft path (→ `devices/<device>.yaml` at the SDL root, both resolved via `trackingBaseDir()` in `storage-type.service.ts`, never by joining `LFBRIDGE_DIR`) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getMappedDirs()` / `setMappedDirs()`, with the per-device graft written via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getMappedDirs()` / `setMappedDirs()`, with the per-device graft written via `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice()`.
 
 Rejecting a mapped-dir key that collides with a **reserved** SDL-root name (§4a.1) on add/rename, and surfacing an already-colliding key from an existing list as a storage warning on load, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `assertMappedDirKeyAllowed(key)` (the add/rename gate called from `setMappedDirs()`, throwing an error naming the reserved word) and `checkReservedMappedDirs(storageId)` (the load-time audit that emits the warning), reading the reserved list from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `RESERVED_SDL_ROOT_NAMES` (the single source the SDL's own writers and this validator share).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `assertMappedDirKeyAllowed(key)` (the add/rename gate called from `setMappedDirs()`, throwing an error naming the reserved word) and `checkReservedMappedDirs(storageId)` (the load-time audit that emits the warning), reading the reserved list from `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `RESERVED_SDL_ROOT_NAMES` (the single source the SDL's own writers and this validator share).
 
 ---
 
@@ -429,7 +429,7 @@ it.
   mapping plus each repo's per-repo toggle, not stored per-computer on this storage.
 
 Reading/writing the sync-repo pick (validate git working tree / URL, reject mapped-dir & big-file overlaps, clone a URL remote into the machine-local cache) and resolving the effective mirror root for an owned repo is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()` / `setStateSyncRepo()` / `clearStateSyncRepo()`, feeding `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`), whose additive mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()` / `setStateSyncRepo()` / `clearStateSyncRepo()`, feeding `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null`), whose additive mirror is written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ### 4b.1 Auto-adoption — the field shows the storage's own SDL as the effective value (LOCKED)
 
@@ -467,7 +467,7 @@ configuring anything.
   way — media bytes still move over IPFS alone ([decisions.mdx](./decisions.mdx)).
 
 Resolving the effective sync repo — the explicitly configured pick first, the storage's own git root auto-adopted second — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo(storageId)` (the configured pick) with the SDL-root fallback the backbone already performs in `getGitBackboneRemote(storageId)` (same file), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the derived-value field + Override/Clear) and consumed per repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo(storageId)` (the configured pick) with the SDL-root fallback the backbone already performs in `getGitBackboneRemote(storageId)` (same file), surfaced by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the derived-value field + Override/Clear) and consumed per repo by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)`.
 
 ---
 
@@ -550,7 +550,7 @@ Reassigning here is not only a local grouping change; it has the same two conseq
   stays the authoritative copy regardless.
 
 Reading the set of repos this storage owns (the owner mapping) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` (joins the repo list against `resolveRepoOwner`, returning the rows whose owner is this storage), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the Owned-repos TanStack table). The per-row reassign reuses the same endpoint as the manual reassign — `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner` (which, for a company target with a sync repo, also asserts via `owner-propagation.service.ts` — `assertCompanyOwnership()`, [repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` (joins the repo list against `resolveRepoOwner`, returning the rows whose owner is this storage), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` (the Owned-repos TanStack table). The per-row reassign reuses the same endpoint as the manual reassign — `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner` (which, for a company target with a sync repo, also asserts via `owner-propagation.service.ts` — `assertCompanyOwnership()`, [repo_owner_propagation.mdx §2](./repo_owner_propagation.mdx#2-where-the-assertion-lives--owner_mapyaml-in-the-company-sync-repo-locked)).
 
 ### 4c.3 Membership comes from the remote org, not from where the repo sits on disk (LOCKED)
 
@@ -559,7 +559,7 @@ and [repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-dec
 a repo is listed here because its **remote org** binds to this storage — **not** because it is physically
 inside this storage's directory.
 
-* **A repo outside the storage's directory still belongs to it.** `~/BGit/Bryan_git/charlie-kirk` (remote
+* **A repo outside the storage's directory still belongs to it.** `~/repos/charlie-kirk` (remote
   `github.com/ACT3ai/charlie-kirk`) appears in the **ACT3ai** company's Owned-repos list even though it lives
   nowhere near that company's root. Under a containment-first resolution it wrongly landed under **Personal**,
   which meant its tracking mirrored to the wrong SDL — the reason this ordering is locked.
@@ -573,7 +573,7 @@ inside this storage's directory.
   only fixes what the **auto** path resolves to.
 
 Resolving membership from the remote-derived owner (with the manual override taking precedence) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` / `ownerMatchesCompany(owner, row)`, fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getOwnedRepos(storageId)` / `ownerMatchesCompany(owner, row)`, fed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote(remote, personalAccounts)`.
 
 ---
 
@@ -607,7 +607,7 @@ and [repo_company_mapping.mdx §3.2](./repo_company_mapping.mdx#32-which-orgs-ar
   ([storage_company.mdx §10.3](./storage_company.mdx#103-proposing-and-creating-the-company-storages-locked)).
 
 Resolving the parent directory (the setting, else the derivation from where existing storages live) and creating a company storage under it are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `storagesParentDir()` (returns `{ dir, configured }`) and `createCompanyStorage(org)` (mkdir + `git init` + a descriptor carrying `type: company`, `company_name`, and `owner_slugs: ["<org>"]`), over the app-config key `storages.parent_dir` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `storagesParentDir()` (returns `{ dir, configured }`) and `createCompanyStorage(org)` (mkdir + `git init` + a descriptor carrying `type: company`, `company_name`, and `owner_slugs: ["<org>"]`), over the app-config key `storages.parent_dir` in `~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts`.
 
 ---
 
@@ -626,7 +626,7 @@ storage:                         # identity mirror (written by discovery; read-o
   id: act3                       # the Storages row id (personal | communityId | short hash of root)
   name: "ACT3 Company Files"
   type: company                  # local | repo | personal | company | community
-  root: ~/BGit/Bryan_git/act3_large_files_bridge
+  root: ~/repos/act3_large_files_bridge
 
 lfbridge: null                   # §3 the hidden tracking directory — kind `repo` ONLY.
                                  # This example storage is `type: company` — an SDL — so it has NO
@@ -641,7 +641,7 @@ lfbridge: null                   # §3 the hidden tracking directory — kind `r
 backing:                         # §4 backing locations — each ON/OFF + this machine's absolute path
   dedicated_repo:
     enabled: true
-    path: ~/BGit/Bryan_git/act3_large_files_bridge   # the storage's own repo when type: repo/company
+    path: ~/repos/act3_large_files_bridge   # the storage's own repo when type: repo/company
   google_drive:
     enabled: false
     path: null                   # absolute local mount path; canonical relative path in storage.yaml
@@ -668,10 +668,10 @@ sync_repo:                       # §4b company/Personal only — additive mirro
   hash of the root), so the local settings for a storage are found the same way the row is.
 
 Reading and writing this machine-local per-storage config (and mapping it to/from the UI) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (atomic YAML under `pin/s/<id>/`, via `resolveStateDir()`), exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `storagesRouter` `GET /api/storages/:id/settings` and `PATCH /api/storages/:id/settings`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (atomic YAML under `pin/s/<id>/`, via `resolveStateDir()`), exposed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `storagesRouter` `GET /api/storages/:id/settings` and `PATCH /api/storages/:id/settings`.
 
 The settings form itself (the `repo`-only `.lfbridge/` checkbox + location picker — replaced by the read-only "this storage's root IS its tracking area" line for an SDL, branched on `usesLfbridgeDir(type)` — and the three backing-location toggles + path fields) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` component (route registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx` — `StorageSettingsPage` component (route registered in `~/repos/LargeFileBridge/code/packages/frontend/src/router.tsx`).
 
 ---
 
@@ -696,7 +696,7 @@ offer, never act on files unasked). Turning a location **off** stops updating it
 the directory that is already there.
 
 Materializing each enabled backing location during the pass (create-if-missing + ensure the tracking area resolved via `trackingBaseDir()` — `.lfbridge/` for a `repo`, the root for an SDL + update the mirror) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureBackingLocations(id)` (new; called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` per known storage, through the same bounded `cores − 2` limiter as repo/computer units).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureBackingLocations(id)` (new; called from `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll()` per known storage, through the same bounded `cores − 2` limiter as repo/computer units).
 
 ---
 
@@ -707,17 +707,17 @@ The page is a single scrollable settings form (no table beneath it, so it does n
 ```
  ┌ ‹ Storages ──────────────────────────────────────────────────────────────┐
  │  ACT3 Company Files                                          [ ⋮ ]        │
- │  ~/BGit/Bryan_git/act3_large_files_bridge   ·   type: company             │
+ │  ~/repos/act3_large_files_bridge   ·   type: company             │
  ├───────────────────────────────────────────────────────────────────────────┤
  │  Tracking area                                                            │
  │   ⓘ This storage's root IS its tracking area — a dedicated Large File     │
  │     Bridge file repo has no hidden .lfbridge/ directory.  (type: company)  │
- │     ~/BGit/Bryan_git/act3_large_files_bridge                               │
+ │     ~/repos/act3_large_files_bridge                               │
  │                                                                           │
  │  Backing locations   (each is an extra, human-reachable copy)             │
  │   ☑ Dedicated Git repo   (preferred)                                      │
  │       ┌──────────────────────────────────────────────┐  [Browse…]        │
- │       │ ~/BGit/Bryan_git/act3_large_files_bridge      │                   │
+ │       │ ~/repos/act3_large_files_bridge      │                   │
  │       └──────────────────────────────────────────────┘                   │
  │   ☐ Google Drive                                                          │
  │       ┌──────────────────────────────────────────────┐                   │
@@ -848,7 +848,7 @@ The page is a single scrollable settings form (no table beneath it, so it does n
    an **opt-out** rather than an opt-in. Only tracking **text** is affected; media bytes still move over IPFS
    alone.
 9c. The **Owned-repos list is resolved remote-org first** (§4c.3): a repo whose remote org binds to this storage
-   is listed **even when it lives outside this storage's directory** (e.g. `~/BGit/Bryan_git/charlie-kirk` with
+   is listed **even when it lives outside this storage's directory** (e.g. `~/repos/charlie-kirk` with
    remote `github.com/ACT3ai/charlie-kirk` under the **ACT3ai** company, not Personal), with **path containment
    only as the fallback** for repos with no forge org. The rows in this table and the repos whose tracking
    mirrors into this storage's sync repo are, by construction, the **same set**; a manual reassign (§4c.1)

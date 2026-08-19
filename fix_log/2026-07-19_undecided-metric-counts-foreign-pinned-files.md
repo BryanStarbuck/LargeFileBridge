@@ -114,7 +114,7 @@ Not applicable — no Use_Cases.csv in this repo; verified against the pm specs 
 * State check: the reported file's pin IS recorded in
   `~/T/_large_files_bridge/foreign-pins.json` under its exact CID and absolute path.
 * Service probe (`tsx`, real service path): `computeRepoDetail` for
-  `~/BGit/Bryan_git/charlie-kirk` now returns
+  `~/repos/charlie-kirk` now returns
   `counts: { undecided: 7, pinnedForeign: 69, … }` and the target row
   `{ decision: "undecided", pinnedForeign: true }` — 7 + 69 = the 76 the user saw, so the
   arithmetic accounts for exactly the reported number.

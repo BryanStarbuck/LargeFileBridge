@@ -182,7 +182,7 @@ its **own** header buttons (right-aligned in the header), not the shared file ac
 | **Refresh community catalog** | Re-fetches every subscribed community's `library` manifest (§2) and re-plans pins against the budget (§5), so newly-published videos appear without waiting on the background pass. | Header, right-aligned. | **proposed** |
 
 Neither is implemented yet, so no code pointer. When built, they render in the `PageHeader` `actions`
-slot of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx`
+slot of `~/repos/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx`
 — `CommunitiesPage`. These are page-level actions, distinct from the per-row bookmark toggle and the
 per-community mode/intent controls in the table (§7).
 
@@ -290,10 +290,10 @@ filter popover while its own cell was segmented — two different controls for t
 **neither** could express "Recommended and Full." The filter becomes a facet; the editor does not move.
 
 The Backup-mode **cell** is a segmented one-of-N editor (correct — it stays) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx` — `CommunitiesPage` (the `mode` column's `cell`, mapping `MODES` to segment buttons that `patch` `backupMode`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx` — `CommunitiesPage` (the `mode` column's `cell`, mapping `MODES` to segment buttons that `patch` `backupMode`).
 
 The Mode **filter** is today a `<select>` of `MODES` and the Bookmark filter a `["yes","no"]` select; both are to be rebuilt as rail items per §7.1, and the intent facets do not exist yet (`intent` is `filterable: false`) — **to be implemented in code**:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx` — `CommunitiesPage` (the `mode` / `bookmark` / `intent` column definitions), rendered by the shared facet rail in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/communities/CommunitiesPage.tsx` — `CommunitiesPage` (the `mode` / `bookmark` / `intent` column definitions), rendered by the shared facet rail in `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ---
 

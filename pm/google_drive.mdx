@@ -44,7 +44,7 @@ folder, not any one repo, so it carries the list that spans the *whole machine*.
 Dropbox backbone — same shape, different vendor and different hazards.
 
 Walking a whole-computer directory root (every repo unit plus the non-repo computer unit that spans the machine) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
 
 Enable/disable and the mount override live in the hub schema at
 `large_files.settings.backbones.google_drive` (`enabled`, `root`) — [§6](#6-configuration).
@@ -91,7 +91,7 @@ authoritative writer identity is always `origin.computer_id` **inside** the file
 name (hub [§3](./sync_list.mdx#3-the-file--largefilesbridge_synclistyaml)).
 
 Resolving and validating a mount/subfolder path (tilde expansion, absolute-path resolution, and the existing-directory check) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `resolveDir()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/paths.ts` — `resolveDir()`
 
 ---
 
@@ -131,7 +131,7 @@ The list changes underneath us whenever Google syncs in a peer's newer copy. LFB
   *untrusted input*, not a command.
 
 Detecting which files changed since the last poll by diffing the current stat set against the previously recorded one is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()`
 
 ---
 
@@ -151,7 +151,7 @@ prevents most, but the reader must still tolerate all of them.
 | **Clock skew** | Machine clocks differ; Drive's own timestamps are not authoritative. | Resolve by **revision, then content, then time** (hub [§5.3](./sync_list.mdx#53-conflicts-resolve-by-revision-then-content-then-time)); `written_at` is a last resort only. |
 
 Skipping OS / metadata junk directories while walking the mount (the shared hard-skip set that keeps `.cache`, `Caches`, and similar scratch dirs out of the walk) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
 
 ---
 
@@ -185,7 +185,7 @@ the hub. It is **not** re-specified here:
   `/My Drive/LargeFileBridge`.
 
 Reading the app-level `config.yaml` (and seeding default scan roots when none are configured) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()`
 
 ---
 
@@ -297,7 +297,7 @@ this the gentle, read-only way:
   Drives" hazard to enforce here.
 
 Each Google Drive account mount is discovered and classified for the File System browser (one `provider: "google_drive"` row per `GoogleDrive-<email>`, email parsed out, ordered by email) in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (the `GoogleDrive-` branch) · surfaced on the home column by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir` block).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/cloud-roots.ts` — `detectCloudRoots()` (the `GoogleDrive-` branch) · surfaced on the home column by `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (the `isHomeDir` block).
 
 ### 10.3 Server-mode note
 
@@ -351,11 +351,11 @@ at the top of this file.)
   [processing.mdx](./processing.mdx)).
 
 Producing the per-account Drive batch during scan recalc, and naming/replacing its YAML, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
 `TodoBatchCalcEngine.recalcForStorage(storage)` writing via
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
 `batchFileName(storage)` (→ `gdrive_<account-slug>_2_do.yaml`); the transcribe discovery walk is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
 
 ---
 

@@ -75,7 +75,7 @@ directories whose subtree holds big files, videos, or heavy images) is specified
 [file_system.mdx §1–§3](./file_system.mdx) and applied to every folder glyph across the app.
 
 Listing one directory level (Node `fs` only, sorted dirs-first, with per-entry badges) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`, served by `fs.router.ts` → `GET /api/fs`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`, served by `fs.router.ts` → `GET /api/fs`.
 
 ### 1.1 Row actions — the entity menu (right-click + `⋮`)
 
@@ -93,7 +93,7 @@ action menu** as everywhere else ([menus.mdx](./menus.mdx)):
   ([menus.mdx §4](./menus.mdx#4-the-entity--more-menu--single-entity-pages)).
 
 The Miller-column strip — one lazily-fetched column per directory level, drill-down replacing columns to the right — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (and its `FsColumn`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (and its `FsColumn`).
 
 ### 1.2 Page actions — the action-links row
 
@@ -130,7 +130,7 @@ are inherited from that spec and **not** restated here.
   `Home → _Mirror → Politics → Charlie_Kirk_Mi` example.
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`; the scope `root` is the deepest column, `currentDir = stack[stack.length - 1]`, passed as `{ root: currentDir }`). The downward-only recursive walk that enforces containment is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `walkMedia()` (recurses into children of `root` only, never a parent).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`; the scope `root` is the deepest column, `currentDir = stack[stack.length - 1]`, passed as `{ root: currentDir }`). The downward-only recursive walk that enforces containment is `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `walkMedia()` (recurses into children of `root` only, never a parent).
 
 ---
 
@@ -183,10 +183,10 @@ file_system:
   columns:                       # open column chain, root → deepest, left to right (§1.3)
     - /Users/bryan
     - /Users/bryan/BGit
-    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm
+    - /Users/bryan/repos/LargeFileBridge/pm
   selection:                     # the 1+ entries highlighted when the user left (§1.2 multi-select)
-    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm/directories.mdx
-    - /Users/bryan/BGit/Bryan_git/LargeFileBridge/pm/files.mdx
+    - /Users/bryan/repos/LargeFileBridge/pm/directories.mdx
+    - /Users/bryan/repos/LargeFileBridge/pm/files.mdx
   filters:                       # the §1.4 header checkboxes (all default ON)
     only_large: true             # [x] Only Large Files/Dirs
     videos: true                 # [x] Videos
@@ -231,21 +231,21 @@ Rules (LOCKED):
 
 The persisted-view-state shape (`file_system:` — open columns, selection, filters) added to the
 per-user config schema is defined in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `UserConfigSchema` (the `file_system` block, a `FileSystemViewSchema`).
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `UserConfigSchema` (the `file_system` block, a `FileSystemViewSchema`).
 
 Loading the saved view (pruned to the longest still-valid column prefix + existing selection, the
 stale-path tolerance above) and writing it back is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs-view.service.ts` — `loadFsView()` / `saveFsView()` (which persist the `file_system:` block through `getUserConfig()` / `updateUserConfig()` in `store-model/user-config.service.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs-view.service.ts` — `loadFsView()` / `saveFsView()` (which persist the `file_system:` block through `getUserConfig()` / `updateUserConfig()` in `store-model/user-config.service.ts`).
 
 Exposing that view state to the browser is handled in code (per-user, allow-list-gated):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `GET /api/fs/view-state` (pruned load) and `PUT /api/fs/view-state` (debounced save).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `GET /api/fs/view-state` (pruned load) and `PUT /api/fs/view-state` (debounced save).
 
 Restoring the column chain + selection on mount and debounce-persisting them on every change (plus a
 flush on unmount so clicking away to another left-bar tab still saves) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (seeds the column `stack` from `api.fsViewState()` behind a `restoredRef` gate — `?path` deep-link wins, then the saved view, then home — and debounce-saves via `api.saveFsViewState()`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (seeds the column `stack` from `api.fsViewState()` behind a `restoredRef` gate — `?path` deep-link wins, then the saved view, then home — and debounce-saves via `api.saveFsViewState()`).
 
 Keeping the client's cached view state coherent with each save (the LOCKED cache-coherence rule above)
-is handled in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx`
+is handled in code: `~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx`
 — `FileSystemPage`'s `persistView()` helper writes the just-saved `{columns, selection}` into the
 `["fs","viewState"]` react-query cache (`queryClient.setQueryData`) as it calls `api.saveFsViewState()`,
 for BOTH the debounced-change save and the flush-on-unmount save, so a re-mount within the cache window
@@ -347,10 +347,10 @@ is wrong here too.
 
 Applying the header filters server-side — the size cut against the settings threshold, the checked-media
 overrides, and hiding directories with no qualifying descendant — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (taking the `onlyLarge` / `videos` / `images` / `audio` query params; the per-directory keep test via `dirHasQualifyingDescendant()`, a bounded recursive walk honoring the §1 hard-skip set; threshold from `getAppConfig().big_file.threshold_bytes`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (taking the `onlyLarge` / `videos` / `images` / `audio` query params; the per-directory keep test via `dirHasQualifyingDescendant()`, a bounded recursive walk honoring the §1 hard-skip set; threshold from `getAppConfig().big_file.threshold_bytes`).
 
 Rendering the four header filter checkboxes and threading their state into the `GET /api/fs` query (and into the persisted view state) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (the `FsFilters` control row).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FileSystemPage` (the `FsFilters` control row).
 
 ---
 
@@ -420,7 +420,7 @@ keep it in step across the user's computers. A file that is only a *candidate* (
 `P` (pinning is per-file).
 
 Deciding whether a file earns the pin badge (its decision is `sync`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsPinned()` (badge value `pin`, letter P).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsPinned()` (badge value `pin`, letter P).
 
 ### 3.3 The compress badges (C / c) — yellow, files only
 
@@ -459,7 +459,7 @@ just paints it onto the raw filesystem so a share site is visible while browsing
 gateway (the only-our-content rule, [knowledge/ipfs.mdx §6](../knowledge/ipfs.mdx), stands).
 
 Detecting the IPFS `i` badge — artifact names, the capped markdown/manifest content peek, and a directory that publishes one underneath — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsIpfsArtifact()` and `dirPublishesIpfs()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `fileIsIpfsArtifact()` and `dirPublishesIpfs()`.
 
 ### 3.4a The git-ignored badge (I) — near-white, files and directories
 
@@ -485,7 +485,7 @@ committed to git, pinned over IPFS instead** (the whole product bet — [dropbox
 > so there is never ambiguity.
 
 Detecting the git-ignored `I` badge (ask `git check-ignore` for the entry against its owning repo, with the result cached on the listing's badge context) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (the `git_ignored` push, using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnore()` / `nearestGitAtOrAbove()`, batched per directory in `buildBadgeContext()` so a column costs one `git check-ignore --stdin` per repo, not one spawn per row).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (the `git_ignored` push, using `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnore()` / `nearestGitAtOrAbove()`, batched per directory in `buildBadgeContext()` so a column costs one `git check-ignore --stdin` per repo, not one spawn per row).
 
 ### 3.5 Ordering & stacking (LOCKED)
 
@@ -530,10 +530,10 @@ every place it renders, explains itself on hover** — the user should never hav
   clips it, and it never fires a duplicate native browser `title`.
 
 Computing the ordered badge list per entry (repo precedence, pin, compress, ipfs — rightmost-first) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (with the per-listing `buildBadgeContext()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `computeBadges()` (with the per-listing `buildBadgeContext()`).
 
 Naming each letter on hover — the per-badge name/description metadata (the single source shared by the hover tooltip and the legend) and the portal tooltip that shows it — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `BADGE_META` (the `name` + `desc` per `FsBadge`) rendered through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/Tooltip.tsx` — `Tooltip` (body-portal, position:fixed); the legend reuses `BADGE_META` in `BadgeLegend.tsx` — `BadgeLegend`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `BADGE_META` (the `name` + `desc` per `FsBadge`) rendered through `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/Tooltip.tsx` — `Tooltip` (body-portal, position:fixed); the legend reuses `BADGE_META` in `BadgeLegend.tsx` — `BadgeLegend`.
 
 ---
 
@@ -573,7 +573,7 @@ semantics are owned by [decision_toggles.mdx](./decision_toggles.mdx) and are **
   always (§1); clicking a toggle only decides.
 
 Rendering the two inline toggles per row (four states, pin always, ⊘ repo-scoped else N/A, stop-propagation, directory-ignore opens the pop-over) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggles` (each axis a `DecisionToggle`); whether a path is under a repo (so the ⊘ toggle renders vs. N/A) is decided by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitService.repoRootFor()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggles` (each axis a `DecisionToggle`); whether a path is under a repo (so the ⊘ toggle renders vs. N/A) is decided by `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitService.repoRootFor()`.
 
 ---
 
@@ -601,7 +601,7 @@ invisible, so the **`--lfb-badge-git-ignored-border` hairline** is what makes th
 deliberately faint, de-emphasized marker for a de-emphasized state.
 
 Rendering the ordered white-letter-on-color badge chips (with their hover tooltips) from a row's `badges[]`, and the badge legend, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` component (legend in `BadgeLegend.tsx` — `BadgeLegend`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` component (legend in `BadgeLegend.tsx` — `BadgeLegend`).
 
 ---
 
@@ -795,7 +795,7 @@ One content column: a **header** (identity + primary button + `⋮`), a **badge/
   directory** is omitted (you are on it).
 
 Rendering the View-one-directory page — header, badge/flag strip, rollup table, and the `⋮` more menu — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage`.
 
 ### 7.1 Page actions — the action-links row
 
@@ -812,7 +812,7 @@ the **Do not compress** sticky flag (§10) suppresses the compress item just as 
 Compress offers.
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to this directory).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneDirectoryPage.tsx` — `ViewOneDirectoryPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to this directory).
 
 ---
 
@@ -850,7 +850,7 @@ their **Compress…** action is hidden (the offer is suppressed); when **Never I
 **Track / Pin** is hidden (nothing under here may be pinned).
 
 Computing the four charter category counts by a bounded recursive walk is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (via `buildEntityView()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildDirRollup()` (via `buildEntityView()`).
 
 **Height — bounded (the content-below exception).** This page renders an **inside summary** footer
 **beneath** the rollup table (§7 layout). Because content sits **below** the table, it is the
@@ -914,7 +914,7 @@ here they are **directory-scoped** — they cover current and future contents:
 Neither flag deletes or alters any bytes ([menus.mdx §6.2/§6.6](./menus.mdx)).
 
 Writing the directory-scoped sticky flags — and clearing `sync` decisions below when Never IPFS turns on — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `setEntityFlags()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `setEntityFlags()`.
 
 ---
 

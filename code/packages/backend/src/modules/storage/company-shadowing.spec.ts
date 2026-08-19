@@ -2,7 +2,7 @@
 // shadowing the real, remoted clone of the same company.
 //
 // This is a regression test for the highest-cost silent fault the app has produced. On 2026-08-10, BOTH of
-// Bryan's computers had two rows for company "Act3": `~/BGit/Bryan_git/act3_large_files_bridge` (adopted on
+// Bryan's computers had two rows for company "Act3": `~/repos/act3_large_files_bridge` (adopted on
 // its NAME alone — no `storage.yaml`, no git remote) and `~/BGit/act3/act3_large_files_bridge` (descriptor,
 // origin, content). The bare one held `pinned: true`, so every device registration, manifest and decision
 // was committed into a repo that cannot push. Neither computer published anything; each concluded the other

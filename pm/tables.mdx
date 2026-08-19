@@ -17,7 +17,7 @@ that shape that are the same on every table** so the per-page specs don't restat
 4. **Per-user, per-page persistence** of sort + filter (§4).
 
 The shared control row (search box, filter icon, sort icon), 500/page pagination, click-a-header sort, and full-page-height are all implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component.
 
 **Reference implementation:** [Repos](./repos.mdx) §3 + §8 already implements the control row and the
 bookmark toggle in full detail; this file **generalizes** that pattern to every table and adds the
@@ -71,7 +71,7 @@ The flag lives **with the entity**, in the local state tree ([storage_local.mdx]
 * The scan **never** touches bookmarks — user fields are preserved across re-registration.
 
 Persisting a bookmark toggle to the entity's `config.yaml` (the Repos reference implementation of the `POST /:id/bookmark` endpoint) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `POST /:repoId/bookmark` route (via `updateRepoConfig()` in `store-model/units.service.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `POST /:repoId/bookmark` route (via `updateRepoConfig()` in `store-model/units.service.ts`).
 
 ---
 
@@ -120,7 +120,7 @@ renders **disabled** with the tooltip *"At least one value must be shown."* (Use
 result do not exist; users who blank a table by accident and cannot see why do.)
 
 The shared filter surface — today a `<select>`-per-enum popover, to be rebuilt as the facet rail (§2.2) — is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` popover and its generic `filterFn`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` popover and its generic `filterFn`).
 
 ### 2.2 The facet rail — filtering without opening a dropdown (LOCKED)
 
@@ -150,7 +150,7 @@ their current state.
   boxes is unchecked; the rail carries one **Clear filters** link when any facet is active.
 
 The facet rail is a **new** shared surface; it is to be implemented in code alongside the existing control row:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a new facet-rail region above the table body, driven by the same `columnFilters` state as the popover).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a new facet-rail region above the table body, driven by the same `columnFilters` state as the popover).
 
 ### 2.3 What survives in the filter (`⛛`) popover (LOCKED)
 
@@ -209,7 +209,7 @@ column's toggle can show, so the rail and the cells speak one vocabulary. The **
 when that axis exists on the row).
 
 Deriving the git-ignore axis from git itself (never from the ledger), which is what forces these into two facets, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (via the batched `checkIgnore()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (via the batched `checkIgnore()`).
 
 ### 2.5 Checkbox vs. radio vs. segmented — pick by the question (LOCKED)
 
@@ -258,7 +258,7 @@ is a **special-cased promotion**, not a column vocabulary:
   of the *full* list; this filter hides everything *except* bookmarks. Independent — either or both.
 
 The "Bookmarked only" promotion (today pinned to the top of the filter popover, to move to the head of the rail) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `id === "bookmark"` special case).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `id === "bookmark"` special case).
 
 ### 2.8 A facet's values must be declared — an empty facet is a bug (LOCKED)
 
@@ -313,10 +313,10 @@ Every table whose rows are **files** — the one-repo task tabs ([one_repo.mdx](
 
 The backend flag that this toggle reads — `analysisOnly` on each `FileRow`, set for a small,
 not-git-ignored media file admitted purely so it can be OCR'd / described / transcribed — is produced in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (the candidate predicate) and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (the candidate predicate) and
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`.
 The toggle itself is rendered by the shared table in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the promoted `largeOnly` control, sibling of the `bookmark` special case).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the promoted `largeOnly` control, sibling of the `bookmark` special case).
 
 ### 2.10 The File-type facet — Images · Videos · Audio · PDFs · Other (LOCKED)
 
@@ -369,9 +369,9 @@ Values, defaults, and rules:
   future new class stays visible to existing users.
 
 The shared classifier both the facet and the media viewer route on lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName()` (image | video | audio | pdf | other), beside `mediaKindForName()`; `isPdfName()` is the PDF discriminator.
+`~/repos/LargeFileBridge/code/packages/shared/src/media.ts` — `fileTypeForName()` (image | video | audio | pdf | other), beside `mediaKindForName()`; `isPdfName()` is the PDF discriminator.
 The facet is rendered inside the shared table's Filter dropdown:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileTypeFacet` prop; `FILE_TYPE_COMMON` / `FILE_TYPE_EXTRA`, the `showMoreTypes` disclosure, the `FileTypeRow` component, and the `All kinds` reset).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileTypeFacet` prop; `FILE_TYPE_COMMON` / `FILE_TYPE_EXTRA`, the `showMoreTypes` disclosure, the `FileTypeRow` component, and the `All kinds` reset).
 
 ### 2.11 The file filter — segmented All · Not yet · Done controls + the editable boolean clause bar (LOCKED — product-owner revision 2026-07-21)
 
@@ -498,12 +498,12 @@ The panel appears on **every surface that lists files**, each with the honest su
 
 The expression model — tokenizer, parser, evaluator, canonical builder, and the surgical
 clause-rewrite — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/fileFilter.ts` — `parseFileFilter()`, `evalFileFilter()`, `canonicalExpr()`, `setFieldInExpr()`, `FILE_FILTER_FIELDS`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/fileFilter.ts` — `parseFileFilter()`, `evalFileFilter()`, `canonicalExpr()`, `setFieldInExpr()`, `FILE_FILTER_FIELDS`.
 The two-column segmented panel and the bottom clause bar UI are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/FileFilterPanel.tsx` — `FileFilterPanel` (with `SegmentedField`) and `FileFilterClauseBar`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/FileFilterPanel.tsx` — `FileFilterPanel` (with `SegmentedField`) and `FileFilterClauseBar`.
 The shared table wires state, row predicate, rail-checkbox shortcut, and persistence in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileFilter` prop), persisted via
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `TableViewSchema.file_filter`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `fileFilter` prop), persisted via
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `TableViewSchema.file_filter`.
 
 ### 2.12 The control-row pop-up windows — visible edge, click-outside, Apply (LOCKED — product-owner revision 2026-07-21)
 
@@ -518,7 +518,7 @@ The **Filter ⛛**, **Sort**, and **Columns** pop-up windows share one window be
   collapse it. It applies nothing new (changes are live); it simply closes the window.
 
 The shared pop-up window (edge line, click-outside collapse, Apply footer) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/Popover.tsx` — `Popover` (used by `DataTable` and the Full-paths page).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/Popover.tsx` — `Popover` (used by `DataTable` and the Full-paths page).
 
 ### 2.13 The control row spans the full page width, even in a split layout (LOCKED — product-owner revision 2026-07-22)
 
@@ -537,7 +537,7 @@ area**, and the companion panel **starts underneath it**, never beside it.
   controls at all, rather than showing them inline and then jumping.
 
 The full-width control-row slot is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `controlsPortal` prop and the `controls` node it portals); the slot itself is `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (the `controls` prop).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `controlsPortal` prop and the `controls` node it portals); the slot itself is `~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx` — `ReviewSplitLayout` (the `controls` prop).
 
 ### 2.14 Row hover is page state, not just a CSS tint (LOCKED — added 2026-07-22)
 
@@ -555,7 +555,7 @@ state: `onRowHover(row)` on enter, `onRowHover(null)` on leave.
   is showing", against light yellow for the sticky selection — [duplicates.mdx §3.3](./duplicates.mdx)).
 
 Row hover state is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `onRowHover` / `rowHoverClass` props; the clear lives on the body scroll container's `onMouseLeave`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `onRowHover` / `rowHoverClass` props; the clear lives on the body scroll container's `onMouseLeave`).
 
 ---
 
@@ -594,7 +594,7 @@ Opening the **sort** icon reveals a two-side dropdown:
 ```
 
 The sort icon and its dropdown of sortable columns with asc/desc controls and the Clear-sort reset are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showSort` popover).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showSort` popover).
 
 ### 3.2 Assigning a priority — insert & cascade-demote (LOCKED)
 
@@ -623,7 +623,7 @@ The charter's **click-a-header-to-sort** still holds and drives the **same** sta
   share **one** sort state (a header-driven change shows in the dropdown and vice-versa).
 
 Click-a-header-to-sort with the asc↔desc toggle and shared active-column caret, driving the same sort state as the dropdown, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the header `toggleSort`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the header `toggleSort`).
 
 ### 3.4 The default sort — Bookmarks first (LOCKED default, user-changeable)
 
@@ -659,7 +659,7 @@ see or change the sort.
 * **The sort icon stays colored when a non-default sort is active**, unchanged.
 
 The active-sort chip run is a **new** shared surface, sharing the sort state that today only the popover and headers drive; it is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a chip run on the control row, calling the existing `assignPriority()` / `promoteToPrimary()`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a chip run on the control row, calling the existing `assignPriority()` / `promoteToPrimary()`).
 
 ### 3.6 Sort obeys the axis split too (LOCKED)
 
@@ -694,7 +694,7 @@ The §2.4 rule is not filter-only. **Pin and git-ignore are two sortable columns
   columns** the user turned off in the Columns dropdown (§4b). The list is exhaustive by construction —
   see §4.0a.
 * **Status: IMPLEMENTED.** The `tables.views` map — unused scaffolding until now — is live. Backend:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.service.ts`
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.service.ts`
   (`loadTableViews` / `saveTableView`, read-modify-write merge-by-key so one table's write never
   clobbers another) behind `GET/PUT /api/table-views[/:tableId]`
   (`.../store-model/table-views.router.ts`). Frontend: the `useTableView(tableId)` hook
@@ -729,7 +729,7 @@ a partial on its own would **default every absent key** and wipe that table's sa
 columns. Merge onto the stored view first, parse second, both inside `updateUserConfig`'s mutate callback.
 
 Wire contract and merge:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.router.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/table-views.router.ts`
 (`viewBody`) and `.../table-views.service.ts`, `saveTableView()`.
 Guarded by `.../table-views.spec.ts` — a round-trip test over a fixture holding a non-default value in
 every field, plus a test asserting the fixture still covers every field `TableViewSchema` declares.
@@ -739,14 +739,14 @@ every field, plus a test asserting the fixture still covers every field `TableVi
 `extraFacets={[…]}` as inline literals, so those props are a new object every render; an effect that
 depends on them re-runs on every render and **restarts the 600 ms debounce**, which under a stream of
 re-renders (a row-hover sweep, a liveness poll) can starve the write indefinitely. Implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
 `viewJson` payload + its save effect).
 
 **A pending write is flushed when the PAGE goes away, not only on unmount.** Closing the tab, reloading,
 or quitting the browser tears the page down without unmounting anything, so a change made inside the last
 600 ms was lost — the "I changed it, then restarted, and it was gone" case. `useTableView` flushes on
 `visibilitychange → hidden` and `pagehide` as well as on unmount:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/useTableView.ts`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/useTableView.ts`.
 
 #### 4.1 Facets persist as the HIDDEN values, never the shown ones (LOCKED)
 
@@ -827,9 +827,9 @@ and applies to **every** table. Each table assigns a `priority` (+ optional `min
 columns with no `priority` are pinned. Site-wide rule the product owner set: **Peers is the single
 lowest priority (hides first), Size is second-lowest (hides next)**; a table's identity column (Name /
 Repo / File) and its Status verdict are pinned. Implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
 (`useResponsiveColumns()`), typed on `LfbColumn` (`priority`, `minWidth`) in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`.
 
 ---
 
@@ -857,7 +857,7 @@ checkbox per column**. Modeled on the sister app's movie-sheet "Columns" pop-out
   shown one, so a newly-added column defaults to visible for existing users).
 * **Where.** The dropdown, the `hiddenCols` state, the manual-then-responsive column pipeline, and the
   hydrate/save wiring all live in the shared
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
+  `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
   (`tableId` prop, `toggleCol`, `manualColumns` → `visibleColumns`), so **every** table inherits it.
 
 ---
@@ -921,7 +921,7 @@ The five columns are **as narrow as an icon** — a single ~15px glyph with **mi
 padding). The columns of bare icons sit **tight together**, not spread apart by whitespace (product owner,
 2026-07-19: "the spacing between those columns of just icons should be far more narrow"). They never carry
 text in a cell; they never wrap. Typed on `LfbColumn.tight` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`; the `px-0.5` is
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts`; the `px-0.5` is
 applied in `.../table/DataTable.tsx` (both the header and cell `tight` branch).
 
 ### 4c.2 The header is the same icon as the cells — an icon-only header (LOCKED)
@@ -956,9 +956,9 @@ live beside the icon meta in the reusable task-icon kit (`TASK_ICON`), hovering 
 **publish** the text, `HoverInfoPanel` in the left bar **renders** it, and the single render-nothing
 `HoverInfoBridge` that connects them is mounted **once, globally, in the app shell** — not per page:
 
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` / `setHoverDefault` / `useHoverDefault` / `HoverInfoBridge`;
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`;
-mounted at `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` / `setHoverDefault` / `useHoverDefault` / `HoverInfoBridge`;
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`;
+mounted at `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`.
 
 ### 4c.4 One shared visual grammar — StatusActionIcon: JUST THE GLYPH, no rounded rectangle (LOCKED)
 
@@ -978,10 +978,10 @@ visual language across three states.
 | **not-applicable** ("na") | The axis/task does not apply to this row. | The glyph in a **faint grey**; **inert** (no click). |
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` —
 `StatusActionIcon` (glyph-only; `cloneElement` injects the per-state `color`/`fill`, `fillWhenDone` is the
 Pin's solid-fill flag); the per-kind header, cell, and explanation are the reusable kit
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON`,
 `TaskIconHeader`, `TaskIconCell`.
 
 #### 4c.4a The Pin is THREE-STATE — grey / blue / RED (LOCKED)
@@ -1061,7 +1061,7 @@ declared row height survives only as the **first-paint estimate**, used before a
 it is never the number the arithmetic trusts.
 
 The windowing and the measurement are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` and the `measureRow` ref it returns; attached to the first body row by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` and the `measureRow` ref it returns; attached to the first body row by `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`
 
 ## 4d. Modified-click on a row opens a new tab (LOCKED, site-wide)
 
@@ -1101,9 +1101,9 @@ destination its plain click routes to). With `rowHref` present:
   the trailing `⋮` kebab ([menus.mdx §3](./menus.mdx)) stop propagation and are unaffected by this rule.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `rowHref` prop, and the body `<tr>`'s `onClick` / `onAuxClick` handlers that branch on `metaKey` / `ctrlKey` / `shiftKey` / `button === 1` before falling through to `onRowClick`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (the `rowHref` prop, and the body `<tr>`'s `onClick` / `onAuxClick` handlers that branch on `metaKey` / `ctrlKey` / `shiftKey` / `button === 1` before falling through to `onRowClick`).
 First adopter:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (its `rowHref` for the files table).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (its `rowHref` for the files table).
 
 ### 4d.1 Backlog — the tables that still need `rowHref` (HONEST STATUS)
 
@@ -1181,14 +1181,14 @@ This section owns only what the **shared table** does with one.
   saved view changes shape because of this feature.
 
 The row's optional `presence` field, and the composer that appends manifest entries with no local candidate, are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`, set by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`, set by
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
 the toggle, facets, search, sort, and `rowHref` that consume it are the unchanged shared surfaces in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 The remote-only row's `gitignore: false` value, and the disabled Ignore toggle with its hover reason, are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `remoteOnlyRows()` (sets `gitignore: false`) and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `ignore` icon column (`disabled={locked || remoteOnly}` with the explanatory `title`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `remoteOnlyRows()` (sets `gitignore: false`) and
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `ignore` icon column (`disabled={locked || remoteOnly}` with the explanatory `title`).
 
 ---
 
@@ -1301,7 +1301,7 @@ the **union** of all columns once, and the active tab selects and orders a **sub
   active tab is simply not shown; switching tabs re-projects the same underlying rows (no refetch).
 
 Applied in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (reads `TASK_TABS[activeTab].columnIds` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (reads `TASK_TABS[activeTab].columnIds` from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts`).
 
 <!--
   LOCKED: Every primary table has a leading bookmark toggle (per-computer, per-entity flag, §1.1).

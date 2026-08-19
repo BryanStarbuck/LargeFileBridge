@@ -36,10 +36,10 @@ Three rules follow, and every section below is an instance of one of them:
    those two disagree, the ledger wins.
 
 The durable fault trail every playbook starts from is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` / `RollingFileWriter.writeSync()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` / `RollingFileWriter.writeSync()`
 
 The state root every log path below resolves against is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` / `resolveLogDir()`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` / `resolveLogDir()`
 
 ---
 
@@ -81,7 +81,7 @@ busy 300-file batch's line rate can wrap in an afternoon. **Copy the state root 
 — an investigation that takes an hour can destroy the evidence it is looking for.
 
 The size-bounded rotating writer behind `log.log` / `error.err` is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter.roll()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter.roll()`
 
 **The external-process exception.** IPFS daemon logs are written by a detached `ipfs daemon` (or by
 launchd via `StandardOut/ErrorPath`) whose fd we do not own — so `RollingFileWriter`'s per-write cap
@@ -89,7 +89,7 @@ can never reach them. They obey the same policy only at the boundary where the w
 file: each daemon start and each autostart (re)install.
 
 The reopen-boundary rotation for the externally-written IPFS logs is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `rotateIfOversized()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `installAutostart()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `rotateIfOversized()`, called from `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `startDaemon()` and `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `installAutostart()`
 
 **Residual (known, accepted):** a daemon that runs for months with no restart can exceed the cap until
 its next start. Reboots and app restarts roll it long before then in practice.
@@ -100,7 +100,7 @@ never lingers. Never look for evidence there; never move them into the state roo
 live in `%TEMP%` instead, for the same reason and with the same status: Windows has no `/tmp`, and a
 literal one resolves to a `<drive>:\tmp` that does not exist. `just paths` prints where they landed on
 the machine in front of you. Resolved in:
-`~/BGit/Bryan_git/LargeFileBridge/scripts/dev/paths.mjs` — `runtimeDir()`, `portFile()`, `pidFile()`.
+`~/repos/LargeFileBridge/scripts/dev/paths.mjs` — `runtimeDir()`, `portFile()`, `pidFile()`.
 
 ---
 
@@ -122,7 +122,7 @@ the single most expensive misread in the product's history.
 Faster, and reports both plus the launchd agents:
 
 ```bash
-cd ~/BGit/Bryan_git/LargeFileBridge && just status
+cd ~/repos/LargeFileBridge && just status
 ```
 
 * **`backend :8787 down`** → it died. Go to **§4.1** / **§4.4**.
@@ -214,7 +214,7 @@ module-level in-memory array with **no disk write and no restore** — an empty 
 means **LOST**, not finished.
 
 The in-memory backlog that a crash vaporizes with no trace is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module-level `pending: QueueTask[]` (~line 93) / `queueDepth()` (~line 127)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the module-level `pending: QueueTask[]` (~line 93) / `queueDepth()` (~line 127)
 
 **Step 5 — How much actually got done?** Do **not** trust the empty in-flight map (§4.2 explains why).
 Count artifacts on disk:
@@ -238,7 +238,7 @@ the progress registry **deletes the record on completion**, so at post-mortem th
 **always empty** — for a batch that finished perfectly and for one that was killed mid-flight.
 
 The registry that deletes the job record on completion (why the post-mortem map is empty) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `track()` (~line 43) / `end()` (~line 29)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `track()` (~line 43) / `end()` (~line 29)
 
 **Question 1 — does the ledger balance?**
 
@@ -352,7 +352,7 @@ round-trip, not CPU — but **each in-flight job pins its base64 payload in heap
 whenever the unit of work holds bytes.
 
 The per-bucket admission caps that decide how many payloads can be pinned at once are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`
 
 See [memory.mdx](./memory.mdx) for the fix and [performance.mdx P-27](./performance.mdx) for the
 event-loop sibling of this bug.
@@ -384,10 +384,10 @@ questions. Retries happen **only** for errors the classifier calls transient (ti
 anything else fails immediately and correctly (a 400 will still be a 400 in 8 seconds).
 
 The transient-vs-permanent classification and the retry loop around a provider call are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isTransient()` (~line 101) / `withProviderRetry()` (~line 186)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `isTransient()` (~line 101) / `withProviderRetry()` (~line 186)
 
 The single real `fetch` to a vision provider, and the size-scaled timeout it is given, are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `postJsonOnce()` (~line 137) / `timeoutForBytes()` (~line 131)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `postJsonOnce()` (~line 137) / `timeoutForBytes()` (~line 131)
 
 > **Today, a provider call that SUCCEEDS is invisible** — `adapters.ts`'s only log statement is a retry
 > **warning**. You can see failure and you can see retry; you cannot see success, latency, or which model
@@ -398,10 +398,10 @@ heavyweight MLX engine, else `whisper-base`. A silent auto-fallback changes qual
 a common cause of "why is this transcript worse today?"
 
 The per-file describe runner, and the description path it writes to, are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~line 158) / `resolveDescriptionPath()` (~line 47)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~line 158) / `resolveDescriptionPath()` (~line 47)
 
 The engine choice and the auto-fallback chain are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (~line 46) / `transcribeWithEngine()` (~line 72)
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (~line 46) / `transcribeWithEngine()` (~line 72)
 
 **Discriminates:** provider error vs. transient exhaustion vs. permanent rejection vs. engine fallback vs.
 killed mid-flight.
@@ -425,7 +425,7 @@ rate against queue depth over time — a flat depth with a healthy END rate mean
 (working as designed); a growing depth means the producer outruns the drain.
 
 The pending backlog and its head rows (what is waiting, right now) are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()` (~line 127) / `listQueuedItems()` (~line 204)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()` (~line 127) / `listQueuedItems()` (~line 204)
 
 **Question 3 — did we actually achieve the concurrency we budgeted?** Count BEGINs with no END at each
 instant — the real in-flight number. **Achieved concurrency below the budget** means something is
@@ -451,7 +451,7 @@ Present = it was done, whatever the UI says. Absent = it was not, whatever the l
 early unless `overwrite` is set. "Nothing happened" is often "everything already happened."
 
 The already-done check that makes re-running a batch safe is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readDescription()` (~line 68), consulted by `describeOne()` before any work
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `readDescription()` (~line 68), consulted by `describeOne()` before any work
 
 **Question 3 — was it deduped?** The queue refuses to hold the same `op + path` twice while it is pending
 or running. A double-click reports the second batch as `deduped` — that is correct behavior, not a
@@ -480,7 +480,7 @@ slow; a blocked *loop* takes down `/health` too.
 a queue or request path:
 
 ```bash
-rg -n "spawnSync|readFileSync|readdirSync|statSync" ~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules
+rg -n "spawnSync|readFileSync|readdirSync|statSync" ~/repos/LargeFileBridge/code/packages/backend/src/modules
 ```
 
 **The standing rule: NEVER `spawnSync` / `readFileSync` on a queue or request path.** This is exactly
@@ -529,7 +529,7 @@ Errors go to **both** files deliberately: `error.err` is the complete fault trai
 `log.log` keeps the same line **in context**, next to the INFO lines that explain what led to it.
 
 The level routing (and the dual write of errors to both files) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the `log.*` API (`log.debug` / `log.info` / `log.warn` / `log.error`) over `RollingFileWriter.writeSync()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the `log.*` API (`log.debug` / `log.info` / `log.warn` / `log.error`) over `RollingFileWriter.writeSync()`
 
 **The standing rule for engineers — non-negotiable:**
 
@@ -546,10 +546,10 @@ path, and runs every interpolated field through `stripControlChars` so an untrus
 **forge a log line**. That last property is why this is a rule and not a style preference.
 
 The required structured shape for every error site is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` / the `LogErrorFields` interface (`file`, `className?`, `operation`, `expected?`, `error`, `data?`)
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` / the `LogErrorFields` interface (`file`, `className?`, `operation`, `expected?`, `error`, `data?`)
 
 The synchronous flush that runs before a clean exit (so the batched tail is not lost) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `flushLogs()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `flushLogs()`
 
 ---
 

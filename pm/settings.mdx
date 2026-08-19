@@ -56,7 +56,7 @@ The threshold renders as **one number input with a unit dropdown on its right**:
   `config.yaml` so all downstream code compares plain bytes.
 
 The value + unit threshold control (and the resolved-bytes helper text) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage`
 
 ### 1.2 Units — MB / GB / TB
 
@@ -106,10 +106,10 @@ This `big_file` block is the authoritative home of both thresholds. It **superse
 should be re-pointed at this value (see [scan.mdx §9](./scan.mdx#9-reconciliation-with-existing-specs)).
 
 Saving the threshold — resolving value+unit to `threshold_bytes` and persisting the `big_file` block — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `PATCH /` (uses `toBytes()` into `updateAppConfig()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `PATCH /` (uses `toBytes()` into `updateAppConfig()`)
 
 Reading and writing the computer-wide `config.yaml` (the `big_file` block and every other global default) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
 
 ---
 
@@ -227,19 +227,19 @@ These two fields persist on the existing `compression.images` / `compression.vid
 
 The Compression settings surface (per-media codec allow/deny + quality, **plus the `convert_types` toggle
 and the per-extension `skip_exts` checkbox list**) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` Compression section (backed by `compression.router.ts` `GET/PATCH /api/compress/settings`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` Compression section (backed by `compression.router.ts` `GET/PATCH /api/compress/settings`)
 
 Global settings write to the app `config.yaml`; account/appearance settings write to the per-user
 `users/<email>/config.yaml`.
 
 The scanner-roots editor (the textarea of top-level dirs the scan walks) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` (persisted via `settingsRouter` `PATCH /` `scannerRoots`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` (persisted via `settingsRouter` `PATCH /` `scannerRoots`)
 
 Reading and writing the per-user `users/<email>/config.yaml` (account/appearance settings) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig()` / `updateUserConfig()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/user-config.service.ts` — `getUserConfig()` / `updateUserConfig()`
 
 The admin-gated allow-list editor surface (companies + individuals) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/AllowListPage.tsx` — `AllowListPage` (backed by `settingsRouter` `PATCH /security`, gated by `requireAdmin()`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/AllowListPage.tsx` — `AllowListPage` (backed by `settingsRouter` `PATCH /security`, gated by `requireAdmin()`)
 
 ### 4.2 Page actions — verify & re-scan buttons (proposed)
 
@@ -256,7 +256,7 @@ beside the relevant Save**, or in the page header where global:
 
 These sit **alongside** the existing per-section **Save** buttons (they verify, they don't replace Save).
 None is implemented yet, so no code pointer; when built they belong in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
 `SettingsPage`, calling the scan / describe-credentials / ipfs-node endpoints already defined in their
 own specs. They are page/section-level actions, not per-row `⋮` items.
 
@@ -294,15 +294,15 @@ count** so the abstract percentage is never ambiguous:
   **next** run with no restart.
 
 The percentage field lives in the app config schema, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance`
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance`
 (`max_core_fraction`, default `0.9`).
 
 The slider surface (and the live "≈ N of M cores" readout) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
 `SettingsPage` Parallelism section.
 
 The resolved mass-compute budget is computed live from this setting in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
 (reads `performance.max_core_fraction`); the fixed responsive floor is `responsiveBudget()` (`cores − 2`).
 
 ### 4.4 The IPFS node verdict — the SAME three states the IPFS page shows
@@ -317,7 +317,7 @@ and **Serving only your content**. The restart itself lives on the IPFS page; Se
 points there.
 
 Reporting the posture with its restart-pending state is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `toGlobalSettings()` (`ipfs.compliant` + `ipfs.restartRequired`, from `ipfs.service.ts` — `isCompliant()` / `compliancePendingRestart()`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` IPFS node section.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `toGlobalSettings()` (`ipfs.compliant` + `ipfs.restartRequired`, from `ipfs.service.ts` — `isCompliant()` / `compliancePendingRestart()`), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `SettingsPage` IPFS node section.
 
 ---
 
