@@ -81,7 +81,7 @@ big threshold — with a diff against the previous scan (added / grown / shrunk 
 written to that unit's `status.yaml` (§6). It changes **no** file contents and moves **no** bytes.
 
 The metadata-only discovery pass that stats candidates and never opens files runs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` → `walkUnit()` (uses `fs.statSync` only)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` → `walkUnit()` (uses `fs.statSync` only)
 
 ---
 
@@ -122,7 +122,7 @@ being IPFS-pinned locally … make that happen at the 15-minute [interval]."*
   records a `needs_tool` gap and the app routes the user to [install it](./tools.mdx).
 
 The 15-minute pass that reads the local pinset and reconciles/refreshes each `pinned_by` claim against the manifests runs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (reads `ipfs.listPins()`, refreshes via `setPinClaim()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (reads `ipfs.listPins()`, refreshes via `setPinClaim()`)
 
 ### 2.2 The live filesystem watcher — event-driven, while the web app runs (LOCKED)
 
@@ -233,7 +233,7 @@ expiring claim cannot leak if a pass dies mid-flight. The suppression is narrow 
   which is the safe direction to fail in.
 
 The claim and the watcher's use of it are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/self-writes.ts` — `noteOwnWrite()` / `isOwnRecentWrite()`; claimed at the one place bytes reach a working tree, `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile()`; honoured by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `isQualifying()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/self-writes.ts` — `noteOwnWrite()` / `isOwnRecentWrite()`; claimed at the one place bytes reach a working tree, `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `catToFile()`; honoured by `~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `isQualifying()`
 
 **Debounce + coalesce.** Editors and tools emit **bursts** (a save writes a temp file, renames it,
 deletes the temp). The watcher collects raw events into a pending set and **debounces** (default
@@ -260,16 +260,16 @@ tree will update."*
 posture.
 
 Registering the OS watcher over the scanner roots, filtering to qualifying add/delete events, debouncing bursts, and kicking the coalesced discovery worker happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `bindNative()` / `bindPruned()` → `onChange()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`, then `startScan("manual")`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `bindNative()` / `bindPruned()` → `onChange()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`, then `startScan("manual")`)
 
 Deciding which directories may hold a kernel watch, and binding the pruned per-directory watch set on the platforms where recursion costs one watch per directory, happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — `makeWatchFilter()` (the `HARD_SKIP` + macOS-bundle + `scanner.ignore_globs` prune predicate) and `watchTreePruned()` → class `PrunedTreeWatch` (`bindTree()` / `bind()` / `onRaw()` / `releaseSubtree()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — `makeWatchFilter()` (the `HARD_SKIP` + macOS-bundle + `scanner.ignore_globs` prune predicate) and `watchTreePruned()` → class `PrunedTreeWatch` (`bindTree()` / `bind()` / `onRaw()` / `releaseSubtree()`)
 
 Extending into a directory that appears later and announcing the files it brought with it, and treating the watch cap as a re-openable ceiling while `ENOSPC` stays sticky, happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — class `PrunedTreeWatch` — `onRaw()` → `bindTree(from, announceFiles)` and `bind()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — class `PrunedTreeWatch` — `onRaw()` → `bindTree(from, announceFiles)` and `bind()`
 
 Starting the watcher when the backend boots and stopping it on shutdown is wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `main()` (calls `startWatcher()` after `app.listen`; `stopWatcher()` on `SIGINT`/`SIGTERM`)
+`~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `main()` (calls `startWatcher()` after `app.listen`; `stopWatcher()` on `SIGINT`/`SIGTERM`)
 
 ### 2.3 Scan staleness → the repo header's "Scan now" primary (LOCKED)
 
@@ -288,9 +288,9 @@ the button flips back to "View recommendation".
   staleness decision is a pure client check so no extra fetch is needed.
 
 The last-scan timestamp on the repo detail, the 2-week staleness gate, and the header wiring live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (sets `lastScanAt: status.last_scan_at`);
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `scanIsStale()` (the 2-week gate);
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`scanDue` drives the "Scan now" button).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (sets `lastScanAt: status.last_scan_at`);
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `scanIsStale()` (the 2-week gate);
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (`scanDue` drives the "Scan now" button).
 
 ---
 
@@ -346,7 +346,7 @@ reconcile, so it kept firing forever with nothing anywhere to correct it — for
 orphan schedule still committing and pushing from the computer.
 
 Carrying the on/off state into the install, and stopping a worker the OS runs while settings say off, happens in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `buildInstallOpts()` / `reconcileWorkerSchedules()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `buildInstallOpts()` / `reconcileWorkerSchedules()`
 
 ### 3.1 The Mac launchd plist
 
@@ -381,7 +381,7 @@ A LaunchAgent, distinct from the pin job's plist (`com.largefilebridge.pin`,
   ([storage_local.mdx §12](./storage_local.mdx#12-logging)).
 
 The Mac launchd LaunchAgent plist is rendered and installed/enabled/disabled via `launchctl` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` — `launchdInstaller` → `install()` (renders via `renderPlist()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/launchd.ts` — `launchdInstaller` → `install()` (renders via `renderPlist()`)
 
 ### 3.2 The Windows scheduled task
 
@@ -431,7 +431,7 @@ The same drift detection the Mac path has (interval, trigger script, node binary
 `reconcileWorkerSchedules()` self-heals a Windows computer exactly as it does a Mac one.
 
 The Windows scheduled task and its hidden launcher shim are rendered, registered, verified and read back via `schtasks` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/schtasks.ts` — `schtasksInstaller` → `install()` (renders via `renderShim()` + `renderTaskXml()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/schtasks.ts` — `schtasksInstaller` → `install()` (renders via `renderShim()` + `renderTaskXml()`)
 
 ### 3.3 The Linux systemd user timer
 
@@ -464,13 +464,13 @@ logged in, unless `loginctl enable-linger` is set for the account. This is the s
 app itself has (the trampoline POSTs a running backend), so it costs nothing extra today.
 
 The Linux systemd user timer and its oneshot service are rendered, installed and read back via `systemctl --user` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/systemd.ts` — `systemdInstaller` → `install()` (renders via `renderService()` + `renderTimer()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/systemd.ts` — `systemdInstaller` → `install()` (renders via `renderService()` + `renderTimer()`)
 
 Deciding whether systemd is actually drivable here (systemd-booted, `systemctl` present) happens in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/os/systemd.ts` — `supported()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/os/systemd.ts` — `supported()`
 
 Choosing the per-OS installer (launchd on Mac, Task Scheduler on Windows, a systemd user timer on Linux, the no-op + in-process watchdog elsewhere) happens in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `installer()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `installer()`
 
 ---
 
@@ -492,7 +492,7 @@ honoring `scanner.ignore_globs` and `follow_symlinks`. In one pass it does three
    large-file-bridge payload (§4.1). Diff against the previous scan to classify each change.
 
 Repo discovery, registering each `.git` working tree, and building the repo mask before the per-unit walk happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (calls `findGitRepos()` then `registerRepo()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (calls `findGitRepos()` then `registerRepo()`)
 
 The scan **never descends** into `scanner.ignore_globs` (e.g. `**/node_modules/**`, `**/.git/**`,
 `**/.Trash/**`), a unit's own `exclude_globs`, or the **hard-skip directory set** (§4.3) — this is
@@ -566,7 +566,7 @@ A file is a **candidate** (a large-file-bridge payload the scan records) when **
 
 The candidate predicate — git-ignored media at any size (rule 1), else the size gate (rule 2), plus forced
 includes (rule 3), the checked-in nudge (rule 4), and analysis candidates at any size (rule 5) — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate` / `analysisOnly`, using `isAnalysisCandidate()` = `isMediaFile()` **or** `isPdfFile()` from `shared/scan-filters.ts`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`isCandidate` / `analysisOnly`, using `isAnalysisCandidate()` = `isMediaFile()` **or** `isPdfFile()` from `shared/scan-filters.ts`)
 
 > #### Why rule 4 exists — the bug it fixes (root-cause note, do not remove)
 >
@@ -611,7 +611,7 @@ The scan does **not** define the threshold or its default — it only applies it
 The threshold gates case 2 of §4.1 only; git-ignored **media** (case 1) ignores it.
 
 Resolving the per-unit effective threshold (repo override else the global default) happens in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
 
 #### The checked-in threshold — a SECOND, lower gate (LOCKED)
 
@@ -632,8 +632,8 @@ checked_in_threshold = min(global big_file.checked_in_threshold_bytes,  // defau
   otherwise a row appears in the table that the metric offering to fix it does not count.
 
 The checked-in gate and its clamp live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`checkedInBig`) and the `checkedInThreshold: Math.min(...)` at the repo call site;
-the matching metric count in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeTaskMetrics()` / `checkedInThresholdBytes()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`checkedInBig`) and the `checkedInThreshold: Math.min(...)` at the repo call site;
+the matching metric count in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeTaskMetrics()` / `checkedInThresholdBytes()`
 
 ### 4.3 The hard-skip directory set (never descend)
 
@@ -651,7 +651,7 @@ double-counts every media file the repo already reports. A stale worktree (paren
 `git worktree prune` ran) additionally makes every git command inside it fatal
 (`not a git repository: (null)`), which spammed `error.err` on every scan cycle.
 Skip is implemented in the shared walk-filter set: code
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`.
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`.
 
 **Why build outputs are skipped (second root-cause note):** a Docusaurus/Next build **copies** the
 source media into its output dir, so before this list the scan reported `Intel_Murder_Docus`'s hero
@@ -661,7 +661,7 @@ removes the phantom duplicates (Intel dropped from 27+build-dupes to a clean **2
 main performance lever on large trees.
 
 The single-source-of-truth hard-skip directory set, shared with the FS-browser badge pass, lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `HARD_SKIP`
 
 #### 4.3.1 Transient downloader temp files (never candidates) — added 2026-07-21
 
@@ -681,7 +681,7 @@ transient can neither be indexed nor trigger the walk that would index it. The *
 own appearance still qualifies in the watcher, so the rescan that matters is never lost.
 
 Drops transient temp files in the scan walk and refuses to wake on them in the watcher, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `isTransientDownloadFile()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts` — `isTransientDownloadFile()`
 (applied in `scanner.service.ts` `walkUnit` file loop and `watcher.service.ts` `isQualifying()`)
 
 ### 4.4 Preflight — required tools before a scan (brew-install)
@@ -733,10 +733,10 @@ One unit walk bounds how many candidate rows it holds in memory (and persists to
   budgets, so N roots can never hold N × the cap.
 
 The two-tier cap, the exact drop counting, and the per-root budget split are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`UNIT_CANDIDATE_CAP` / `UNIT_CANDIDATE_HARD_CAP`, and `dirIsExcluded()` for the subtree prune), `scanComputerUnit()`, and `diffStatus()` (stamps `scan_dropped_candidates`); carried to the client in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`scanDroppedCandidates`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` (`UNIT_CANDIDATE_CAP` / `UNIT_CANDIDATE_HARD_CAP`, and `dirIsExcluded()` for the subtree prune), `scanComputerUnit()`, and `diffStatus()` (stamps `scan_dropped_candidates`); carried to the client in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (`scanDroppedCandidates`).
 
 The incomplete-census recommendation the user actually sees is built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildScanTruncatedWarning()`, ranked first by `topRecommendation()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildScanTruncatedWarning()`, ranked first by `topRecommendation()`.
 
 ---
 
@@ -806,7 +806,7 @@ The web app reads these `status.yaml` files to show, per repo and on the Scans p
 big-file counts, and "N new big files found" badges — all without the scan ever having opened a file.
 
 Diffing against the previous scan and writing the added/grew/deleted change set to each unit's `status.yaml` happens in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()` (persisted via `writeStatus()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `diffStatus()` (persisted via `writeStatus()`)
 
 > **The per-scan repo-wide counts re-stamp lands in Local Storage, never the working repo (LOCKED).** Beyond
 > each pin unit's `status.yaml`, the scan also re-stamps the repo-wide `repo_storage.yaml` (`counts:` +
@@ -817,7 +817,7 @@ Diffing against the previous scan and writing the added/grew/deleted change set 
 > re-stamp can never merge-conflict. This is the exact churn the placement policy keeps out of git.
 
 The per-scan `repo_storage.yaml` counts/`last_scan` re-stamp routing to the Local-Storage tracking root (never a working repo) is defined authoritatively in [artifact_placement_policy.mdx §6](./artifact_placement_policy.mdx) and implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts()` / `writeRepoStorage()` (routed through `tracking-root.service.ts` — `resolveTrackingRoot()`), driven by `scanner.service.ts` — `scanAll()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `refreshCounts()` / `writeRepoStorage()` (routed through `tracking-root.service.ts` — `resolveTrackingRoot()`), driven by `scanner.service.ts` — `scanAll()`.
 
 ### 6.1 The scan recalc runs the TO DO Batch Calc Engine (LOCKED)
 
@@ -840,7 +840,7 @@ Engine** ([transcribe_calc_engine.mdx](./transcribe_calc_engine.mdx)) is **not**
 scan — it runs only on the explicit "Show what could be transcribed" request.
 
 Invoking the recalc stage after classification is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — calls `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.recalcAll()` / `recalcForStorage(storage)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — calls `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `TodoBatchCalcEngine.recalcAll()` / `recalcForStorage(storage)`.
 
 ---
 
@@ -862,7 +862,7 @@ This surfaces on the **Scans** page alongside the 15-min pin's own installed/on-
 scheduled jobs are visible side by side.
 
 Reading each worker's installed/enabled state reconciled against real launchd state, and the install/uninstall/enable/disable controls, live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState()` / `control()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `workerState()` / `control()`
 
 ### 7.1 The Scans page — layout & actions
 
@@ -891,10 +891,10 @@ transparency + control surface for both scheduleTasks. Top to bottom it renders:
   off (or on but nothing is bound) and green when it is actively watching.
 
 The verdict banner, the two scheduleTask worker cards, and the watcher card — with their per-card controls (Install/Uninstall + Turn-on/Turn-off for the scheduleTasks, Turn-on/Turn-off for the watcher) render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `ScansPage` (the `WorkerCard` + `WatcherCard` sub-components; scheduleTask controls call `schedule.service.ts` → `control()`, the watcher toggle calls `watcher.service.ts` → `setWatcherEnabled()`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `ScansPage` (the `WorkerCard` + `WatcherCard` sub-components; scheduleTask controls call `schedule.service.ts` → `control()`, the watcher toggle calls `watcher.service.ts` → `setWatcherEnabled()`).
 
 The watcher card's data (`enabled` / `watching` / `roots`) is served alongside the two scheduleTasks in the Scans payload, and its on/off toggle is handled, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (adds `watcher: watcherState()`); toggle route `POST /api/jobs/watcher/:action` in `jobs.router.ts` → `watcher.service.ts` `setWatcherEnabled()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `jobsPageData()` (adds `watcher: watcherState()`); toggle route `POST /api/jobs/watcher/:action` in `jobs.router.ts` → `watcher.service.ts` `setWatcherEnabled()`.
 
 #### Header action — Scan / Rescan, and WHEN it last ran (BUILT 2026-07-29)
 
@@ -917,10 +917,10 @@ button, top-right of the header**, and one line of text under it:
   same kick for the transfer and device-registration jobs.
 
 The Scan/Rescan header button, the per-card Run now, and the absolute last-scan line render in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `RunNowButton` (label/disabled state) and `ScansPage` / `WorkerCard` (the `absoluteTime(...) (relativeTime(...))` stamps).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `RunNowButton` (label/disabled state) and `ScansPage` / `WorkerCard` (the `absoluteTime(...) (relativeTime(...))` stamps).
 
 Accepting the manual kick and answering with the worker's fresh state is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/jobs.router.ts` — `POST /api/jobs/:worker/run` → `startScan("manual")` / `startRun(worker, "manual")`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/jobs.router.ts` — `POST /api/jobs/:worker/run` → `startScan("manual")` / `startRun(worker, "manual")`.
 
 #### Header actions — on-demand kicks (proposed)
 
@@ -934,7 +934,7 @@ shared file action-links row (this is not a file-list page — [page_actions.mdx
 | **Pin now** | Kicks the 15-minute **transfer** scheduleTask on demand — one immediate full pin pass ([pin_process.mdx](./pin_process.mdx)), independent of the 15-min cadence. | Header, right-aligned, primary. | **proposed** |
 
 The on-demand **discovery** run these would trigger is already implemented (`startScan()` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts`, §10); surfacing
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts`, §10); surfacing
 **Scan now** / **Pin now** as buttons in `ScansPage`'s header is the proposed addition. These header
 kicks are distinct from the per-card **Install/Turn-on** controls above, which manage the *schedule*, not
 a single run.
@@ -1046,7 +1046,7 @@ inside, or tied to, the HTTP request that triggered it. This section is the auth
   manual and scheduled runs — reflecting the real finish, not the moment the trigger route returned.
 
 The detached background job — kicked off by a route that returns immediately and never awaits the walk — is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `startScan()` → `runJob()` (Rescan route: `reposRouter.post("/rescan")` in `repos.router.ts`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `startScan()` → `runJob()` (Rescan route: `reposRouter.post("/rescan")` in `repos.router.ts`)
 
 ### 10.2 Observable — live progress lives on the server
 
@@ -1064,7 +1064,7 @@ The detached background job — kicked off by a route that returns immediately a
   shows *"Scanning…"* and is disabled whenever a scan is running, even one it did not start.
 
 The single always-mounted progress bar that polls the server job and re-attaches after navigation is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ScanProgressBar.tsx` — `ScanProgressBar` (polls `GET /api/repos/scan-status`, served by `getScanJob()`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ScanProgressBar.tsx` — `ScanProgressBar` (polls `GET /api/repos/scan-status`, served by `getScanJob()`)
 
 ### 10.3 Single-flight, coalesced, non-blocking
 
@@ -1080,7 +1080,7 @@ The single always-mounted progress bar that polls the server job and re-attaches
   yielding changes only *when* the synchronous stats run, never *what* they read.
 
 Single-flight coalescing and the cooperative event-loop yielding that keeps the app responsive during a walk are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` / `findGitRepos()` (`await yieldToLoop()` every `YIELD_EVERY`; single-flight `rerunQueued` in `scan-job.ts`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()` / `findGitRepos()` (`await yieldToLoop()` every `YIELD_EVERY`; single-flight `rerunQueued` in `scan-job.ts`)
 
 ---
 
@@ -1115,7 +1115,7 @@ repoFolders)` loop in `scanAll()` — leaves a many-core machine idle while a si
   `status.yaml` files.
 
 The repo-units loop running as a `mapLimit()` at the responsive budget while each walk still yields to the event loop is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (the `for (const folder of repoFolders)` loop becomes `mapLimit(repoFolders, responsiveBudget(), …)`; `walkUnit()` / `findGitRepos()` keep their `await yieldToLoop()`), drawing `responsiveBudget()` + `mapLimit()` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()` (the `for (const folder of repoFolders)` loop becomes `mapLimit(repoFolders, responsiveBudget(), …)`; `walkUnit()` / `findGitRepos()` keep their `await yieldToLoop()`), drawing `responsiveBudget()` + `mapLimit()` from `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`.
 
 ---
 

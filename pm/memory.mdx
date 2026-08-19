@@ -63,7 +63,7 @@ const DESCRIBE_CONCURRENCY = Math.max(1, Number(process.env.LFB_DESCRIBE_CONCURR
 of the files it is admitting.
 
 The media-aware admission cap that decides how many jobs of each op run at once is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`
 
 ### 1.2 One file is resident three-to-four times over on the upload path
 
@@ -83,10 +83,10 @@ allocates the Buffer **and** the base64 string **simultaneously** — the Buffer
 until the string exists.
 
 The read-and-inline-encode step that pins the Buffer and its base64 string at the same time is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()`
 
 The data-URL template concat and the `JSON.stringify` body serialization that make copies two and three are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `chatVisionAdapter.describe()` / `postJson()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `chatVisionAdapter.describe()` / `postJson()`
 
 ### 1.3 The arithmetic
 
@@ -137,7 +137,7 @@ Only `probeVideo()` (~L166) needs stdout at all. `encodeCrf()` (~L187), `encodeT
 `fitImageUnderLimit()` (~L362) pay the same ceiling for output they **discard**.
 
 The child-process runner whose stdout accumulator sets a 32 MB per-child ceiling is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()`
 
 ### 1.5 The precedent that makes this inexcusable
 
@@ -150,7 +150,7 @@ transcodeActive / transcodeWaiters / acquireTranscodeSlot()   — fit-media.ts ~
 A counter, a waiter queue, acquire-before, release-in-`finally`. It works. **Nothing gates bytes.**
 
 The core-slot gate whose shape the memory budget must copy is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (`transcodeActive` / `transcodeWaiters`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (`transcodeActive` / `transcodeWaiters`)
 
 ### 1.6 The asymmetry — we budget *other* processes' RAM and not our own
 
@@ -165,7 +165,7 @@ carefully refuse to OOM the machine with someone else's memory, and then OOM our
 **That asymmetry is the lesson of this spec.**
 
 The RAM-clamped transcribe concurrency — the right pattern, applied to the wrong process — is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (`MODEL_RAM_PER_JOB_BYTES` / `RAM_HEADROOM_BYTES`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()` (`MODEL_RAM_PER_JOB_BYTES` / `RAM_HEADROOM_BYTES`)
 
 ### 1.7 We had no instrumentation and no chance of seeing it coming
 
@@ -204,7 +204,7 @@ wait if it doesn't fit.**
   when set, mirroring how `LFB_DESCRIBE_CONCURRENCY` overrides the count.
 
 The memory budget resolver — ceiling × fraction, read live, env-overridable — belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()` (sibling of `coreBudget()` / `responsiveBudget()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()` (sibling of `coreBudget()` / `responsiveBudget()`)
 
 ### 2.2 `estimatedBytes(file)` — what a job costs before it runs
 
@@ -250,7 +250,7 @@ the process.
 
 The describe-only scope of the reservation — and the `if (t.op !== "describe") return 0` that keeps the
 compress bucket out of the byte budget for now — is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `estimatedBytes()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `estimatedBytes()`
 
 ### 2.3 Reservation / release discipline (LOCKED)
 
@@ -301,7 +301,7 @@ For files routed through fit-media, the reservation is taken **around the fit + 
 in-flight lifetime, not just the HTTP call.
 
 The two-budget admission test — count AND bytes — belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` (calling `capFor()` and the new `acquireMemory()` / `estimatedBytes()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` (calling `capFor()` and the new `acquireMemory()` / `estimatedBytes()`)
 
 ---
 
@@ -329,7 +329,7 @@ These append to [performance.mdx](./performance.mdx)'s catalog and follow its fo
   counter + waiter-queue + `finally`-release pattern applied to bytes instead of slots.
 
 The byte-reserving admission gate and its budget resolver belong in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `acquireMemory()` / `estimatedBytes()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pump()` / `acquireMemory()` / `estimatedBytes()`, drawing `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()`
 
 ### 🔴 P-29 — One file is resident 3–4× on the upload path · memory
 
@@ -355,7 +355,7 @@ The byte-reserving admission gate and its budget resolver belong in code:
      which also lets `INFLATION` (§2.2) drop from ~4.0 toward ~2.5.
 
 The single-build payload path and the streaming/multipart upload belong in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` / `postJson()` / `chatVisionAdapter.describe()` / `gemini.describe()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` / `postJson()` / `chatVisionAdapter.describe()` / `gemini.describe()`
 
 ### 🟠 P-30 — `runAsync()` reserves 32 MB of stdout per child on a path that discards stdout · memory
 
@@ -374,7 +374,7 @@ The single-build payload path and the streaming/multipart upload belong in code:
   quadratic concat disappears with the ceiling.
 
 The opt-in, chunk-array stdout capture belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (`captureStdout` option) / `probeVideo()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (`captureStdout` option) / `probeVideo()`
 
 ### 🟠 P-31 — No heap instrumentation at all; the V8 ceiling is implicit · observability
 
@@ -394,7 +394,7 @@ The opt-in, chunk-array stdout capture belongs in code:
   that would have predicted the next OOM.
 
 The explicit heap ceiling and the heartbeat memory sample belong in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `scripts.dev` / `scripts.start` (`NODE_OPTIONS=--max-old-space-size=…`); `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the heartbeat sampler
+`~/repos/LargeFileBridge/code/packages/backend/package.json` — `scripts.dev` / `scripts.start` (`NODE_OPTIONS=--max-old-space-size=…`); `~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the heartbeat sampler
 
 ### 🟠 P-32 — A V8 OOM is invisible to our logging; only `launcher.log` saw it · observability
 
@@ -417,7 +417,7 @@ The explicit heap ceiling and the heartbeat memory sample belong in code:
   crash **not happen** and be **seen coming**; that spec's job is to make it **survivable**.
 
 The heap-pressure WARN and the near-limit snapshot flag belong in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the heap-pressure threshold check; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/package.json` — `NODE_OPTIONS` (`--heapsnapshot-near-heap-limit=1`)
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — the heap-pressure threshold check; `~/repos/LargeFileBridge/code/packages/backend/package.json` — `NODE_OPTIONS` (`--heapsnapshot-near-heap-limit=1`)
 
 ### 🟡 P-33 — The 10-minute request timeout multiplies memory hold time · memory
 
@@ -438,11 +438,11 @@ The heap-pressure WARN and the near-limit snapshot flag belong in code:
   the p95 latency is elevated**, since a slow provider and a full bucket are the exact OOM recipe.
 
 The payload-scaled timeout and the long-hold WARN belong in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `timeoutForBytes()` / `postJsonOnce()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `timeoutForBytes()` / `postJsonOnce()`
 
 ### 🟡 P-34 — The in-flight map is empty at postmortem time · observability
 
-- **Where:** `code/packages/backend/src/shared/progress.registry.ts` — `end()` **deletes** the job
+- **Where:** `code/packages/backend/src/modules/progress/progress.registry.ts` — `end()` **deletes** the job
   record.
 - **Symptom:** The registry is a **live view**, correct by design for the dock. But it means that at
   the moment we most want to know **which 24 files were in flight when the heap hit 4.1 GB**, the map
@@ -456,7 +456,7 @@ The payload-scaled timeout and the long-hold WARN belong in code:
   archaeology dig through `launcher.log`.
 
 The terminal-record handoff from the live registry to the durable log belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/progress.registry.ts` — `end()` (append to the transactions log before delete)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `end()` (append to the transactions log before delete)
 
 ---
 
@@ -485,7 +485,7 @@ The terminal-record handoff from the live registry to the durable log belongs in
   still present in the owner (deleting either line would otherwise restore the leak silently).
 
 The single configured sharp instance and its guard live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.ts` — the module body (`sharp.cache(false)` / `sharp.concurrency(1)`), guarded by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.import-guard.spec.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.ts` — the module body (`sharp.cache(false)` / `sharp.concurrency(1)`), guarded by `~/repos/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.import-guard.spec.ts`
 
 ### 🔴 P-40 — The OCR worker pool was built lazily and never released · memory
 
@@ -510,7 +510,7 @@ The single configured sharp instance and its guard live in code:
   process open.
 
 The idle-retirement sweep and its in-flight gate live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `armIdleTimer()` / `withPoolJob()` / `shutdownOcrWorkers()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `armIdleTimer()` / `withPoolJob()` / `shutdownOcrWorkers()`
 
 ### 🟠 P-41 — A byte-for-byte compare read both whole files into memory · memory
 
@@ -537,7 +537,7 @@ The idle-retirement sweep and its in-flight gate live in code:
   opposite memory behaviour is the smell — if a third appears, it should be one shared utility.
 
 The bounded compare lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `sameBytes()`, covered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/same-bytes.spec.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `sameBytes()`, covered by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/same-bytes.spec.ts`
 
 ### 🟠 P-42 — An idempotence guard scoped to the module, for listeners owned by the process · memory
 
@@ -560,8 +560,8 @@ The bounded compare lives in code:
   currency.
 
 The process-scoped guards live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()`, and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — the import-time exit-flush registration
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()`, and
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — the import-time exit-flush registration
 
 ---
 
@@ -582,10 +582,10 @@ The memory budget gets a knob **alongside** the core budget's, and it is read **
   the ceiling from a web page; they can only choose how much of it we spend.
 
 The setting field lives in the app config schema, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance` (`max_memory_fraction`, default `0.5`)
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.performance` (`max_memory_fraction`, default `0.5`)
 
 Read live at admission and served/edited over the settings surface, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — the `performance` GET/PUT handlers; edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — the `performance` GET/PUT handlers; edited from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`
 
 ---
 
@@ -600,7 +600,7 @@ Read live at admission and served/edited over the settings surface, in code:
    it**. The default is `stdio: ignore`.
 4. **The heap ceiling is explicit, never V8's default.** `--max-old-space-size` is set at launch in
    every path that starts the backend (`dev`, `start`, the task runner, launchd) — from ONE place,
-   `~/BGit/Bryan_git/LargeFileBridge/scripts/node-heap-run.mjs`, which the `dev`/`start` scripts run
+   `~/repos/LargeFileBridge/scripts/node-heap-run.mjs`, which the `dev`/`start` scripts run
    through. It is a script rather than inline `NODE_OPTIONS=… cmd` because that form is POSIX-sh syntax
    and cmd.exe reads it as a program name, so on Windows the backend never started at all.
 5. **Every reservation is released in a `finally`.** Success, throw, timeout, abort — no exceptions,
@@ -657,12 +657,12 @@ Measured on a copy of the real cache, 2,000 files through the old path: RSS 45 �
 Through the fixed path: RSS 84 → 113 MB in 0.04 s.
 
 *The write-back store — load once, mutate in memory, debounced + explicit flush, bounded entry count —*
-*is implemented in* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts`,
+*is implemented in* `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts`,
 *class* `WriteBackStore` *(`get` / `touch` / `flush`), consumed by* `discoverForeignPin`, `recordForeignPin`,
 `verifyForeignPins`, *and drained by the exported* `flushForeignPinStores()`.
 
 *The scan flushes both stores at its commit point in*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts`, *function* `scanAll`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts`, *function* `scanAll`.
 
 **Why nothing warned.** `heap-watch` measured `heapUsed / heap_size_limit` — 78 MB of 6,240 MB, i.e.
 1.2%. By its own correct arithmetic the process was idle while it held 4 GB of the user's RAM. RSS
@@ -671,7 +671,7 @@ cooldown shape, and its WARN names whether the bytes sit outside the V8 heap or 
 committed-but-idle pages.
 
 *The RSS threshold and its warning are implemented in*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts`, *function* `sampleRss`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts`, *function* `sampleRss`
 *(called from* `sample`*)*.
 
 **Why it was unattributable after the fact.** The ledger logged `heapUsed` and `rss` but not
@@ -680,7 +680,7 @@ external" — have different causes and different fixes. `heapTotalMB` is now on
 `externalMB` joins it above 32 MB.
 
 *The memory snapshot on every ledger line is written by*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/transactions.ts`, *function* `memFields`.
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/transactions.ts`, *function* `memFields`.
 
 **Secondary contributor.** `sharp`/libvips defaults (a 50 MB operation cache with a 0% hit rate for
 hash-once work, plus a per-pipeline worker pool sized to the core count, each carrying a malloc arena
@@ -690,7 +690,7 @@ the job level, and the decode is bounded to ~1 MB of pixels either way.
 
 *Originally set at module load in* `modules/media/perceptual.service.ts`. **That placement was itself a
 defect** — see §5.2 / P-39 — and the settings now live in*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.ts`, *which every sharp
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/sharp-runtime.ts`, *which every sharp
 user imports.*
 
 ---

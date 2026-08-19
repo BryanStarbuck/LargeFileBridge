@@ -92,9 +92,9 @@ computer:
   backbone just doesn't work" — the same defect that was hit in production, whose hazard **moved** from a
   `.lfbridge/` line to the root metadata rather than going away
   ([git_backbone.mdx §4.2.1](./git_backbone.mdx#421-the-sync-repos-committed-tracking-payload-must-never-be-git-ignored-locked-learned-from-a-defect)).
-  Handled in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`
+  Handled in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`
   — `reconcileLfbridgeIgnore(root, type)` (for an SDL it reconciles the **root** metadata + `devices/`, not
-  a `.lfbridge/` line) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`
+  a `.lfbridge/` line) and `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`
   — `GitBackbone.ensureSdlCommittable()`.
 
 ### 1.1 The Personal repo root *is* the `.lfbridge` area — there is no `.lfbridge/` here (LOCKED)
@@ -229,7 +229,7 @@ machine. LFB then reads the whole `devices/` directory:
   they appear there in the UI, and we can open them up and get details on them."*
 
 Writing this computer's own `devices/<id>.yaml` into the Personal repo (self-owned) and reading the whole registry to discover the other computers is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)`, with the fingerprint from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()`; surfaced in the Devices tab by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/devices.service.ts` — `writeSelfDevice(storageRoot)` / `readDevices(storageRoot)`, with the fingerprint from `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/hardware.service.ts` — `collectHardware()`; surfaced in the Devices tab by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/devices/DevicesPage.tsx` — `DevicesPage`.
 
 ---
 
@@ -255,7 +255,7 @@ Both shapes converge on one working copy; everything downstream is indifferent t
 picked.
 
 Persisting the Personal storage's Git remote (its kind — local path or URL — and value) from the settings page, and reading it back to resolve the working copy, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()` / `readStorageSettings()` (the `backing.dedicated_repo` block), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `writeStorageSettings()` / `readStorageSettings()` (the `backing.dedicated_repo` block), consumed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveWorkingCopy(storageId, remote)`.
 
 ---
 
@@ -295,7 +295,7 @@ time on each machine and how the two converge.
    row and see its full hardware details (§4.3).
 
 Seeding the Personal SDL on first configuration (descriptor + mapped dirs + `.gitattributes` + self device) and driving the first fetch/merge/commit/push is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` (writes the descriptor + self device on create/index) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` (the Git cycle around the reconcile).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureStorage()` (writes the descriptor + self device on create/index) and `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)` (the Git cycle around the reconcile).
 
 ---
 
@@ -334,7 +334,7 @@ within ten minutes, regardless of the byte-pin opt-in. It is a distinct worker w
 installed / on-off switch on the Scans page, so *"I turn that on"* is a single, visible toggle.
 
 Driving the per-pass Git cycle for the Personal storage (fetch+merge before the reconcile, commit+push after, with the non-fast-forward retry) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)`, calling `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` then `GitBackbone.commitAndPush()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit(id)`, calling `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` then `GitBackbone.commitAndPush()`.
 
 ---
 
@@ -433,11 +433,11 @@ SDL (nor into any working repo's `.lfbridge/`), and is **never** team-shared (it
   [processing.mdx](./processing.mdx)).
 
 Producing the Personal batch during scan recalc, and naming/replacing its YAML, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
 `TodoBatchCalcEngine.recalcForStorage(storage)` writing via
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
 `batchFileName(storage)` (→ `personal_2_do.yaml`); the transcribe discovery walk is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
 
 ---
 
@@ -475,7 +475,7 @@ company or Personal — and **Personal is the catch-all**:
   persisted as `owner_override` in the repo's `config.yaml`.
 
 Persisting and matching the personal-accounts list is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig().personalAccounts` / `setPersonalAccounts()`, matched by `isPersonalAccount(host, owner)` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig().personalAccounts` / `setPersonalAccounts()`, matched by `isPersonalAccount(host, owner)` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`.
 
 ---
 
@@ -510,7 +510,7 @@ can also have a sync repo** — indeed it is the **canonical** one: the Personal
   reassign it to a company and its tracking mirrors to that company's sync repo instead.
 
 Resolving the Personal sync-repo mirror root for a Personal-owned repo (`<syncRepo>/repos/<repoKey>/` or null) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (Personal branch resolves the Personal dedicated repo from `storage-settings.service.ts`), whose additive mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (Personal branch resolves the Personal dedicated repo from `storage-settings.service.ts`), whose additive mirror is written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ### 14.1 Personal's owned-repos list & reassign to a company
 
@@ -576,7 +576,7 @@ which is the authority for the rule; this section states only what is Personal-s
   Personal repo already carries alongside `devices/`.
 
 Adopting the Personal SDL's own git root as the sync repo when no explicit pick is configured is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo(storageId)` with the SDL-root fallback already performed by `getGitBackboneRemote(storageId)` (same file), resolved per repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` and mirrored by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo(storageId)` with the SDL-root fallback already performed by `getGitBackboneRemote(storageId)` (same file), resolved per repo by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` and mirrored by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ---
 
@@ -675,7 +675,7 @@ LFB's own text:
 * **The Personal SDL** — one per user, turned on in Personal storage settings (§5), conventionally
   `~/BGit/Bryan_git/personal_large_files_bridge/`.
 * **A company sync repo** — one per company the user added ([storage_company.mdx §7](./storage_company.mdx#7-the-company-sync-repo)),
-  e.g. `~/BGit/Bryan_git/act3_large_files_bridge/`.
+  e.g. `~/repos/act3_large_files_bridge/`.
 
 **Why the distinction is the whole license.** In a **working repo** LFB is a **guest**: someone else's
 code lives there, the user commits to it by hand, and LFB must never run `git commit`/`push` on their
@@ -686,7 +686,7 @@ else**. A working repo NEVER gets the Part II engine — it is governed by
 [git_backbone.mdx](./git_backbone.mdx) and [git_ignore.mdx](./git_ignore.mdx).
 
 **The kind decides, not the path** — the same rule as §1.1, keyed on the resolved storage kind via
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` —
 `usesLfbridgeDir(kind)` / `trackingBaseDir(root, kind)`.
 
 #### 16.1.1 Both repos are governed autonomously — the company case is not a lesser case (LOCKED)
@@ -719,7 +719,7 @@ Personal-only document.
   without a human. Autonomy is about *git*, never about silently re-mapping someone's repos.
 
 Keying the engine to a dedicated LFB file repo — Personal SDL or company sync repo alike — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `usesLfbridgeDir(kind)` / `trackingBaseDir(root, kind)`, with the per-storage serialization in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock()` and the per-file conflict resolution in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolutionFor()` / `GitBackbone.resolveConflicts()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `usesLfbridgeDir(kind)` / `trackingBaseDir(root, kind)`, with the per-storage serialization in `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock()` and the per-file conflict resolution in `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolutionFor()` / `GitBackbone.resolveConflicts()`.
 
 ### 16.2 The v1 audit — what is actually true today (evidence, 2026-07-16)
 
@@ -1041,7 +1041,7 @@ spec states them: [git_backbone.mdx §6.3](./git_backbone.mdx#63-the-push-retry-
   it is a **standing fault**, not a retry.
 
 The three-attempt push budget, its per-attempt re-pull, and its per-attempt error logging are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `BACKOFF_MS = [0, 2000, 8000]` loop, each iteration calling `GitBackbone.pull()`), with the honest commit message of item 2 in the same file's `composeCommitMessage()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `BACKOFF_MS = [0, 2000, 8000]` loop, each iteration calling `GitBackbone.pull()`), with the honest commit message of item 2 in the same file's `composeCommitMessage()`.
 
 ---
 

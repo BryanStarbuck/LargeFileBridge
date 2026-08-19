@@ -84,7 +84,7 @@ code/
 **The task runner runs on macOS, Linux AND Windows.** Every recipe is one portable command line
 (`node`, `pnpm`, `just`) and nothing else: no `cd`, no `lsof`/`pgrep`/`launchctl`, no shebang recipes, and
 no comment lines inside a recipe body (`just` hands those to the shell, and `#` is an unknown command to
-`cmd.exe`). What each recipe calls is in code: `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/dev.mjs` —
+`cmd.exe`). What each recipe calls is in code: `~/repos/LargeFileBridge/scripts/dev/dev.mjs` —
 `cmdRun` / `cmdStop` / `cmdStatus` / `cmdLogs` / `cmdClean`, over `proc.mjs` (ports and process trees per
 OS), `launch.mjs` (the detached launcher that pipes the dev tree through the rotating log sink) and
 `boot.mjs` (login autostart: launchd / Task Scheduler / systemd user unit).
@@ -96,7 +96,7 @@ pnpm calls complete in which nothing resolves — the app then dies one second i
 module-not-found. So every install proves the tree instead: each project's direct dependencies must
 resolve to a real package directory and each tool its scripts name must have a runnable `.bin` shim, and a
 tree that fails is repaired (`--force`, then a from-scratch reinstall) or reported by name.
-Verified and repaired in code: `~/BGit/Bryan_git/LargeFileBridge/scripts/dev/deps.mjs` —
+Verified and repaired in code: `~/repos/LargeFileBridge/scripts/dev/deps.mjs` —
 `treeProblems()` (the check) and `ensureInstalled()` (the repair ladder), called by `dev.mjs` `cmdInstall`
 for `code/`, `cli/code/` and the auth lib. A dev tree that dies before the ports come up is reported as
 such, with that same finding, by `dev.mjs` `reportDeadTree()` — never as a port timeout.
@@ -106,7 +106,7 @@ does not untrack what is already in the index, and pnpm's package entries are *s
 as mode-120000 blobs holding a target path, and a Windows checkout (no symlink support by default) writes
 each one as a **text file** — so `node_modules/vite` is a 123-byte file, nothing resolves, and every
 reinstall is undone by the next pull. Detected and reported in code:
-`~/BGit/Bryan_git/LargeFileBridge/scripts/dev/deps.mjs` — `trackedModules()` / `warnIfTracked()` (asks git,
+`~/repos/LargeFileBridge/scripts/dev/deps.mjs` — `trackedModules()` / `warnIfTracked()` (asks git,
 prints the untracking commands) and `committedSymlinkReason()` (names a checked-out symlink for what it
 is). **The auth lib's own tree is installed too** — a `link:` dep links a directory, it does not install
 one, so `@auth/backend`'s `jose` resolves from OpenAuthFederated's `node_modules` and nowhere else:
@@ -149,7 +149,7 @@ a global error handler → `error.err`, listens on `server.backend_port`. Module
 `Router` + `service` files (not Nest modules) but map 1:1 to the same responsibilities.
 
 The Express bootstrap (helmet, CORS, auth middleware, feature-router mounts, global error handler) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `main()`
+`~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `main()`
 
 ```
 packages/backend/src/
@@ -238,7 +238,7 @@ that POSTs to the internal route (sister precedent), so the worker runs in the a
 no first-run write); **Zod-validates on read**, rejecting malformed files loudly (storage_local.mdx §15).
 
 The atomic YAML store (tmp→fsync→rename, per-file mutex, defaults-on-absence, schema-validate-on-read) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `writeYaml()` / `updateYaml()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `writeYaml()` / `updateYaml()`
 
 **Three scopes** (`scopes.ts`):
 
@@ -290,10 +290,10 @@ primary; systemd/Windows secondary behind the same interface). The launchd `Prog
 `/api/internal/run/<worker>` route — the actual work runs in the app's TypeScript.
 
 The metadata-only discovery walk (the 4-hour scan worker: repo discovery, mask, big-file stat, diff) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `scanAll()`
 
 The detached, single-flight background scan job runner (kicks the walk off the request, coalesces reruns) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `startScan()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `startScan()`
 
 ---
 
@@ -321,7 +321,7 @@ shows the red IPFS pill (one_repo.mdx §3.3, the Status / settings strip), disab
 ## 8. Authentication — OpenAuthFederated (charter + storage_local.mdx §4/§10)
 
 Consumed exactly as both sisters do, via pnpm `link:` to
-`~/BGit/Bryan_git/OpenAuthFederated/code/packages/{auth-backend,auth-react}`. **Embedded mode** — the
+`~/repos/OpenAuthFederated/code/packages/{auth-backend,auth-react}`. **Embedded mode** — the
 real Google Workspace OIDC round-trip runs in-process; app session + access tokens are HS256 signed
 with one on-disk secret. No separate auth server, no JWKS to host.
 
@@ -451,7 +451,7 @@ All under `/api`, all typed by `@lfb/shared`. (`/api/v1/*` is the auth middlewar
    renders; `/api/health` + `/api/repos` respond; a scan populates the Repos table.
 
 The `lfb` CLI entry (scan/pin/install-agent, also invoked by the launchd trigger) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()`
+`~/repos/LargeFileBridge/code/packages/backend/src/cli.ts` — `run()`
 
 **Sequencing note:** steps 2–6 are backend and can proceed while 7 (frontend) is built against the
 frozen `@lfb/shared` types — the two sides only meet at the §10 REST contract.
@@ -526,10 +526,10 @@ column by column):
   frontend renders array order right-to-left (directories.mdx §3.5).
 
 The File System column-browser REST routes are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `fsRouter` (`GET /api/fs`, `GET /api/fs/home`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `fsRouter` (`GET /api/fs`, `GET /api/fs/home`)
 
 The one-directory-level listing (readdir + stat + per-entry code badges) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()`
 
 ### 14.2 Shared types (`@lfb/shared`)
 

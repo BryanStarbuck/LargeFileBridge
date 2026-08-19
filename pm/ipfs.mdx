@@ -17,7 +17,7 @@ around *repos and files LFB already manages*. This one starts from the **IPFS pi
 including content that is **pinned but not yet tracked by LFB**, so the user can **import** it.
 
 Reading the local pinset (`ipfs pin ls`) as metadata-only ground truth is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `listPins()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `listPins()`
 
 Three jobs:
 
@@ -85,10 +85,10 @@ question: **"is this file pinned on THIS local computer's IPFS node, right now?"
 * **User-facing wording is "Pinned locally"** for a file pinned on this node outside Large File Bridge —
   never phrased as if being pinned by other software made it less pinned.
 * Local pin truth is computed in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
   `composeFileRows` (`pinnedHere` / `pinnedForeign`) and `transferFor` (self-claim-only `pinned`);
   discovery + per-scan verification in
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` —
   `discoverForeignPin()` / `verifyForeignPins()`.
 
 ### 1.2 A peer's pin claim survives a sync — and still never becomes local pin truth (LOCKED)
@@ -124,7 +124,7 @@ prevent. A merge that *adds* peer knowledge while *refusing* peer assertions abo
 that satisfies both.
 
 Re-deriving the self-claim from the real local pinset while unioning peers' claims is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (per-entry union merge; own claim re-derived), read back by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor()` (self-claim-only `pinned`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (per-entry union merge; own claim re-derived), read back by `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `transferFor()` (self-claim-only `pinned`).
 
 ---
 
@@ -188,10 +188,10 @@ A single horizontal card that reflects the node **and** its only-our-content com
 mostly, but it is where a non-compliant node is **flagged and fixable**.
 
 Reading the reprovide strategy, gateway posture, and GC state for the card is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `nodePosture()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `nodePosture()`
 
 The **Node** reachability verdict and the **PeerID** shown on the card are read in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `health()` / `peerId()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `health()` / `peerId()`
 
 **A probe that TIMED OUT is not a probe that was REFUSED.** The verdict is a control call capped at 15s,
 and a daemon that is alive and answering blows through that cap routinely — a stale pooled keep-alive
@@ -236,7 +236,7 @@ changed the [global setting](./settings.mdx#4-the-rest-of-the-global-settings-su
 default — then the banner is an amber *acknowledged* note, not a red error.
 
 Restoring the only-our-content defaults when the user clicks **Fix** is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` (exposed by the `POST /enforce` handler in `ipfs.router.ts`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` (exposed by the `POST /enforce` handler in `ipfs.router.ts`)
 
 #### 3.1.1 A WRITTEN SETTING IS NOT A LIVE SETTING (LOCKED, learned from a defect)
 
@@ -253,7 +253,7 @@ daemon has adopted it, the fault trail says so, and the Fix confirmation tells t
 restart IPFS. Nothing claims the machine is compliant on the strength of a write alone.
 
 Reporting which keys were written and that a restart is required is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` returning `ComplianceEnforcement { changed, restartRequired }`; surfaced to the user by `IpfsPage.tsx` / `IpfsDashboardPage.tsx` (`onFix`). Regression test: `code/packages/backend/src/modules/ipfs/compliance-enforcement.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()` returning `ComplianceEnforcement { changed, restartRequired }`; surfaced to the user by `IpfsPage.tsx` / `IpfsDashboardPage.tsx` (`onFix`). Regression test: `code/packages/backend/src/modules/ipfs/compliance-enforcement.spec.ts`.
 
 **The gap OUTLIVES the call that opened it, so the card must too.** Returning `restartRequired` to the one
 caller that toasts it is not enough: the node card is re-read every few seconds by pages that stay open for
@@ -273,7 +273,7 @@ the daemon to be missing across **consecutive** probes, and the restarts the app
 at all — they *watched* the stop and say so.
 
 Remembering the un-adopted write, and clearing it only when a different process will answer next, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `compliancePendingRestart()` (set by `enforceCompliance()`; cleared by `noteDaemonStopped()` for a stop we watched, and by `health()` after consecutive unreachable probes for one we didn't). Rendered by `IpfsPage.tsx` — `NodeVerdict`, `ipfsShared.tsx` — `SecurityCard`, and `SettingsPage.tsx` (settings.mdx §5). Regression test: `code/packages/backend/src/modules/ipfs/compliance-restart-pending.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `compliancePendingRestart()` (set by `enforceCompliance()`; cleared by `noteDaemonStopped()` for a stop we watched, and by `health()` after consecutive unreachable probes for one we didn't). Rendered by `IpfsPage.tsx` — `NodeVerdict`, `ipfsShared.tsx` — `SecurityCard`, and `SettingsPage.tsx` (settings.mdx §5). Regression test: `code/packages/backend/src/modules/ipfs/compliance-restart-pending.spec.ts`.
 
 **Every surface that speaks for the posture shows the amber state**, including Settings — a page that
 reads "Serving only your content" while the IPFS page reads "Restart needed" is worse than either alone,
@@ -294,7 +294,7 @@ a computer where IPFS is now off, so it fails the job with the real start diagno
 `cause`, [ipfs_ui.mdx §14.2.1](./ipfs_ui.mdx)) instead.
 
 Restarting the daemon so a fresh node's only-our-content settings are in force is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `applyComplianceWithRestart()` (returns a `StartDiagnosis` only when the daemon did not come back; called by `startInstall()`, `controlDaemon("start")` and `startUpgrade()`, each failing the job on it)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `applyComplianceWithRestart()` (returns a `StartDiagnosis` only when the daemon did not come back; called by `startInstall()`, `controlDaemon("start")` and `startUpgrade()`, each failing the job on it)
 
 **The USER's restart button holds the same rule, so it is ONE call.** The amber card's **Restart IPFS** takes
 a healthy daemon down before it brings one back, so it carries exactly the risk above — and a browser doing
@@ -305,7 +305,7 @@ with a single outcome — including a daemon that refused to **stop**, which is 
 but still un-adopted, which is the state the user clicked the button to leave.
 
 Restarting on the user's say-so, as one job with one answer, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `restartDaemon()` (behind `POST /api/ipfs/restart`), awaited to completion by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `restartIpfsAndWait()`, which both `IpfsPage.tsx` — `NodeVerdict` and `IpfsDashboardPage.tsx` — `onRestart` go through
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `restartDaemon()` (behind `POST /api/ipfs/restart`), awaited to completion by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `restartIpfsAndWait()`, which both `IpfsPage.tsx` — `NodeVerdict` and `IpfsDashboardPage.tsx` — `onRestart` go through
 
 **Enforcement is also THROTTLED**, for the same reason §6.6 of [git_backbone.mdx](./git_backbone.mdx)
 throttles commits: it is a *reconciliation of four settings*, not a work item, and running it twice is never
@@ -351,13 +351,13 @@ are ON by default in Kubo**, so the card was reassuring the user about the *defa
   cache** — which is why GC is part of the posture rather than a nicety.
 
 Measuring the two traffic vectors (treating unset as NON-compliant) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `readRelayServiceOff()`, `readDhtClientOnly()`, surfaced via `nodePosture()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `readRelayServiceOff()`, `readDhtClientOnly()`, surfaced via `nodePosture()`
 
 Enforcing them (`Swarm.RelayService.Enabled=false`, `Routing.Type=autoclient`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`, using `setBoolConfigKey()` (the `?json=true` write — Kubo REJECTS a bare string for a boolean flag, and that error would otherwise be swallowed into a warning, leaving the relay ON)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `enforceCompliance()`, using `setBoolConfigKey()` (the `?json=true` write — Kubo REJECTS a bare string for a boolean flag, and that error would otherwise be swallowed into a warning, leaving the relay ON)
 
 Requiring all four for the green verdict is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()` (the `compliant` computation)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()` (the `compliant` computation)
 
 > **Under an in-process node ([Helia](./external_tools_policy.mdx) §4.1.1) this section largely
 > evaporates**: there is no relay service unless we construct one and no gateway unless we mount one, so
@@ -391,7 +391,7 @@ rules](./sync_list.mdx#51-local-claims-are-verified-not-believed) then treat it 
 machine really holds.
 
 Importing untracked pins into tracking (metadata-only — record the CID in the computer-unit manifest, never re-fetch or re-pin) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `importPins()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `importPins()`
 
 > **Tracked-vs-Untracked is decided by a CANONICAL CID match, not a raw string compare.** A pin arrives from
 > `ipfs pin ls` in whatever base it was created (`Qm…` for a legacy/manual add, `bafy…` for ours), and
@@ -427,7 +427,7 @@ Scope, background queue, and the toast follow [page_actions.mdx §1–§2](./pag
 restated; **Rescan** stays outside the menu as this page's primary button ([page_actions.mdx §3](./page_actions.mdx)).
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to the pinset rows).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to the pinset rows).
 
 ---
 
@@ -438,7 +438,7 @@ implemented in code:
 [repos.mdx §3.1](./repos.mdx#31-control-row-above-the-table--locked)).
 
 The pinset table, its columns, the node verdict/details, and the Import controls are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` component
 
 **Height — bounded (the content-below exception).** This page renders a **node-details** panel
 **beneath** the pins table, so it is the **exception** to the site-wide full-page-height default
@@ -512,12 +512,12 @@ column predicate the user unchecks. It therefore renders as the page **title suf
 and the selected child, never as a rail facet; the two surfaces must not be merged.
 
 The pin facet vocabularies exist today as `<select>` `filterOptions` inside the filter popover, and **Untracked only** as a bespoke `rightHeader` toggle button outside it; moving both onto the rail is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` (the `PIN_TYPES` / `TRACKED` column `filterOptions`, and the `untrackedOnly` state + its `rightHeader` button), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsPage.tsx` — `IpfsPage` (the `PIN_TYPES` / `TRACKED` column `filterOptions`, and the `untrackedOnly` state + its `rightHeader` button), against the new facet-rail region of `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 The row `⋮` **pin** catalog (Copy CID · View on IPFS · Import · Unpin) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `PinKebab` component
 Pinning/unpinning a single CID behind that menu (and the pin toggle) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()` / `pinRm()` (exposed by the `POST /pin` handler in `ipfs.router.ts`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()` / `pinRm()` (exposed by the `POST /pin` handler in `ipfs.router.ts`)
 
 ### 5.1.2 UNPIN IS A TWO-PART ANSWER, AND THE TOAST REPORTS THE OUTCOME (LOCKED, learned from a defect)
 
@@ -541,7 +541,7 @@ answered a *failed unpin* with a green **"Pinned"** — the opposite word to the
 read-back that disagrees with the request is an **error**, and it says which way it disagreed.
 
 Clearing the decision alongside the pin, and refusing to report a pin/unpin that did not take effect, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the `POST /pin` handler, over `ipfs-page.service.ts` — `syncedPinTargets()`; the answer's `unsynced[]` is spoken by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/usePinCid.ts` — `usePinCid()`. Regression test: `code/packages/backend/src/modules/ipfs/synced-pin-targets.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the `POST /pin` handler, over `ipfs-page.service.ts` — `syncedPinTargets()`; the answer's `unsynced[]` is spoken by `~/repos/LargeFileBridge/code/packages/frontend/src/components/usePinCid.ts` — `usePinCid()`. Regression test: `code/packages/backend/src/modules/ipfs/synced-pin-targets.spec.ts`.
 
 ### 5.2 Cell navigation ([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link))
 
@@ -566,13 +566,13 @@ which now includes **reading `ipfs pin ls`** and reconciling it against the mani
   it lists pins and sizes; it opens no file and moves no bytes.
 
 Reconciling the pinset against the manifests — classifying each row as `pinned` / `import` / `path-less`, computing the tracked/untracked totals, and rolling up the pinning-repo groups — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `computeIpfsPage()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-page.service.ts` — `computeIpfsPage()`
 
 Manual **Rescan** (top-right) runs the same reconciliation now. Both manual and scheduled runs report an
 `import`-eligible count and appear in the progress dock ([webapp.mdx §11/§12](./webapp.mdx#11-what-shows-up-in-the-dock--the-lfbridge-operation-taxonomy)).
 
 The manual **Rescan** endpoint (re-run the scan, then recompute the page) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter` (`POST /rescan`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — the exported `ipfsRouter` (`POST /rescan`)
 
 The page payload also carries a **`repos`** array — one entry per repo that owns ≥1 tracked pin
 (`repoId`, name, pin count) — which drives the **left-bar disclosure children** (§2.1). It is a rollup
@@ -672,7 +672,7 @@ wears a CID our app didn't create. This page is where that resilience is made vi
 
 Discovery runs in the **background** (the 15-minute scan/pin pass), size-pruned and cached — never on this
 page's read — so opening the IPFS page stays cheap; it reads what a prior pass recorded. Engine in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `discoverForeignPin()` / `resolvePinToPath()`; surfaced by `ipfs-page.service.ts` — `computeIpfsPage()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `discoverForeignPin()` / `resolvePinToPath()`; surfaced by `ipfs-page.service.ts` — `computeIpfsPage()`.
 
 > **The "CLI says pinned, app says not pinned" bug took THREE fixes — recorded must mean RENDERED.**
 > Fix 1: canonical CID matching (the §4 note — v0↔v1 encodings of the same block). Fix 2: foreign-pin

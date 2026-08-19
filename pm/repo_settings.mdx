@@ -41,7 +41,7 @@ The gear is the **only** entry to per-repo settings — global settings never ex
 they only show the global defaults this page can override.
 
 The gear icons that open this page (both navigating to `/repos/$repoId/settings`) live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` settings button (the one-repo header gear) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoGear` (the per-row gear), placed left of `RepoKebab` in the Repos table's `rowMenu` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` settings button (the one-repo header gear) · `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoGear` (the per-row gear), placed left of `RepoKebab` in the Repos table's `rowMenu` by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage`.
 
 ---
 
@@ -51,7 +51,7 @@ The page presents these per-repo settings, each of which either overrides a glob
 inherently repo-specific.
 
 The per-repo settings form is rendered and loaded in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx` — `RepoSettingsPage` component (data via `GET /api/repos/:repoId/settings`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx` — `RepoSettingsPage` component (data via `GET /api/repos/:repoId/settings`)
 
 ### 2.1 Big-file threshold override
 
@@ -79,7 +79,7 @@ The [scan](./scan.mdx) resolves the effective threshold as *override if enabled,
 records `effective_threshold_bytes` in this repo's `status.yaml` each run.
 
 Resolving this per-repo effective threshold (the override when enabled, else the global default) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `resolveThreshold()`
 
 ### 2.2 Pinned on / off (the master toggle)
 
@@ -149,7 +149,7 @@ SDL), not a machine-local one:
   reported in each pass summary.
 
 The shared default-decision policy is written to the SDL and applied on scan in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readDecisionPolicy()` / `setDecisionPolicy()` / `applyDefaultPolicy()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readDecisionPolicy()` / `setDecisionPolicy()` / `applyDefaultPolicy()`.
 
 ### 2.8 Decision attribution mode (privacy — shared)
 
@@ -163,7 +163,7 @@ what identity is written ([decisions.mdx §14](./decisions.mdx)):
 
 LFB **warns before the first commit** if raw emails would be published to a public remote. The mode is
 resolved in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (public-remote heuristic via `classifyRemote()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (public-remote heuristic via `classifyRemote()`).
 
 ### 2.9 Sync this repo's tracking state to the company sync repo
 
@@ -196,7 +196,7 @@ mirror; it is distinct from the §4/§5 placement radios, which the transcript/A
 artifacts use (those default to `lfbridge` regardless).
 
 Reading whether a sync repo exists for the owner, and persisting this per-repo toggle, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null` when none configured or the toggle is off) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (writes `sync_repo.enabled`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns `<syncRepo>/repos/<repoKey>/` or `null` when none configured or the toggle is off) · `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (writes `sync_repo.enabled`).
 
 ### 2.9.1 The default is ON — this toggle is an OPT-OUT (LOCKED)
 
@@ -236,14 +236,14 @@ this section says only what it means **on this page**. It supersedes the "Defaul
 * **Ownership decides WHICH sync repo, and it now resolves from the REMOTE first.** The target is the owning
   storage's sync repo, and that owner is derived from the repo's **remote org** before any path-containment
   test ([repo_company_mapping.mdx §7.3](./repo_company_mapping.mdx#73-ownership-decides-the-sync-repo-target-remote-first-locked)).
-  A repo like `~/BGit/Bryan_git/charlie-kirk` with remote `github.com/ACT3ai/charlie-kirk` therefore mirrors to
+  A repo like `~/repos/charlie-kirk` with remote `github.com/ACT3ai/charlie-kirk` therefore mirrors to
   the **ACT3ai** company SDL even though it sits nowhere near that company's directory.
 * **Still only text, still additive.** ON changes nothing about **bytes**. Media moves over IPFS, for decided
   files only ([decisions.mdx](./decisions.mdx)); Local Storage remains the authoritative copy and the mirror
   is written **in addition to** it, never instead of it.
 
 Resolving the owner's sync repo — the explicitly configured one first, the SDL's own git root auto-adopted second — and writing this toggle's marker is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` (remote-owner first, path containment second), with the SDL-root fallback the Git backbone already performs in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)`, persisted by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `setSyncRepoMarker(repoRoot, syncRepoRoot)` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/settings`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo(repoRoot)` (remote-owner first, path containment second), with the SDL-root fallback the Git backbone already performs in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getGitBackboneRemote(storageId)`, persisted by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `setSyncRepoMarker(repoRoot, syncRepoRoot)` from `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/settings`.
 
 ---
 
@@ -259,7 +259,7 @@ updated_at: 2026-07-02T14:32:15.123Z
 
 repo:                          # identity — written by the scanner, read-only on this page
   name: largefilebridge
-  path: ~/BGit/Bryan_git/LargeFileBridge
+  path: ~/repos/LargeFileBridge
   remote: https://github.com/BryanStarbuck/LargeFileBridge.git
 
 pinned: false                  # §2.2 master toggle
@@ -294,7 +294,7 @@ sync_repo:                     # §2.9 mirror this repo's tracking state to the 
   semantics are subsumed by the threshold-override model.
 
 Writing every field on this page to the repo's `config.yaml` (and mapping it back for the UI) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (via `updateRepoConfig` / `toRepoSettings`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` (via `updateRepoConfig` / `toRepoSettings`)
 
 ### 3.1 Two repo files, two scopes — both machine-local (Local Storage)
 
@@ -450,7 +450,7 @@ A **"Reassign owner…"** control lets the user override the derived mapping:
   only; use the §4.3/§5.3 move actions to relocate artifacts if desired.
 
 The owner, its derivation source, and the manual override are read/written in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` reads the derived/overridden owner into `RepoSettings` and accepts the reassign via the same `PATCH /api/repos/:repoId/settings` (owner override field); the derivation itself belongs to [repo_company_mapping.mdx](./repo_company_mapping.mdx).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` reads the derived/overridden owner into `RepoSettings` and accepts the reassign via the same `PATCH /api/repos/:repoId/settings` (owner override field); the derivation itself belongs to [repo_company_mapping.mdx](./repo_company_mapping.mdx).
 
 ---
 
@@ -491,10 +491,10 @@ sync_repo:
 
 The two placement enums, the ownership override, and the sync-repo toggle are added to the shared type and
 mapped by the settings router in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `RepoSettings` gains `transcription: { placement }`, `aiDescription: { placement }`, `ownership: { owner, source }`, and `syncRepo: { enabled }` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `toRepoSettings()` maps `config.yaml` → these fields and `PATCH /api/repos/:repoId/settings` writes them back; the mirror itself is driven by `tracking-sync.service.ts` — `mirrorToSyncRepo()`.
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `RepoSettings` gains `transcription: { placement }`, `aiDescription: { placement }`, `ownership: { owner, source }`, and `syncRepo: { enabled }` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `toRepoSettings()` maps `config.yaml` → these fields and `PATCH /api/repos/:repoId/settings` writes them back; the mirror itself is driven by `tracking-sync.service.ts` — `mirrorToSyncRepo()`.
 
 The placement enums are consumed when an artifact is written by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (honors the per-repo `placement` before its own fallback order).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (honors the per-repo `placement` before its own fallback order).
 
 ---
 

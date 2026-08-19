@@ -29,7 +29,7 @@ Two keys are **bare** (no modifier), because they are universal conventions:
 * **`/`** — focus the page's search box.
 
 The platform detection, the `Control`-vs-`Alt` decision, and the exact-modifier match are in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `IS_MAC` / `MODIFIER_LABEL` / `platformModifier`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `IS_MAC` / `MODIFIER_LABEL` / `platformModifier`.
 
 Nothing fires while the user is **typing** in an `<input>`, `<textarea>`, or a contenteditable — so a
 hotkey letter typed into a search or a path field is just text. `Esc` is the exception (always dismisses
@@ -52,8 +52,8 @@ navigation shortcuts.
   the latest handlers — no memoization required.
 
 The provider, the live registry, the single key listener, and the `useHotkeys` hook are in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `HotkeyProvider` / `registerGroup` / `useHotkeys`. The provider is mounted once at the app root in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — inside `ProgressProvider`, wrapping `RouterProvider`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `HotkeyProvider` / `registerGroup` / `useHotkeys`. The provider is mounted once at the app root in
+`~/repos/LargeFileBridge/code/packages/frontend/src/main.tsx` — inside `ProgressProvider`, wrapping `RouterProvider`.
 
 **`/` search-focus is generic.** Rather than wire `/` on every page, the global handler focuses the first
 `input[type=search]` / search-placeholder input on the page — so every table's search box (all tables are
@@ -71,7 +71,7 @@ bottom-right corner opens the same overlay for discoverability. `Esc` or a backd
 
 The overlay reads scopes live (so it reflects the page you're on), merges scopes that share a title, and
 renders the modifier-aware key chips, in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `HotkeyHelpOverlay` (+ the bottom-right button in `HotkeyProvider`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/hotkeys.tsx` — `HotkeyHelpOverlay` (+ the bottom-right button in `HotkeyProvider`).
 
 ---
 
@@ -94,7 +94,7 @@ Registered by the app shell; available everywhere. Modifier = **Control (Mac) / 
 | **`Esc`** | Close the open overlay/menu |
 
 The Global scope is registered in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`useHotkeys("global", "Global", …)`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell` (`useHotkeys("global", "Global", …)`).
 
 ---
 
@@ -117,7 +117,7 @@ Native `<video>`/`<audio>` transport keys still work when the player is focused 
 = seek, ↑/↓ = volume, `F` = fullscreen where the browser provides it). Those are the browser's, not ours.
 
 The Media viewer scope is registered in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (`useHotkeys("media-viewer", "Media viewer", …)`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (`useHotkeys("media-viewer", "Media viewer", …)`).
 
 ---
 
@@ -141,7 +141,7 @@ so the two never collide. The popup traps focus while open and restores it to th
 ([warnings.mdx §6](./warnings.mdx#6-accessibility--keyboard)).
 
 The action-popup scope is registered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`useHotkeys("action-popup", "Action popup", …)` + the previewed-media `<video>`/`<audio>` play/pause handler).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`useHotkeys("action-popup", "Action popup", …)` + the previewed-media `<video>`/`<audio>` play/pause handler).
 
 ---
 

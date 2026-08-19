@@ -54,7 +54,7 @@ const processing = jobs.length > 0 || queued > 0 || activeBatches > 0;
 ```
 
 The shared predicate is read from the poll in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `useProgress()` (exposes `jobs`, `queued`, and the `batches`; a derived `processing`/`isProcessing` boolean is computed from them).
+`~/repos/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `useProgress()` (exposes `jobs`, `queued`, and the `batches`; a derived `processing`/`isProcessing` boolean is computed from them).
 
 ---
 
@@ -83,7 +83,7 @@ when the processing is done."*
 
 The conditional Processing row (appended after the yaml nav items, while work runs or lingers, routing to
 `/processing`) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (reads `useProgress()`; renders the Processing `<Link>` after the `leftBar.navItems` map when `processing || recentlyFinished`, with the active-route tint and the running+queued count).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (reads `useProgress()`; renders the Processing `<Link>` after the `leftBar.navItems` map when `processing || recentlyFinished`, with the active-route tint and the running+queued count).
 
 ---
 
@@ -113,10 +113,10 @@ it** — retained on the server, rendered by the page, and unreachable from the 
   only claims there is **something to look at**, which stays true after the work ends.
 
 Deciding whether a settled batch is still recent enough to keep the row open is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/linger.ts` — `lastBatchFinishedAt()` (the most recent settled stamp, skipping active and unparseable ones) and `isRecentlyFinished()` (the window test, false while `processing`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/progress/linger.ts` — `lastBatchFinishedAt()` (the most recent settled stamp, skipping active and unparseable ones) and `isRecentlyFinished()` (the window test, false while `processing`).
 
 Driving the expiry off its own clock rather than the poll is done in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (a 15s `setInterval` runs only while lingering; React Query's structural sharing returns an identical data reference on an idle poll, so a poll-derived expiry would never re-render and the row would hang until an unrelated change).
+`~/repos/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (a 15s `setInterval` runs only while lingering; React Query's structural sharing returns an identical data reference on an idle poll, so a poll-derived expiry would never re-render and the row would hang until an unrelated change).
 
 ---
 
@@ -138,7 +138,7 @@ so a mass run can never wall the screen.
   not restate the card layout, the offset math, or the poll.
 
 The dock's click-through to the Processing page is wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (an `onClick` → `navigate({ to: "/processing" })` wrapper around the card stack; `role="button"`, keyboard-activatable).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (an `onClick` → `navigate({ to: "/processing" })` wrapper around the card stack; `role="button"`, keyboard-activatable).
 
 ### 3.1 The card cap — at most 3 live cards + a summary line (LOCKED)
 
@@ -161,7 +161,7 @@ screen. The dock is therefore **capped**:
   default 3-toast cap), so it reads as one consistent house pattern, not a special case.
 
 The 3-card cap + the "+ N more running" summary line is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (`MAX_DOCK_CARDS = 3`; `jobs.slice(0, MAX_DOCK_CARDS)` for the cards, `jobs.length − visible.length` → the "+ N more running" line, ordered before the visible cards so the column-reverse stack places it under them and above the "+ N queued" footer).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx` — `ProgressDock` (`MAX_DOCK_CARDS = 3`; `jobs.slice(0, MAX_DOCK_CARDS)` for the cards, `jobs.length − visible.length` → the "+ N more running" line, ordered before the visible cards so the column-reverse stack places it under them and above the "+ N queued" footer).
 
 ---
 
@@ -192,7 +192,7 @@ the busyness of the machine is visible, not inferred.
   `performance.max_core_fraction`. When the field is absent (idle), the read simply does not render.
 
 The worker-utilization read (busy/budget of the core budget, with the resolved fraction) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `workers` from `useProgress()`; renders the "{busy} / {budget} workers busy (~{pct}% of cores)" line atop the page — above the batches table (§4.1) — and passes the same figure to the dock/nav badge). The figure is assembled server-side from the queue's live in-flight slot count and `coreBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (§5), sourcing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the in-flight slot count + `coreBudget()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (reads `workers` from `useProgress()`; renders the "{busy} / {budget} workers busy (~{pct}% of cores)" line atop the page — above the batches table (§4.1) — and passes the same figure to the dock/nav badge). The figure is assembled server-side from the queue's live in-flight slot count and `coreBudget()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (§5), sourcing `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — the in-flight slot count + `coreBudget()`.
 
 ---
 
@@ -378,7 +378,7 @@ Its states, columns, facets, and responsive behavior are §4.3 — unchanged in 
 **`Rejected`** state (§4.3.1) and the **Batch** facet + column (§4.3.1b).
 
 The two-table Processing page is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (subscribes to `useProgress()`; renders `<ProcessingBatchesTable batches={batches} />` — `fillHeight={false}`, content-sized to 6 rows — above `<ProcessingItemsTable />` — `fillHeight`, fed by `jobs` + `queuedItems` + `recentFailures`), with the batch table in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingBatchesTable.tsx` — `ProcessingBatchesTable` (the Rejected column's `rejectionRate()`, the §4.1.2 ETA gate, and the row click → `setBatchFacet()`). The route is registered in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/router.tsx` — `processingRoute` (`path: "/processing"`, code-split).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingPage.tsx` — `ProcessingPage` (subscribes to `useProgress()`; renders `<ProcessingBatchesTable batches={batches} />` — `fillHeight={false}`, content-sized to 6 rows — above `<ProcessingItemsTable />` — `fillHeight`, fed by `jobs` + `queuedItems` + `recentFailures`), with the batch table in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingBatchesTable.tsx` — `ProcessingBatchesTable` (the Rejected column's `rejectionRate()`, the §4.1.2 ETA gate, and the row click → `setBatchFacet()`). The route is registered in `~/repos/LargeFileBridge/code/packages/frontend/src/router.tsx` — `processingRoute` (`path: "/processing"`, code-split).
 
 ### 4.2a The empty state (LOCKED)
 
@@ -427,10 +427,10 @@ truth and can never disagree**: each row's state is exactly the bucket its batch
   one click** (§4.3.1's banner), not buried in a retry-each-row flow.
 
   Draining the doomed tasks and marking them `halted` — never `failed` — is in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), carried on `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `haltDoomedTasks()` (splices `pending`, `recordFailure({ state: "halted" })`, `appendTerminal(id, "halted")`), carried on `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FailedItemView.state?: "failed" | "halted"`.
 
   The amber **"Not attempted"** rendering and the one-banner-per-circuit grouping are in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ItemState` / `STATE_ORDER` / the state labels; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/haltedWarning.tsx` — `groupHalted()` / `haltedWarningDef()` (the re-queue action).
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ItemState` / `STATE_ORDER` / the state labels; `~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/haltedWarning.tsx` — `groupHalted()` / `haltedWarningDef()` (the re-queue action).
 * **Sort.** Default **Running → Pending → Failed → Halted → Rejected → Done**, so in-flight work is on top,
   the **actionable** problems (`Failed`, then the free-to-fix `Halted`) sit next where they are found without
   hunting, and the **settled** outcomes (`Rejected`, `Done`) — the ones with nothing to do about them — sit
@@ -515,10 +515,10 @@ are the live batches — and that forces **two deliberate, documented departures
   disabled — *"At least one value must be shown."*
 
 The Batch facet's runtime vocabulary, its non-persistence, and the `Ad hoc` value are to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "batch"` column, its vocabulary derived from `useProgress().batches` + the `Ad hoc` sentinel for `batchId == null`, held in component state and excluded from the `tables.views.<tableId>` persistence write).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "batch"` column, its vocabulary derived from `useProgress().batches` + the `Ad hoc` sentinel for `batchId == null`, held in component state and excluded from the `tables.views.<tableId>` persistence write).
 
 The Status facet ships its vocabulary today (`filterOptions: ["Running", "Queued", "Not attempted", "Failed"]` — it still lacks `Rejected`) but as a `<select>`; the Kind facet's values, the rail rendering, the `Failed only` preset, and the real `defaultSort` (replacing the invisible `STATE_ORDER` pre-sort) are to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "status"` / `id: "kind"` columns and the `STATE_ORDER` row sort), against the new facet-rail region of `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` — `ProcessingItemsTable` (the `id: "status"` / `id: "kind"` columns and the `STATE_ORDER` row sort), against the new facet-rail region of `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable`.
 
 ### 4.3.2 The columns (transcribe example) + responsive priority-drop (LOCKED)
 
@@ -562,11 +562,11 @@ Columns, highest priority (never dropped) → lowest (dropped first as the page 
 
 The per-item processing table (the six states, the Running→Pending→Failed→Halted→Rejected→Done default sort,
 the Batch column, and the responsive priority-drop column set) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/processing/ProcessingItemsTable.tsx` —
 `ProcessingItemsTable` (a `DataTable` fed by `jobs` (Running) + `queuedItems` (Pending) + `recentFailures`
 (Failed / Not attempted / Rejected, split on `FailedItemView.state`) from `useProgress()`, using the shared
 responsive-priority column machinery of
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`).
 
 **`Done` is spec'd but has no wire slice yet — a known, deliberate gap.** §4.3.1 describes the state and
 §4.3.1a reserves its facet value, but §5's payload carries **no** recent-completions field, so the table
@@ -620,9 +620,9 @@ browser or the poll has to do. The poll also **self-accelerates** while busy (§
 live without a heavier idle poll.
 
 The bounded-payload caps are enforced server-side (`listQueuedItems()` / `listRecentFailures()` cap at 500)
-in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`; the
+in `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts`; the
 row windowing + 500-default pagination live in the shared
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
 `useWindowedRows` windowing, [performance.mdx P-01](./performance.mdx)); the non-blocking backend is the
 async producers cited in §5 and [ai_description.mdx §3.3.1](./ai_description.mdx).
 
@@ -653,7 +653,7 @@ regress:
   and **never** to a resurrected idle poll.
 
 The shared-state read (so another tab's / launchd's work surfaces here) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (the `useQuery(["progress"])` busy-only poll + `useLiveRefresh(["progress","jobs"], [["progress"]])` stream subscription, merged de-duped by job id with the tab's own optimistic `run()` set) against the process-global `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` that every producer writes into (both now bump the `progress`/`jobs` topics at their write choke points).
+`~/repos/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (the `useQuery(["progress"])` busy-only poll + `useLiveRefresh(["progress","jobs"], [["progress"]])` stream subscription, merged de-duped by job id with the tab's own optimistic `run()` set) against the process-global `~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` and `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` that every producer writes into (both now bump the `progress`/`jobs` topics at their write choke points).
 
 ### 4.6 Applying a TO DO batch is a Processing producer (LOCKED)
 
@@ -684,7 +684,7 @@ process-global queue, so an idle Processing page **starts moving on its own** (�
 other producer.
 
 The To-Do batch Apply that writes decisions then enqueues the effects is served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (fans the checked recommendations out to `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` as `compress` / `transcribe` tasks and `pull_down` recommendations as **pin/fetch** work (the `pin` op — [job_queue.mdx §4b](./job_queue.mdx); `pull_down` is **not** a `JobOp`)), triggered from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply` (fans the checked recommendations out to `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` as `compress` / `transcribe` tasks and `pull_down` recommendations as **pin/fetch** work (the `pin` op — [job_queue.mdx §4b](./job_queue.mdx); `pull_down` is **not** a `JobOp`)), triggered from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` / `TranscribeBatchPopup`.
 
 ### 4.6.1 A `pull_down` job for a remote-only row — the path (LOCKED)
 
@@ -724,7 +724,7 @@ manifest's recorded path → the file becomes an ordinary local row on the next 
   single `mixed` row ([processing_batches.mdx §1.2](./processing_batches.mdx)), exactly as §4.6 requires.
 
 The pull itself — pin the CID, materialize the bytes, then hand the file to the compress queue — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pullMissing(repoRoot, checkedPaths, { compress })` (bounded fan-out through the shared IPFS limiter; per-item failure containment), enqueued from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pullMissing(repoRoot, checkedPaths, { compress })` (bounded fan-out through the shared IPFS limiter; per-item failure containment), enqueued from `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/batches/:id/apply`.
 
 ---
 
@@ -776,7 +776,7 @@ GET /api/progress → {
   `performance.max_core_fraction`.
 
 The extended payload is assembled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (folds `queueDepthByOp()` → `queuedByOp`, `listBatches()` → `batches`, and the in-flight slot count + `coreBudget()` → `workers` into `ProgressListResult`), reading `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepthByOp()` / `listBatches()` / the live in-flight slot count (which prunes finished batches past the retention window), against `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`. The client + provider consume it via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `progress()` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (exposes `batches` and `workers` alongside `jobs`/`queued`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.router.ts` — `GET /` (folds `queueDepthByOp()` → `queuedByOp`, `listBatches()` → `batches`, and the in-flight slot count + `coreBudget()` → `workers` into `ProgressListResult`), reading `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepthByOp()` / `listBatches()` / the live in-flight slot count (which prunes finished batches past the retention window), against `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`. The client + provider consume it via `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `progress()` and `~/repos/LargeFileBridge/code/packages/frontend/src/progress/ProgressContext.tsx` — `ProgressProvider` (exposes `batches` and `workers` alongside `jobs`/`queued`).
 
 ---
 

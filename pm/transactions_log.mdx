@@ -66,10 +66,10 @@ The instrumentation gap is verified and specific:
   post-hoc analysis.
 
 The per-file AI-description runner that today logs only terminal outcomes — the gap this spec closes — is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (line ~158; `log.info` ~228 success, `log.error` ~233 failure, **no BEGIN**)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (line ~158; `log.info` ~228 success, `log.error` ~233 failure, **no BEGIN**)
 
 The in-memory queue whose backlog the crash vaporized is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — module-level `pending: QueueTask[]`, `enqueue()` (~109), `pump()` (~229)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — module-level `pending: QueueTask[]`, `enqueue()` (~109), `pump()` (~229)
 
 ---
 
@@ -92,10 +92,10 @@ the ledger tells you *what it was carrying when it did*. Read together, the 2026
 becomes a five-second diagnosis instead of a six-hour blind spot.
 
 The rotating writer and the synchronous fault-trail discipline `transactions.log` reuses are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` class, `roll()` method
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `RollingFileWriter` class, `roll()` method
 
 The state root that places `transactions.log` beside `error.err` (override `LFB_LOG_DIR`) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` / `resolveLogDir()`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveStateDir()` / `resolveLogDir()`
 
 ---
 
@@ -169,7 +169,7 @@ defense, not cosmetics. Values containing a space are wrapped in double quotes:
 `file="/Users/bryan/My Movies/a b.mp4"`.
 
 The control-character stripper every interpolated value must pass through is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `stripControlChars()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `stripControlChars()`
 
 ---
 
@@ -217,7 +217,7 @@ and `bucket=` (the admission bucket). Depth-on-every-line turns the ledger into 
 graph** you can plot with `awk` — you can see 1,440 go in and watch it fail to come down.
 
 The enqueue, drain, and per-task dispatch that must emit `queue_batch` / `queue_task` ledger lines are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` (~109), `pump()` (~229), `takeRunnable()` (~239), `runTask()` (~297)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `enqueue()` (~109), `pump()` (~229), `takeRunnable()` (~239), `runTask()` (~297)
 
 ### 5.2 `describeOne` — the gap that caused the incident
 
@@ -226,7 +226,7 @@ path too. The **fit-to-limit sub-step** and the **sidecar write** each get their
 a 1,440-file batch that dies mid-transcode must say *which* step it died in.
 
 The AI-description runner that gains a BEGIN at entry and an END in `finally` is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()` (~158)
 
 ### 5.3 Every outbound provider call
 
@@ -239,7 +239,7 @@ The instrumentation goes at the **`fetch()` itself**, not at the adapter's `desc
 site, and every provider — Gemini, Grok, OpenAI, and every future adapter — is covered for free.
 
 The single `fetch()` that must be wrapped in a `provider_call` BEGIN/END pair is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `postJsonOnce()` (~137, the `fetch` at ~141), called via `postJson()` (~174)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `postJsonOnce()` (~137, the `fetch` at ~141), called via `postJson()` (~174)
 
 The adapters that flow through it — `gemini` (~205, `describe()` ~222, the only video-capable one), the
 `chatVisionAdapter` factory (~250), `grok` (~296), and `openai` (~305) — need **no** logging code of their
@@ -253,7 +253,7 @@ file and understand why the batch was slow. Today the retry wrapper's `log.warn`
 log statement in the entire 380-line adapters file; after this spec it is a redundant convenience.
 
 The retry wrapper whose every attempt becomes its own BEGIN/END pair is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (~186, its lone `log.warn` at ~197)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `withProviderRetry()` (~186, its lone `log.warn` at ~197)
 
 ### 5.5 `transcribeOne` and the engine fallback chain
 
@@ -263,10 +263,10 @@ degraded from the heavyweight engine to the fallback for 900 of 1,000 files is a
 incident** that is otherwise invisible.
 
 The transcription runner that gains BEGIN/END is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86; `log.info` 123 / `log.warn` 129 / `log.error` 130 today)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (~86; `log.info` 123 / `log.warn` 129 / `log.error` 130 today)
 
 The engine selection and fallback that must be ledger events, not silent behavior, are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (~46), `transcribeWithEngine()` (~72)
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/engine.ts` — `pickEngine()` (~46), `transcribeWithEngine()` (~72)
 
 ### 5.6 fit-media transcodes
 
@@ -276,7 +276,7 @@ spawn gets a child txn with its `exitCode`. If the OOM lives anywhere, the heap 
 these lines will show it.
 
 The compress-to-fit path whose transcodes each need a child txn is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (~429), `runAsync()` (~67)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `fitMediaUnderLimit()` (~429), `runAsync()` (~67)
 
 ### 5.7 Compression jobs
 
@@ -286,7 +286,7 @@ synchronous record of *exactly which absolute path we touched and what came out*
 **data-safety** requirement, not just a debugging nicety.
 
 The per-file compressor that must ledger its input, output, and disposition is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` — `compressFile()`
 
 ### 5.8 Scans, pin passes, and scheduled runs
 
@@ -303,7 +303,7 @@ incident hit, recorded so the heap numbers on every subsequent line have a denom
 `SHUTDOWN` on clean exit. **A `BOOT` not preceded by a `SHUTDOWN` is a crash. Full stop.**
 
 The shutdown hook the SHUTDOWN marker must ride is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` / `flushLogs()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `installLogShutdownFlush()` / `flushLogs()`
 
 ### 5.10 The instrumentation checklist
 
@@ -344,7 +344,7 @@ with the exact backlog depth at the moment of death (`queued=1291` — the numbe
 * See [memory.mdx](./memory.mdx) for what to do once the heartbeat tells you the heap is climbing.
 
 The queue depth and per-bucket running counts the heartbeat reads are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()`, plus the live registry in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `jobs` Map (line 10), `track()` (43), `end()` (29)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `queueDepth()`, plus the live registry in `~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `jobs` Map (line 10), `track()` (43), `end()` (29)
 
 ---
 
@@ -373,7 +373,7 @@ round-trip. This is not a hot loop and must never become one:
   allowed to be lossy; the ledger is durable because it is not.
 
 The synchronous fault-trail writer whose durability posture the ledger adopts is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` (the sync `error.err` path) and the `log.{debug,info,warn,error,fatal}(ctx,msg)` API
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `logError()` (the sync `error.err` path) and the `log.{debug,info,warn,error,fatal}(ctx,msg)` API
 
 ---
 
@@ -397,7 +397,7 @@ The synchronous fault-trail writer whose durability posture the ledger adopts is
   logs (`ipfs-daemon.log`) whose fds we do not own.
 
 The oversize-rotation helper the ledger deliberately does **not** need (it is for external writers only) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `rotateIfOversized()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` — `rotateIfOversized()`
 
 ---
 
@@ -426,7 +426,7 @@ redaction rule is **absolute**.
   an allow-list. **Never** reflect an object into the line.
 
 The credential stores whose values must never reach a ledger line are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/google-apikey-file.ts` and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/google-apikey-file.ts` and `~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts`
 
 **The rule, stated once:** the ledger's field set is a **fixed allow-list** (§3.2–3.4). A value
 that is not on that list does not go in the file. Adding a field is a spec change, reviewed for

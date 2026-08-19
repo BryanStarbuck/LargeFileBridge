@@ -410,7 +410,7 @@ const shadowedReported = new Set<string>();
  * remote" into `error.err` every few minutes and nothing ever leaves the machine, while the properly-remoted
  * clone sits at `pinned: false` doing nothing. Every peer concludes this computer has been offline since the
  * day the shadow appeared, so their pull-downs fail with "no computer is currently providing this file" and
- * their counts never drain. Reproduced on BOTH of Bryan's computers on 2026-08-10: `~/BGit/Bryan_git/act3_large_files_bridge`
+ * their counts never drain. Reproduced on BOTH of Bryan's computers on 2026-08-10: `~/repos/act3_large_files_bridge`
  * (no descriptor, no origin, pinned) shadowing `~/BGit/act3/act3_large_files_bridge` (descriptor, origin, not pinned).
  *
  * So: group company rows by normalized identity and keep the BEST one — initialized beats bare, having a

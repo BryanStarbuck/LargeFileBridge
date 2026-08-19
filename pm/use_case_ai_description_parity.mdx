@@ -209,7 +209,7 @@ transcription's explicit-action posture.
 
 Planning the eligible describe set, skipping already-described, and background-queuing the remainder are
 handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `planDescribe()` / `enqueueDescribe()` (mirror of `transcribe.service.ts` `planTranscribe()` / `enqueueTranscribe()`); the page action in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createDescriptions()` (mirror of `createTranscriptions()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `planDescribe()` / `enqueueDescribe()` (mirror of `transcribe.service.ts` `planTranscribe()` / `enqueueTranscribe()`); the page action in `~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createDescriptions()` (mirror of `createTranscriptions()`).
 
 **What we double-check (Step 6):**
 * **Create AI descriptions** mirrors **Create Transcriptions**: scope (checked-else-all), skip-already-done,
@@ -300,7 +300,7 @@ Storage regardless, identical to the transcript case.
 
 Writing the first durable **content** artifact — a **transcript or a description** — into the repo's
 committed `.lfbridge/` (while leaving Category-B tracking untouched in Local Storage) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (the Category-A placement radio, mirror of `transcribe.service.ts` — `resolveTranscriptPath()`); the Category-B writers continue to route through `tracking-root.service.ts` — `resolveTrackingRoot()` (Local Storage), unaffected by the content write.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (the Category-A placement radio, mirror of `transcribe.service.ts` — `resolveTranscriptPath()`); the Category-B writers continue to route through `tracking-root.service.ts` — `resolveTrackingRoot()` (Local Storage), unaffected by the content write.
 
 **What we double-check (Step 9):**
 * Describing the first image in an image-only repo (no transcript anywhere) writes the `.ai_description` into

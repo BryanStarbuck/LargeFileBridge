@@ -119,7 +119,7 @@ capped + cooperatively yielding — no exceptions, on any page.**
   works identically in either case.
 
 Row virtualization/windowing for large tables is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` hook
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` hook
 
 ### 🔴 P-02 — Row selection copies the whole Set and re-renders the whole table · T2
 - **Where:** `FullPathsPage.tsx` (`selected: Set<string>`, per-checkbox
@@ -162,7 +162,7 @@ Row virtualization/windowing for large tables is handled in code:
   `await`s it. Keeps the caps; frees the loop between chunks.
 
 The buffered async flat large-file listing that backs `GET /api/fs/flat` is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listFilesFlat()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listFilesFlat()`
 
 ### 🟠 P-05 — Client does full-dataset filter/sort/paginate on the main thread · T1/T2
 - **Where:** `FullPathsPage.tsx` `filtered = useMemo(files.filter(...))` +
@@ -177,7 +177,7 @@ The buffered async flat large-file listing that backs `GET /api/fs/flat` is in c
   the payload shrinks — noted as a follow-up, not required for the hang fix.
 
 The debounced search/filter input hook is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useDebounced.ts` — `useDebounced()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useDebounced.ts` — `useDebounced()`
 
 ### 🟠 P-06 — Time formatting allocates `Date` objects per cell per render · T2
 - **Where:** `lib/format.ts` `relativeTime`/`absoluteTime` (called in `changed`,
@@ -313,7 +313,7 @@ The debounced search/filter input hook is in code:
   disclosure check is O(1) syscalls, not O(children). Router handler `await`s it.
 
 The async, entry-capped one-directory listing with the O(1) `hasChildren` probe is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (and `dirHasChildren()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.service.ts` — `listDirectory()` (and `dirHasChildren()`)
 
 ### 🟠 P-17 — Entity flag/decision changes invalidate `["fs"]`/`["repo"]` → re-walk every open column · T4
 - **Where:** `components/menu/EntityMenu.tsx` `invalidate()`
@@ -344,7 +344,7 @@ The async, entry-capped one-directory listing with the O(1) `hasChildren` probe 
   only re-render when the visible window actually moves.
 
 The rAF-coalesced scroll handler that skips re-renders when the window start is unchanged is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` scroll listener
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` — `useWindowedRows()` scroll listener
 
 ### 🟡 P-19 — Two hand-rolled windowed tables duplicate logic and drift · architecture
 - **Where:** `components/table/DataTable.tsx` and `pages/fs/FullPathsPage.tsx` each
@@ -386,7 +386,7 @@ The rAF-coalesced scroll handler that skips re-renders when the window start is 
   is not yet built, so its local manifest + pins are written but not yet advertised to peers.
 
 The bounded-concurrency pin pass is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll` + `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitPin` (per-file) + `pinComputerUnit`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll` + `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `runUnitPin` (per-file) + `pinComputerUnit`
 
 **Now unified with P-26.** P-23 (pin pass → the **responsive** budget, `cores − 2`) and P-26 below (the
 job queue → the **mass-compute** budget, `round(cores × 0.9)`) no longer each roll their own core count:
@@ -411,7 +411,7 @@ both draw from the **same** shared helper, and the two named budgets are defined
 
 The media-aware, core-budgeted queue drain — per-op caps and the image-vs-video bucket that shape the
 fan-out — is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `bucketOf()` / `pump()`, drawing `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `coreBudget()`
 
 ### 🔴 P-27 — AI description's compress-to-fit ran synchronously (`spawnSync`), freezing the server under a mass run · T3
 - **Where:** `code/packages/backend/src/modules/describe/fit-media.ts` ran **every** ffmpeg / ffprobe /
@@ -436,7 +436,7 @@ fan-out — is in code:
   [ai_description.mdx §3.3.1](./ai_description.mdx) and [processing.mdx §4.4](./processing.mdx).
 
 The async compress-to-fit + async base64 read are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` + the `async` fit/probe/encode functions; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in `gemini.describe()` / `chatVisionAdapter.describe()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` + the `async` fit/probe/encode functions; `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (`await fs.promises.readFile`), awaited in `gemini.describe()` / `chatVisionAdapter.describe()`.
 
 - **What this fix did *not* do.** The `fs.promises.readFile` above fixed **T3** — the read stopped
   blocking the event loop — and did **nothing** for **T5**: it still materializes the entire
@@ -489,7 +489,7 @@ one-paragraph diagnosis and the pointer, so this file stays the index it has alw
   becomes what it always should have been: an upper bound.
 
 The two-budget admission test — count AND bytes, with the reservation released in a `finally` — is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `takeRunnable()` / `estimatedBytes()` / `memoryFits()` / `releaseMemory()`, drawing `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `takeRunnable()` / `estimatedBytes()` / `memoryFits()` / `releaseMemory()`, drawing `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts` — `memoryBudget()`
 
 ### 🔴 P-29 — One file is resident 3–4× on the upload path · T5
 - **Where:** `code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()`
@@ -506,7 +506,7 @@ The two-budget admission test — count AND bytes, with the reservation released
   follow-up that removes the `JSON.stringify` copy.
 
 The build-the-payload-once discipline on the upload path is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (prefix-aware) / `gemini.describe()` / `chatVisionAdapter.describe()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/adapters.ts` — `readBase64Capped()` (prefix-aware) / `gemini.describe()` / `chatVisionAdapter.describe()`
 
 ### 🟠 P-30 — A 32MB-per-child stdout ceiling on a path that discards stdout · T5
 - **Where:** `code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()`'s
@@ -520,7 +520,7 @@ The build-the-payload-once discipline on the upload path is in code:
   accumulated into a chunk array `join()`ed once. Only `probeVideo()` opts in.
 
 The opt-in stdout capture that stops discarding callers from paying a 32MB ceiling is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (`captureStdout`), set only by `probeVideo()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `runAsync()` (`captureStdout`), set only by `probeVideo()`
 
 ### 🟠 P-31 — The heap ceiling was V8's accident, not our decision · T5
 - **Where:** `code/packages/backend/package.json` (`"dev": "tsx watch src/main.ts"`) — no node
@@ -542,7 +542,7 @@ The opt-in stdout capture that stops discarding callers from paying a 32MB ceili
   while any work is running. The last heartbeat before a gap is the crash's fingerprint.
 
 The heap-pressure watch that warns before the ceiling, and the heartbeat that makes the climb visible, are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts` — `startHeapWatch()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/transactions.ts` — `startHeartbeat()` / `registerHeartbeatSource()`
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/heap-watch.ts` — `startHeapWatch()`; `~/repos/LargeFileBridge/code/packages/backend/src/shared/transactions.ts` — `startHeartbeat()` / `registerHeartbeatSource()`
 
 ### 🔴 P-33 — The backlog lived only in memory, and an empty queue was ambiguous · T6
 - **Where:** `code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `pending:
@@ -556,7 +556,7 @@ The heap-pressure watch that warns before the ceiling, and the heartbeat that ma
   replay cheap and safe.
 
 The durable backlog and its boot restore are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` — `appendEnqueued()` / `appendAttempt()` / `appendTerminal()` / `foldLiveSet()` / `compact()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-journal.ts` — `appendEnqueued()` / `appendAttempt()` / `appendTerminal()` / `foldLiveSet()` / `compact()`; `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/queue-restore.ts` — `restoreQueueOnBoot()`
 
 ### 🟡 P-34 — Background work announced only its endings · T6
 - **Where:** `code/packages/backend/src/modules/describe/describe.service.ts` — `describeOne()`
@@ -607,15 +607,15 @@ The durable backlog and its boot restore are in code:
   it can never delay the response it used to run inside.
 
 The cheap row aggregates are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (consumed by `computeRepoRow()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (consumed by `computeRepoRow()`)
 
 The yielding, coalesced list endpoint is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `startRepoRowsFeed()` / `repoRows()` / `convergeAllWorkingRepos()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `startRepoRowsFeed()` / `repoRows()` / `convergeAllWorkingRepos()`
 (P-35 shipped this as `buildRepoRows()` + a single in-flight promise; **P-37** replaced that with the
 multicast feed, which keeps the one-walk guarantee and adds progressive delivery.)
 
 The drift guard that keeps the two counting paths honest is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts`
 
 ---
 
@@ -623,10 +623,10 @@ The drift guard that keeps the two counting paths honest is in code:
 
 ### 🔴 P-37 — The Repos list and the One-repo detail were composed synchronously and delivered as one blob
 - **Where:**
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
   `computeRepoDetail()` / `composeFileRows()` / `remoteOnlyRows()` / `repoRowStats()` (all synchronous,
   no yields, no partial delivery);
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
   `GET /api/repos` and `GET /api/repos/:repoId`.
 - **Symptom — reported as "the lists are slow on some machines".** Two distinct faults, and the second is
   the one that made it *machine-dependent*:
@@ -694,30 +694,30 @@ The drift guard that keeps the two counting paths honest is in code:
     refetch (every live-refresh bump is one) keeps its finished table until the new answer lands.
 
 The async, yielding, batch-emitting composer and its one assembly step are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (the `assemble` closure + `RowStreamOpts`) / `composeFileRows()` / `remoteOnlyRows()` / `repoRowStats()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()` (the `assemble` closure + `RowStreamOpts`) / `composeFileRows()` / `remoteOnlyRows()` / `repoRowStats()`
 
 The non-blocking `git check-ignore -v` twin the request path now uses is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerboseAsyncDetailed()`, sharing `runCheckIgnoreAsync()` + `parseVerboseCheckIgnore()` with the sync twin
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerboseAsyncDetailed()`, sharing `runCheckIgnoreAsync()` + `parseVerboseCheckIgnore()` with the sync twin
 
 The two NDJSON routes, the multicast row feed, and the concurrent pinset fold are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/stream` / `GET /api/repos/:repoId/detail/stream` / `startRepoRowsFeed()` / `pinReality()` / `ndjson()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/stream` / `GET /api/repos/:repoId/detail/stream` / `startRepoRowsFeed()` / `pinReality()` / `ndjson()`
 
 The wire contract (`RepoRowsStreamEvent`, `RepoDetailStreamEvent`, `FileRowPatch`, `RepoDetail.partial`) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts`
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts`
 
 The three-valued ⊘ column that refuses to guess while the axis is undetermined is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `gitignore` column's `cell` (state `na` when `f.gitignore === undefined`), over the shared inert state in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — the `gitignore` column's `cell` (state `na` when `f.gitignore === undefined`), over the shared inert state in `~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx`
 
 The client-side reducers that fold the events into the SAME react-query keys the pages already own are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()` / `streamRepoDetail()` / `framePublisher()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()` / `streamRepoDetail()` / `framePublisher()`
 
 The hoisted sticky-flag snapshot that removed the O(rows × flags) per-row rescan is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `flagsResolver()` (sharing `foldFlags()` with `effectiveFlags()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `flagsResolver()` (sharing `foldFlags()` with `effectiveFlags()`)
 
 The three guards that keep streaming from drifting away from buffering are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — streamed rows === buffered rows;
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos-stream.spec.ts` — the wire, folded back, === the buffered route;
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.spec.ts` — the client reducer, the publish policy, and the fallback
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — streamed rows === buffered rows;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos-stream.spec.ts` — the wire, folded back, === the buffered route;
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/streamQueries.spec.ts` — the client reducer, the publish policy, and the fallback
 
 - **The progress dock, while we were in here.** Two cards were reported as looking like duplicates. They
   were not — the registry adds one card per job and removes it in a `finally` — but the whole-computer pin
@@ -728,7 +728,7 @@ The three guards that keep streaming from drifting away from buffering are in co
   is the remaining way the dock can honestly show two cards for what a user reads as one job.
 
 - **Known follow-up, deliberately not taken here.** `discoverRoots()` in
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` is still a
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` is still a
   synchronous depth-3 `readdirSync` walk with a descriptor read per directory, behind a 5-second cache, and
   it is reachable from the repo-row path (`ownerForRepoConfig` → `getStorageRow`). It measures 344 visits /
   3 ms on the development machine, so it is not the reported fault — but it is the same shape, it is the
@@ -786,7 +786,7 @@ few seconds and nothing after. The missing half is the **background** pass:
   polling rule (Aspect 6b) is untouched.
 
 The decision is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()`
 (pure, so it is pinned without mounting the shell) and the `useCensusPending()` hook that feeds it;
 rendered by `frontend/src/pages/repos/MetricsStrip.tsx` — `MetricPanel` and
 `frontend/src/pages/repos/ReposPage.tsx`.
@@ -811,7 +811,7 @@ total collapses to `count × height` regardless of `start`, and the feedback loo
 survives only as the first-paint estimate, used before any row exists to measure.
 
 Implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/useWindowedRows.ts` —
 `useWindowedRows()` and the `measureRow` ref it returns, attached to the first body row by
 `frontend/src/components/table/DataTable.tsx`. Pinned by
 `frontend/src/components/table/useWindowedRows.spec.ts`, which asserts the algebra rather than a pixel
@@ -844,7 +844,7 @@ to a thin background PATH that `stableGitBin()` exists to provide, through a doo
 The PATH write updates whichever key is already present (Windows spells it `Path`) rather than adding a
 second one the child would have to choose between.
 
-Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-bin.ts` —
+Implemented in `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git-bin.ts` —
 `isSimpleGitSafeBinary()` + `withGitOnPath()`, applied by
 `backend/src/modules/git/git.service.ts` — `openRepo()`. Guarded by
 `backend/src/modules/git/git-bin-windows.spec.ts`, which asserts our predicate agrees with `simple-git`'s
@@ -870,7 +870,7 @@ is suppressed, and only for the exact paths we wrote: a user's own drop during a
 watcher, and the 4-hour full scan sees everything regardless. The window only decides whether the discovery
 walk happens *now*, in the middle of the transfer that created the file, or later when the disk is quiet.
 
-Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/watcher/self-writes.ts` —
+Implemented in `~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/self-writes.ts` —
 `noteOwnWrite()` / `isOwnRecentWrite()`; claimed at the single choke point where bytes reach a working tree,
 `backend/src/modules/ipfs/ipfs.service.ts` — `catToFile()` (rather than at the two pin call sites, so a
 future caller cannot forget); honoured by `backend/src/modules/watcher/watcher.service.ts` —
@@ -936,7 +936,7 @@ Two endpoints back the two heaviest pages, and both share the same broken model:
   request-synchronous producers of a blob and become **thin readers over a streaming index**.
 
 The background streaming filesystem walk that replaces the walk-per-request blob is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `walkFilesFlatStreaming()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `walkFilesFlatStreaming()`
 
 ### The target architecture
 
@@ -1014,7 +1014,7 @@ Five properties, each mapping to an aspect of "performance in all ways":
   - `GET /api/fs` unchanged externally but now cache-backed.
 
 The mtime + short-TTL directory-listing cache for the column browser is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `getListingCached()` / `putListing()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `getListingCached()` / `putListing()`
 
 ### Aspect 2 — The streaming protocol (the cross-package contract)
 
@@ -1029,7 +1029,7 @@ The mtime + short-TTL directory-listing cache for the column browser is in code:
   streams cleanly through the dev proxy (`code/packages/frontend/vite.config.ts` `/api` → `:8787`).
 
 The NDJSON stream endpoint that emits `meta`/`batch`/`done` events and aborts the walk on client disconnect is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `fsRouter` `GET /api/fs/flat/stream` handler
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — `fsRouter` `GET /api/fs/flat/stream` handler
 
 ### Aspect 3 — Frontend: asynchronous, non-blocking consumption
 
@@ -1053,10 +1053,10 @@ The NDJSON stream endpoint that emits `meta`/`batch`/`done` events and aborts th
   the TanStack model, `useWindowedRows`) already operates on a plain growing `files` array.
 
 The Bearer-authed fetch/NDJSON stream reader is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`
 
 The progressive consumer hook (ref-accumulate + rAF-coalesced flush, drop-in for the `useQuery` shape) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing()` hook
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing()` hook
 
 ### Aspect 4 — Off-main-thread filter/sort (follow-up, specified now)
 
@@ -1091,7 +1091,7 @@ it becomes load-bearing only for the largest roots.
   a flag/decision change patches the in-memory row store, it never restarts a walk.
 
 The pub/sub bridge that delivers optimistic per-entity badge patches to the streamed listing is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/flatListingPatch.ts` — `subscribeFlatBadgePatch()` / `emitFlatBadgePatch()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/flatListingPatch.ts` — `subscribeFlatBadgePatch()` / `emitFlatBadgePatch()`
 
 - **React Query `select`** to subscribe to the minimum slice (P-09) — audit remaining `useQuery` reads
   for over-subscription (`Sidebar.tsx` done; check `OneRepoPage.tsx`, `IpfsPage.tsx`).
@@ -1143,14 +1143,14 @@ The product rule this serves is LOCKED in
 per-page behavior in [one_repo.mdx §4.11](./one_repo.mdx).
 
 The revision bus and its subscription fan-out are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()` / `subscribe()` / `currentRevisions()`, exposed by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /api/events/stream` handler.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()` / `subscribe()` / `currentRevisions()`, exposed by
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /api/events/stream` handler.
 
 The client subscription that maps a bumped topic to query keys and invalidates them (no interval, debounced, one connection per tab) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`, over the existing reader `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`, over the existing reader `~/repos/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
 
 The on-demand freshness trigger that gives the bus something to announce (a stale storage backbone cycle + reconcile, debounced and single-flighted) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
 
 ### Aspect 6b — Sitewide coverage: every page paints instantly and stays live (LOCKED)
 
@@ -1169,7 +1169,7 @@ the region that shows it. Tables keep their existing loading-table/skeleton patt
 pages use the shared skeleton.
 
 The shared content-region skeleton every shell-first page uses is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/PageSkeleton.tsx` — `PageSkeleton()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/PageSkeleton.tsx` — `PageSkeleton()`
 
 **Rule 2 — Every state-changing write bumps a topic, and every page subscribes.** The sitewide topic
 catalog (backend constants in `state-events.service.ts`, subscriptions via `useLiveRefresh`):
@@ -1193,7 +1193,7 @@ trailing-edge coalesced bump — leading edge fires at once (a lone event never 
 the ~1s window fold into one. Every choke point marked **throttled** above uses it.
 
 The coalesced bump is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopicThrottled()` / `bumpTopicsThrottled()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopicThrottled()` / `bumpTopicsThrottled()`
 
 **The polls that remain, and why (exhaustive — anything else is a defect).** The stream announces
 *server writes*; a poll is only honest where the state changes with **no server write to observe**, or

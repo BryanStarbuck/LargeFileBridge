@@ -69,14 +69,14 @@ What the `lfbridge` tier resolves to is keyed on **storage kind** — the rule i
 
 | Storage kind of the resolved root | `lfbridge` resolves to | `.lfbridge/`? |
 | --- | --- | --- |
-| **`repo`** — a working git repo, e.g. `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<relDir>/<name.ext><artifactExt>` | **YES** — LFB is a guest, so it quarantines its files in one hidden corner |
+| **`repo`** — a working git repo, e.g. `~/repos/charlie-kirk/` | `<root>/.lfbridge/<relDir>/<name.ext><artifactExt>` | **YES** — LFB is a guest, so it quarantines its files in one hidden corner |
 | **`personal` / `company` / `community`** — an SDL, e.g. `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<relDir>/<name.ext><artifactExt>` | **NO — never** — the SDL root *is* the `.lfbridge` area |
 
 The **other two** tiers are unaffected by the kind rule: `beside` is always the media's own directory, and
 `sync_repo` always targets `<syncRepo>/repos/<repoKey>/…` (§3).
 
 The enum and its two consumers live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `ArtifactPlacement` type (`"lfbridge" | "beside" | "sync_repo"`), referenced by `RepoSettings.transcription.placement` and `RepoSettings.aiDescription.placement`.
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `ArtifactPlacement` type (`"lfbridge" | "beside" | "sync_repo"`), referenced by `RepoSettings.transcription.placement` and `RepoSettings.aiDescription.placement`.
 
 ---
 
@@ -84,7 +84,7 @@ The enum and its two consumers live in code:
 
 The control is a **radio group** (three rows, single selection), rendered inside the host page's local
 `Section`/`RadioGroup` helpers
-(`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`).
+(`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`).
 
 ```
 Where should transcripts be stored?
@@ -132,9 +132,9 @@ is handed to the resolver, which returns `{ root, rel, gitIgnore, owner }`:
   configured artifact root), `rel = <relDir>/<name.ext><artifactExt>`.
 
 The chosen tier is passed to the resolver, which turns it into an absolute path, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `artifactPathForPlacement(root, rel, ext, placement)` (the per-tier entry point) and `resolveArtifactPlacement()` (honors the per-repo `placement` before its own fallback order) and `lfbridgeArtifactPath(root, rel, ext)` (mirrors the path + appends the extension). The extension constants are `TRANSCRIPTION_EXT` / `AI_DESCRIPTION_EXT` in the same file.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `artifactPathForPlacement(root, rel, ext, placement)` (the per-tier entry point) and `resolveArtifactPlacement()` (honors the per-repo `placement` before its own fallback order) and `lfbridgeArtifactPath(root, rel, ext)` (mirrors the path + appends the extension). The extension constants are `TRANSCRIPTION_EXT` / `AI_DESCRIPTION_EXT` in the same file.
 Deciding what the `lfbridge` tier's base actually is — `<root>/.lfbridge` for kind `repo`, `<root>` itself for an SDL — is the single choke point every LFB writer resolves through (none joins `LFBRIDGE_DIR` directly), implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
 
 The **extension is always APPENDED, never substituted** — `talk.mp3` → `talk.mp3.transcription`, so
 `talk.mp3` and `talk.wav` never collide ([Transcribe.mdx §3.2](./Transcribe.mdx)). This holds for **all
@@ -187,7 +187,7 @@ configured** ([storage_company.mdx](./storage_company.mdx), owner derived per
   `.lfbridge/` until it is restored"*). We do **not** silently rewrite the stored enum.
 
 Whether a sync repo exists for the owner is read in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — the placement resolver's `needsSetup` flag (true when a `sync_repo`/`dedicated-repo` owner is chosen but none is configured) surfaces to the UI via the settings payload.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — the placement resolver's `needsSetup` flag (true when a `sync_repo`/`dedicated-repo` owner is chosen but none is configured) surfaces to the UI via the settings payload.
 
 ### 5.2 `lfbridge` when keep-`.lfbridge/` consent is off
 
@@ -228,7 +228,7 @@ ai_description:
 ```
 
 Both fields save through the existing per-repo settings PATCH — no new endpoint:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` maps the incoming `placement` enums into `config.yaml` and back for the UI via `toRepoSettings()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `PATCH /api/repos/:repoId/settings` maps the incoming `placement` enums into `config.yaml` and back for the UI via `toRepoSettings()`.
 
 They are **machine-local** intents in the same file as the rest of per-repo settings, but note the **owner**
 axis (`sync_repo` availability) is derived, not stored, so the same repo on another computer with a sync repo
@@ -282,7 +282,7 @@ act on files on our own" posture. It runs through the ordinary job/queue surface
 ([processing.mdx](./processing.mdx)) so a large repo's move is watchable and cancelable.
 
 Detecting stray artifacts and relocating them to the selected tier is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — a `findArtifactsAcrossTiers(repo, ext)` scan feeds a `moveArtifactsToTier(repo, ext, target)` batch that relocates each file via `lfbridgeArtifactPath()` and reports moved/skipped/failed. Exposed to the UI as `POST /api/repos/:repoId/artifacts/move` in `reposRouter`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — a `findArtifactsAcrossTiers(repo, ext)` scan feeds a `moveArtifactsToTier(repo, ext, target)` batch that relocates each file via `lfbridgeArtifactPath()` and reports moved/skipped/failed. Exposed to the UI as `POST /api/repos/:repoId/artifacts/move` in `reposRouter`.
 
 ---
 
@@ -376,7 +376,7 @@ tier RESOLVES to is keyed on storage KIND — rule OWNED by artifact_placement_p
 never re-litigated; single choke point trackingBaseDir(root,type?) / usesLfbridgeDir(type) in
 storage-type.service.ts (NO writer joins LFBRIDGE_DIR directly):
   - WORKING GIT REPO (kind `repo`, the DEFAULT) → KEEPS .lfbridge/ (LFB is a guest → one hidden corner):
-    ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription
+    ~/repos/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription
   - DEDICATED LFB FILE REPO / SDL (personal|company|community) → NO .lfbridge/ AT ALL, the root IS the
     .lfbridge area: ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription
     NOT …/personal_large_files_bridge/.lfbridge/_Mirror/… (the OLD, now-WRONG pattern).

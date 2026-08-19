@@ -152,7 +152,7 @@ large_files:                              # LEVEL 1 — the single top-level key
       identity:                           # LEVEL 4 — the source of truth for WHAT this repo is
         name: LargeFileBridge
         remote: https://github.com/BryanStarbuck/LargeFileBridge.git
-        path: ~/BGit/Bryan_git/LargeFileBridge   # working tree ON THE WRITING COMPUTER (may differ here)
+        path: ~/repos/LargeFileBridge   # working tree ON THE WRITING COMPUTER (may differ here)
       synced: true                        # this repo's master toggle (storage_local.mdx §6.2)
       settings:                           # LEVEL 4 — per-repo overrides (else inherit settings above)
         big_file_override: { enabled: false, value: 100, unit: MB }
@@ -241,7 +241,7 @@ Any claim the list makes about **this** computer is checked against reality befo
   the disk disposes.
 
 Verifying a `pinned_by` claim for this computer against the real IPFS pinset — dropping or refreshing only our own label — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (checks `ipfs.listPins()`, updates via `setPinClaim()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (checks `ipfs.listPins()`, updates via `setPinClaim()`)
 
 ### 5.2 Absence is NOT deletion (default)
 
@@ -276,7 +276,7 @@ mirror. Settings still resolve per the normal inherit chain (per-repo override �
 global `config.yaml`). The per-backbone specs restate this from their side.
 
 The per-repo manifest — written to Local Storage and mirrored to the sync repo — is written in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest()` (writes `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`, mirrored to `<syncRepo>/repos/<repoUid>/manifest.yaml` via `tracking-sync.service.ts` when enabled).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest()` (writes `~/T/_large_files_bridge/repos/<repoKey>/manifest.yaml`, mirrored to `<syncRepo>/repos/<repoUid>/manifest.yaml` via `tracking-sync.service.ts` when enabled).
 
 > **Superseded — the mirror's key.** Wherever this spec writes the mirror as
 > `<syncRepo>/repos/<repoKey>/…`, the mirror subtree is now keyed by the repo's **normalized git remote**
@@ -338,7 +338,7 @@ verification of local claims, the absence-is-not-delete default, and the revisio
 still decide what this computer believes afterward.
 
 Deriving the remote-keyed mirror subtree and merging a pulled mirror per entry into Local Storage are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) feeding `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`; the equivalent remote-folding helper already shipping is `normalizeRemoteKey()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) feeding `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`; the equivalent remote-folding helper already shipping is `normalizeRemoteKey()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`), and `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`), called from the repo pin pass in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
 
 ---
 
@@ -363,7 +363,7 @@ are part of `settings.ipfs`: publishing a list never turns this machine into a p
 and `reprovide_strategy` stays `pinned`.
 
 Writing this computer's own view — with `pinned_by` set only for CIDs it actually pins — and publishing the per-repo manifest to Local Storage (+ the sync-repo mirror) happen in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (self-only `setPinClaim()`, then `writeManifest()` → `repos/<repoKey>/manifest.yaml`, mirrored to the sync repo via `tracking-sync.service.ts` when enabled)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()` (self-only `setPinClaim()`, then `writeManifest()` → `repos/<repoKey>/manifest.yaml`, mirrored to the sync repo via `tracking-sync.service.ts` when enabled)
 
 ---
 

@@ -17,7 +17,7 @@ The left bar's **Repos** item (order 1, icon `FolderGit2`, route `/` — source 
 ([One repo](./one_repo.mdx)).
 
 The Repos page is loaded and rendered as one TanStack table in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` component
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` component
 
 This spec builds on the siblings and does not repeat them:
 
@@ -82,7 +82,7 @@ export type RepoStatus =
 ```
 
 The per-repo summary row (`RepoRow`) each table row shows is assembled by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow`
 
 ---
 
@@ -122,7 +122,7 @@ header**, the **top-right Add repo button**, and the **Repos table** with its co
 **All tables are TanStack tables** (charter rule). This is one flat, chromeless `DataTable`:
 
 The rows are served to the table by the backend endpoint in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `GET /api/repos`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `GET /api/repos`
 
 ### 3.1 Control row (above the table) — LOCKED
 
@@ -169,10 +169,10 @@ A single control row sits above the table, matching the standard toolbar:
 the floating popovers, never the data surface).
 
 The control row's search box and the icon-only sort/filter popovers are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` / `showSort` popovers).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (the `showFilter` / `showSort` popovers).
 
 The **facet rail** and the **active-sort chip run** are **new** shared surfaces and are **to be implemented in code** on the same component, driven by the same `columnFilters` / sort state:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a facet-rail region + chip run above the table body).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component (a facet-rail region + chip run above the table body).
 
 ### 3.2 Columns
 
@@ -201,10 +201,10 @@ a **responsive priority** that decides which columns hide as the table narrows �
 | — | **`⋮`** | — | — | — | The row **kebab** — the **repo** action catalog ([menus.mdx §3 / §5.1](./menus.mdx#3-the-row--kebab--every-table-has-one)). A control cell: it opens the menu, never the row. Right-click on the row opens the same menu ([menus.mdx §3.1](./menus.mdx#31-right-click-opens-the-same-menu-locked)). |
 
 The counting columns are composed by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (one pass over the scan candidates + the remote-only rows, producing `counts` / `peerCount` / `notBackedUp` / `missingHere` / `bytes`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (one pass over the scan candidates + the remote-only rows, producing `counts` / `peerCount` / `notBackedUp` / `missingHere` / `bytes`).
 
 The columns themselves are declared in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (the `columns` array) + `totalFiles()` for col 8.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (the `columns` array) + `totalFiles()` for col 8.
 
 **The count columns are not facets, and are not pin/git-ignore axes (LOCKED).** *Pinned · Pending
 · Undecided · Ignored* (cols 3–6) — and equally *Files · Missing here · Already pinned · Not backed up*
@@ -230,10 +230,10 @@ every row is a single line again. In code we achieve this with a **per-column mi
 the sum of the visible columns' minimum widths (plus the leading select + trailing chevron/kebab) must
 fit the container; while it doesn't, the **lowest-priority** visible column is dropped and the budget
 recomputed. Implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` —
 `useResponsiveColumns()` (measures the container with a `ResizeObserver`, drops lowest-priority columns
 until the min-width budget fits), driven by the per-column `priority` + `minWidth` fields on
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn`.
 
 **Priority numbers — LOWER number = MORE important (kept longest); HIGHER number = dropped first.** The
 master stack-rank below covers **every column that can appear** across LFB's repo-style/file tables (the
@@ -322,10 +322,10 @@ checked by default**; all-checked is the resting, inactive state and there is **
   ([tables.mdx §4.1](./tables.mdx#41-facets-persist-as-the-hidden-values-never-the-shown-ones-locked)).
 
 The `RepoStatus` enum the facet's values are drawn from is declared in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — the `RepoStatus` union type.
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — the `RepoStatus` union type.
 
 The Status column's filter (today a `<select>` of `STATUS_OPTIONS`, to be rebuilt as this rail facet) is declared in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (the `status` column's `filterOptions`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (the `status` column's `filterOptions`).
 
 ### 3.3 Pagination — LOCKED
 
@@ -400,7 +400,7 @@ pinned) means nothing is backing this repo up.
 > facet value** — which is a **frozen wire value** and was **not** renamed ([decisions.mdx §7](./decisions.mdx)).
 > The one-repo `Add to IPFS` tile counts **the same number** this column shows (files with no pin decision,
 > excluding rows another IPFS tool already pinned on this node), so the two surfaces still agree.
-> *Column in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` —
+> *Column in:* `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` —
 > the `undecided` `LfbColumn`; *the one-repo tiles in:* `.../pages/repos/metricWarnings.ts` — `METRIC_CATALOG`.
 
 > **These counts include git-ignored media of *any* size.** The scan's payload rule
@@ -443,7 +443,7 @@ computer", offered the one remedy that cannot work for it ("open Large File Brid
 so it can pull them" — there is nothing to pull), and pushed the count **above `Pinned`**, breaking the
 subset relation above.
 
-*Defined once in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `isSingleCopy()`, used by `repoRowStats()` (the column), `computeTaskMetrics()` (the One-repo tile) and `export-repo-recommendations.ts` (the CLI export).
+*Defined once in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `isSingleCopy()`, used by `repoRowStats()` (the column), `computeTaskMetrics()` (the One-repo tile) and `export-repo-recommendations.ts` (the CLI export).
 
 **Why `Already pinned` had to become a column.** `counts.pinnedForeign` has always been computed and
 never shown. A file whose bytes another IPFS tool already pinned on this node is deliberately kept out of
@@ -451,8 +451,8 @@ never shown. A file whose bytes another IPFS tool already pinned on this node is
 not" saga), so before this column existed it was subtracted from Undecided and added to **nothing** — the
 visible columns silently stopped summing to the repo's file count, with no cell to explain the gap.
 
-*Composed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()`; *summed in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `totalFiles()`.
-*Guarded in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — every aggregate is asserted against the same aggregate recomputed from `computeRepoDetail`'s fully-composed rows.
+*Composed in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()`; *summed in:* `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `totalFiles()`.
+*Guarded in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/repo-row-stats.spec.ts` — every aggregate is asserted against the same aggregate recomputed from `computeRepoDetail`'s fully-composed rows.
 
 ### 4.2 Status pill colors (LOCKED)
 
@@ -477,7 +477,7 @@ emptiest. A repo with **nothing to pin** (no large files at all) is `never` too:
 verdict, and a green "Up to date" tick over an empty census would be a claim the scan never made. Read it
 together with **Files** (col 8) and **Last scan** (col 14), which say whether the census is empty or stale.
 
-*Rolled up in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `rollupStatus()` (one function, used by both the Repos row and the One-repo detail, so the list and the page it opens can never disagree).
+*Rolled up in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `rollupStatus()` (one function, used by both the Repos row and the One-repo detail, so the list and the page it opens can never disagree).
 
 ### 4.3 `Peers` counts your OTHER computers (LOCKED)
 
@@ -491,7 +491,7 @@ for the one situation it exists to catch: files that live on this machine and no
 twin (`TaskMetrics.notBackedUp`) always excluded self; this is the repo-level number brought in line with
 it, and **`Not backed up`** (col 12) is the same test surfaced as a count.
 
-*Counted in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (cheap path) and `peerCountForFiles()` (composed path); both skip `computerLabel()`.
+*Counted in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `repoRowStats()` (cheap path) and `peerCountForFiles()` (composed path); both skip `computerLabel()`.
 
 ---
 
@@ -505,7 +505,7 @@ it, and **`Not backed up`** (col 12) is the same test surfaced as a count.
 visual affordance and goes to the same place.
 
 Whole-row click navigation to the repo's per-file screen is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` `onRowClick` (navigates to `/repos/$repoId`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` `onRowClick` (navigates to `/repos/$repoId`)
 
 **On top of that, each data cell is a deep link** to the most specific view for that cell
 ([menus.mdx §2](./menus.mdx#2-cell-navigation--clicking-a-cell-is-a-deep-link)) — so a click lands the
@@ -538,7 +538,7 @@ Pin now / Git ignore / Toggle Pinned / Repo settings… / Copy path / **Remove r
 it opens the menu and never opens the repo.
 
 The trailing per-row repo kebab (and its action catalog) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` component (mounted as the table's `rowMenu` in `ReposPage`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` component (mounted as the table's `rowMenu` in `ReposPage`)
 
 ---
 
@@ -555,7 +555,7 @@ this computer with LFBridge:
 * A repo already registered is rejected with an inline message (no duplicate rows).
 
 Registering a repo by folder path (and kicking a background rescan) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos` (calls `registerRepo`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos` (calls `registerRepo`)
 
 ### 6.1 Page actions — the action-links row
 
@@ -578,7 +578,7 @@ are checked, else **every** repo in the list; both run through the background qu
 so the header returns immediately.
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to the repo rows).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `ReposPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, scoped to the repo rows).
 
 ---
 
@@ -597,10 +597,10 @@ implemented in code:
   progress.
 
 The streamed list endpoint (one shared walk, multicast to every reader) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/stream` handler + `startRepoRowsFeed()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — the `GET /api/repos/stream` handler + `startRepoRowsFeed()`
 
 The client reducer that folds the batches into the page's existing `["repos"]` cache is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/streamQueries.ts` — `streamRepoRows()`
 
 * **A BACKGROUND PASS MAKES EVERY NUMBER IN THIS TABLE PROVISIONAL (performance.mdx P-38, LOCKED).** The
   per-repo counts here — peers, pinned, undecided — are recomputed by the same `scan` / `pin` passes that
@@ -612,7 +612,7 @@ The client reducer that folds the batches into the page's existing `["repos"]` c
   [one_repo.mdx §5](./one_repo.mdx) documents for `Pull down`.
 
 Whether a count is still being worked out is decided in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()`; rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useCensusPending.ts` — `censusPendingFrom()`; rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx`
 
 ---
 
@@ -647,7 +647,7 @@ so it's discoverable. No layout shift between states (same box).
   ([menus.mdx §5.1](./menus.mdx#51-repo)) so it is reachable without hunting for the tiny icon.
 
 The leading ribbon toggle and its optimistic flip are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `BookmarkToggle` (mutated via `ReposPage` `toggleBookmark`)
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` — `BookmarkToggle` (mutated via `ReposPage` `toggleBookmark`)
 
 ### 8.3 Persistence — it lives in the repo's `config.yaml` (LOCKED)
 
@@ -671,7 +671,7 @@ big_file_override: { … }
   `config.yaml` and returns the updated `RepoRow`. Idempotent; unknown `repoId` → 404.
 
 Persisting the bookmark flag to the repo's `config.yaml` is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/bookmark`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter` → `POST /api/repos/:repoId/bookmark`
 
 ### 8.4 Sort & filter — the shared model ([tables.mdx](./tables.mdx))
 

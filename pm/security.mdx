@@ -73,7 +73,7 @@ allowListed(email):
 ```
 
 The single live allow decision (companies OR individuals, read fresh every request, fail-closed) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `allowListed()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `allowListed()`
 
 * **Two independent switches, OR'd.** `allow_companies` covers *domains*; `allow_individuals` covers
   *exact emails*. An email is allowed if **either** switch admits it. A switch that is **off**
@@ -93,7 +93,7 @@ The single live allow decision (companies OR individuals, read fresh every reque
     otherwise (`settings.mdx §4`).
 
 The two enforcement middlewares (401 for non-listed data access, 403 for non-admin edits) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `requireAllowListed()` / `requireAdmin()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `requireAllowListed()` / `requireAdmin()`
 
 "Configured" is its own boolean, `access.configured`, set to `true` the instant the Security Setup page
 saves. It is the single fact the frontend gate (§4.1) and the one-time write lock (§8.1) both key on.
@@ -142,7 +142,7 @@ access:
   non-secret policy (which domains/emails are allowed).
 
 Reading and writing the app-level `config.yaml → access` block is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/config.service.ts` — `getAppConfig()` / `updateAppConfig()`
 
 Inventory row (per storage_local.mdx §14 rule — every persisted key has a row):
 
@@ -198,7 +198,7 @@ authentication** because there is no user yet; its write path is protected inste
 and loopback guard of §8.
 
 The first-run Security Setup page component is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/security/SecuritySetupPage.tsx` — `SecuritySetupPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/security/SecuritySetupPage.tsx` — `SecuritySetupPage`
 
 ### 4.1 Layout
 
@@ -264,7 +264,7 @@ The first-run Security Setup page component is implemented in code:
 * Validation: each entry must be a syntactically valid email. Stored lowercased.
 
 The shared two-section form (companies + individuals, add/remove rows, client-side validity) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/AllowListFields.tsx` — `AllowListFields` / `isAllowListValid()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/AllowListFields.tsx` — `AllowListFields` / `isAllowListValid()`
 
 ### 4.4 Save behavior
 
@@ -300,7 +300,7 @@ the operator typed it (`security.service.ts`).
   a foot-gun).
 
 Server-side normalization (trim, `@`-strip, lowercase, regex-validate, de-dupe) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `normalizeDomains()` / `normalizeEmails()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `normalizeDomains()` / `normalizeEmails()`
 
 ---
 
@@ -330,10 +330,10 @@ oafAllowedDomains =
   OIDC step; the authoritative allow-list (§6.2) is what actually decides.
 
 Computing the coarse OIDC domain pre-filter (company domains ∪ individual-email domains ∪ env) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `oafAllowedDomains()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `oafAllowedDomains()`
 
 Passing that domain set into the embedded OpenAuthFederated middleware (`createFederatedFrontend({ allowedDomains })`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `allowedDomains()` / `buildAuthFrontend()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` — `allowedDomains()` / `buildAuthFrontend()`
 
 ### 6.2 Layer 2 — the authoritative allow-list (`identify.ts`, exact)
 
@@ -376,7 +376,7 @@ never leak the allow-list to an unauthenticated caller (§8.3):
 ```
 
 The public, minimal config payload (`{ configured, appName }` only — no allow-list) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `getPublicSecurityConfig()` (served by `securityRouter` `GET /config`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `getPublicSecurityConfig()` (served by `securityRouter` `GET /config`)
 
 ### 7.2 `POST /api/security/setup` — one-time, loopback-guarded, unauthenticated
 
@@ -397,7 +397,7 @@ On success it normalizes (§5), writes `config.yaml → access`, sets `configure
 company domain was added — §6.3).
 
 The one-time first-run write (normalize, persist, flip `configured:true`) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `completeSetup()` (served by `securityRouter` `POST /setup`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/security/security.service.ts` — `completeSetup()` (served by `securityRouter` `POST /setup`)
 
 ### 7.3 `GET`/`PATCH /api/settings/security` — admin-only (return visits)
 
@@ -408,7 +408,7 @@ and the same "at least one rule" guard as setup, so an admin cannot accidentally
 `configured` stays `true`.
 
 The admin return-visit read/replace of the allow-list is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `GET /security` / `PATCH /security` (calls `updateSecurity()`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/settings/settings.router.ts` — `settingsRouter` `GET /security` / `PATCH /security` (calls `updateSecurity()`)
 
 Client wrappers (`api/client.ts`): `api.securityConfig()`, `api.securitySetup(input)`,
 `api.security()`, `api.setSecurity(input)`.
@@ -478,7 +478,7 @@ hosted install fronted by one still needs its own edge rule for `/api/internal` 
 the app can guarantee is that no request TALKS its way into being local.
 
 Deciding whether a request physically originated on this computer is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/loopback.ts` — `isLoopback()` (the one implementation; `security.router.ts → loopbackOnly()`, `internal.router.ts → loopbackOnly()`, `os-open.ts → isLocalRequest()` and `identify.ts` all delegate to it)
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/loopback.ts` — `isLoopback()` (the one implementation; `security.router.ts → loopbackOnly()`, `internal.router.ts → loopbackOnly()`, `os-open.ts → isLocalRequest()` and `identify.ts` all delegate to it)
 
 ### 8.5 Post-auth privilege confusion (enforcement bypass)
 
@@ -539,7 +539,7 @@ batch is checked as strictly as its worst item; symlink-safe because `assertAllo
 **defines** an allow-root — are deliberately outside this guard.
 
 Confining every filesystem path a media-engine request carries is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts` — `confineRequestPaths()` (mounted after `requireAllowListed` on the ocr / transcribe / describe / compress / git-ignore routers)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts` — `confineRequestPaths()` (mounted after `requireAllowListed` on the ocr / transcribe / describe / compress / git-ignore routers)
 
 ---
 

@@ -119,7 +119,7 @@ Seeding the repo's Local-Storage `repos/<repoKey>/` tracking directory and its `
 `repo_storage.yaml` when a repo is registered — and creating the working repo's committed `.lfbridge/`
 for its Category-A content (it **no longer** adds `.lfbridge/` to the repo `.gitignore`, since nothing
 churny is written there) — is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (resolving the tracking root via `tracking-root.service.ts` — `resolveTrackingRoot()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureRepoStorage(repoRoot)` (resolving the tracking root via `tracking-root.service.ts` — `resolveTrackingRoot()`).
 
 ---
 
@@ -146,7 +146,7 @@ A repo storage is the on-disk backing for everything the [One repo](./one_repo.m
   knows what to fetch.
 
 The repos list and per-repo UI over this storage are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (served by `repos.router.ts`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (served by `repos.router.ts`).
 
 ---
 
@@ -229,11 +229,11 @@ batch *reads* that ledger; it is not part of it.)
   files"* → background jobs on [processing.mdx](./processing.mdx)).
 
 Producing the repo batch during scan recalc, and naming/replacing its YAML, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` —
 `TodoBatchCalcEngine.recalcForStorage(storage)` writing via
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts` —
 `batchFileName(storage)` (→ `repo_<repo-slug>_2_do.yaml`); the transcribe discovery walk is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts`.
 
 ---
 
@@ -276,7 +276,7 @@ into the repo or adds `.lfbridge/` to the repo `.gitignore` (nothing churny is w
 
 * Enforcing "Local Storage always, working repo never" for `repo_storage.yaml` (path resolved so it lands
   under `resolveTrackingRoot()`, never a working repo) is done in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` —
   `repoStoragePath(repoRoot)` / `writeRepoStorage(repoRoot, doc)` (Local-Storage-always, not gated on the
   keep-`.lfbridge/` consent).
 
@@ -288,7 +288,7 @@ of conflicting, their two sides are **unioned** — every computer's lines are k
 `.gitattributes` marking those paths `merge=union` **before** each merge, so git folds them conflict-free.
 
 * Writing the union-merge `.gitattributes` ahead of every fetch/merge is done in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
   `GitBackbone.ensureMergeAttributes()` (constant `UNION_MERGE_PATHS`), called at the top of
   `GitBackbone.pull()` ([git_backbone.mdx §4.2](./git_backbone.mdx)).
 
@@ -305,7 +305,7 @@ tools; it never clobbers real content** ([git_backbone.mdx §4.3](./git_backbone
 
 * Detecting the all-`repo_storage.yaml` conflict, dropping the regeneratable file, and committing (else
   abort-and-surface) is done in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
   `GitBackbone.pull()` guarded by `isRepoStorageYamlPath(...)`, resolving via
   `GitBackbone.autoResolveRepoStorageConflicts(conflicts)`.
 

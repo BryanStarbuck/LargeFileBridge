@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Company Storage
-description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/BGit/Bryan_git/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) plus its tracking metadata (fingerprint index, IPFS manifest, media-analysis outputs) — and all of it sits at the storage ROOT: a company storage is a DEDICATED LFB FILE REPO (an SDL), so it has NO .lfbridge/ directory at all. .lfbridge/ is a working-repo-only concept; the SDL root IS the .lfbridge area (artifact_placement_policy.mdx §0). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. The company's settings page also lists the repos owned by this company with a per-row reassign control (§7.1 → storage_settings.mdx §4c); reassigning a repo INTO this company records a travelling ownership assertion (repo_owner_propagation.mdx) that reaches other members but applies on their machines only via review-and-consent, moves NO bytes, and only re-targets which sync repo the repo's tracking mirrors to. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and the tracking layout defined in storages.mdx §4, with the SDL (no-.lfbridge/) placement rule owned by artifact_placement_policy.mdx §0.
+description: The Company storage spec. A shared pile of a company's large files, one directory-based storage per company, e.g. ~/repos/act3_large_files_bridge/. Each carries a storage.yaml with name + type: company + a company block (company_name and company-scoped child properties) plus its tracking metadata (fingerprint index, IPFS manifest, media-analysis outputs) — and all of it sits at the storage ROOT: a company storage is a DEDICATED LFB FILE REPO (an SDL), so it has NO .lfbridge/ directory at all. .lfbridge/ is a working-repo-only concept; the SDL root IS the .lfbridge area (artifact_placement_policy.mdx §0). A user may belong to MORE THAN ONE company, so several company storages can coexist; each appears as its own child in the Storages left-bar tab (labeled by company name). Company storages are pinned across the members' computers over IPFS and often also clone to a shared Google Drive / Dropbox. The company's settings page also lists the repos owned by this company with a per-row reassign control (§7.1 → storage_settings.mdx §4c); reassigning a repo INTO this company records a travelling ownership assertion (repo_owner_propagation.mdx) that reaches other members but applies on their machines only via review-and-consent, moves NO bytes, and only re-targets which sync repo the repo's tracking mirrors to. Sibling of storage_repo / storage_personal / storage_community; shares the storage.yaml schema and the tracking layout defined in storages.mdx §4, with the SDL (no-.lfbridge/) placement rule owned by artifact_placement_policy.mdx §0.
 ---
 
 # LargeFileBridge — Company Storage
@@ -47,7 +47,7 @@ stay in their natural directories and are brought into scope by a **list of mapp
 (§1.1).
 
 ```
-~/BGit/Bryan_git/act3_large_files_bridge/     ← ONE company's storage root = its Syncable Data Location ("ACT3")
+~/repos/act3_large_files_bridge/     ← ONE company's storage root = its Syncable Data Location ("ACT3")
 │                                              ← this root IS the .lfbridge area — an SDL has NO .lfbridge/
 ├── LargeFilesBridge_SyncList.yaml            ← the portable list (sync_list.mdx), committed to git here
 ├── storage.yaml            ← name + type: company + company block (storages.mdx §3)
@@ -60,7 +60,7 @@ stay in their natural directories and are brought into scope by a **list of mapp
 └── …NO big files here — they live in the MAPPED directories (§1.1)…
 ```
 
-* **Root:** one **SDL** directory per company, e.g. `~/BGit/Bryan_git/act3_large_files_bridge/` — a small
+* **Root:** one **SDL** directory per company, e.g. `~/repos/act3_large_files_bridge/` — a small
   Git repo of metadata. A user in three companies has three such roots, each its own storage. **The company's
   metadata sits at the root — there is no `.lfbridge/` here.** `.lfbridge/` is a **working-repo-only**
   concept (where LFB is a guest and quarantines its files); a company storage is a **dedicated LFB file
@@ -118,14 +118,14 @@ asymmetries existed and are now closed.
   in the guarded set.
 
 Probing the canonical SDL home for every conventional storage is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `conventionalSdlDirs()`, consumed by `discoverRoots()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `conventionalSdlDirs()`, consumed by `discoverRoots()`.
 Guarding the travelling payload against a `.gitignore` rule is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `SDL_ROOT_PAYLOAD` / `ignoresSdlPayloadLine()`, applied by `GitBackbone.ensureSdlCommittable()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `SDL_ROOT_PAYLOAD` / `ignoresSdlPayloadLine()`, applied by `GitBackbone.ensureSdlCommittable()`.
 
 ## 2. `storage.yaml` for a company
 
 ```yaml
-# ~/BGit/Bryan_git/act3_large_files_bridge/storage.yaml   (at the SDL root — no .lfbridge/ segment)
+# ~/repos/act3_large_files_bridge/storage.yaml   (at the SDL root — no .lfbridge/ segment)
 name: "ACT3 Company Files"
 type: company
 created: 2026-05-01T10:12:00Z
@@ -184,7 +184,7 @@ and **auto-creates this storage** to hold the grouping ([repo_company_mapping.md
   company row agree.
 
 Creating-if-absent the company storage for a derived org owner is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (creates via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (creates via `ensureStorage(root, "company", …)` when missing), surfaced by `listStoragesPage()`.
 
 ---
 
@@ -210,7 +210,7 @@ left-bar child, the Repos grouping header, and each owned repo's Owner control
   **travels to teammates** who carry this company storage — everyone sees the same human name, not the slug.
 
 Reading and writing the company's friendly `company_name` (the display name) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readDescriptor` / `writeDescriptor` (the `company.company_name` field), edited from the settings page and rendered by the Storages tab.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `readDescriptor` / `writeDescriptor` (the `company.company_name` field), edited from the settings page and rendered by the Storages tab.
 
 ---
 
@@ -247,7 +247,7 @@ repos owned by this company **additionally mirror** their **LFB tracking state**
   repo a repo can mirror to.
 
 Resolving the company's sync repo and the additive mirror root for an owned repo (`<syncRepo>/repos/<repoKey>/` or null) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the company's `sync_repo` block) consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`, whose mirror is written by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the company's `sync_repo` block) consumed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)`, whose mirror is written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 ### 7.1 The company's owned-repos list & reassign
 
@@ -287,9 +287,9 @@ One user, two of their own computers, one company (`ACT3ai`), one working repo, 
 
 | | |
 | --- | --- |
-| **Working repo** | `~/BGit/Bryan_git/charlie-kirk` — remote `https://github.com/ACT3ai/charlie-kirk.git` |
+| **Working repo** | `~/repos/charlie-kirk` — remote `https://github.com/ACT3ai/charlie-kirk.git` |
 | **The file** | `videos/2079054276320440416.mp4` — 5.3 MB, **git-ignored** (`.gitignore:27` → `videos/`) |
-| **Company storage (SDL)** | `~/BGit/Bryan_git/act3_large_files_bridge` — remote `github.com/ACT3ai/act3_large_files_bridge` |
+| **Company storage (SDL)** | `~/repos/act3_large_files_bridge` — remote `github.com/ACT3ai/act3_large_files_bridge` |
 | **Computer A ("the Tower")** | device `bryan-mac-pro` — has the file, pinned it, CID `bafybeihf5o…k7tmi` |
 | **Computer B ("the laptop")** | device `bryanstarbuck-macbook-pro` — has the repo cloned, does **not** have the file |
 
@@ -359,7 +359,7 @@ from the repo's normalized git remote URL** — not from its absolute path.
   deliberately: one names "this repo on this computer", the other names "this repo, anywhere".
 
 Deriving the shared identity and the mirror subtree is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) (the remote-derived key) and `resolveStateSyncRepo()` (which now joins `repos/<repoUid>/`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) (the remote-derived key) and `resolveStateSyncRepo()` (which now joins `repos/<repoUid>/`).
 
 #### 8.4.2 The company SDL IS the sync repo, and the mirror is ON by default (LOCKED)
 
@@ -401,7 +401,7 @@ This **supersedes §7's "Default: OFF"** for the case where a sync repo can be r
   over IPFS, only for files the user decided to sync ([decisions.mdx](./decisions.mdx)).
 
 Resolving the owning storage from the repo's remote and auto-adopting its SDL as the sync repo is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()` (now remote-owner first, containment second), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveOwnerDedicatedRepo()` (now remote-owner first, containment second), consumed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
 
 ##### 8.4.2.1 A line-level migration must leave a PARSEABLE file (LOCKED)
 
@@ -431,9 +431,9 @@ is more important than the migration itself.
   build, a human reading the YAML — has to know about the read-time workaround.
 
 Surviving a valueless block on read is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `dropEmptyBlocks()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `readYaml()` / `dropEmptyBlocks()`.
 Emitting a parseable file, and repairing the machines the broken version already ran on, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sync-repo-default.ts` — `clearPersistedSyncRepoFalse()` and `repairEmptySyncRepoBlocks()`, called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-sync-repo-default.ts` — `clearPersistedSyncRepoFalse()` and `repairEmptySyncRepoBlocks()`, called from `~/repos/LargeFileBridge/code/packages/backend/src/main.ts`.
 
 #### 8.4.3 Receiving is a MERGE, never a copy (LOCKED)
 
@@ -468,7 +468,7 @@ Local Storage therefore **merges per file entry** and never overwrites the local
   alternating `Qm…` / `bafk…` every ~20 minutes, none carrying new information). The winning side supplies
   the whole `(cid, size)` pair, so `size` cannot ping-pong on its own.
   Merge rules and the tie-break in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` —
   `mergeManifests()`.
 * **This computer's own claim is never adopted from the wire**, only derived from its real pinset
   ([ipfs.mdx](./ipfs.mdx)): a peer's manifest cannot make this machine believe it holds bytes it does not.
@@ -480,7 +480,7 @@ Local Storage therefore **merges per file entry** and never overwrites the local
   Self-label passed at **every** `mergeManifests` call site in code — the wire boundaries
   `reconcileFromSyncRepo()` and `mirrorToSyncRepo()` (both also `incomingIsWire`), and the local folds
   `reconcileMirroredRepos()`, `pinRepoFolderInner()` and `repoManifestWithTracking()`:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts`.
   Omitting it at even one site is enough to re-adopt our own stale claim and put it back into circulation.
 * **A mirror file that exists but will not parse is RESTORED, never stamped over.** The best-effort readers
   answer "nothing" for a conflicted or corrupt file, and the merge is skipped in exactly that case — so the
@@ -497,7 +497,7 @@ Local Storage therefore **merges per file entry** and never overwrites the local
   ([decisions.mdx §5.6](./decisions.mdx) — the 2026-07-20 "not backed up: 22 / 0" defect).
 
 Merging a pulled sync-repo subtree into Local Storage is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`, plus the `ledger-merge.ts` `unionLedgerEvents()` fold for `decisions.yaml`), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`, plus the `ledger-merge.ts` `unionLedgerEvents()` fold for `decisions.yaml`), called from the repo pin pass in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after fetch + merge.
 
 #### 8.4.4 Binding a forge org to a company storage — `owner_slugs` (LOCKED)
 
@@ -524,7 +524,7 @@ name comparison that fails the moment the directory is named `act3_large_files_b
   beats every rule above — the user always wins.
 
 Resolving a forge-org slug to a company storage row (and recording the binding) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (the function §5 cites; it exists and implements all three rules above, with heuristic write-back in `recordOwnerSlug()`), backed by the descriptor's `company.owner_slugs`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner(slug)` (the function §5 cites; it exists and implements all three rules above, with heuristic write-back in `recordOwnerSlug()`), backed by the descriptor's `company.owner_slugs`.
 
 ### 8.5 Remote-only rows — a file in the list that is not on this disk (LOCKED)
 
@@ -557,7 +557,7 @@ computer does not have **cannot be shown**. That makes the most important row in
   here (§8.4.3); it simply stops being offered.
 
 Composing remote-only rows by joining the reconciled manifest against the scanned candidates is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends manifest entries with no local candidate and no local file), with the type in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (appends manifest entries with no local candidate and no local file), with the type in `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`.
 
 ### 8.6 Two manifests must not disagree
 
@@ -572,7 +572,7 @@ SDL-only committed manifest for a *working repo* finds nothing and fails every f
 defect this section closes by naming the single reader.
 
 Reading the one manifest both the pull-down list and the pull action agree on is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()` (both `readRepoTrackingManifest`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `missingPinnedFromPeers()` and `pullMissing()` (both `readRepoTrackingManifest`).
 
 ### 8.7 Four smaller defects this use case also closes
 
@@ -590,7 +590,7 @@ first three are **fixed** — the rule each one now states is the standing rule;
   `trackingBaseDir()`.
 
   Placing an SDL's committed manifest by storage kind is handled in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `committedManifestPath()`, over `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `committedManifestPath()`, over `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()`.
 * **A mirror write triggers a backbone sync.** Committing otherwise waits for the 10-minute device
   worker's pass. The mirror announces the **destination it wrote into** — `dst`, the path **inside the
   SDL** — not the working-repo root, so the owning SDL resolves and commits + pushes within seconds.
@@ -599,7 +599,7 @@ first three are **fixed** — the rule each one now states is the standing rule;
   fragile precisely because its failure mode is silent — always hand it a path under the SDL root.
 
   Announcing the mirrored tracking state to its SDL is handled in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (calls `noteArtifactWritten(dst, "tracking-state")`).
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (calls `noteArtifactWritten(dst, "tracking-state")`).
 * **The company is bound to the org.** §5 above names `ensureCompanyForOwner(slug)`, and the function
   **exists**: it resolves a forge-org slug to a company storage by (1) an explicit `company.owner_slugs`
   claim, (2) a normalized name match, (3) a lone company storage adopting an unclaimed org — writing rule
@@ -608,14 +608,14 @@ first three are **fixed** — the rule each one now states is the standing rule;
   the code can act on rather than a string in a label.
 
   Resolving a forge-org slug to its company storage is handled in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner()` (heuristic write-back via `recordOwnerSlug()`).
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `ensureCompanyForOwner()` (heuristic write-back via `recordOwnerSlug()`).
 
   **Still open:** `deriveOwnerForRemote()` returns `companyId: null`, so the owner block the rest of the
   product reads is **not yet joined** to a company storage row — §8.4.2's ownership lookup has to call
   `ensureCompanyForOwner()` itself. The remaining work is to fill that `companyId` at derivation time.
 
   The unjoined owner derivation is in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote()`.
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `deriveOwnerForRemote()`.
 * **The same repo cloned twice must not confuse the two.** This machine has `charlie-kirk` at **two**
   paths, and the path-hash key gives them separate, non-communicating state directories. Under §8.4.1 they
   share one `repoUid` — which is correct: they *are* the same repo. Local Storage stays split per path
@@ -674,13 +674,13 @@ itself. A client that misses a bump loses nothing but latency: its next read is 
 never ship state over the bus, only the fact that state moved.**
 
 Bumping a topic when server state changes is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()` / `subscribe()` / `currentRevisions()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/events/state-events.service.ts` — `bumpTopic()` / `subscribe()` / `currentRevisions()`.
 
 The reconcile fold that bumps a repo's topic after a backbone pull is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileMirroredRepos()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileMirroredRepos()`.
 
 The manifest / scan-status writes that bump the same topic are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `writeRepoManifest()` / `writeRepoStatus()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `writeRepoManifest()` / `writeRepoStatus()`.
 
 #### 8.9.2 The stream is authenticated NDJSON — NOT SSE (LOCKED)
 
@@ -706,10 +706,10 @@ exactly this reason ([performance.mdx Aspect 2](./performance.mdx)). We reuse th
 inventing a second push channel — **one streaming transport in the product, used twice.**
 
 The event-stream endpoint is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /api/events/stream` handler.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /api/events/stream` handler.
 
 The Bearer-authed NDJSON reader it reuses is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`.
 
 #### 8.9.3 A bump invalidates query keys — it never carries rows
 
@@ -728,7 +728,7 @@ shape, and its normal loading behavior.
   page re-reads **once**, not per bump.
 
 The subscribe-and-invalidate hook is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts` — `useLiveRefresh()`.
 
 #### 8.9.4 This does NOT reopen background polling (LOCKED)
 
@@ -771,7 +771,7 @@ This is deliberately modeled on the **existing** stale-scan trigger, which alrea
 problem for scanning; we copy the pattern rather than invent a second freshness policy.
 
 Triggering a stale storage backbone cycle + reconcile on boot / page load is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `maybeSyncBackbone()`, modeled on `~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scan-job.ts` — `maybeTriggerStaleScan()`.
 
 #### 8.9.7 What this adds to the acceptance narrative
 
@@ -784,7 +784,7 @@ per-page rendering rules are unchanged ([one_repo.mdx §4.11](./one_repo.mdx)) �
 ## 9. Acceptance criteria
 
 1. There is **one company storage per company**, rooted in its own directory (e.g.
-   `~/BGit/Bryan_git/act3_large_files_bridge/`), which is the storage's **Syncable Data Location** —
+   `~/repos/act3_large_files_bridge/`), which is the storage's **Syncable Data Location** —
    small travelling text tracked **at the root itself**. It is a **dedicated LFB file repo (an SDL)**, so it
    has **no `.lfbridge/` directory at all** — `.lfbridge/` is working-repo-only and the SDL root **is** the
    `.lfbridge` area ([artifact_placement_policy.mdx §0](./artifact_placement_policy.mdx)); **no big files
@@ -959,7 +959,7 @@ Once org → company storage is a recorded fact, three things follow with no fur
    in the URL is what enforces it.
 
 Deriving the org from a repo's remote, grouping repos by org, applying the authored-commit membership test, and creating a company storage per org is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (group + membership test) and `createCompanyStorage(org)` (mkdir + `git init` + descriptor with `owner_slugs`), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/organizations` and `POST /api/storages/companies`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` (group + membership test) and `createCompanyStorage(org)` (mkdir + `git init` + descriptor with `owner_slugs`), surfaced by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/organizations` and `POST /api/storages/companies`.
 
 ---
 
@@ -1064,10 +1064,10 @@ applies to a company storage with full force:
 ---
 
 Driving the company tracking repo's autonomous cycle and resolving its conflicts is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (per-file conflict resolution) and `commitAndPush()` (ahead-count push + retry budget), driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `syncStorageTextInner()` under `withStorageGitLock()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (per-file conflict resolution) and `commitAndPush()` (ahead-count push + retry budget), driven per storage by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `syncStorageTextInner()` under `withStorageGitLock()`.
 
 Refusing to author a commit when nothing substantive changed is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` after `git add -A`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.dropVolatileOnlyChanges()`, called from `commitAndPushInner()` after `git add -A`.
 
 ---
 
@@ -1198,8 +1198,8 @@ Rules:
   user's own decisions; a community storage has its own rules.
 
 The machine-local flag (plus the pass's cursor, §14.3) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `StorageUnitConfigSchema.auto_sync_in`, read/written by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (the `autoSyncIn` patch field).
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `StorageUnitConfigSchema.auto_sync_in`, read/written by
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` / `writeStorageSettings()` (the `autoSyncIn` patch field).
 
 ### 14.2 What qualifies a file — all four, always (LOCKED)
 
@@ -1269,7 +1269,7 @@ More rules the pass obeys:
   code path.
 
 The hourly pass is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/auto-sync-in.service.ts` — `startAutoSyncIn()` (the hourly self-arming timer) and `runAutoSyncIn()` (steps 2–5, wrapped in its own `track("pin", "changes from your team", …)` and composing its phase line with `WorkNote`), armed at boot from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/auto-sync-in.service.ts` — `startAutoSyncIn()` (the hourly self-arming timer) and `runAutoSyncIn()` (steps 2–5, wrapped in its own `track("pin", "changes from your team", …)` and composing its phase line with `WorkNote`), armed at boot from `~/repos/LargeFileBridge/code/packages/backend/src/main.ts`.
 
 ### 14.3a Manual trigger — the storage-detail ⋮ menu (power-user)
 
@@ -1288,7 +1288,7 @@ next scheduled hour, and the request returns at once. Rules:
   waiting up to an hour.
 
 The manual trigger is handled in code:
-route `POST /api/storages/:id/auto-sync-in/run` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts`, calling `runAutoSyncIn({ forceStorageId })` in `auto-sync-in.service.ts`; the ⋮ menu lives in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` (`powerActions`).
+route `POST /api/storages/:id/auto-sync-in/run` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts`, calling `runAutoSyncIn({ forceStorageId })` in `auto-sync-in.service.ts`; the ⋮ menu lives in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` (`powerActions`).
 
 ### 14.4 The settings page names the ORGANIZATION the company maps to (LOCKED)
 
@@ -1309,7 +1309,7 @@ leave **zero doubt which organization that is.** A company storage's settings pa
   present that silently.
 
 Surfacing the bound org slugs on the settings read is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the `ownerSlugs` field, from `readDescriptor(root).company.owner_slugs`), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `readStorageSettings()` (the `ownerSlugs` field, from `readDescriptor(root).company.owner_slugs`), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageSettingsPage.tsx`.
 
 ### 14.5 Acceptance criteria — §14
 
@@ -1332,7 +1332,7 @@ Surfacing the bound org slugs on the settings read is handled in code:
 
 <!--
   Company storage = a company's SHARED big files, one per company. The root (e.g.
-  ~/BGit/Bryan_git/act3_large_files_bridge/) is the storage's SYNCABLE DATA LOCATION (small travelling
+  ~/repos/act3_large_files_bridge/) is the storage's SYNCABLE DATA LOCATION (small travelling
   text: SyncList + the metadata AT THE ROOT); NO big files live under it. LOCKED: a company storage is a
   DEDICATED LFB FILE REPO (an SDL) → NO .lfbridge/ AT ALL; .lfbridge/ is working-repo-only and the SDL root
   IS the .lfbridge area, so storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml,

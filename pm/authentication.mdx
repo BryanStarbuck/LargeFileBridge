@@ -48,9 +48,9 @@ so a config backup never carries live credentials. All three pieces below persis
 
 | # | What | Where it lives | Survives restart? | Source of truth in code |
 | --- | --- | --- | --- | --- |
-| 1 | **Signing secret** (HS256) | `~/T/_large_files_bridge/.auth_session_secret` — 48 random bytes, base64url, `0600`, created once on first boot and **reused** thereafter. Never in `.env`. | **Yes** — read from disk every boot; only generated when the file is absent. | `loadOrCreateSecret()` in `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts`; path from `authSecretPath()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/scopes.ts` |
-| 2 | **Session records** | `~/T/_large_files_bridge/users/<email>/sessions/<sid>.json` — one `0600` JSON per session; sign-out writes a `revoked:true` tombstone rather than deleting. | **Yes** — plain files under the state root. | `FileSessionStore` in `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts`; wired in `constructAuthFrontend()` |
-| 3 | **Browser credential** | The `oaf_lfb_session` cookie: `HttpOnly`, `SameSite=Lax`, `Max-Age = 300 days` (persistent, **not** a session cookie), `Secure` in server mode. Host-only (no `Domain`), so it is scoped to `localhost` and — because cookies are **not port-scoped** — is presented to every LFB port. | **Yes** — a persistent cookie held by the browser; a server restart does not touch it. | `setCookie()` in `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-backend/src/frontend.ts` |
+| 1 | **Signing secret** (HS256) | `~/T/_large_files_bridge/.auth_session_secret` — 48 random bytes, base64url, `0600`, created once on first boot and **reused** thereafter. Never in `.env`. | **Yes** — read from disk every boot; only generated when the file is absent. | `loadOrCreateSecret()` in `~/repos/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts`; path from `authSecretPath()` in `~/repos/LargeFileBridge/code/packages/backend/src/shared/store/scopes.ts` |
+| 2 | **Session records** | `~/T/_large_files_bridge/users/<email>/sessions/<sid>.json` — one `0600` JSON per session; sign-out writes a `revoked:true` tombstone rather than deleting. | **Yes** — plain files under the state root. | `FileSessionStore` in `~/repos/OpenAuthFederated/code/packages/auth-backend/src/session-store.ts`; wired in `constructAuthFrontend()` |
+| 3 | **Browser credential** | The `oaf_lfb_session` cookie: `HttpOnly`, `SameSite=Lax`, `Max-Age = 300 days` (persistent, **not** a session cookie), `Secure` in server mode. Host-only (no `Domain`), so it is scoped to `localhost` and — because cookies are **not port-scoped** — is presented to every LFB port. | **Yes** — a persistent cookie held by the browser; a server restart does not touch it. | `setCookie()` in `~/repos/OpenAuthFederated/code/packages/auth-backend/src/frontend.ts` |
 
 Only **operational, in-memory** things are lost on restart — the built auth middleware
 (`activeMiddleware`) and the in-memory Bearer cache in the SPA — and **neither is the session**. The
@@ -62,7 +62,7 @@ The single durable-state root is `resolveStateDir()` — `~/T/_large_files_bridg
 appear to vanish and force a re-login. This is the one hard precondition (§5, cause C).
 
 `resolveStateDir()` lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts`
 
 ---
 
@@ -83,13 +83,13 @@ to a bare path. In local mode this allow-lists the loopback dev-port band; in se
 configured CORS origins.
 
 The sign-in flow (start, callback, allowed redirect origins) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
 `constructAuthFrontend()` and `allowedRedirectOrigins()`
 
 The browser side of the handshake (start redirect, complete callback) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `startGoogleSignIn()`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `startGoogleSignIn()`,
 backed by `RealAuthCore.authenticateWithRedirect()` / `completeRedirectCallback()` in
-`~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts`
+`~/repos/OpenAuthFederated/code/packages/auth-react/src/core.ts`
 
 ### 3.1 The mount follows the credentials file, live (LOCKED)
 
@@ -116,10 +116,10 @@ with no `google` block → user pastes one in a minute later" is the *expected* 
   `/api/v1` request, and it is attempted once per distinct credentials value, not once per request.
 
 Keeping the live middleware in step with the credentials file is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
 `ensureFreshAuthFrontend()` (called from the handler `buildAuthFrontend()` returns), comparing
 `googleCredsFingerprint()` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts`.
 Covered by `auth-frontend.spec.ts` (mutates the credentials file under a running server).
 
 ---
@@ -143,13 +143,13 @@ schedules a re-mint **~30 s before** expiry, turning that into a silent renewal.
 path remains as a backstop.
 
 * Proactive scheduling in the shared library:
-  `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` —
+  `~/repos/OpenAuthFederated/code/packages/auth-react/src/core.ts` —
   `RealAuthCore.enableAutoRefresh()` / `scheduleRefresh()` / `refresh()` (armed off each mint's own `exp`).
 * Enabled by the app in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — the
+  `~/repos/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — the
   `authCore.enableAutoRefresh()` call after `registerAuthBridge(...)`.
 * The reactive 401 backstop lives in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor
+  `~/repos/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — the response interceptor
   (`reloadSession()` on 401, one retry; the retry first drops the stale `Authorization` header so a
   failed re-mint can never re-send the expired Bearer that just 401'd).
 
@@ -162,7 +162,7 @@ remain; concurrent requests queue on the SDK's single-flight mint, and a known-e
 sent (the request goes without a Bearer and the reactive 401 backstop recovers it).
 
 Refresh-before-use attach guard is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `getFreshToken()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `getFreshToken()`
 (consumed by `axios.ts`'s request interceptor and `lib/streamNdjson.ts`).
 
 ### 4.1 Why expired Bearers still reached the API — the three remaining holes (LOCKED)
@@ -188,16 +188,16 @@ The renewal targets are layered so the attach guard rarely bites: the keep-alive
 before `exp`, the attach guard at **60 s**, and the hard floor is **10 s**.
 
 Threshold decisions are pure and unit-tested in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/tokenFreshness.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/tokenFreshness.ts` —
 `needsProactiveRenewal()` / `needsRefreshBeforeUse()` / `safeToAttachStaleToken()`
 (regression guard: `tokenFreshness.spec.ts`).
 
 One shared mint per refresh storm is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `refreshTokenOnce()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` — `refreshTokenOnce()`.
 
 The self-healing keep-alive (re-derived every 60 s, plus on tab-visible / `pageshow` / `online`, and
 never while the tab is hidden so the no-background-polling rule holds) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/authCore.ts` —
 `startSessionKeepAlive()`, started once from `main.tsx`.
 
 **A 401 recovers once, together, and ends in a clean re-login.** Concurrent 401s share ONE recovery
@@ -207,7 +207,7 @@ page rendering failed data: a single notice — "Your Large File Bridge session 
 in again." — is shown and the boot gate re-runs, landing on the sign-in page.
 
 Single-flight 401 recovery + the clean re-login are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — `recoverSession()` and
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/axios.ts` — `recoverSession()` and
 `announceSessionLapsed()` (response interceptor).
 
 The backend's verification warning names its caller (method + path, never the query string) so a
@@ -219,7 +219,7 @@ Every `/api` request is attributed to a principal by verifying its Bearer on the
 top.
 
 Principal attribution + allow-list recheck is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `identify`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `identify`
 (via `verifyToken(..., { embedded: true })` and `allowListed`)
 
 ---
@@ -276,14 +276,14 @@ gate now does, with two rules that together guarantee the restart property:
    > (`transcode.service.ts` — "ffmpeg not installed").
 
 The gate, the three boot states, and the transient-retry predicate are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()`, `BootStatus`, and
+`~/repos/LargeFileBridge/code/packages/frontend/src/main.tsx` — `Root()`, `BootStatus`, and
 `retryWhileBackendDown`, with the predicate itself in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transientError.ts` — `isTransientNetworkError()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/transientError.ts` — `isTransientNetworkError()`
 (it lives in its own module, not `main.tsx`, so it is unit-testable — `transientError.spec.ts` asserts both
 directions: 502/504 transient, 503/500/4xx authoritative).
 
 The `load()` retry/backoff and the `loadState()` it feeds are handled in code:
-`~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.loadWithRetry()`.
+`~/repos/OpenAuthFederated/code/packages/auth-react/src/core.ts` — `RealAuthCore.loadWithRetry()`.
 
 ### 5.2 The restart timeline, after the fix
 
@@ -314,7 +314,7 @@ Error handling and logging that make these debuggable:
 
 * **Transient vs. real is an explicit predicate.** `isTransientNetworkError()` routes state 0 vs. state 1,
   and it rate-limits transient noise in the fault trail instead of logging one line per retry.
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transientError.ts` —
+  `~/repos/LargeFileBridge/code/packages/frontend/src/lib/transientError.ts` —
   `isTransientNetworkError()`; consumed by `main.tsx` — `retryWhileBackendDown()`, `reportGlobal()`.
 
 * **A RESPONSE IS NOT PROOF THE BACKEND ANSWERED (LOCKED).** This spec previously stated the rule as "no
@@ -342,7 +342,7 @@ Error handling and logging that make these debuggable:
 * **A fresh computer with no credentials is guided, not stuck.** `GET /api/health/auth-config` returns a
   non-secret `credentialsFile` block (path, filename, schema — never values) that the sign-in screen and
   Settings render, so "can't sign in" states are self-explaining.
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/health/health.router.ts` — the
   `GET /auth-config` route; rendered by `CredentialsSetupCard`.
 
 ---
@@ -364,7 +364,7 @@ existing records keep the ceiling they were created with. This matches the siste
 (EmailDeliveryHero, the_starbucks, all/app).
 
 The lifetime policy is set in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
 `constructAuthFrontend()` (`sessionTtlSeconds` / `inactivityTimeoutSeconds` / `accessTokenTtlSeconds`).
 
 ---
@@ -374,7 +374,7 @@ The lifetime policy is set in code:
 * **Google OAuth client credentials** come from env (`GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET`) or the
   out-of-repo file `~/.credentials/large_files_bridge.json` (override `LFB_CREDENTIALS_FILE`); env wins.
   The **secret values are never committed** — only the placeholder schema and filename live in code.
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` —
   `loadGoogleCreds()` / `hasGoogleCreds()`.
 * **Allow-list is authoritative and fail-closed** ([security.mdx](./security.mdx)): a valid Google
   identity that is not allow-listed is refused; `hd` (hosted-domain) is required so membership is proven
@@ -393,7 +393,7 @@ The lifetime policy is set in code:
   kind: the rule reads absolute, so the next reader either trusts a guarantee the code does not make, or
   finds the bypass and assumes it is a bug. **The last gate is the important one** — the moment real Google
   credentials exist, the bypass is dead, so it cannot silently shadow a real deployment.
-  Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts`.
+  Implemented in `~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts`.
 
 ---
 

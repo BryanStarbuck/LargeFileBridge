@@ -122,7 +122,7 @@ trigger. Boot-time `reconcileWorkerSchedules()` already repairs a drifted path *
 watchdog extends that same repair to the **long gap between startups**.
 
 The in-process watchdog — overdue detection, running the overdue worker's pass in the app, and calling the schedule reconcile so a dead OS trigger self-repairs — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` (heartbeat), `tick()` (per-worker overdue check + in-process run + reconcile), `runWorkerInProcess(kind)`. Started once at boot by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`. The plist rewrite + reload it triggers is `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `startWatchdog()` (heartbeat), `tick()` (per-worker overdue check + in-process run + reconcile), `runWorkerInProcess(kind)`. Started once at boot by `~/repos/LargeFileBridge/code/packages/backend/src/main.ts` — `bootstrapState()`. The plist rewrite + reload it triggers is `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `reconcileWorkerSchedules()`.
 
 ### 3.1 The kick is fire-and-acknowledge — and an undelivered fire is recorded, not guessed at (LOCKED)
 
@@ -148,15 +148,15 @@ works when the app is the thing that is down — so a lost cycle is **recoverabl
 silently rolled into the next 15 minutes. A completed pass clears the record.
 
 The fire-and-acknowledge kick route (accept the job, return at once, never await the pass) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /run/:worker`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/internal/internal.router.ts` — `POST /run/:worker`.
 The detached, single-flight pass for `pin` and `device`, which stamps `last_run` on completion rather than on accept, is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/run-job.ts` — `startRun(kind, source)`, `runDetached()`, `runIsActive(kind)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/run-job.ts` — `startRun(kind, source)`, `runDetached()`, `runIsActive(kind)`.
 The trigger's failure classification, liveness probe, and retry are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/deploy/launchd/run-worker.mjs` — `classify(e)`, `portIsAccepting()`, `recordMiss(reason, detail)`.
+`~/repos/LargeFileBridge/code/deploy/launchd/run-worker.mjs` — `classify(e)`, `portIsAccepting()`, `recordMiss(reason, detail)`.
 Reading and clearing the missed-cycle record is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/worker-misses.service.ts` — `workerMiss(kind)`, `clearWorkerMiss(kind)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/worker-misses.service.ts` — `workerMiss(kind)`, `clearWorkerMiss(kind)`.
 Running a recorded missed cycle immediately (without waiting for the 2× overdue threshold) is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `tick()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` — `tick()`.
 
 ---
 
@@ -192,7 +192,7 @@ computer advanced the remote, and the branch diverged — a state LFB must merge
 on.
 
 Tolerating and delivering commits LFB did not author (merge the remote, then push the local side; never force, never discard) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (fetch + auto-merge of the remote) followed by `GitBackbone.commitAndPush()` (pushes whenever the branch is ahead, §6), both driven per storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)` and `ensureDeviceRegisteredInner(id)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (fetch + auto-merge of the remote) followed by `GitBackbone.commitAndPush()` (pushes whenever the branch is ahead, §6), both driven per storage by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)` and `ensureDeviceRegisteredInner(id)`.
 
 ---
 
@@ -215,7 +215,7 @@ It does **not** guess, and it does **not** clobber — but it also does **not** 
 the flow: every other storage and the IPFS byte work continue.
 
 The fetch → auto-merge → push recovery for a diverged branch, and the abort-and-surface fallback for a true conflict, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (merge or `--abort` + record conflicts) and `GitBackbone.commitAndPush()` (the non-fast-forward re-pull-then-push retry). The surfaced conflict/auth problem is logged and attached to the pass by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.pull()` (merge or `--abort` + record conflicts) and `GitBackbone.commitAndPush()` (the non-fast-forward re-pull-then-push retry). The surfaced conflict/auth problem is logged and attached to the pass by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)`.
 
 ---
 
@@ -247,7 +247,7 @@ The rule this locks in:
   pass that legitimately writes nothing must still deliver a branch that is ahead.
 
 Attempting the push whenever the branch is ahead of the remote (not only after a fresh local commit), via an ahead-count check, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (pushes when `result.committed` OR `aheadCount(branch) > 0`) and its helper `GitBackbone.aheadCount(branch)` (`git rev-list --count origin/<branch>..HEAD`).
 
 ### 6.1 The debounced post-mirror nudge — the write is the trigger (LOCKED)
 
@@ -281,7 +281,7 @@ what this spec locks is how it fits the resilience contract:
   checked against this rule.
 
 The debounced nudge, and the storage-resolution trap it avoids, are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` / `flushArtifactSync()` (debounce + coalesce per storage; `storageIdForPath()` resolves by root prefix and returns null for a working-repo path), called from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (announces `dst`, the SDL-side destination).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteArtifactWritten()` / `flushArtifactSync()` (debounce + coalesce per storage; `storageIdForPath()` resolves by root prefix and returns null for a working-repo path), called from `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo()` (announces `dst`, the SDL-side destination).
 
 ### 6.2 A repo with no `origin` — committing forever, reaching nobody (LOCKED)
 
@@ -308,7 +308,7 @@ What this spec locks is where it sits in the resilience contract:
   the reason. **Silence must mean success.**
 
 Setting the no-origin problem instead of returning silently is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `hasOrigin()` branch, which now sets `result.problem` and logs a WARN before returning), surfaced onto the storage by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `GitBackbone.commitAndPush()` (the `hasOrigin()` branch, which now sets `result.problem` and logs a WARN before returning), surfaced onto the storage by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner(id)`.
 
 ### 6.3 One lock per storage — every git operation, no exceptions (LOCKED)
 
@@ -327,7 +327,7 @@ tree and one git index at the same time (**F10**). The rule, owned by
   that must hold in every build.
 
 Serializing every git operation per storage behind one lock is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock(id, fn)`, taken by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit()` / `ensureDeviceRegistered()` / `syncStorageText()` and by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` (whose `withCompanyGitLock` is now an alias of the same lock, not a second one).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git-lock.ts` — `withStorageGitLock(id, fn)`, taken by `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnit()` / `ensureDeviceRegistered()` / `syncStorageText()` and by `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` (whose `withCompanyGitLock` is now an alias of the same lock, not a second one).
 
 ### 6.4 Working repos: the guest rule, narrowed to what it protects (LOCKED)
 
@@ -357,10 +357,10 @@ delivery end-to-end, while everything outside `.lfbridge/` stays untouchable. Fo
   `artifacts` probe (expected path, exists, layout matched, committed, pushed), so a strand is one read.
 
 Committability guard + `artifact_health` audit implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts` — `ensureArtifactCommittable()` (hooked from `sync-trigger.service.ts` `noteArtifactWritten()`) and `auditArtifactCommittability()` (emitted by `debug-export.service.ts` `exportOneUnit()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts` — `ensureArtifactCommittable()` (hooked from `sync-trigger.service.ts` `noteArtifactWritten()`) and `auditArtifactCommittability()` (emitted by `debug-export.service.ts` `exportOneUnit()`).
 
 Legacy-line healing, scoped delivery, and ff-only convergence implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `repairLegacyArtifactIgnores()`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` (delivery, fired via `sync-trigger.service.ts` `noteArtifactWritten()`'s `repo:` target) and `maybeConvergeWorkingRepo()` / `convergeWorkingRepoFromOrigin()` (convergence, fired from `repos.router.ts` list + detail loads).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `repairLegacyArtifactIgnores()`; `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()` (delivery, fired via `sync-trigger.service.ts` `noteArtifactWritten()`'s `repo:` target) and `maybeConvergeWorkingRepo()` / `convergeWorkingRepoFromOrigin()` (convergence, fired from `repos.router.ts` list + detail loads).
 
 ### 6.5 An offline laptop is not a fault, and a stuck repo is not a secret (LOCKED)
 
@@ -387,10 +387,10 @@ expected and self-healing, so:
   three DNS timeouts that cannot conjure a network.
 
 Classifying offline vs. auth vs. remote, and the retry-when-connectivity-returns waiter, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/net-transient.ts` — `isTransientNetworkError()`, `hostFromGitError()` / `hostFromRemote()`, `whenOnline()`; and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `classifyRemoteFailure()` (which sets `GitCycleResult.offline`).
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/net-transient.ts` — `isTransientNetworkError()`, `hostFromGitError()` / `hostFromRemote()`, `whenOnline()`; and `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `classifyRemoteFailure()` (which sets `GitCycleResult.offline`).
 
 Logging an offline cycle below the fault trail and re-firing it on reconnect is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `reportGitProblem()`; and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteFailure()` (which declines to count a transient as a consecutive failure).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `reportGitProblem()`; and `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts` — `noteFailure()` (which declines to count a transient as a consecutive failure).
 
 **(b) A repo that can never fast-forward must be visible to the user.** Refusing to touch a user's repo
 (§6.4) stays exactly as it is — no reset, no rebase, no discarded work, ever. But a repo stuck that way
@@ -408,10 +408,10 @@ computed from work that cannot arrive). The only action offered is **Check again
 fetch + fast-forward-only merge, so the button can never damage anything.
 
 Recording and classifying the refusal is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `convergeWorkingRepoFromOrigin()` → `recordSyncBlock()` / `getRepoSyncBlock()` / `recheckWorkingRepoConvergence()`; served on `RepoDetail.syncBlocked` by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/:repoId` and `POST /api/repos/:repoId/sync-check`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `convergeWorkingRepoFromOrigin()` → `recordSyncBlock()` / `getRepoSyncBlock()` / `recheckWorkingRepoConvergence()`; served on `RepoDetail.syncBlocked` by `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/repos/:repoId` and `POST /api/repos/:repoId/sync-check`.
 
 Turning it into the user's recommendation is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildSyncBlockedWarning()`, ranked in `topRecommendation()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildSyncBlockedWarning()`, ranked in `topRecommendation()`.
 
 ---
 
@@ -434,7 +434,7 @@ surfacing it still matters for the window where the **app itself was down** (F7)
 an honest picture of the background process's health.
 
 Deriving the **overdue** flag from `last_run_at` + interval and returning it in the Scans page worker state is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `isWorkerOverdue(intervalSeconds, lastRunAt)` and `workerState(kind)` (sets `overdue` when installed + enabled). The field rides `WorkerState` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` and is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `workerHealth(state)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts` — `isWorkerOverdue(intervalSeconds, lastRunAt)` and `workerState(kind)` (sets `overdue` when installed + enabled). The field rides `WorkerState` in `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` and is rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `workerHealth(state)`.
 
 Two further signals ride the same card, both required by the charter's background-process transparency:
 
@@ -447,7 +447,7 @@ Two further signals ride the same card, both required by the charter's backgroun
   "app not running", which sent every reader looking for the wrong problem.
 
 Surfacing "running now" and the undelivered-cycle notice is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `missedCycleNote(state)` and `WorkerCard`, fed by `workerState(kind)` (`running`, `lastMiss`) in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/scans/ScansPage.tsx` — `missedCycleNote(state)` and `WorkerCard`, fed by `workerState(kind)` (`running`, `lastMiss`) in `~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/schedule.service.ts`.
 
 ---
 
@@ -516,7 +516,7 @@ its failures honestly and probes the port before making any claim about the app.
 recorded and recovered (F11) instead of vanishing into the next interval, and the Scans page shows them (§7).
 
 The regression test that runs the real trigger against a fast-accept backend, a connect-but-never-answer backend, and a dead port is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/run-worker-trigger.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/run-worker-trigger.spec.ts`.
 
 ---
 

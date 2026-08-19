@@ -184,7 +184,7 @@ function resolveOwningStorage(abs: string, index: OwnerStorage[]): { storage: Ow
  *   2. **Path containment** (the historical rule): the most specific mapped source dir that contains the
  *      repo, else Personal as the catch-all for anything under `~` → the same dedicated-repo-else-SDL choice.
  *
- * Remote-first is load-bearing. `~/BGit/Bryan_git/charlie-kirk` (remote `github.com/ACT3ai/charlie-kirk`) is
+ * Remote-first is load-bearing. `~/repos/charlie-kirk` (remote `github.com/ACT3ai/charlie-kirk`) is
  * NOT physically inside the ACT3 company storage, so containment alone resolved it to **Personal** — the
  * wrong storage — and the file's tracking state was mirrored where no teammate or second computer of the
  * user's would ever look for it.

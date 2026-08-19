@@ -97,7 +97,7 @@ With AI, these days, people often use GIThub to share/backup their files across 
   * Override with the `LFB_STATE_DIR` env var; falls back to `/tmp/_large_files_bridge`
     only if the home path can't be built.
   * This is the single on-disk home for everything the app persists — no database.
-  * Resolved in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/state-dir.ts`,
+  * Resolved in code: `~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts`,
     functions `resolveStateDir()` (state root) and `resolveLogDir()` (log dir; same as the state root
     unless `LFB_LOG_DIR` is set).
 
@@ -112,10 +112,10 @@ With AI, these days, people often use GIThub to share/backup their files across 
   `log.log.1` … `log.log.5`, oldest dropped). Nothing grows unbounded.
   * Tunable via env: `LFB_LOG_MAX_BYTES` (default `5242880`) and `LFB_LOG_GENERATIONS` (default `5`).
   * App-side rotation (`log.log` / `error.err`) implemented in
-    `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts`,
+    `~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts`,
     class `RollingFileWriter` (cached byte counter, `roll()` for rotation) with the `log.*` / `logError()` API.
   * Launcher rotation (`launcher.log`) implemented by the dependency-free sink
-    `~/BGit/Bryan_git/LargeFileBridge/scripts/log_rotate_pipe.mjs`, which the `justfile` pipes
+    `~/repos/LargeFileBridge/scripts/log_rotate_pipe.mjs`, which the `justfile` pipes
     `pnpm dev` through. Its rotation policy MUST stay identical to `logging.ts` (same env vars/defaults).
   * IPFS daemon logs (`ipfs-daemon.log`, `ipfs-autostart.log` / `.err`) are written by an **external
     process** (a detached `ipfs daemon`, or launchd via `StandardOut/ErrorPath`) whose fd we don't own,
@@ -144,17 +144,17 @@ LargeFileBridge/
 
 These rules are strict — they define where things are allowed to live.
 
-* **`~/BGit/Bryan_git/LargeFileBridge/pm/`** — Product management **only**.
+* **`~/repos/LargeFileBridge/pm/`** — Product management **only**.
   All product-management material (goals, to-dos, decisions, planning) lives here.
   **Never put code in this directory.**
 
-* **`~/BGit/Bryan_git/LargeFileBridge/code/`** — Web app code **only**.
+* **`~/repos/LargeFileBridge/code/`** — Web app code **only**.
   This directory, and its subdirectories, are the **only** place the web app code
   may go. All application code lives here — nowhere else.
 
 ## Knowledge directory
 
-* **`~/BGit/Bryan_git/LargeFileBridge/knowledge/`** holds our knowledge base.
+* **`~/repos/LargeFileBridge/knowledge/`** holds our knowledge base.
 * **Read every file in this directory into the context window.** These files
   give us knowledge we should know and understand about the project. Always
   pull them in.

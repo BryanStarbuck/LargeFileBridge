@@ -92,7 +92,7 @@ assertions:
 
 Writing an ownership assertion into the company sync repo's root `owner_map.yaml` when a member assigns a repo
 to a company (and tombstoning it on un-assign) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `assertCompanyOwnership(remote, companyId)` / `withdrawCompanyOwnership(remote, companyId)` (write/tombstone the keyed entry, then `mirrorToSyncRepo`-style commit + push via the company's git backbone), reading the company's sync-repo root from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()`. Invoked from the reassign path `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `assertCompanyOwnership(remote, companyId)` / `withdrawCompanyOwnership(remote, companyId)` (write/tombstone the keyed entry, then `mirrorToSyncRepo`-style commit + push via the company's git backbone), reading the company's sync-repo root from `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-settings.service.ts` — `getStateSyncRepo()`. Invoked from the reassign path `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner`.
 
 ---
 
@@ -128,7 +128,7 @@ export interface PendingCompanyMapping {
 
 Computing the pending set (match pulled assertions against this computer's repos by remote, minus already-owned
 and previously-declined) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `computePendingMappings()` (reads each configured company's sync-repo `owner_map.yaml`, joins against the repo list by normalized remote, filters out already-owned + declined), surfaced by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/company-mappings/pending`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `computePendingMappings()` (reads each configured company's sync-repo `owner_map.yaml`, joins against the repo list by normalized remote, filters out already-owned + declined), surfaced by `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `GET /api/company-mappings/pending`.
 
 ---
 
@@ -211,7 +211,7 @@ declined:
   sync repo and does not affect other members.
 
 Applying the batch (write accepted repos' `owner_override`, record declines) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `applyPendingMappings(selections)` (per row: accepted → `resolveRepoOwner` override via the same writer the manual reassign uses; declined → append to `company_mapping_declines.yaml`), exposed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/company-mappings/apply`. The page is rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/company/CompanyMappingReviewPage.tsx` — `CompanyMappingReviewPage` (route in `router.tsx`; the Storages-badge link in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/owner-propagation.service.ts` — `applyPendingMappings(selections)` (per row: accepted → `resolveRepoOwner` override via the same writer the manual reassign uses; declined → append to `company_mapping_declines.yaml`), exposed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/company-mappings/apply`. The page is rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/company/CompanyMappingReviewPage.tsx` — `CompanyMappingReviewPage` (route in `router.tsx`; the Storages-badge link in `~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx`).
 
 ---
 
@@ -247,7 +247,7 @@ The review is not ceremony — it protects a real boundary:
 
 Tombstoning on un-assign and re-surfacing a superseded decline are handled by the same
 `owner-propagation.service.ts` functions (§2, §4.4); the pull-time recompute runs on the company backbone pass
-in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (which, after merging tracking state, refreshes the pending-mappings cache).
+in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (which, after merging tracking state, refreshes the pending-mappings cache).
 
 ---
 

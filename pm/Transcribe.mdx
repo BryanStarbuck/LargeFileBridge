@@ -89,7 +89,7 @@ involved (§5.2).
 
 The per-file loop (classify → ffmpeg demux → whisper → write transcript → report), wrapped in a
 progress-registry job so the dock shows a live card, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (async; wraps the run in `track("transcribe", …)` from `modules/progress/progress.registry.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `transcribeOne()` (async; wraps the run in `track("transcribe", …)` from `modules/progress/progress.registry.ts`).
 
 ---
 
@@ -112,7 +112,7 @@ commands and a **Re-check** button that re-queries `GET /api/transcribe/tools` a
 once fixed — no page reload (§5.2).
 
 The instant pending state, the progress-dock nudge, and the setup card are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useTranscribeFile.ts` — `useTranscribeFile()` (react-query mutation; toasts the honest outcome, invalidates `["transcript"]` + `["progress"]`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` / `MediaAnalysis` (calls `api.transcribeFile` / `api.transcript`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useTranscribeFile.ts` — `useTranscribeFile()` (react-query mutation; toasts the honest outcome, invalidates `["transcript"]` + `["progress"]`) · `~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` / `MediaAnalysis` (calls `api.transcribeFile` / `api.transcript`) · `~/repos/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard`.
 
 ### 2.2 One file — the ⋮ kebab / right-click
 
@@ -135,7 +135,7 @@ Compress path.
   action over the whole storage.
 
 The kebab/menu items (`Transcribe…` on a file, `Transcribe all files…` on a directory / repo / storage) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (file + directory) · `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab` · `~/repos/LargeFileBridge/code/packages/frontend/src/pages/storages/StorageDetailPage.tsx` — `StorageDetailPage`.
 
 ### 2.5 The page action — "Create Transcriptions" (selected-or-all, background-queued)
 
@@ -161,7 +161,7 @@ count. This is the worked example in [page_actions.mdx §1](./page_actions.mdx):
 transcribed, none checked → **28** queued → *"28 files will have their Transcriptions created"*.
 
 The "Create Transcriptions" page action, its plan/skip/queue, and the toast are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createTranscriptions()` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `planTranscribe()` / `enqueueTranscribe()`.
 
 ---
 
@@ -181,7 +181,7 @@ hierarchy**, under the media's **full filename (extension kept)** with **`.trans
 >
 > | Storage kind | Example root | The transcript lands at |
 > | --- | --- | --- |
-> | **`repo`** — a working git repo (Git Storage) | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription` |
+> | **`repo`** — a working git repo (Git Storage) | `~/repos/charlie-kirk/` | `<root>/.lfbridge/<rel-dir>/<name.ext>.transcription` |
 > | **`personal` / `company` / `community`** — an SDL file repo | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/<rel-dir>/<name.ext>.transcription` (**no** `.lfbridge/`) |
 
 > **This supersedes the previous LOCKED "beside the media, extension replaced" layout.** An earlier
@@ -254,7 +254,7 @@ Three rules, together, define the path — **all LOCKED**:
 > if it is, appends `!.lfbridge/` + `!.lfbridge/**` re-include rules
 > ([artifact_placement_policy.mdx §1.1.1](./artifact_placement_policy.mdx)).
 > Verifies and repairs committability in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts`, `ensureArtifactCommittable()`.
+> `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-committability.service.ts`, `ensureArtifactCommittable()`.
 
 ### 3.2 Append-not-replace resolves the old collision caveat (LOCKED)
 
@@ -365,8 +365,8 @@ the common path — the tracking-base + append-extension invariant (§3.1) still
 > old, now-**wrong** layout), the full filename with **`.transcription` appended**, **committed** (travels
 > with the repo), and **no** `.transcribe/` directory.
 >
-> **Working git repo (keeps `.lfbridge/`).** Transcribing `~/BGit/Bryan_git/charlie-kirk/videos/_QwGo0LyZ3I.mp4`
-> writes to `~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription` — LFB is a guest
+> **Working git repo (keeps `.lfbridge/`).** Transcribing `~/repos/charlie-kirk/videos/_QwGo0LyZ3I.mp4`
+> writes to `~/repos/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription` — LFB is a guest
 > in the user's own project, so it quarantines the artifact under the hidden `.lfbridge/`. Likewise, in-repo,
 > a file two directories deep at `<repo>/CIA/FINAL_CIA_Drones.mp4` writes to
 > `<repo>/.lfbridge/CIA/FINAL_CIA_Drones.mp4.transcription`.
@@ -374,13 +374,13 @@ the common path — the tracking-base + append-extension invariant (§3.1) still
 The ordered resolution (walk-up → owning-storage/dedicated-repo → first-time signal → last-resort), the
 kind-resolved path-mirrored placement, the **append**-`.transcription` naming, and the home-`~`
 expansion of pasted paths are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (transcript path via `lfbridgeArtifactPath(root, rel, ext)` = `join(trackingBaseDir(root), rel) + TRANSCRIPTION_EXT`, where `TRANSCRIPTION_EXT` is **appended**, not substituted) and `artifactPathForPlacement(root, rel, ext, placement)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (transcript path via `lfbridgeArtifactPath(root, rel, ext)` = `join(trackingBaseDir(root), rel) + TRANSCRIPTION_EXT`, where `TRANSCRIPTION_EXT` is **appended**, not substituted) and `artifactPathForPlacement(root, rel, ext, placement)`.
 Deciding the base that path hangs off — `<root>/.lfbridge` for kind `repo`, `<root>` itself for an SDL — is the single choke point every LFB writer resolves through (none joins `LFBRIDGE_DIR` directly), implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)` / `resolveStorageType(root)`.
 Migrating a pre-existing SDL `.lfbridge/` up to the root (with a read-fallback to the old path until it is migrated, so no transcript is reported missing or regenerated mid-migration) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-sdl-lfbridge.ts` — `migrateSdlLfbridge()`.
 The transcript path (`<root>/.lfbridge/<rel-dir>/<name.ext>.transcription`) and the owning-root resolution wrap it in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` / `resolveStorageRoot()`. The per-case `gitIgnore` flag is **retired** — transcripts live in the committed `.lfbridge/` area, so no `*.transcription` ignore line is ever injected.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` / `resolveStorageRoot()`. The per-case `gitIgnore` flag is **retired** — transcripts live in the committed `.lfbridge/` area, so no `*.transcription` ignore line is ever injected.
 
 ### 3.5 The first-time setup wizard — actions that trigger it (LOCKED)
 
@@ -412,10 +412,10 @@ and, when set, opens the wizard (via a global request bus, so no entry point nee
 re-runs the original action once a Personal storage exists. The wizard offers exactly the two choices above
 — **Dedicated Git repo** (recommended; artifacts tracked + backed up, placement rule B) or **Plain folder** —
 and commits by creating the one Personal storage at its canonical root. Implemented in code:
-* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (the `needsSetup` flag).
-* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/placement` (what-would-this-do) · `POST /api/storages/personal/create` (the wizard's commit).
-* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `createPersonalStorage()` (creates the root, optional `git init`, enables the dedicated-repo backing).
-* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/FirstTimeStorageWizard.tsx` — `FirstTimeStorageWizardProvider` (the modal) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts` — `requestStorageSetup()` (the bus the Transcribe / Get-AI-details launchers call).
+* `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `resolveArtifactPlacement()` (the `needsSetup` flag).
+* `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.router.ts` — `GET /api/storages/placement` (what-would-this-do) · `POST /api/storages/personal/create` (the wizard's commit).
+* `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `createPersonalStorage()` (creates the root, optional `git init`, enables the dedicated-repo backing).
+* `~/repos/LargeFileBridge/code/packages/frontend/src/components/FirstTimeStorageWizard.tsx` — `FirstTimeStorageWizardProvider` (the modal) · `~/repos/LargeFileBridge/code/packages/frontend/src/lib/setupWizard.ts` — `requestStorageSetup()` (the bus the Transcribe / Get-AI-details launchers call).
 
 ### 3.6 Pasted paths are `~`-expanded (LOCKED)
 
@@ -423,7 +423,7 @@ Users paste paths that begin with `~` (e.g. `~/BGit/Bryan_git/personal_large_fil
 point home-expands the input **before** any resolution, so `~/…` and the absolute form behave identically
 everywhere — walk-up, ownership matching, and dedicated-repo routing all operate on the expanded absolute
 path. Home-expansion of every inbound path is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `expandHome()` (applied at each service entry point and inside `resolveArtifactPlacement()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `expandHome()` (applied at each service entry point and inside `resolveArtifactPlacement()`).
 
 ---
 
@@ -501,7 +501,7 @@ The transcription engine is our existing **`Transcribe.js`** tool (canonically
     approves it** (charter consent posture preserved).
 
 The copied in-process engine (ffmpeg demux + Whisper with the MPS→CPU fallback and English sanity check, returning a structured result instead of logging/exiting) lives in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, methods `toolStatus()` / `transcribeToFile()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, methods `toolStatus()` / `transcribeToFile()`.
 
 ### 5.1 Async & non-blocking — the "Generate transcript didn't work" fix (LOCKED)
 
@@ -524,7 +524,7 @@ while a transcription runs. Two behaviours ride on that:
   shows even in a browser tab that did **not** start it (a launchd tree run, another window).
 
 The async spawn (with the streamed stdout progress parse and the duration probe) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, private `spawnAsync()` / `runWhisper()` / `probeDurationSec()` / `parseSegmentEndSec()` (the public `transcribeToFile()` takes an `onProgress` sink).
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — class `Transcriber`, private `spawnAsync()` / `runWhisper()` / `probeDurationSec()` / `parseSegmentEndSec()` (the public `transcribeToFile()` takes an `onProgress` sink).
 
 ### 5.2 No credentials, no cloud — the setup card (LOCKED)
 
@@ -543,9 +543,9 @@ re-queries the tools endpoint; once the tool appears the run is re-enabled **wit
 the "fix it, then hit the button to run again" flow the product owner asked for.
 
 The setup card + Re-check are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard` (Re-check calls the `["transcribe-tools"]` query's `refetch`). The full install
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/TranscribeSetupCard.tsx` — `TranscribeSetupCard` (Re-check calls the `["transcribe-tools"]` query's `refetch`). The full install
 preflight also lists `whisper` (alongside `ffmpeg`/`ffprobe`) under **Settings → Tools**, implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` — `buildRows()` (reads `GET /api/transcribe/tools` via `api.transcribeTools()` for the `whisper` row; `GET /api/compress/tools` for `ffmpeg`/`ffprobe`, shared with the Compress feature since both drive the same binary).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/ToolsPage.tsx` — `buildRows()` (reads `GET /api/transcribe/tools` via `api.transcribeTools()` for the `whisper` row; `GET /api/compress/tools` for `ffmpeg`/`ffprobe`, shared with the Compress feature since both drive the same binary).
 
 #### 5.2.1 Detection detail — why a genuinely-installed tool must never be reported missing (LOCKED)
 
@@ -582,11 +582,11 @@ model were all present).
 
 The widened tool-search `PATH` (shared by detection and execution, so the two never disagree) is implemented
 in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `toolSearchPath()` / `toolEnv()` / `commandExists()` / `spawnAsync()`, reused by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts`
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/audio-prep.ts` — `toolSearchPath()` / `toolEnv()` / `commandExists()` / `spawnAsync()`, reused by
+`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/qwen-asr.ts` and
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/model-provision.service.ts`
 (pipx/brew/ffmpeg detection during provisioning, §3 below). The Whisper engine
-(`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — private
+(`~/repos/LargeFileBridge/code/packages/backend/src/tools/transcribe/Transcribe.ts` — private
 `commandExists()` / `spawnAsync()`) keeps its own copy of the engine logic (deliberately not merged into
 `audio-prep.ts`, to avoid churn on the working engine) but draws the **same** `toolEnv()` so the two engines
 never disagree on what's installed.
@@ -602,8 +602,8 @@ matter which button the user clicked** — a real defect this hardening pass fix
 previously called the transcribe API directly, silently skipping the consent gate every time (the model
 would then always resolve straight to whichever fallback was available, and the user was never offered the
 higher-quality engine on their first run from that button). The two launchers are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useTranscribeFile.ts` — `useTranscribeFile()` (wraps its `run()` in `withModelReady()` before `mutate()`) ·
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `runTranscribeFile()` / `withModelReady()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/useTranscribeFile.ts` — `useTranscribeFile()` (wraps its `run()` in `withModelReady()` before `mutate()`) ·
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts` — `runTranscribeFile()` / `withModelReady()`.
 
 > **The heavyweight model is provisioned separately — with permission — not by this setup card.** The
 > setup card covers only the small **CLI binaries**. The **heavyweight model weights** (multi-GB,
@@ -633,7 +633,7 @@ Allow-list-gated like every data route, mirroring `compression.router.ts`:
 | `POST /api/transcribe/enqueue` | `{ paths?, root?, overwrite? }` | **Plan + background-queue** (the page action-link, §2.5). Resolves the eligible set (checked `paths` or the recursive `root`, minus already-transcribed), pushes it onto the [background queue](./job_queue.mdx), and **returns the plan immediately** (`EnqueuePlan` — [page_actions.mdx §5](./page_actions.mdx)), not the results. |
 
 The transcription REST surface (tools / read-transcript / file / batch / tree / storage / **enqueue**) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`. The `POST /enqueue` handler calls `enqueueTranscribe()` and returns without awaiting the queue.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.router.ts` — `transcribeRouter`, mounted at `/api/transcribe` in `~/repos/LargeFileBridge/code/packages/backend/src/main.ts`. The `POST /enqueue` handler calls `enqueueTranscribe()` and returns without awaiting the queue.
 
 > **Long-running note.** Whisper is slow (minutes per file), so the request can stay open for a while —
 > but the engine is **async and non-blocking** (§5.1), so a slow run no longer freezes the server, and
@@ -770,9 +770,9 @@ transcribe`) — the shared To-Do batch area whose schema is
 
 The on-demand per-storage / all-storage walk (transcribable-and-no-sidecar candidate test, one
 `kind: transcribe` batch written per storage) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — class `WhatCanBeTranscribedCalcEngine`, methods `scanStorage()` / `scanAll()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — the exported functions `scanAll()` / `scanStorage(scopeId)` (a module, not a `WhatCanBeTranscribedCalcEngine` class); route `POST /api/todo/transcribe-scan` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts`.
 The link that triggers it posts a scan route, implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`.
 
 ### 8.2 The transcribe slug + the ~80% popup (Apply → background jobs → Processing) (LOCKED)
 
@@ -791,7 +791,7 @@ transcribe slugs are self-clearing as the user works through them.
 
 The transcribe slug, its default-checked ~80% popup, and the "Transcribe N files" Apply that enqueues the
 background jobs are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (the popup + Apply) and `ShowTranscribableLink` (the "Show what could be transcribed" trigger).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup` (the popup + Apply) and `ShowTranscribableLink` (the "Show what could be transcribed" trigger).
 
 ## 9. The Transcribe status icon & the Transcribe tab (LOCKED)
 
@@ -837,7 +837,7 @@ The tab's default sort puts the red/orange "could" rows first (most work-to-do a
 The icon is a control cell — it stops click propagation and never navigates the row.
 
 The Transcribe status icon is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon` (state from the new `FileRow.transcribe` field composed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` — `TranscribeStatusIcon` (state from the new `FileRow.transcribe` field composed in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows`).
 
 ### 9.1 The `Transcribable` metric tile → popup, and the blue "Transcribe ›" header primary (LOCKED)
 
@@ -867,7 +867,7 @@ on); now it opens the popup and lets the user **start the transcription**.
 
 The `Transcribable` tile's and the **"Transcribe ›"** header primary's shared `WarningDef` (the same
 transcribe popup, scoped to the counted candidates, gated by `withModelReady`) is built in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `buildTranscribeWarning()`, wired into `buildMetricWarning()` (the `transcribable` case) and ranked in
 `topRecommendation()` (the transcribe slot of the worst-first order).
 
@@ -907,7 +907,7 @@ in one place.
        here, never re-litigated. trackingBaseDir(root, type?) / usesLfbridgeDir(type) in
        storage-type.service.ts is the SINGLE CHOKE POINT; NO writer joins LFBRIDGE_DIR directly.
        - WORKING GIT REPO (kind `repo`, the DEFAULT) → KEEPS .lfbridge/ (LFB is a guest → quarantine in one
-         hidden corner): ~/BGit/Bryan_git/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription
+         hidden corner): ~/repos/charlie-kirk/.lfbridge/videos/_QwGo0LyZ3I.mp4.transcription
        - DEDICATED LFB FILE REPO / SDL (personal|company|community) → NO .lfbridge/ AT ALL, the root IS the
          .lfbridge area: ~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…/x.mp4.transcription
          NOT …/personal_large_files_bridge/.lfbridge/_Mirror/… (the OLD, now-WRONG pattern).
@@ -931,7 +931,7 @@ in one place.
   (§2) entry points: MediaViewer button + Transcription tab (instant Transcribing… pending), file ⋮
        Transcribe…, batch, dir/repo/storage "Transcribe all files…". Always explicit user action.
   (§8) BULK DISCOVERY: on-demand What Can Be Transcribed Calc Engine (transcribe-scan.engine.ts
-       WhatCanBeTranscribedCalcEngine.scanStorage/scanAll; POST /api/todo/transcribe-scan) — triggered ONLY
+       transcribe-scan.engine.ts scanStorage/scanAll; POST /api/todo/transcribe-scan) — triggered ONLY
        by To-Do "Show what could be transcribed" link, NEVER the scheduled scan. Walks each storage for
        transcribable (special_files.mdx §3) audio/video with NO .transcription sidecar → one kind:transcribe
        batch per storage in _do_batches/ (to_do_batches.mdx §4). Renders as a transcribe slug (to_do.mdx §7);

@@ -100,7 +100,7 @@ The working repo, by contrast, holds only what travels with the repo itself:
   scan that a broad ignore rule has not swallowed those committed artifacts and warns loudly if it has.
 
 The Local-Storage manifest (and its optional sync-repo mirror) is written by code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest` (path from `manifestPath`, resolved via `tracking-root.service.ts` — `resolveTrackingRoot()` / `resolveStateSyncRepo()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifest` (path from `manifestPath`, resolved via `tracking-root.service.ts` — `resolveTrackingRoot()` / `resolveStateSyncRepo()`).
 
 ### 2.1 The mirror subtree is keyed by the REMOTE — `repos/<repoUid>/` (LOCKED, supersedes `<repoKey>` above)
 
@@ -132,7 +132,7 @@ ALSO    →  <syncRepo>/repos/<repoUid>/manifest.yaml                (the travel
   needs no attribute change ([git_backbone.mdx §4.2](./git_backbone.mdx#42-append-mostly-shared-lists-merge-by-union)).
 
 Deriving the remote-keyed mirror subtree is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) consumed by `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`); the remote-folding helper already shipping is `normalizeRemoteKey()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `normalizeRemoteKey()` / `repoUidFor()` (re-exported from the leaf `repo-identity.ts`) consumed by `resolveStateSyncRepo()` (which joins `repos/<repoUid>/`); the remote-folding helper already shipping is `normalizeRemoteKey()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts`.
 
 ### 2.2 The owning SDL is the sync repo, and the mirror defaults ON (LOCKED, supersedes "default OFF")
 
@@ -169,7 +169,7 @@ repo configured — is what turns on the travel; any pre-existing bare `<repo>/.
 migrated into Local Storage on the next pin pass and dropped from the working tree.
 
 Resolving the Local-Storage manifest path and the optional sync-repo mirror on each pin pass is wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder` (writes `repos/<repoKey>/manifest.yaml` via `manifest.service.ts`, mirrored to the sync repo when `resolveStateSyncRepo()` is non-null).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder` (writes `repos/<repoKey>/manifest.yaml` via `manifest.service.ts`, mirrored to the sync repo when `resolveStateSyncRepo()` is non-null).
 
 ---
 
@@ -194,7 +194,7 @@ never ground truth** (hub [§5](./sync_list.mdx#5-trust--reconciliation-the-load
   so a repo the user never asked LFB to touch stays pristine.
 
 Reading the manifest a sync-repo pull delivered and folding it into Local Storage is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `readManifest` / `reconcileManifest` (consumed after `GitBackbone.pull()` on the sync repo).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `readManifest` / `reconcileManifest` (consumed after `GitBackbone.pull()` on the sync repo).
 
 ### 4.1 Folding it in is a PER-ENTRY MERGE, on EVERY pull (LOCKED)
 
@@ -217,7 +217,7 @@ applied to this backbone:
   reconcile that only happens when someone clicks something is a reconcile that does not happen.
 
 Merging a pulled sync-repo subtree into Local Storage per entry is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`; it formerly copied the tree wholesale and had no callers — both halves are fixed), called from the repo pin pass in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after `GitBackbone.pull()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileFromSyncRepo()` (a per-entry union merge over `mergeManifests()`; it formerly copied the tree wholesale and had no callers — both halves are fixed), called from the repo pin pass in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder()`, and from the SDL git cycle (`syncStorageTextInner()` / `pinStorageUnitInner()`) via `reconcileMirroredRepos()` after `GitBackbone.pull()`.
 
 ---
 
@@ -320,7 +320,7 @@ tree: the pull-down list never clears, and a pull materializes a stray file lite
   The unit manifest is healed on WRITE too, so the file itself stops carrying `\` instead of being
   re-healed forever.
 
-*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest-normalize.ts` —
+*Implemented in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest-normalize.ts` —
 `normalizeManifestPaths()`, applied in `manifest.service.ts` `readManifestFile()` / `serializeDeterministic()`,
 `tracking-sync.service.ts` `readManifestBestEffort()`, and `units.service.ts` `getRepoManifest()` /
 `writeRepoManifest()` / `mergeRepoManifests()`. *Regression tests:* `manifest-paths.spec.ts`,
@@ -347,7 +347,7 @@ flat file literally named `jfk\training\clip.mp4.yaml`. That file is a *differen
 sidecar (the file's history silently forks in two), and `\` is not a legal filename character on Windows —
 so the committed sync repo carrying it **fails to check out** on the very machine that produced it.
 
-*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/rel-path.ts` —
+*Implemented in:* `~/repos/LargeFileBridge/code/packages/backend/src/shared/rel-path.ts` —
 `relPosix()` / `joinRel()` / `healWindowsPath()` / `healPathKeyedMap()`. Producers: `scanner.service.ts`
 (candidate `rel`), `tracking.service.ts` (index `rel`), `file-sidecar.service.ts` `sidecarPath()`,
 `artifact-placement.service.ts` `owningStorage()`. Consumers: `pin.service.ts` `resolveAbs` /
@@ -373,7 +373,7 @@ startup migration:
 * repairs the **committed sync-repo mirror** as well. `copyTree` is additive and never deletes, so a stray
   fixed locally would otherwise live on in the mirror — and that copy is the one Windows cannot clone.
 
-*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-posix-paths.ts` —
+*Implemented in:* `~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-posix-paths.ts` —
 `migratePosixPaths()`, called from `main.ts` before any state is read. *Regression test:*
 `migrate-posix-paths.spec.ts`.
 
@@ -404,7 +404,7 @@ Decision writes are normalized at the funnel for the same reason: `recordDecisio
 stamps, so no NEW `\` event is ever recorded on any OS (it also repairs the fingerprint join, which is
 POSIX-keyed and silently matched nothing for a `\` path).
 
-*Implemented in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/sidecar-heal.ts` —
+*Implemented in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/sidecar-heal.ts` —
 `isStrayPathName()` / `copyHealed()` / `mergeSidecarFiles()`, applied in `tracking-sync.service.ts`
 `copyTree()` (mirror out) and `copyTreeExcept()` (reconcile in), and shared with `migrate-posix-paths.ts` so
 the two can never drift on what "the same event" means. *Regression test:* `sidecar-heal.spec.ts`.
@@ -432,7 +432,7 @@ manifest:
   never touched.**
 
 The atomic temp-then-rename write plus the sync-repo mirror are in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml`, and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` (invoked after the Local-Storage write; the git commit/push is `GitBackbone.commitAndPush()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml`, and `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` (invoked after the Local-Storage write; the git commit/push is `GitBackbone.commitAndPush()`).
 
 The project `CLAUDE.md` forbids auto-branching/pushing a **working** repo; committing to the **sync repo** is
 the granted, purpose-built exception ([git_backbone.mdx §1](./git_backbone.mdx)). LFB commits only the
@@ -508,7 +508,7 @@ large_files:
       identity:
         name: LargeFileBridge
         remote: https://github.com/BryanStarbuck/LargeFileBridge.git
-        path: ~/BGit/Bryan_git/LargeFileBridge   # writer's path — advisory only
+        path: ~/repos/LargeFileBridge   # writer's path — advisory only
       synced: true
       files:                              # sorted by `path`, stable key order (§6)
         - path: large/hero_8k.png

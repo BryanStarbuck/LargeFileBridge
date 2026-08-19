@@ -25,7 +25,7 @@ each of which is just pixels once rendered — so a scanned contract, a signed a
 become searchable text the same way a screenshot does. This is where OCR stops being the mirror of AI
 description (image + video) and becomes a superset: **image + video + PDF.**
 
-Implemented in code: `ocrKindFor()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` returns `image` / `video` / `pdf` (else null); the PDF page-render path is `renderPdfPages()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/pdf.ts`.
+Implemented in code: `ocrKindFor()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` returns `image` / `video` / `pdf` (else null); the PDF page-render path is `renderPdfPages()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/pdf.ts`.
 
 The distinction is not academic. AI description **paraphrases** and may *mention* that a sign exists; OCR
 **quotes** the sign, exactly, and can be searched for. A slide deck video described by Gemini yields "a
@@ -116,7 +116,7 @@ the three now obliges adding it to all three.
 The symmetry is asserted in code by the parallel module trees `modules/transcribe/` ↔ `modules/describe/` ↔
 **`modules/ocr/`**, `lib/transcribe.ts` ↔ `lib/describe.ts` ↔ **`lib/ocr.ts`**, `TranscribeStatusIcon.tsx` ↔
 `DescribeStatusIcon.tsx` ↔ **`OcrStatusIcon.tsx`**, and the paired fields on
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` (`TaskMetrics`, `FileRow`,
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` (`TaskMetrics`, `FileRow`,
 `OcrResult`/`OcrBatchResult` mirroring the describe/transcribe pairs).
 
 ---
@@ -189,9 +189,9 @@ overwhelmingly PDFs, and "read the text out of these PDFs" is exactly what a use
   `brew install poppler` hint. Empty-text is still a SUCCESS (a blank page contributes nothing, §2.3).
 
 Implemented in code: `ocrPdf()` and the `needs_pdf_tools` gate in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts`; page rendering +
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts`; page rendering +
 `pdfToolsPresent()` / `pdfPageCount()` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/pdf.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/pdf.ts`.
 
 ### 1.7 The negative case — what OCR is NOT for
 
@@ -277,7 +277,7 @@ same intent ("sample the middle of the window, never t=0") applied honestly to a
 
 Phases the grid, clamps sub-stride clips, and rejects a zero-frame extraction rather than laundering it into
 an empty-but-`done` artifact, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/frames.ts` → `extractFrames()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/frames.ts` → `extractFrames()`.
 
 #### 2.2.3 Consecutive-duplicate frames collapse (LOCKED)
 
@@ -365,7 +365,7 @@ qwen→whisper auto-fallback ([transcribe_engine.mdx](./transcribe_engine.mdx));
 RapidOCR later is a new row, not a refactor.
 
 The engine adapters, per-kind speed selection, availability probe, and auto-fallback are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `ENGINES` (`vision` / `tesseract`), `selectEngine(kind, requested)`, `engineStatus()`, `recognize(imagePath, { level })`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `ENGINES` (`vision` / `tesseract`), `selectEngine(kind, requested)`, `engineStatus()`, `recognize(imagePath, { level })`.
 
 ### 3.3 The one provisioning caveat — Tesseract's language data must be VENDORED (LOCKED)
 
@@ -385,7 +385,7 @@ home**, silently, on a feature whose entire premise is that it does not (§4). T
   It is **never** silent, and never a side effect of clicking "OCR…".
 
 Vendoring the traineddata and pinning `langPath`/`corePath` to local paths (so the fallback engine never reaches the network) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — the `tesseract` adapter's `createWorker(lang, oem, { langPath: VENDORED_LANG_DIR, corePath: VENDORED_CORE_DIR, gzip: false })`; data files under `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/assets/tessdata/`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — the `tesseract` adapter's `createWorker(lang, oem, { langPath: VENDORED_LANG_DIR, corePath: VENDORED_CORE_DIR, gzip: false })`; data files under `~/repos/LargeFileBridge/code/packages/backend/assets/tessdata/`.
 
 ---
 
@@ -424,7 +424,7 @@ media's **full filename (extension kept)** with **`.ocr` appended** as a second 
 >
 > | Storage kind | Example root | The OCR text lands at |
 > | --- | --- | --- |
-> | **`repo`** — a working git repo | `~/BGit/Bryan_git/charlie-kirk/` | `<root>/.lfbridge/videos/x.mp4.ocr` |
+> | **`repo`** — a working git repo | `~/repos/charlie-kirk/` | `<root>/.lfbridge/videos/x.mp4.ocr` |
 > | **`personal` / `company` / `community`** — an SDL | `~/BGit/Bryan_git/personal_large_files_bridge/` | `<root>/_Mirror/…/x.mp4.ocr` (**no** `.lfbridge/`) |
 
 ```
@@ -492,11 +492,11 @@ exists under the media's kind-resolved tracking base — the same single source 
 the status icon (§11.2), and the `ocred` metric (§12) all read.
 
 Resolving the `.ocr` path via the shared ordered placement rule, reading back a done record, and writing the artifact under the resolved tracking base are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` — `resolveOcrPath()` / `readOcr()` / `ocrOne()` (artifact path via `lfbridgeArtifactPath(root, rel, OCR_EXT)` in `storage/artifact-placement.service.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` — `resolveOcrPath()` / `readOcr()` / `ocrOne()` (artifact path via `lfbridgeArtifactPath(root, rel, OCR_EXT)` in `storage/artifact-placement.service.ts`).
 Deciding the base that path hangs off — `<root>/.lfbridge` for kind `repo`, `<root>` for an SDL — is the single choke point every LFB writer resolves through, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
 The storage-table indicator that detects the `.ocr` artifact is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `analysisOutputs()`.
 
 ### 5.3 Placement is chosen by the SHARED 3-way radios (cross-reference)
 
@@ -547,7 +547,7 @@ no-op — the defect [Transcribe.mdx §2.1](./Transcribe.mdx) fixed), posts, toa
 invalidates `["ocr"]` + `["progress"]`.
 
 The shared launcher and the readiness gate are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/ocr.ts` — `runOcrFile()` / `withOcrReady()`; the backend probe `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `engineStatus()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/ocr.ts` — `runOcrFile()` / `withOcrReady()`; the backend probe `~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/engines.ts` — `engineStatus()`.
 
 ---
 
@@ -612,7 +612,7 @@ The band (band 6) held **two** columns — AI description (left) and Transcripti
   there, not built here.
 
 The third analysis column, its ✓ presence marker, the generate pane, and the seek-on-click are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (a third `AnalysisColumn` / `AnalysisBody` / `GeneratePane`, gated on `kind` being image or video) and `ActionBar` (the **OCR…** action, §8.1).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `MediaAnalysis` (a third `AnalysisColumn` / `AnalysisBody` / `GeneratePane`, gated on `kind` being image or video) and `ActionBar` (the **OCR…** action, §8.1).
 
 ---
 
@@ -702,7 +702,7 @@ not apply — the grammar the `Create` group uses throughout.
   — it must never also trigger the row's cell-link navigation.
 
 Building the per-file `Create` group, including the PDF branch that makes **Create OCR text** appear for a PDF, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions` (the `mkind === "image" || mkind === "video" || isPdfName(v.name)` guard on the `create-ocr-text` item), over the kind helpers `mediaKindForName` / `isPdfName` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions` (the `mkind === "image" || mkind === "video" || isPdfName(v.name)` guard on the `create-ocr-text` item), over the kind helpers `mediaKindForName` / `isPdfName` in `~/repos/LargeFileBridge/code/packages/shared/src/`.
 
 ### 8.3 A directory — the ⋮ kebab / right-click → **Create OCR text** (LOCKED)
 
@@ -722,7 +722,7 @@ a recursive walk can resolve to thousands of files, it gets the **"Opening windo
 opposite — that the Repo catalog was Open / Work / Config / Copy / Danger with **no** producing actions, so
 OCR must not add one. **That was already untrue when it was written**: the repo-row kebab had gained
 `Create Transcriptions` and `Create AI descriptions`
-(`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab`),
+(`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/RowKebabs.tsx` — `RepoKebab`),
 and the second of those carries a comment recording that it, too, had been missing and unreachable there.
 Read literally, the stale text argued for the one outcome §0 forbids: a surface carrying two of the three.
 
@@ -815,11 +815,11 @@ candidate list from the **already-in-memory `RepoDetail.files`**, so there is no
 walk, and **do** get it.
 
 The `Create OCR text` items in the **File** and **Directory** catalogs are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `Create` group; calls `openOcrBatch({ paths: [file] })` / `openOcrBatch({ root: dir })`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `Create` group; calls `openOcrBatch({ paths: [file] })` / `openOcrBatch({ root: dir })`).
 The `Create OCR text` page action-link and the `Show what could be OCR'd` link are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createOcrText()` (calls `openOcrBatch()` from `lib/batchPopup.ts`) / `showWhatCanBeOcred()`; mounted through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/pageActions.ts` — `createOcrText()` (calls `openOcrBatch()` from `lib/batchPopup.ts`) / `showWhatCanBeOcred()`; mounted through `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/PageActions.tsx` — `producingActions()`.
 The media-viewer action and its launcher are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (calls `runOcrFile()` from `lib/ocr.ts`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar` (calls `runOcrFile()` from `lib/ocr.ts`).
 
 ---
 
@@ -881,7 +881,7 @@ expensive **before** committing to it. `POST /api/ocr/plan` returns `frames?` pe
 feed this (§18); it is the one field OCR's plan has that its siblings' plans do not.
 
 The OCR batch-popup launcher is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openOcrBatch(scope)` (fetches `POST /api/ocr/plan`, builds the OCR `WarningDef` with the previewed files as checked targets, appends `excludedClause(alreadyDone, "OCR text")`, and opens it via the global host `requestBatchPopup()`), whose Apply calls `api.ocrEnqueue`; the host `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openOcrBatch(scope)` (fetches `POST /api/ocr/plan`, builds the OCR `WarningDef` with the previewed files as checked targets, appends `excludedClause(alreadyDone, "OCR text")`, and opens it via the global host `requestBatchPopup()`), whose Apply calls `api.ocrEnqueue`; the host `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/BatchPopupHost.tsx` — `BatchPopupHost`.
 
 ---
 
@@ -975,7 +975,7 @@ compress's media-aware pair: **`ocr:image`** (wide, mass-compute) and **`ocr:vid
 Waiting backlog, the per-op counts — works with **no new UI**.
 
 The `ocr` bucket's media-aware caps and the shared extraction gate are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` (the `ocr:image` / `ocr:video` buckets, drawn from `coreBudget()`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (the shared semaphore OCR's `extractFrames()` also acquires) · the op union `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `ProgressKind` (add `"ocr"`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` (the `ocr:image` / `ocr:video` buckets, drawn from `coreBudget()`) · `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/fit-media.ts` — `acquireTranscodeSlot()` (the shared semaphore OCR's `extractFrames()` also acquires) · the op union `~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `ProgressKind` (add `"ocr"`).
 Policy: [parallelization.mdx §3](./parallelization.mdx).
 
 ---
@@ -993,7 +993,7 @@ data-driven tab config the other five use ([task_tabs.mdx §7](./task_tabs.mdx))
 Default sort is the shared **"could-first"** (the actionable rows), then **Size desc**.
 
 The per-row `ocr` status is `na` unless the file is an image, a video, or a **PDF** (`ocrStatusFor()` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts`); PDFs join
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts`); PDFs join
 the same "could → done" model as the media kinds, so a folder of contracts opens as a full column of
 **could**-OCR rows.
 
@@ -1012,7 +1012,7 @@ product-wide "Large files only" default ([tables.mdx §2.9](./tables.mdx), [task
   **PDF** is admitted as an `analysisOnly` candidate ([scan.mdx §4.1](./scan.mdx)) — a row that exists
   **only** so it can be OCR'd / described / transcribed, and that is **never** bridged to IPFS on its own (the
   same non-payload exclusion the checked-in-nudge rows get). The admission predicate is `isAnalysisCandidate()`
-  (media **or** PDF) in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts`.
+  (media **or** PDF) in `~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-filters.ts`.
   Without that admission the OCR tab could not list a 2 MB JPG or a 1 MB PDF at all, and no rail toggle could
   reveal it. This closes the reported gap: *"go into a repo, open the OCR tab, turn off Large files, and OCR
   the PDFs that are definitely smaller than the large-file size."*
@@ -1022,7 +1022,7 @@ product-wide "Large files only" default ([tables.mdx §2.9](./tables.mdx), [task
   screenshots) in one click. PDF is included precisely because **OCR is often done on PDFs**.
 
 The OCR tab's default sort, columns, and this default-OFF toggle are declared in the shared tab config in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — the `ocr` `TaskTabDef` (its `largeOnlyDefault: false`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — the `ocr` `TaskTabDef` (its `largeOnlyDefault: false`).
 
 ### 11.2 The three-state OCR status icon (`TextSelect`, done-color **violet**)
 
@@ -1059,7 +1059,7 @@ settles at **100% done** — a **big green 0** on `OCRable` ([task_tabs.mdx §2.
 there, rather than presenting an eternal wall of candidates.
 
 The OCR status icon is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/OcrStatusIcon.tsx` — via the shared `StatusActionIcon` (the sibling of `TranscribeStatusIcon.tsx` / `DescribeStatusIcon.tsx` / `CompressStatusIcon.tsx`); the click wired in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `onOcrActivate()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/OcrStatusIcon.tsx` — via the shared `StatusActionIcon` (the sibling of `TranscribeStatusIcon.tsx` / `DescribeStatusIcon.tsx` / `CompressStatusIcon.tsx`); the click wired in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `onOcrActivate()`.
 
 ### 11.3 The OCR icon is now a PERSISTENT LEADING column on every file table (LOCKED — see [tables.mdx §4c](./tables.mdx))
 
@@ -1091,7 +1091,7 @@ changed is that the OCR icon now also rides on **every other** file table alongs
   page,"* so those words become searchable without opening the file ([tables.mdx §4c.3](./tables.mdx)).
 
 The shared icon-column block, its one visual grammar, the icon-only header, and the hover explanation are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, violet `--lfb-ocr-done` for OCR's done fill); the reusable task-icon kit `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the OCR row carries the `TextSelect` header glyph and the plain-English hover string); the column typing `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the hover text is PUBLISHED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` and RENDERED by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`, connected by the single global `HoverInfoBridge` mounted in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`; and the per-tab column order `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pinned`, `gitignore`, `transcribe`, `describe`, `ocr`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/StatusActionIcon.tsx` — `StatusActionIcon` (the three-state box, violet `--lfb-ocr-done` for OCR's done fill); the reusable task-icon kit `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TASK_ICON` / `TaskIconHeader` / `TaskStatusCell` (the OCR row carries the `TextSelect` header glyph and the plain-English hover string); the column typing `~/repos/LargeFileBridge/code/packages/frontend/src/components/table/types.ts` — `LfbColumn.headerCell` / `LfbColumn.tight`; the hover text is PUBLISHED by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo` and RENDERED by `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`, connected by the single global `HoverInfoBridge` mounted in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`; and the per-tab column order `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` + `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` (`columnIds` begin `pinned`, `gitignore`, `transcribe`, `describe`, `ocr`).
 
 ---
 
@@ -1123,7 +1123,7 @@ candidates checked → **Confirm** → `POST /api/ocr/enqueue` → op `ocr` → 
 enqueues; it never runs OCR inline** (§9, the locked-closed defect).
 
 The `buildOcrWarning` builder and its registration in the metric switch are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildOcrWarning()`, returned by `buildMetricWarning()` for `ocrable` and **`null`** for `ocred`; rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx`. The numbers come from `RepoDetail.taskMetrics`, computed in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildOcrWarning()`, returned by `buildMetricWarning()` for `ocrable` and **`null`** for `ocred`; rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx`. The numbers come from `RepoDetail.taskMetrics`, computed in `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoDetail()`.
 
 ### 12.3 The blue "OCR ›" header recommendation — and where it ranks (LOCKED)
 
@@ -1148,7 +1148,7 @@ The inherited precedence rules still apply: **scan-stale wins** (the primary rea
 is nearly always a no-op (§6).
 
 The label and its position in the worst-first order are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `topRecommendation()` (returns `{ metricId, warning, label }`; the `ocr` entry appended **last** in the ordered list), rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `topRecommendation()` (returns `{ metricId, warning, label }`; the `ocr` entry appended **last** in the ordered list), rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`.
 
 ### 12.4 An already-OCR'd file is NEVER re-offered and NEVER re-OCR'd (LOCKED)
 
@@ -1251,7 +1251,7 @@ slug** whose ~80% popup (§9) Apply enqueues background `ocr` jobs. The engine *
 > asymmetry §0 exists to prevent. The names below are the *intended* shape when all three land together.
 
 The OCR calc engine and its route **would** live in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/ocr-scan.engine.ts` — class `WhatCanBeOcredCalcEngine`, methods `scanStorage()` / `scanAll()` (the sibling of `transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine`); route `POST /api/todo/ocr-scan` on `todo.router.ts`. Frontend: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `OcrBatchPopup` / `ShowOcrableLink`.
+**Not yet written** (§ below: "specified, not written") — planned as `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/ocr-scan.engine.ts` with `scanStorage()` / `scanAll()` and a `POST /api/todo/ocr-scan` route on `todo.router.ts`. Build it against the shipped sibling `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` (exported `scanAll()` / `scanStorage(scopeId)`), whose route is the only `*-scan` one `todo.router.ts` serves today. Frontend: `~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `OcrBatchPopup` / `ShowOcrableLink`.
 
 ---
 
@@ -1373,7 +1373,7 @@ credentials to manage** (§4):
 * **`ocr.engine`** — `auto` (default) | `vision` | `tesseract`.
 
 The config schema block is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ocr` block of `AppConfigSchema` (`engine` default `"auto"`, `video_stride_seconds` default `15`, `max_frames` default `1000`, `max_pages` default `500`, `language`); edited from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — the `ocr` block of `AppConfigSchema` (`engine` default `"auto"`, `video_stride_seconds` default `15`, `max_frames` default `1000`, `max_pages` default `500`, `language`); edited from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx`.
 
 ---
 
@@ -1397,11 +1397,11 @@ on a machine without ffmpeg, §6), **`needs_pdf_tools`** (a PDF on a machine wit
 **`unsupported`** (not an image/video/PDF), or **`failed`** (with the reason).
 
 The OCR REST surface is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.router.ts` — `ocrRouter`, mounted at `/api/ocr` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/main.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.router.ts` — `ocrRouter`, mounted at `/api/ocr` in `~/repos/LargeFileBridge/code/packages/backend/src/main.ts`.
 The services are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` — `ocrOne()` / `ocrMany()` / `ocrTree()` / `previewOcr()` / `planOcr()` / `enqueueOcr()`; the video sampler `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ocr/frames.ts` — `extractFrames()` (async `spawn`, `fps=1/15`, half-stride phase, `scale`, `-an`, JPEG q3) / `probeVideo()` / `collapseDuplicates()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/ocr.service.ts` — `ocrOne()` / `ocrMany()` / `ocrTree()` / `previewOcr()` / `planOcr()` / `enqueueOcr()`; the video sampler `~/repos/LargeFileBridge/code/packages/backend/src/modules/ocr/frames.ts` — `extractFrames()` (async `spawn`, `fps=1/15`, half-stride phase, `scale`, `-an`, JPEG q3) / `probeVideo()` / `collapseDuplicates()`.
 The frontend client methods are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.ocrEngines` / `ocr` / `ocrFile` / `ocrBatch` / `ocrTree` / `ocrPlan` / `ocrEnqueue`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.ocrEngines` / `ocr` / `ocrFile` / `ocrBatch` / `ocrTree` / `ocrPlan` / `ocrEnqueue`.
 
 ### 18.1 The enums OCR must join — the exhaustive list (LOCKED)
 

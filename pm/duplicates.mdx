@@ -139,14 +139,14 @@ rows instead of dragging the page (or rubber-banding the document) behind it.
 > to scroll **past each other**, which is only possible when the page behind them holds still.
 
 Implemented as a per-route opt-in in the app shell, which swaps its page-height scroller for a
-viewport-bounded flex column: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`,
+viewport-bounded flex column: `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx`,
 `AppShell()` — the `anchored` flag.
 The two scroll regions and their no-chaining rule live in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` (the
 `fillHeight` body region) and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx`,
 `GroupReviewColumn()`; the pane geometry that passes the bounded height down is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/ReviewSplitLayout.tsx`,
 `ReviewSplitLayout()`.
 
 Subsets ([subsets.mdx](./subsets.mdx)) shares this behaviour — it is the same layout component.
@@ -210,11 +210,11 @@ Rules:
   file in every group brushed past. A short pause is also what the user means by "show me this one".
 
 The table rows are served by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/videos.router.ts` — `videosRouter` → `GET /api/videos/duplicates` (reads `duplicates.csv`, §9; groups sorted by reclaimable bytes descending).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/videos.router.ts` — `videosRouter` → `GET /api/videos/duplicates` (reads `duplicates.csv`, §9; groups sorted by reclaimable bytes descending).
 The group row model (one row per group, the representative file name, reclaimable bytes, the search text spanning every member) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/videoGroups.tsx` — `buildDuplicateGroups()` / `buildVideoColumns()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/videoGroups.tsx` — `buildDuplicateGroups()` / `buildVideoColumns()`.
 Selection + hover precedence and the full-width control-row slot are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage` (`selectedGroupId` / `hoveredGroupId` → `shownGroup`; the `controlsEl` portal target it hands the `DataTable`), configured by `DuplicatesPage.tsx` — `DuplicatesPage`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage` (`selectedGroupId` / `hoveredGroupId` → `shownGroup`; the `controlsEl` portal target it hands the `DataTable`), configured by `DuplicatesPage.tsx` — `DuplicatesPage`.
 
 ---
 
@@ -346,9 +346,9 @@ The rules:
    starts serving 403s from expired URLs.
 
 The poster endpoint is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/poster.service.ts` — `ensurePoster()` (content-keyed cache, concurrency semaphore, in-flight de-dup), `posterKindFor()` / `normalizePosterWidth()`; the route is `media.router.ts` — `GET /api/media/poster` (same `verifyGrant()` gate as `/raw`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/poster.service.ts` — `ensurePoster()` (content-keyed cache, concurrency semaphore, in-flight de-dup), `posterKindFor()` / `normalizePosterWidth()`; the route is `media.router.ts` — `GET /api/media/poster` (same `verifyGrant()` gate as `/raw`).
 The poster-first block, the click-to-play swap, and the transcode fallback are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `MemberPreview`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `MemberPreview`.
 
 ### 4.4 The resolution print rule (LOCKED)
 
@@ -359,7 +359,7 @@ Dimensions that match no class print bare: `1442x1080`. Snapping tolerates the u
 variance (±8 px per axis; portrait matches by the transposed dimensions).
 
 The class-snapping helper is one shared function in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/videos.ts` — `resolutionLabel(width, height)` (the `RESOLUTION_CLASSES` named constant; `codecLabel()` sits beside it for §4.5).
+`~/repos/LargeFileBridge/code/packages/shared/src/videos.ts` — `resolutionLabel(width, height)` (the `RESOLUTION_CLASSES` named constant; `codecLabel()` sits beside it for §4.5).
 
 ### 4.5 The codec print rule (LOCKED)
 
@@ -368,7 +368,7 @@ heic, webp for images) — prints as the word **`codec`** followed by the value 
 **`codec (h264)`**. Same form in the common block and in the differing lines.
 
 The right review column is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, per-file blocks with the five icon controls; its own `overflow-y-auto` region; the common/differing split is `computeAttributeSplit()`, the per-file icon state is `videoGroups.tsx` — `memberTaskState()`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/GroupReviewColumn.tsx` — `GroupReviewColumn` (action links, common block, per-file blocks with the five icon controls; its own `overflow-y-auto` region; the common/differing split is `computeAttributeSplit()`, the per-file icon state is `videoGroups.tsx` — `memberTaskState()`).
 
 ---
 
@@ -439,7 +439,7 @@ Rules:
   ([subsets.mdx §5](./subsets.mdx)).
 
 The row is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage` (the `pageActions` memo it feeds to the shared `PageActions` component in `components/menu/PageActions.tsx`; `startScan()` is shared with the pop-up so both paths behave identically).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `VideosReviewPage` (the `pageActions` memo it feeds to the shared `PageActions` component in `components/menu/PageActions.tsx`; `startScan()` is shared with the pop-up so both paths behave identically).
 
 ### 5.2 When the pop-up opens — the 2-day quiet window (LOCKED)
 
@@ -477,7 +477,7 @@ The evaluation, in order — **the first matching rule wins**:
   `promptOnEntry` alone.
 
 The two clocks are evaluated in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `dedupeStatus()` (`VIDEOS_SCAN_PROMPT_QUIET_DAYS` suppression + `VIDEOS_SCAN_STALE_DAYS` recommendation, both from `@lfb/shared` `videos.ts`); the auto-open-once latch is `VideosReviewPage.tsx` (the `autoOpened` ref, keyed on `status.promptOnEntry`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `dedupeStatus()` (`VIDEOS_SCAN_PROMPT_QUIET_DAYS` suppression + `VIDEOS_SCAN_STALE_DAYS` recommendation, both from `@lfb/shared` `videos.ts`); the auto-open-once latch is `VideosReviewPage.tsx` (the `autoOpened` ref, keyed on `status.promptOnEntry`).
 
 ### 5.3 The pop-up anatomy (LOCKED)
 
@@ -515,7 +515,7 @@ It is an **in-app HTML modal** on the one `ModalHost` — never a native browser
   here"*, with an inline Start-scan link that reopens this modal).
 
 The modal is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (one component serves both pages, keyed by variant; Esc/backdrop = Skip).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/StartScanModal.tsx` — `StartScanModal` (one component serves both pages, keyed by variant; Esc/backdrop = Skip).
 
 ### 5.4 Start is fire-and-forget — instant dismissal, a toast, background work (LOCKED)
 
@@ -549,8 +549,8 @@ duplicates** (§5.1), because both call one shared start path:
    as an error toast and the row's link stays clickable for a retry.
 
 The fire-and-forget start is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — the `start` mutation (`onMutate` closes the modal + flips the optimistic running status; `onSuccess` raises the toast with its View-progress action); the server side is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `startDedupeScan()` (synchronous single-flight latch + `setImmediate()` deferral so the response flushes first).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — the `start` mutation (`onMutate` closes the modal + flips the optimistic running status; `onSuccess` raises the toast with its View-progress action); the server side is
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `startDedupeScan()` (synchronous single-flight latch + `setImmediate()` deferral so the response flushes first).
 
 ### 5.5 The running state on the page (LOCKED)
 
@@ -583,7 +583,7 @@ background-processing model, and the **Processing** surfaces track all of it
   page re-renders with fresh groups.
 
 Enqueueing the batch is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `startDedupeScan()` (detached + single-flight; the run registers the `dedupe_scan` batch and folds every item at the queue's shared settle seams `settleExternalItem`/`settleOne`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `startDedupeScan()` (detached + single-flight; the run registers the `dedupe_scan` batch and folds every item at the queue's shared settle seams `settleExternalItem`/`settleOne`).
 
 ---
 
@@ -709,8 +709,8 @@ back into the library's compare functions — media bytes are never re-read to c
 * The compare boundary is one module so the fallback→PDQ swap never touches the engine.
 
 The hash + compare boundary is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage()` / `hammingDistance()` / `sameContent()` ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)); the video side is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/vpdq.service.ts` — `ensureVpdqFrames()` (sha256-keyed `.vpdq` cache) / `symmetricSharedFraction()` (the stored-value duplicate matcher) / `anySampledFrameMatch()` (the cheap prefilter before the full compare).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage()` / `hammingDistance()` / `sameContent()` ([perceptual_fingerprint.mdx §3](./perceptual_fingerprint.mdx)); the video side is
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/vpdq.service.ts` — `ensureVpdqFrames()` (sha256-keyed `.vpdq` cache) / `symmetricSharedFraction()` (the stored-value duplicate matcher) / `anySampledFrameMatch()` (the cheap prefilter before the full compare).
 
 ---
 
@@ -749,7 +749,7 @@ scan"** — see §8.4, which is a hard requirement, not an optimization.
 (charter + [perceptual_fingerprint.mdx §4](./perceptual_fingerprint.mdx)).
 
 The engine is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (the phases of §8.3) with the pure, unit-tested grouping split into `groupByExactHash()` (pass 1) and `groupByFingerprint()` (pass 2), composed by `computeDuplicateGroups()`; candidate enumeration in `known-media.ts` — `collectKnownMedia()`; warm-re-scan hash/fingerprint caches in `hash-cache.ts` — `VideosCaches`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (the phases of §8.3) with the pure, unit-tested grouping split into `groupByExactHash()` (pass 1) and `groupByFingerprint()` (pass 2), composed by `computeDuplicateGroups()`; candidate enumeration in `known-media.ts` — `collectKnownMedia()`; warm-re-scan hash/fingerprint caches in `hash-cache.ts` — `VideosCaches`.
 
 ### 8.3 The run is PROGRESSIVE — hash first, publish, then fingerprint (LOCKED)
 
@@ -795,9 +795,9 @@ Rules:
   for hours. Phase-2 work reports through the progress registry and the `phase` field.
 
 The phased run is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (phase 0/1/2 in sequence), `hashOneFile()` (phase 1 per file), `fingerprintOneFile()` (phase 2 per file), `publish()` (the CSV write + live-refresh bump used at every boundary), `probeAttrsFor()` (grouped members only).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `runDedupeScan()` (phase 0/1/2 in sequence), `hashOneFile()` (phase 1 per file), `fingerprintOneFile()` (phase 2 per file), `publish()` (the CSV write + live-refresh bump used at every boundary), `probeAttrsFor()` (grouped members only).
 The phase is surfaced to the page in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `phaseLabel()` (the running banner's phase clause).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/videos/VideosReviewPage.tsx` — `phaseLabel()` (the running banner's phase clause).
 
 ### 8.4 Candidate freshness — the scan must see files created since the last repo scan (LOCKED)
 
@@ -827,7 +827,7 @@ Therefore, **phase 0 unions the persisted census with a live media sweep of the 
   refuses to read a stale list; ownership of the census stays with [scan.mdx](./scan.mdx).
 
 Candidate freshening is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/known-media.ts` — `collectKnownMedia(kinds, { freshen: true })` → `freshenFromDisk()` (the media-only sweep, unioned with the persisted rows).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/known-media.ts` — `collectKnownMedia(kinds, { freshen: true })` → `freshenFromDisk()` (the media-only sweep, unioned with the persisted rows).
 
 ### 8.5 Restart resilience — checkpointing (LOCKED)
 
@@ -854,7 +854,7 @@ Rules:
   often* we write, never the atomic whole-file contract.
 
 Checkpointing is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/hash-cache.ts` — `VideosCaches.maybeSave()` (throttled checkpoint, called per file in both phases) beside the end-of-phase `save()`; the completeness flag is `dedupe-store.ts` — `VideosRunStamp.complete` written by `writeDedupeRunStamp()` and read by `dedupeStatus()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/hash-cache.ts` — `VideosCaches.maybeSave()` (throttled checkpoint, called per file in both phases) beside the end-of-phase `save()`; the completeness flag is `dedupe-store.ts` — `VideosRunStamp.complete` written by `writeDedupeRunStamp()` and read by `dedupeStatus()`.
 
 ### 8.6 Hash comparison — the hash alone, deliberately (LOCKED)
 
@@ -881,7 +881,7 @@ unchanged file is never re-streamed (§7.6), **checkpoint** that cache (§8.5), 
 than read whole files into the heap.
 
 Pass 1 is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `groupByExactHash()` (the O(N) bucket; no size gate anywhere); the streamed hash with its size+mtime cache is `exec.ts` — `sha256File()` and `hash-cache.ts` — `VideosCaches.sha256()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `groupByExactHash()` (the O(N) bucket; no size gate anywhere); the streamed hash with its size+mtime cache is `exec.ts` — `sha256File()` and `hash-cache.ts` — `VideosCaches.sha256()`.
 
 ### 8.7 Scaling the fingerprint compare — banding, not brute force (LOCKED)
 
@@ -917,7 +917,7 @@ Measured effect on the unit corpus (4,000 unrelated images + one planted matchin
 under 1 s**, same answer.
 
 The scaled compare is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `unionImagesByFingerprint()` (banding + lowest-band rule + union-find skip), `withinThreshold()` / `toNibbles()` (the early-abort Hamming pre-filter), `videoCandidatePairs()` (duration windowing); the authoritative verdict stays `media/perceptual.service.ts` — `sameContent()` with the exported `IMAGE_THRESHOLD_STRICT` the banding math depends on.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe.service.ts` — `unionImagesByFingerprint()` (banding + lowest-band rule + union-find skip), `withinThreshold()` / `toNibbles()` (the early-abort Hamming pre-filter), `videoCandidatePairs()` (duration windowing); the authoritative verdict stays `media/perceptual.service.ts` — `sameContent()` with the exported `IMAGE_THRESHOLD_STRICT` the banding math depends on.
 
 ### 8.8 Engine logging (LOCKED)
 
@@ -982,7 +982,7 @@ duplicate_group,full_path,sha256,fingerprint,match_basis,size_bytes,duration_s,w
   state root only, never committed anywhere.
 
 Reading/writing the CSV is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe-store.ts` — `writeDuplicatesCsv()` / `readDuplicatesCsv()` (RFC-4180 encode/parse in `csv.ts`; atomic write + state-root paths in `paths.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/videos/dedupe-store.ts` — `writeDuplicatesCsv()` / `readDuplicatesCsv()` (RFC-4180 encode/parse in `csv.ts`; atomic write + state-root paths in `paths.ts`).
 
 ---
 

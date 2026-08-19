@@ -132,11 +132,11 @@ compresses everything**. The list is an **opt-OUT** (extensions to skip), which 
 default even when new extensions are added later.
 
 The two new fields belong on the compression schema, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.compression.images`
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `AppConfigSchema.compression.images`
 / `.video` (add `convert_types` default `true`, `skip_exts` default `[]`). **Proposed.**
 
 The Settings UI (the master toggle + the per-extension checkbox list per media type) belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` —
 `SettingsPage` Compression section (backed by `compression.router.ts` `GET/PATCH /api/compress/settings`).
 **Proposed.**
 
@@ -159,7 +159,7 @@ runs, per file:
    allowed/available preferred target (JPEG by default), subject to the **alpha guard** (§1.6).
 
 Honoring the two settings when building the per-file plan belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `pickImageTarget()` (respect `convert_types`: no extension change when off) and `checkFile()` /
 `compressFile()` (early `skip_exts` return). The same two hooks apply to `pickVideoTarget()`. **Proposed.**
 
@@ -219,7 +219,7 @@ medium quality, same resolution.
 
 Selecting the primary HEIF item and re-encoding it to JPEG (bare read / primary-item decode; **no** index,
 **no** `--with-aux`) belongs in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/compress/compression.service.ts` —
 `pickImageTarget()` (HEIC/HEIF/AVIF → JPEG target) and `imageCommand()` (the `magick input.heic
 output.jpg` / `heif-dec` invocation, primary-item only). A `heif`/libheif delegate probe is added to
 `detectTools()` so a missing delegate degrades with an "install libheif" message, not a silent wrong

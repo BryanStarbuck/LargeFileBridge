@@ -56,7 +56,7 @@ workflow. So the rows are exactly the files the rest of LFB already cares about:
   complete (charter: no silent truncation).
 
 The recursive, metadata-only, Node-`fs`-only large-file walk (cap, iteration budget, hard-skip, threshold) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `walkFilesFlatStreaming()` (buffered via `fs.service.ts` → `listFilesFlat()`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `walkFilesFlatStreaming()` (buffered via `fs.service.ts` → `listFilesFlat()`).
 
 Directories are **never** rows here (this is a file table; the column browser is where directories
 live). The chosen **root** defaults to the OS **home directory**, with a **Home** button and an
@@ -95,7 +95,7 @@ The standard app frame (256px left bar), then — inside the File System area �
   the same right-aligned **code badges** and a trailing **`⋮`** kebab as the column browser.
 
 The tab strip that switches Column view (`/fs`) and Full paths (`/fs/paths`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`.
 
 ---
 
@@ -130,7 +130,7 @@ unchecked). Only what is **page-specific** is below.
 > persisted per user as `tables.views["fs-paths"].file_filter`. This is **implemented**. Where
 > §3.1/§3.3's checkbox-facet sketches conflict with it, tables.mdx §2.11 wins.
 > Rendered in code:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (`FS_PATHS_FF_FIELDS`, `ffRowValue()`, the `FileFilterPanel` + `FileFilterClauseBar` in its ⛛ popover).
+> `~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (`FS_PATHS_FF_FIELDS`, `ffRowValue()`, the `FileFilterPanel` + `FileFilterClauseBar` in its ⛛ popover).
 
 ```
  ┌──────────────────────────────────────────────────────────────────────────────────┐
@@ -265,10 +265,10 @@ persist as `hidden:` — the **unchecked** values — never `shown:`
 The worked `files:` example in that section **is** this page.
 
 The client-side derivation of the facet values (from the C/c and P badges) and the shared sort state is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `filtered` memo + `setSort()`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `filtered` memo + `setSort()`).
 
 The facet rail, the active-sort chip run, and multi-level sort are **new** shared surfaces; they are to be implemented in code on the shared table, not on this page:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component ([tables.mdx §2.2 / §3.5](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` component ([tables.mdx §2.2 / §3.5](./tables.mdx#22-the-facet-rail--filtering-without-opening-a-dropdown-locked)).
 
 #### 3.4a This page must stop hand-rolling its table (NEW — engineering note)
 
@@ -283,7 +283,7 @@ behavior §3.1–§3.4 specifies is a *shared* behavior configured with this pag
 (Compressed, Pin (IPFS), Git-ignore) — none of it is a reason for a custom row.
 
 to be implemented in code (the migration):
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (replace its local `useReactTable` + segmented control row with the shared `DataTable` from `code/packages/frontend/src/components/table/DataTable.tsx`, passing its facet definitions).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (replace its local `useReactTable` + segmented control row with the shared `DataTable` from `code/packages/frontend/src/components/table/DataTable.tsx`, passing its facet definitions).
 
 ### 3.5 Action row — `Select all · IPFS pin · Unpin`
 
@@ -303,7 +303,7 @@ checked. Pin/Unpin reuse the per-entity decision endpoint, so — like everywher
 ([menus.mdx §6.6](./menus.mdx)) is refused by pin and reported as skipped.
 
 Batch pin/unpin over the checked rows (per-entity decision → sync/ignore, skip-and-report) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `pin` mutation), backed by `entity.service.ts` → `setEntityDecision()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (the `pin` mutation), backed by `entity.service.ts` → `setEntityDecision()`.
 
 ### 3.6 Page actions — the action-links row
 
@@ -320,7 +320,7 @@ queue, and the toast wording are inherited from [page_actions.mdx §1–§2](./p
 restated. (The IPFS **pin/Unpin** buttons stay as this page's primary decision actions in their own row.)
 
 implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, fed the checked paths + root as its `scope`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FullPathsPage.tsx` — `FullPathsPage` (mounts `PageActions` from `code/packages/frontend/src/components/menu/PageActions.tsx` — `PageActions`, fed the checked paths + root as its `scope`).
 
 ---
 
@@ -395,7 +395,7 @@ each axis's `on` / `off` / `recommended` / `n/a` value, plus **whether the entry
 the git-ignore axis is N/A outside one, §3.3). Full paths inherits that shape; it does not invent one.
 
 Streaming the flat listing into the page as rows arrive (NDJSON from `GET /api/fs/flat`) and windowing the large row set for scroll performance is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing` (rows windowed by `useWindowedRows.ts` — `useWindowedRows`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/useStreamedFlatListing.ts` — `useStreamedFlatListing` (rows windowed by `useWindowedRows.ts` — `useWindowedRows`).
 
 ---
 

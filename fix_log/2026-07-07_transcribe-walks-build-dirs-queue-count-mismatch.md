@@ -11,7 +11,7 @@
 
 ## Resolved context
 
-* Project: **LargeFileBridge** (`~/BGit/Bryan_git/LargeFileBridge/code`) — not the ACT3 stack;
+* Project: **LargeFileBridge** (`~/repos/LargeFileBridge/code`) — not the ACT3 stack;
   the skill's ACT3 variables do not apply.
 * URL: `http://localhost:2222/repos/bef908e3bce0fa2f` → One-repo page (`OneRepoPage.tsx`).
 * Repo id `bef908e3bce0fa2f` = sha1(`/Users/bryanstarbuck/BGit/Bryan_git/Intel_Murder_Docus`)

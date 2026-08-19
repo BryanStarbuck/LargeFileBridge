@@ -53,7 +53,7 @@ for the same reason compress got one ([compression.mdx §12.1](./compression.mdx
   explicit confirm; nothing is written until the user clicks the primary button.
 
 The dialog is a **web modal, not a native prompt**, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreDialog.tsx` — `GitIgnoreDialog` (the fixed `bg-black/40` overlay + centered card, `stopPropagation`, Esc-to-cancel, Cancel focused).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreDialog.tsx` — `GitIgnoreDialog` (the fixed `bg-black/40` overlay + centered card, `stopPropagation`, Esc-to-cancel, Cancel focused).
 
 ---
 
@@ -82,7 +82,7 @@ File-System scope rule ([file_system.mdx §5.1](./file_system.mdx)) from "the de
 > **Politics** column. The last column the user *committed a selection in* is the intent.
 
 Resolving the rightmost-selected-column target set (walk the open-column stack right→left for the first with checked rows; fall back to the deepest column's dir) is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `resolveGitIgnoreTarget()` (reads the per-column checked sets from the browser state; passes `{ paths }` or `{ root }` to `openGitIgnore()`), with the flat-table twin in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/domainActions.tsx` — `gitIgnoreBig()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `resolveGitIgnoreTarget()` (reads the per-column checked sets from the browser state; passes `{ paths }` or `{ root }` to `openGitIgnore()`), with the flat-table twin in `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/domainActions.tsx` — `gitIgnoreBig()`.
 
 ---
 
@@ -145,7 +145,7 @@ The controls, all LOCKED:
    path already ignored or not in a repo).
 
 The adaptive summary, the conditionally-rendered Recursive checkbox, the live preview, and the two skip notes are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreDialog.tsx` — `GitIgnoreDialog` (state: `recursive`; derives the shape from the plan's `files`/`dirs` counts; the primary label switches on `recursive`; the button is disabled on an empty `plan.lines`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreDialog.tsx` — `GitIgnoreDialog` (state: `recursive`; derives the shape from the plan's `files`/`dirs` counts; the primary label switches on `recursive`; the button is disabled on an empty `plan.lines`).
 
 > **The Recursive default is OFF (LOCKED, and deliberately unlike compress).** [compression.mdx §12.3](./compression.mdx)
 > defaults its recursive box **on**. Git ignore defaults it **off**, because whole-tree ignoring is the more
@@ -174,10 +174,10 @@ compress-inside bus ([compression.mdx §12.2](./compression.mdx)) so no call-sit
    one anchored rule directly through the engine (§5) — no dialog — because a lone file needs no scope choice.
 
 Opening the dialog from anywhere is a single bus call (the target set + which repo owns it), handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/gitIgnore.ts` — `openGitIgnore()` / `onGitIgnoreRequested()` (the single-slot bus), consumed by the once-mounted `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreProvider.tsx` — `GitIgnoreProvider` (mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/gitIgnore.ts` — `openGitIgnore()` / `onGitIgnoreRequested()` (the single-slot bus), consumed by the once-mounted `~/repos/LargeFileBridge/code/packages/frontend/src/components/gitignore/GitIgnoreProvider.tsx` — `GitIgnoreProvider` (mounted at the app root in `~/repos/LargeFileBridge/code/packages/frontend/src/main.tsx`).
 
 The per-entity menu items and the page-action link call the bus instead of the old confirm, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `git-ignore` action's `onSelect` → `openGitIgnore(...)`) · `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/domainActions.tsx` — `gitIgnoreBig()` (rewired from the `notWiredToast` stub to `openGitIgnore(scope)`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` (the `git-ignore` action's `onSelect` → `openGitIgnore(...)`) · `~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/domainActions.tsx` — `gitIgnoreBig()` (rewired from the `notWiredToast` stub to `openGitIgnore(scope)`).
 
 ---
 
@@ -251,13 +251,13 @@ un-anchored name for a specific path.
   single-file line and **nothing else**.
 
 Planning the lines (classify each target as file/dir/not-in-repo, group by owning repo, build anchored repo-relative lines per §5.2, drop `git check-ignore` hits, refuse LFB's own committed text) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `planGitIgnore()` (returns the `GitIgnorePlan`: `linesByRepo`, `alreadyIgnored`, `notInRepo`), using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `nearestGitAtOrAbove()` / `checkIgnore()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `planGitIgnore()` (returns the `GitIgnorePlan`: `linesByRepo`, `alreadyIgnored`, `notInRepo`), using `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `nearestGitAtOrAbove()` / `checkIgnore()`.
 
 Deciding **which** paths that refusal covers for a given owning repo — `<root>/.lfbridge/` for kind `repo`, the SDL **root** metadata for an SDL — resolves through the same choke point every LFB writer uses:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `resolveStorageType(root)` / `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `resolveStorageType(root)` / `trackingBaseDir(root, type?)` / `usesLfbridgeDir(type)`.
 
 Writing the planned lines into each owning repo's root `.gitignore` (append-only, idempotent, preserve trailing newline) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `applyGitIgnore()` / `appendIgnoreLines()` (mirrors the existing `ensureLfbridgeIgnored()` append pattern in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `applyGitIgnore()` / `appendIgnoreLines()` (mirrors the existing `ensureLfbridgeIgnored()` append pattern in `~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts`).
 
 #### 5.4.1 Asking git is THREE-valued: ignored / not ignored / **unknown** (LOCKED)
 
@@ -281,10 +281,10 @@ Two failure modes are guarded explicitly rather than being allowed to surface as
 
 Batching the `--stdin` feed, splitting on the submodule fatal, bisecting a failed batch, and reporting the
 unanswered paths as unknown is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `runCheckIgnore()` / `runCheckIgnoreBatch()` / `checkIgnoreRepoUsable()`, surfaced through `checkIgnoreDetailed()` / `checkIgnoreVerboseDetailed()` (and their async twins) as `CheckIgnoreResult.unknown`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `runCheckIgnore()` / `runCheckIgnoreBatch()` / `checkIgnoreRepoUsable()`, surfaced through `checkIgnoreDetailed()` / `checkIgnoreVerboseDetailed()` (and their async twins) as `CheckIgnoreResult.unknown`.
 
 Leaving an unknown row's git-ignore axis undecided, and keeping unknown rows out of the nudge count, is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()` (returns `{}` for an unknown path) and the `bigNotIgnored` tally in `computeTaskMetrics()` (counts `gitignore === false`, never `undefined`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()` (returns `{}` for an unknown path) and the `bigNotIgnored` tally in `computeTaskMetrics()` (counts `gitignore === false`, never `undefined`).
 
 ### 5.5 UN-ignore: the OFF direction, and the only line LFB may delete (LOCKED)
 
@@ -322,10 +322,10 @@ click. The row carries `gitignoreLocked` + `gitignoreRule` for exactly this
 ([decision_toggles.mdx §1.0](./decision_toggles.mdx)).
 
 The un-ignore engine (group by repo, one verbose check per repo, exact-line test, remove, verify, roll back) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `unignorePaths()` / `removeIgnoreLines()`, using `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerbose()` (the `-v` form that reports the owning rule).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `unignorePaths()` / `removeIgnoreLines()`, using `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreVerbose()` (the `-v` form that reports the owning rule).
 
 Deciding whether a row's toggle is interactive or locked (the SAME accept condition as `unignorePaths()`, or the UI would offer a removal the engine refuses) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`.
 
 ---
 
@@ -348,7 +348,7 @@ the server and returns the result — there is no background batch:
   without a manual rescan.
 
 The plan/apply routes and the client methods are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.router.ts` — `POST /ignore/plan` / `POST /ignore/apply` (mounted under `/api/git`), and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `gitIgnorePlan()` / `gitIgnoreApply()` (the latter invalidates the `fs` / `entity` queries on success so the `I` badge appears).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.router.ts` — `POST /ignore/plan` / `POST /ignore/apply` (mounted under `/api/git`), and `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `gitIgnorePlan()` / `gitIgnoreApply()` (the latter invalidates the `fs` / `entity` queries on success so the `I` badge appears).
 
 ---
 

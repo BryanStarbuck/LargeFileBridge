@@ -1,4 +1,4 @@
-ROOT_DIR dir is ~/BGit/Bryan_git/LargeFileBridge
+ROOT_DIR dir is ~/repos/LargeFileBridge
 
 COMPRESSION_SPEC is file {ROOT_DIR}/pm/compression.mdx
 CODECS_SPEC is file {ROOT_DIR}/pm/codecs.mdx

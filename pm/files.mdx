@@ -145,14 +145,14 @@ presence?: "local" | "remote-only";   // ABSENT ⇒ "local"
   the next scan makes it an ordinary local file and the page renders normally.
 
 Carrying `presence` on the row model, and composing a remote-only entry from the reconciled manifest rather than a local stat, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`, set by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
+`~/repos/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow.presence`, set by
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`;
 this page's not-found-vs-remote-only branch belongs in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()` and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()` and
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage`.
 
 Assembling this `EntityView` payload (identity, badges, repo/pin context, compression heuristic, flags) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()`, served by `entity.router.ts` → `GET /api/entity`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `buildEntityView()`, served by `entity.router.ts` → `GET /api/entity`.
 
 ---
 
@@ -170,10 +170,10 @@ The page follows [menus.mdx §4](./menus.mdx)'s "one primary, rest under `⋮`" 
   separated last.
 
 Choosing which primary button to show for the file's flags + decision is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage` → `pickPrimary()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `ViewOneFilePage` → `pickPrimary()`.
 
 Queueing the file for the **Pin now** primary (POST `/repos/:id/pin`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.pinNow()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.pinNow()`.
 
 ---
 
@@ -190,7 +190,7 @@ buried in the menu — this is the page where a user manages a file's standing p
 The `⋮` menu's toggle items and these switches are **the same state** — flipping one updates the other.
 
 Writing the two sticky flags — including the Never IPFS side-effect that demotes `sync` decisions under the path — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `setEntityFlags()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/entity/entity.service.ts` — `setEntityFlags()`.
 
 ---
 
@@ -203,7 +203,7 @@ properties-first page to its viewer-first sibling; the reverse link is the viewe
 For non-media files there is no such affordance.
 
 Rendering the media-only Open image/video viewer affordance is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `OpenViewer()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` — `OpenViewer()`.
 
 ### 7.1 Page actions — media shortcuts (proposed)
 
@@ -223,7 +223,7 @@ into the `⋮` File catalog — they are page-level actions on this single-entit
 per-row `⋮` kebab elsewhere ([menus.mdx](./menus.mdx)). This page is not a file-list page, so it does
 **not** carry the shared file action-links row ([page_actions.mdx §0](./page_actions.mdx)); these are its own
 header buttons. When built they belong in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/ViewOneFilePage.tsx` —
 `ViewOneFilePage`, reusing the same launchers the viewer uses (`runDescribeFile` in `lib/describe.ts`,
 the transcribe hook, and the compress offer).
 

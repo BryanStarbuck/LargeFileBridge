@@ -12,7 +12,7 @@ each slug opens a **batch popup** where the user confirms the recommendations an
 It reaches the user two ways — **here** (the dedicated page), and as **[warnings](./warnings.mdx)** on the
 individual pages (a repo's batch shows as that repo's yellow banner). Both open the **same** batch popup.
 
-Rendered in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoPage`.
+Rendered in code: `~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoPage`.
 
 Siblings this builds on and does not repeat:
 
@@ -59,7 +59,7 @@ Design tenets:
 * Like every nav item its content is defined in `pm/left_bar.yaml`; this file specifies its behavior.
 
 The nav item + its live count badge is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — the To-Do `<Link>` (count from `GET /api/todo/batches`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — the To-Do `<Link>` (count from `GET /api/todo/batches`).
 
 ---
 
@@ -104,7 +104,7 @@ The nav item + its live count badge is rendered in code:
   recommendations here after its next scan."* (Never an error; this is the good state.)
 
 The list is fetched from `GET /api/todo/batches` (slug-shaped: identity + `totals` + `pattern`), served in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `GET /api/todo/batches`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `GET /api/todo/batches`.
 
 ### 4.1 Ordering — bubble up what matters (LOCKED)
 
@@ -119,7 +119,7 @@ Slugs sort by an **importance score**, most important first:
    in at their natural rank; a still-dismissed batch does not show at all.
 
 The score is computed server-side so the badge and list agree, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `importanceScore(batch)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `importanceScore(batch)`.
 
 ---
 
@@ -146,7 +146,7 @@ The [non-intrusive tooltip](./non_intrusive_tooltip.mdx) explains any metric on 
 reserved panel), so the slug itself stays terse.
 
 Each slug is rendered by `TodoBatchSlug`, which picks its template from `batch.pattern`, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchSlug`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchSlug`.
 
 ### 5.1 Slug templates — one per `pattern` (LOCKED)
 
@@ -177,7 +177,7 @@ for an unknown pattern rather than failing.
   batch stays hidden until its contents materially change.
 
 Dismiss → `DELETE /api/todo/batches/:id`; both buttons wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchSlug` (chevron `onOpen`, trash `onDismiss`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchSlug` (chevron `onOpen`, trash `onDismiss`).
 
 ---
 
@@ -215,7 +215,7 @@ and progress shows on the [Processing](./processing.mdx) page ([warnings.mdx §5
 Applied files drop out of the **next** recompute, so the slug shrinks or disappears.
 
 The batch popup reuses the warning popup component, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` (mounts the shared `WarningPopup` body; apply → `POST /api/todo/batches/:id/apply`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TodoBatchPopup` (mounts the shared `WarningPopup` body; apply → `POST /api/todo/batches/:id/apply`).
 
 ### 6.1 A pull-down batch from a peer computer (LOCKED)
 
@@ -289,7 +289,7 @@ transcribe slugs** to the list:
   three axis toggles — [warnings.mdx §4.5](./warnings.mdx#45-the-subjects-list--the-actual-filesdirectories-with-checkboxes-locked).)
 
 The link → `POST /api/todo/transcribe-scan`; rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `ShowTranscribableLink`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `ShowTranscribableLink`.
 
 ---
 

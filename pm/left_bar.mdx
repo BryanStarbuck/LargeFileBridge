@@ -48,7 +48,7 @@ The label string itself lives in `pm/left_bar.yaml` (`header.label`) so the fron
 verbatim — the yaml carries the spaced form.
 
 Parsing the spaced wordmark (and the rest of the nav content) out of the raw yaml and exposing it to the renderer is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts` — `parse()` function, exported as the `leftBar` config.
+`~/repos/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts` — `parse()` function, exported as the `leftBar` config.
 
 ---
 
@@ -102,7 +102,7 @@ States:
 * Each item shows its yaml `description` as the hover `title` tooltip.
 
 Rendering each nav item from the yaml with the active (route-match) / hover states and the description tooltip is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` component (its `isActive` route match).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` component (its `isActive` route match).
 
 ### 3.1 The runtime-conditional **Processing** item (only while work runs)
 
@@ -116,7 +116,7 @@ Like the dynamic company children under **Storages** (§3), this item is **runti
 on live state, so it is **not** a static row in `pm/left_bar.yaml` (it is only *documented* there as a
 commented, runtime-only entry). The Sidebar appends it after the yaml `navItems` map when work is running,
 in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
 (reads `useProgress()`; renders the Processing `<Link>` after the yaml items when `processing` is true).
 
 ### 3.2 Repos nest under their owner in the Storages disclosure (LOCKED)
@@ -144,7 +144,7 @@ The **Storages** disclosure (§3) already lists **Personal**, one child **per Co
   each company group.
 
 Injecting each owner child's repo sub-list under the Storages disclosure at runtime (grouping the discovered repos by their `owner`, labeling companies by display name) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (builds `storageChildren`, then nests the repos grouped by `RepoRow.owner` under the matching Personal / Company child), reading owners composed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (builds `storageChildren`, then nests the repos grouped by `RepoRow.owner` under the matching Personal / Company child), reading owners composed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `computeRepoRow()`.
 
 ### 3.3 The Storages entry carries a pending-mapping-review badge (LOCKED)
 
@@ -161,7 +161,7 @@ only nag. The pending set, the assertion travel, and the review page are owned b
 The badge count is **runtime-injected** (it depends on live pulled state), like the dynamic company children
 (§3) and the Processing item (§3.1), so it is not a static row in `pm/left_bar.yaml`. Rendering the
 pending-review badge on the Storages item and linking it to `/company-mappings/review` is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar`
 (reads the pending-mappings count from `GET /api/company-mappings/pending`, renders the badge on the Storages
 `<Link>`).
 
@@ -178,7 +178,7 @@ Pinned to the bottom of the bar, always visible:
   **Allow-list** (only with `role:admin`), **Log out**. Log out returns to the sign-in screen.
 
 The bottom account slot and its upward-expanding, permission-gated popup menu are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` component (the account-menu `permissionGate` filter).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` component (the account-menu `permissionGate` filter).
 
 ### 4.1 The non-intrusive hover-info panel sits just above this slot (LOCKED)
 
@@ -211,7 +211,7 @@ page's content and steal width from it, appear **here**.
   panel** in the right place.
 
 Reserving the fixed white block and mounting the panel between the nav list and the account slot are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
 
 ### 4.2 External product links — the outbound links above the account slot (LOCKED)
 
@@ -250,7 +250,7 @@ that **opens in a new browser tab**, not an in-app route.
   (§AC4). An empty/absent `external_links` list renders nothing (no empty block).
 
 Rendering the external-links block from the yaml (new-tab anchors, left-aligned on the nav grid with a leading `ExternalLink` icon, between the nav list and the account slot) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (an `external_links` block rendered above the account slot), fed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts` — `parse()` (which reads `external_links` into `leftBar.externalLinks`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (an `external_links` block rendered above the account slot), fed by `~/repos/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts` — `parse()` (which reads `external_links` into `leftBar.externalLinks`).
 
 ---
 
@@ -284,7 +284,7 @@ Rendering the external-links block from the yaml (new-tab anchors, left-aligned 
   crashing.
 
 Resolving a nav item's lucide icon by name (unknown name renders nothing) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/NavIcon.tsx` — `NavIcon` component.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/NavIcon.tsx` — `NavIcon` component.
 
 ---
 

@@ -46,7 +46,7 @@ charter's IPFS no-relay default: the app does only what is safe on **this** mach
 and a hosted deployment silently drops the desktop-only affordance rather than exposing it.
 
 The localhost gate (backend in `local` mode AND a loopback request) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `isLocalRequest(req)` (consulted by both `platformInfo` and `openInOs`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `isLocalRequest(req)` (consulted by both `platformInfo` and `openInOs`).
 
 > **This never breaks the charter.** Hand-off only ever opens a file the user **could already open**
 > themselves in Finder — it reads no new bytes, sends nothing over the network, and touches only the
@@ -79,7 +79,7 @@ interface PlatformInfo {
 ```
 
 Reporting the platform family, the human label, and whether hand-off is possible is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `platformInfo(req)` (wrapping `platformFamily()` + `isLocalRequest(req)`), served by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — the `GET /platform` route.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `platformInfo(req)` (wrapping `platformFamily()` + `isLocalRequest(req)`), served by `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — the `GET /platform` route.
 
 ### 2.2 `POST /api/fs/os-open { path }` → `OsOpenResult`
 
@@ -100,7 +100,7 @@ not even be shown), **404** = the file/folder no longer exists at that path, **4
 (missing/blank path, outside the allow-roots, spawn failure).
 
 Handing a local file/folder to the OS default handler (localhost guard → confine → stat → spawn detached) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)`, routed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — the `POST /os-open` route (which maps the thrown reason to 403 / 404 / 400).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)`, routed by `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/fs.router.ts` — the `POST /os-open` route (which maps the thrown reason to 403 / 404 / 400).
 
 ---
 
@@ -122,7 +122,7 @@ Linux"** (an unknown platform degrades to **"this computer"**):
 > In every case the **OS**, not LFBridge, decides which app opens the file — we never name an app.
 
 The family → key + label mapping and the per-platform open command are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `platformFamily()` and `openCommand(abs)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `platformFamily()` and `openCommand(abs)`.
 
 ---
 
@@ -145,7 +145,7 @@ guardrail and adds one process-hygiene rule:
   timer, during a scan, or during a background pin.
 
 The path confinement (`assertAllowedPath` + secret-stash denylist), the existence check, and the detached/unref'd spawn are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)` (calling `assertAllowedPath` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/os-open.ts` — `openInOs(req, input)` (calling `assertAllowedPath` from `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/allow-root.ts`).
 
 ---
 
@@ -178,10 +178,10 @@ Mac"* / *"Opened folder on Mac"*, or the error message).
 
 The two compound controls (the `OpenCompound` unit + the `Open` / `Open folder` bar items, with the
 in-browser vs. on-{label} halves) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `OpenCompound` component and the `open` / `open-folder` items in `ActionBar`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `OpenCompound` component and the `open` / `open-folder` items in `ActionBar`.
 
 The OS-open launcher (toast wrapper over the API) and the API client methods are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/os.ts` — `runOsOpen(path, name)`; `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.platform()` and `api.osOpen(path)`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/os.ts` — `runOsOpen(path, name)`; `~/repos/LargeFileBridge/code/packages/frontend/src/api/client.ts` — `api.platform()` and `api.osOpen(path)`.
 
 ### 5.1 Overflow into "More"
 
@@ -193,7 +193,7 @@ folder in browser`, `Open folder on Mac`) — the OS entries still gated by `can
 to a narrow window; it only changes shape.
 
 The priority-based overflow into the "More" menu is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/OverflowActionBar.tsx` — `OverflowActionBar`.
 
 ---
 

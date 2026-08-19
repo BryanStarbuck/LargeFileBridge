@@ -61,7 +61,7 @@ after the switch**. Artifacts already on disk **stay where they are** until the 
 
 Reading and writing the two per-repo placement settings, resolving the target directory for a kind, and
 the "move existing" relocation are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `placementFor(repoKey, kind)` / `artifactTargetPath(repoRoot, relPath, kind)` / `moveExistingArtifacts(repoKey, kind, target)`; the two radio sections render in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `placementFor(repoKey, kind)` / `artifactTargetPath(repoRoot, relPath, kind)` / `moveExistingArtifacts(repoKey, kind, target)`; the two radio sections render in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
 
 ---
 
@@ -137,7 +137,7 @@ it only changes where the next artifact is placed. The Settings section shows a 
 
 Resolving the target directory from the current radio at generate time (so only new artifacts follow the
 switch) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` (delegates to `artifact-placement.service.ts` `artifactTargetPath()` with the repo's current `placementFor(repoKey, "transcription")`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe.service.ts` — `resolveTranscriptPath()` (delegates to `artifact-placement.service.ts` `artifactTargetPath()` with the repo's current `placementFor(repoKey, "transcription")`).
 
 **What we double-check (Step 2):**
 * `b.mp4`'s transcript is **loose** at `clips/b.mp4.transcription`; `a.mp4`'s is **still** in `.lfbridge/`.
@@ -175,7 +175,7 @@ file."*
 
 Relocating all existing artifacts of a kind to the current target (move, mirror the dir, reconcile
 duplicates, never regenerate) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `moveExistingArtifacts(repoKey, "transcription", target)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `moveExistingArtifacts(repoKey, "transcription", target)`.
 
 **What we double-check (Step 3):**
 * `a.mp4`'s transcript is now beside the clip and **gone** from `.lfbridge/`; `b.mp4`'s is unchanged.
@@ -255,7 +255,7 @@ artifacts. (The full parity walkthrough is [use_case_ai_description_parity.mdx](
 
 Resolving the AI-description target from its **own** radio (independent of transcription) is handled in
 code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (uses `artifact-placement.service.ts` `artifactTargetPath()` with `placementFor(repoKey, "ai_description")`).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/describe/describe.service.ts` — `resolveDescriptionPath()` (uses `artifact-placement.service.ts` `artifactTargetPath()` with `placementFor(repoKey, "ai_description")`).
 
 **What we double-check (Step 5):**
 * The AI-descriptions radio moves `.ai_description` artifacts with **no** effect on `.transcription`
@@ -283,7 +283,7 @@ without any further action.
 
 Disabling the sync-repo radio option when the repo has no company sync repo (and enabling it reactively) is
 handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx` — the placement `<RadioOption disabled>` gate reads `GET /api/repos/:repoId/placement-targets` (backed by `artifact-placement.service.ts` `availableTargets(repoKey)`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx` — the placement `<RadioOption disabled>` gate reads `GET /api/repos/:repoId/placement-targets` (backed by `artifact-placement.service.ts` `availableTargets(repoKey)`).
 
 **What we double-check (Step 6):**
 * On a repo with no company sync repo, the **Company sync repo** option is **disabled** with an
@@ -318,7 +318,7 @@ artifact in its original place.
 
 Detecting an unwritable placement target, failing the generate/move with an actionable reason, and logging
 to `error.err` (never a silent fallback, never a partial move) are handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `assertTargetWritable(target)` (called before write in `artifactTargetPath()` and at the top of `moveExistingArtifacts()`); faults logged via `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/logging.ts` `logError()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `assertTargetWritable(target)` (called before write in `artifactTargetPath()` and at the top of `moveExistingArtifacts()`); faults logged via `~/repos/LargeFileBridge/code/packages/backend/src/shared/logging.ts` `logError()`.
 
 **What we double-check (Step 7):**
 * An unwritable target makes generation **`failed`** with an actionable message and **no silent fallback**

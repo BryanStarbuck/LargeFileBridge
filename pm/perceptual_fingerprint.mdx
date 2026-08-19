@@ -56,7 +56,7 @@ things, and the two specs say so on purpose ([to_fix.mdx §3.4](./to_fix.mdx)):
   what makes hashing the shrunken copy legitimate.
 
 The internal, output-free downscale is in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `decodeForHash()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `decodeForHash()`
 
 **Do not "fix" this into agreement with compression.mdx.** A reader who mistakes `decodeForHash()`'s
 resize for a violation of "never downscale" will delete it — which decodes every image at **full
@@ -133,7 +133,7 @@ Sources: [Meta ThreatExchange README](https://github.com/facebook/ThreatExchange
   Reserve an `audio` fingerprint slot for later.
 
 The algorithm choice and matcher are isolated behind one module so the fallback→PDQ swap is a one-file change, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage(buf)` / `fingerprintVideo(path)` (ffmpeg-sampled) / `hammingDistance(a, b)` / `sameContent(a, b, opts)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — `fingerprintImage(buf)` / `fingerprintVideo(path)` (ffmpeg-sampled) / `hammingDistance(a, b)` / `sameContent(a, b, opts)`.
 
 ---
 
@@ -197,7 +197,7 @@ file:
   the charter demands of the IPFS posture and the AI-provider boundary.
 
 Guaranteeing the perceptual path never performs network I/O (no client imported; ffmpeg invoked with local paths only) is asserted in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — plus the guard test `perceptual.no-network.spec.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/media/perceptual.service.ts` — plus the guard test `perceptual.no-network.spec.ts`.
 
 ---
 

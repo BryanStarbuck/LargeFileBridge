@@ -936,8 +936,17 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
     // Undecided tile asks "pin these?", and their bytes are already pinned on this node.
     if (f.decision === "undecided" && !f.pinnedForeign) m.undecided++;
     if (f.decision === "sync" && f.transfer === "pending") m.pending++;
-    // "Lives only on this computer" — pinned HERE and claimed by no other machine (isSingleCopy).
-    if (isSingleCopy(f.transfer, f.peers, selfLabel)) m.notBackedUp++;
+    // "Lives only on this computer" — pinned HERE and claimed by no other machine (isSingleCopy), OR
+    // pinned here by another tool and never published to the fleet (isUnpublishedForeignPin). Both are
+    // one disk away from gone; the second used to be invisible because its transfer is "na".
+    if (
+      isSingleCopy(f.transfer, f.peers, selfLabel) ||
+      // `false`: a remote-only row already `continue`d above, so it cannot reach here — TypeScript narrows
+      // `f.presence` to "local" | undefined and rejects the comparison outright. The tally() twin has no
+      // such early exit and passes its real `remoteOnly`.
+      isUnpublishedForeignPin(f.decision, !!f.pinnedForeign, f.peers, selfLabel, false)
+    )
+      m.notBackedUp++;
     if (f.compress === "could") {
       if (compressInfo(path.basename(f.path)).compressible === "image") m.compressibleImages++;
       else m.compressibleVideos++;
@@ -1004,6 +1013,39 @@ export function transferFor(
  */
 export function isSingleCopy(transfer: TransferStatus, peers: string[], selfLabel: string): boolean {
   return transfer === "pinned" && !peers.some((p) => p !== selfLabel);
+}
+
+/**
+ * "Pinned here by some other tool, and published to nobody" — the OTHER way a file ends up as a single
+ * copy on one disk (foreign_pin_discovery.mdx §5/§6).
+ *
+ * A foreign pin is REALITY on THIS node and nothing more: the file has no manifest entry, so no other
+ * computer of the user's can see its CID, and none can fetch it. {@link isSingleCopy} cannot see this
+ * state at all — it requires `transfer === "pinned"`, and an undecided row's transfer is "na" — so every
+ * durability surface read these files as fine. Measured on charlie-kirk (2026-08-19): 49 videos, 2.0 GB,
+ * pinned on exactly one disk, with `Not backed up anywhere` reporting 0.
+ *
+ * Deliberately does NOT touch the decision axis. Discovery drives reality, the decision drives intent
+ * (foreign_pin_discovery.mdx §6, LOCKED) — this only stops us CLAIMING a file is safe when it is not.
+ */
+export function isUnpublishedForeignPin(
+  decision: Decision,
+  pinnedForeign: boolean,
+  peers: string[],
+  selfLabel: string,
+  remoteOnly: boolean,
+): boolean {
+  // `remoteOnly` guards the one shape that looks like this but is not it: a row composed from a peer's
+  // manifest with no bytes on this disk at all. There is nothing here to be a single copy OF, and leaving
+  // it in made the cheap Repos-table path and the composed One-repo path disagree — caught by
+  // repo-row-drift.spec.ts, which exists precisely to stop those two arithmetics drifting.
+  if (remoteOnly) return false;
+  // UNDECIDED specifically, not `!== "sync"`. An `ignore` decision is the user saying "do not replicate
+  // this" — raising a durability alarm on it nags about a choice they already made. Undecided is the state
+  // where they have said nothing AND the green pin (one_repo.mdx §4.9) actively reads as "handled", which
+  // is what makes the silence dangerous. It also keeps this metric a strict subset of `counts.pinnedForeign`,
+  // the bucket that counts exactly these rows.
+  return decision === "undecided" && pinnedForeign && !peers.some((p) => p !== selfLabel);
 }
 
 function countDecisions(files: FileRow[]): RepoCounts {
@@ -1115,6 +1157,9 @@ async function repoRowStats(
       } else counts.pending++;
       if (isSingleCopy(transfer, peers, selfLabel)) notBackedUp++;
     }
+    // Same arithmetic computeTaskMetrics() performs: a foreign pin nobody else claims is a single copy,
+    // whatever the decision axis says. Outside the branches above because it is not a decision state.
+    if (isUnpublishedForeignPin(decision, pinnedForeign, peers, selfLabel, remoteOnly)) notBackedUp++;
   };
 
   // Yielding on the same interval as the row walk: this loop is cheap PER candidate but a repo can hold

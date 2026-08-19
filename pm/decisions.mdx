@@ -91,7 +91,7 @@ An **explicit** both-off write is still a real, recorded decision (the table abo
 axes the caller never mentioned, not about axes the user deliberately turned off.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `axesToRecord()`,
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `axesToRecord()`,
 locked by `decision-axis-independence.spec.ts`.
 
 ### 1.1 This ledger records INTENT — git records the git-ignore STATE (LOCKED)
@@ -113,7 +113,7 @@ supplies **provenance only** (`decided_by`, `decided_at`) plus the team-shared i
 > `Git Ignore` metric, nagging the user to ignore files that are **already** ignored.
 
 Reading the git-ignore state from git when composing file rows is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 `composeFileRows()` and `computeTaskMetrics()` (the `bigNotIgnored` count).
 
 > **Note on `bigNotIgnored`.** The **backend field `TaskMetrics.bigNotIgnored` still exists and is still
@@ -121,7 +121,7 @@ Reading the git-ignore state from git when composing file rows is implemented in
 > of that name, which folded into **`Git Ignore`**. The tile's number and its popup's list both come from a
 > single frontend predicate over the git-sourced `FileRow.gitignore` / `gitignoreLocked` / `analysisOnly`
 > fields, so the count and the list can never disagree:
-> `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
 > `gitIgnoreCandidates()`.
 
 **The two axes are surfaced as two checkboxes** ([warnings.mdx §4.3](./warnings.mdx), option kind
@@ -142,7 +142,7 @@ generic popup's "a required radio must be picked" gate does **not** apply — th
 only two optional checkboxes; see [warnings.mdx §5.2](./warnings.mdx).)
 
 The two-checkbox options and the both-off-is-valid Apply gate are declared where the warning is built, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildAddToIpfsWarning()`, the `repo-files-need-decision` popup (`options` = two `kind:"checkbox"` entries; `canApply` returns true regardless of the boxes). It is opened by the **`Add to IPFS`** metric tile ([warnings.mdx §11](./warnings.mdx)).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildAddToIpfsWarning()`, the `repo-files-need-decision` popup (`options` = two `kind:"checkbox"` entries; `canApply` returns true regardless of the boxes). It is opened by the **`Add to IPFS`** metric tile ([warnings.mdx §11](./warnings.mdx)).
 
 The **git-ignore axis alone** has its own scoped entry point — the **`Git Ignore`** tile's popup — which
 carries **one** opt-in checkbox (**☐ Also add them to IPFS (pin)**, default **OFF**) and still writes
@@ -171,7 +171,7 @@ lacked (the gitignore engine, for one, kept no such memory — [git_ignore.mdx](
 > A written decision record — shared, timestamped, attributed — makes the warning leave and stay gone.
 
 Deriving Undecided vs. Decided from the presence of a folded decision record (not from a bare enum default) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()` (a path with no folded record is `undecided`; a folded record with `asked: true` is Decided, a tombstone `asked: false` returns it to Undecided), projected by `reconcile()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()` (a path with no folded record is `undecided`; a folded record with `asked: true` is Decided, a tombstone `asked: false` returns it to Undecided), projected by `reconcile()`.
 
 ---
 
@@ -249,7 +249,7 @@ every record for the reason the user gave: **"the other user may not see those f
 > fold does not read it.
 
 Deriving the STABLE, team-shared SID from the NORMALIZED git remote key (falling back to the local storage id only when there is no remote) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `decisionSid(folder, repoRoot)` (hashes `normalizeRemoteKey(repo.remote)` from `repo-identity.ts`, else `storageSid()`). The fold that keys on `path` alone is `foldLedger()` in the same file.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `decisionSid(folder, repoRoot)` (hashes `normalizeRemoteKey(repo.remote)` from `repo-identity.ts`, else `storageSid()`). The fold that keys on `path` alone is `foldLedger()` in the same file.
 
 ### 3.2 `path` + `fingerprint` — identity that survives absence and change
 
@@ -271,7 +271,7 @@ verified allow-listed email). The backend reads it from the request, not the cli
 cannot be spoofed.
 
 Recording the deciding user from the authenticated request is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` reads `currentUser(req).email` (from `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/current-user.ts`) and passes it to `recordDecision()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` reads `currentUser(req).email` (from `~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/current-user.ts`) and passes it to `recordDecision()`.
 
 ---
 
@@ -319,10 +319,10 @@ repo** so concurrent team edits fold instead of conflicting (§5). It is **never
 git-ignored within the working repo — it is not there at all.
 
 Reading and writing `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` (deterministic YAML, no volatile timestamp, so the sync-repo diffs stay clean) and resolving its destination is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readLedger(repoRoot)` / `appendDecision(repoRoot, record)` (bypasses the `updated_at`-stamping `yaml-store`, like `manifest.service.ts`; both resolve the Local-Storage `repos/<repoKey>/` root via `tracking-root.service.ts` — `resolveTrackingRoot()`, never the working repo).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readLedger(repoRoot)` / `appendDecision(repoRoot, record)` (bypasses the `updated_at`-stamping `yaml-store`, like `manifest.service.ts`; both resolve the Local-Storage `repos/<repoKey>/` root via `tracking-root.service.ts` — `resolveTrackingRoot()`, never the working repo).
 
 Mirroring the ledger to the sync repo and marking it a union-merge path there so team edits never conflict is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (destination from `tracking-root.service.ts` — `resolveStateSyncRepo()`), with `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` (add `"repos/*/decisions.yaml"` alongside `"repos/*/manifest.yaml"`), applied by `ensureMergeAttributes()` **on the sync repo**.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)` / `reconcileFromSyncRepo(repoRoot)` (destination from `tracking-root.service.ts` — `resolveStateSyncRepo()`), with `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `UNION_MERGE_PATHS` (add `"repos/*/decisions.yaml"` alongside `"repos/*/manifest.yaml"`), applied by `ensureMergeAttributes()` **on the sync repo**.
 
 ---
 
@@ -395,7 +395,7 @@ must converge **without a human ever resolving a conflict**. The design that gua
    > and both survive.
 
    Collapsing re-stamps at the single shared serialization of the ledger is handled in code:
-   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `compactLedger()`, applied in `serializeLedger()` (the one spelling used by `decisions.service.ts` — `writeLedger()` and by both mirror directions).
+   `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `compactLedger()`, applied in `serializeLedger()` (the one spelling used by `decisions.service.ts` — `writeLedger()` and by both mirror directions).
 
 5. **Provenance is preserved, not overwritten.** Last-writer-wins changes the *current* decision but the
    log still shows the earlier events until compaction — so "who decided what, when" is auditable. If Bob
@@ -413,10 +413,10 @@ must converge **without a human ever resolving a conflict**. The design that gua
    Both directions now union by **event identity** (exact duplicates collapse; the fold resolves the rest),
    so no writer can ever subtract another writer's events.
    The event-identity union crossing the mirror boundary in both directions is handled in code:
-   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `unionLedgerEvents()`, applied in `tracking-sync.service.ts` — `mirrorToSyncRepo()` (write) and `reconcileFromSyncRepo()` (read).
+   `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `unionLedgerEvents()`, applied in `tracking-sync.service.ts` — `mirrorToSyncRepo()` (write) and `reconcileFromSyncRepo()` (read).
 
 Folding the merged event log to current per-file state (latest `decided_at` per `path`, `decided_by` tiebreak) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `foldLedger()`.
 
 ---
 
@@ -445,7 +445,7 @@ no consent that can stop the *local* record from being written, because it never
   writing the working repo ([artifact_placement_policy.mdx §7.1](./artifact_placement_policy.mdx)).
 
 Writing the ledger to Local Storage unconditionally, and mirroring to the sync repo only when it is enabled, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` always appends to the Local-Storage ledger via `resolveTrackingRoot()`, then calls `tracking-sync.service.ts` — `mirrorToSyncRepo()` when `resolveStateSyncRepo()` is non-null; the local `config.yaml` enum cache is always updated.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` always appends to the Local-Storage ledger via `resolveTrackingRoot()`, then calls `tracking-sync.service.ts` — `mirrorToSyncRepo()` when `resolveStateSyncRepo()` is non-null; the local `config.yaml` enum cache is always updated.
 
 ---
 
@@ -477,8 +477,8 @@ a decision is recorded, LFB reconciles:
 > A rename of any of these would silently re-triage every already-decided file on every computer. The new
 > `Git Ignore` tile's popup (`repo-files-not-git-ignored`) writes through this **same** ledger and this
 > **same** reconciliation — it is a scoped entry point, not a second decision model.
-> *Tile labels in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
-> `METRIC_CATALOG`; *the frozen enum in:* `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
+> *Tile labels in:* `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+> `METRIC_CATALOG`; *the frozen enum in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
 > `reconcile()`.
 * **git-ignore axis → the working tree.** For each folded record with `gitignore: true`, ensure the file
   is git-ignored via the existing engine ([git_ignore.mdx](./git_ignore.mdx)) — anchored, idempotent,
@@ -490,7 +490,7 @@ a decision is recorded, LFB reconciles:
   choice ([storage_local.mdx §7](./storage_local.mdx), "the scanner reconciles, it never clobbers").
 
 Projecting the folded ledger onto the machine-local `decisions:` enum map (IPFS axis) and ensuring the git-ignore axis via the gitignore engine, on every pass and after each write, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, inline from `PATCH /:repoId/files`, and from `tracking-sync.service.ts` — `reconcileMirroredRepos()` right after every backbone pull folds a mirrored ledger, so a teammate's arriving decision reaches the pin engine without waiting for the next scan).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, inline from `PATCH /:repoId/files`, and from `tracking-sync.service.ts` — `reconcileMirroredRepos()` right after every backbone pull folds a mirrored ledger, so a teammate's arriving decision reaches the pin engine without waiting for the next scan).
 
 ---
 
@@ -522,7 +522,7 @@ ones in [one_repo.mdx](./one_repo.mdx) and [menus.mdx](./menus.mdx), only what t
   ledger until the user confirms.
 
 All of these call the one write path so the record's `asked`/`decided_by`/`decided_at`/`sid` are stamped uniformly, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (accepts `{ paths, ipfs?, gitignore? }`, calls `recordDecision()` per path) — the single funnel `api.setDecision` and the bulk/menu actions all target.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (accepts `{ paths, ipfs?, gitignore? }`, calls `recordDecision()` per path) — the single funnel `api.setDecision` and the bulk/menu actions all target.
 
 ---
 
@@ -557,7 +557,7 @@ time forever is the failure mode a good default prevents, and it is why the orig
   act on files on our own" posture — the *policy toggle itself* is the explicit, one-time consent.
 
 The per-repo default-decision policy (read on scan, applied to newly-discovered candidates, recorded as policy-authored events) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `applyDefaultPolicy(folder, newPaths)` (called from `scanner.service.ts` `scanAll` for candidates with no folded record); policy read/written by `readDecisionPolicy()` / `setDecisionPolicy()`; the settings UI is [repo_settings.mdx §2](./repo_settings.mdx).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `applyDefaultPolicy(folder, newPaths)` (called from `scanner.service.ts` `scanAll` for candidates with no folded record); policy read/written by `readDecisionPolicy()` / `setDecisionPolicy()`; the settings UI is [repo_settings.mdx §2](./repo_settings.mdx).
 
 ---
 
@@ -588,7 +588,7 @@ inspect is barely better than none. Every place a decision is shown, its provena
   machine's stale guess.
 
 Surfacing `decidedBy` / `decidedAt` on each `FileRow` (so the table tooltip, filter, and file page can show provenance) is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` joins the folded ledger (`foldLedger`) and adds `decidedBy`/`decidedAt` to each row; `FileRow` in `@lfb/shared` gains the two optional fields; frontend `OneRepoPage.tsx` renders the tooltip + filter.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` joins the folded ledger (`foldLedger`) and adds `decidedBy`/`decidedAt` to each row; `FileRow` in `@lfb/shared` gains the two optional fields; frontend `OneRepoPage.tsx` renders the tooltip + filter.
 
 ---
 
@@ -615,7 +615,7 @@ deterministically (§5 last-writer-wins) but must never resolve it **silently**:
   has it.
 
 Detecting teammate-changed decisions on pull (diff the previous folded state against the freshly-merged one) and emitting the quiet dock note is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile()` returns the set of paths whose folded axes changed; `pin.service.ts` reports them to the progress dock.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile()` returns the set of paths whose folded axes changed; `pin.service.ts` reports them to the progress dock.
 
 ---
 
@@ -661,17 +661,17 @@ losing the user's intent or leaving zombie records:
   decision applies. No surprise re-pinning, no surprise re-asking.
 
 Carrying a decision across a rename (fingerprint match) and re-stamping it across a compress/convert are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `carryOnRename()` / `restampOnTransform()` / `staleOrphans()`, called from `scanner.service.ts` and the compress/convert flows ([compression.mdx §12](./compression.mdx), [codecs.mdx](./codecs.mdx)).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `carryOnRename()` / `restampOnTransform()` / `staleOrphans()`, called from `scanner.service.ts` and the compress/convert flows ([compression.mdx §12](./compression.mdx), [codecs.mdx](./codecs.mdx)).
 
 Telling "never here" from "deleted here", holding the grace period across passes, and dropping a held record the moment the bytes return are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/orphans.service.ts` — `classifyAbsent()`, whose held records persist on the unit's `status.yaml → orphans` map.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/orphans.service.ts` — `classifyAbsent()`, whose held records persist on the unit's `status.yaml → orphans` map.
 
 Acting on that classification during a pin pass — skipping the re-fetch of a held deletion, and on lapse unpinning the CID, dropping this computer's `pinned_by` claim and tombstoning the decision — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()` (grace window `ORPHAN_GRACE_MS`), with the repo unit's tombstone hook supplied by `pinRepoFolder()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()` (grace window `ORPHAN_GRACE_MS`), with the repo unit's tombstone hook supplied by `pinRepoFolder()`.
 
 Surfacing the held deletions to the user is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `deletedHereFor()` (the `RepoDetail.deletedHere` payload), rendered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDeletedHereWarning()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `deletedHereFor()` (the `RepoDetail.deletedHere` payload), rendered by
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `buildDeletedHereWarning()`.
 
 ---
 
@@ -709,7 +709,7 @@ suddenly re-ask about everything already triaged:
 > violated invariant per file as `decision_in_ledger: false` ([debug.mdx §7](./debug.mdx)).
 
 The one-time legacy-decisions backfill (seed the ledger from `config.yaml → decisions:`, `decided_by:"migrated"`, guarded and idempotent) is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/migrate-decisions-to-ledger.ts` — `migrateDecisionsToLedger()` (run at boot alongside `migrate-sync-to-pin.ts`); the standing per-reconcile guard lives in `decisions.service.ts` — `reconcile()` (the cache-only backfill block).
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-decisions-to-ledger.ts` — `migrateDecisionsToLedger()` (run at boot alongside `migrate-sync-to-pin.ts`); the standing per-reconcile guard lives in `decisions.service.ts` — `reconcile()` (the cache-only backfill block).
 
 ---
 
@@ -735,7 +735,7 @@ into public git history is a **privacy leak** we must not create by default:
   outside the repo, never a local absolute path, never any secret. It is small, auditable text.
 
 The per-repo attribution mode (email/handle/anonymous), the public-remote detection (of the SYNC repo) that defaults to `handle`, and the machine-local email↔handle map are to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (returns the value to stamp per the mode); mode stored in the shared policy block (§9); public-remote heuristic reuses `classifyRemote()` in `git.service.ts`, applied to the sync repo's remote resolved via `tracking-root.service.ts` — `resolveStateSyncRepo()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `attributionFor(folder, email)` (returns the value to stamp per the mode); mode stored in the shared policy block (§9); public-remote heuristic reuses `classifyRemote()` in `git.service.ts`, applied to the sync repo's remote resolved via `tracking-root.service.ts` — `resolveStateSyncRepo()`.
 
 ---
 
@@ -760,7 +760,7 @@ That has an honest precondition the UI must not hide:
   no separate sync, no separate schedule ([artifact_placement_policy.mdx §5](./artifact_placement_policy.mdx)).
 
 Detecting "no sync repo configured / toggle off" for a repo and returning the share-status the UI note reads is to be implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `shareStatus(folder)` (`shared` | `local_only_no_sync_repo`), reading `tracking-root.service.ts` — `resolveStateSyncRepo()`; consumed by the warning popup + [repo_settings.mdx §2.6](./repo_settings.mdx).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `shareStatus(folder)` (`shared` | `local_only_no_sync_repo`), reading `tracking-root.service.ts` — `resolveStateSyncRepo()`; consumed by the warning popup + [repo_settings.mdx §2.6](./repo_settings.mdx).
 
 ---
 
@@ -779,7 +779,7 @@ Detecting "no sync repo configured / toggle off" for a repo and returning the sh
   default remains flat.
 
 Enforcing the allow-list on every decision write (and the extension point for future role-gating) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter.use(requireAllowListed)` gates all decision writes; a future role check would sit in `PATCH /:repoId/files` before `recordDecision()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `reposRouter.use(requireAllowListed)` gates all decision writes; a future role check would sit in `PATCH /:repoId/files` before `recordDecision()`.
 
 ---
 
@@ -798,7 +798,7 @@ single decision, and the decision model must respect them:
   file — the flag is the standing exception the policy must honor.
 
 Rejecting an `ipfs:true` decision on a Never-IPFS file (and disabling the checkbox in the UI) is handled/where added in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` checks the entity's `neverIpfs` flag (via `entity.service.ts`) before recording `ipfs:true`; frontend disables the checkbox in `OneRepoPage.tsx` when the row's flag is set.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` checks the entity's `neverIpfs` flag (via `entity.service.ts`) before recording `ipfs:true`; frontend disables the checkbox in `OneRepoPage.tsx` when the row's flag is set.
 
 ---
 
@@ -819,7 +819,7 @@ guess:
   files aren't git-ignored" nudge (§7).
 
 Computing the repo/file counts from the folded ledger (via the reconciled enum) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `countDecisions()` reads the reconciled `cfg.decisions` (fed by `reconcile()`), so counts follow the shared ledger.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `countDecisions()` reads the reconciled `cfg.decisions` (fed by `reconcile()`), so counts follow the shared ledger.
 
 ---
 
@@ -847,7 +847,7 @@ PATCH /api/repos/:repoId/files
   same state; no error, no duplicate visible decision.
 
 The endpoint contract (both bodies, relative-path keys, session-derived `decided_by`, tombstone on legacy `undecided`) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; frontend callers `api.setFileDecisions` (two-axis) and `api.setDecision` (legacy) in `packages/frontend/src/api/client.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; frontend callers `api.setFileDecisions` (two-axis) and `api.setDecision` (legacy) in `packages/frontend/src/api/client.ts`.
 
 ### 19.1 An IPFS-on decision MOVES BYTES — the decision-triggered pin (dated revision 2026-08-03)
 
@@ -860,7 +860,7 @@ defect). The targeted pin runs with `manual: true`: a per-file decision **is** t
 flips `pinned=true` and the 15-minute background pass keeps the pin fresh from then on. An IPFS-off /
 gitignore-only / both-off decision still writes only the ledger — no bytes move.
 Decision-triggered pin fires in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (the `settingIpfsOn` branch) → `pinRepoFolder(folder, paths, { manual: true })` in `packages/backend/src/modules/pin/pin.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files` (the `settingIpfsOn` branch) → `pinRepoFolder(folder, paths, { manual: true })` in `packages/backend/src/modules/pin/pin.service.ts`.
 
 ---
 

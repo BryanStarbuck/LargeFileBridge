@@ -35,10 +35,10 @@ shows**. This spec owns that tab system end to end; the sibling specs own their 
 here for how the tab presents them.
 
 The tab strip and the per-tab tuning are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
-(mounts `TaskTabs` from `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` and
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+(mounts `TaskTabs` from `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` and
 selects the active tab's column set + sort + filter + metrics from
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`).
 
 This spec builds on the siblings and does not repeat them:
 
@@ -78,7 +78,7 @@ This spec builds on the siblings and does not repeat them:
   line, ellipsized ([one_repo.mdx §3.1](./one_repo.mdx#31-header--two-rows-and-neither-of-them-wraps-locked)) —
   so the tab strip never shares a line with it and never squeezes it.
 * **Look.** The house tab style already used by the File System tabs
-  (`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`): a
+  (`~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FsTabs.tsx` — `FsTabs`): a
   horizontal row of tab buttons, each a small **leading icon + label**, with a **2px underline** in
   `--lfb-primary` under the **active** tab (transparent under the others), active label at font-weight 500.
 * **Icons.** All → `LayoutGrid`; IPFS → `Pin` (the pin used everywhere for the Add-to-IPFS axis);
@@ -176,7 +176,7 @@ the page action-links row uses for its "More ▾"** ([page_actions.mdx §3](./pa
 strip, one overflow menu, no layout thrash.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` — `TaskTabs` (the
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/TaskTabs.tsx` — `TaskTabs` (the
 hidden measurement layer, the `useLayoutEffect` fit + `ResizeObserver`, the `visibleCount` split, the
 active-tab swap-back, and the `ChevronDown` menu).
 
@@ -197,7 +197,7 @@ Nothing is docked beside it and nothing reserves width from it — the explanati
 hover-info panel** (§3).
 
 The metrics strip is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
 (one `MetricPanel` per active-tab metric in a single `flex w-full flex-nowrap … overflow-x-auto` row;
 counts from `RepoDetail` per §2.5).
 
@@ -271,9 +271,9 @@ an arrow button (§2.6), so the tile itself is what the user presses. Examples:
   pinned on this node outside Large File Bridge): this metric is a *"pin these?"* ask, and it must never
   nag about a file whose bytes are already pinned ([one_repo.mdx §4.1 blockquote / §4.9 fix 4](./one_repo.mdx)).
   Counted in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
   `computeTaskMetrics` (popup list in
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
   `buildAddToIpfsWarning`).
 * **Git Ignore** → the git-ignore popup over the large files Git is still allowed to commit
   ([git_ignore.mdx](./git_ignore.mdx)); its Apply writes **both** axes so an existing pin decision survives
@@ -293,9 +293,9 @@ it (the spec backlog: only a few of the catalogued warnings are wired as popups 
 
 The panel → popup wiring opens `WarningPopup` directly (the same popup the banner arrow button opens),
 driven per-metric by a `WarningDef` built from the live `RepoDetail`, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`
 (opens `WarningPopup` on click) and
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `buildMetricWarning` (maps a `MetricId` + `RepoDetail` to the popup's `WarningDef`; returns null ⇒ the
 panel falls back to its tab-switch `onOpen`). The same module's `topRecommendation` resolves the
 worst-first popup the header **"View recommendation ›"** primary opens ([one_repo.mdx §3.1](./one_repo.mdx)).
@@ -338,12 +338,12 @@ scoped to exactly the files the number counts, and lets the user **start the wor
   [transcribe_engine.mdx §3.6](./transcribe_engine.mdx), [ai_description.mdx §2](./ai_description.mdx)).
 
 The new per-metric builders and their wiring into the tile-popup resolver are added in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `buildTranscribeWarning()` / `buildDescribeWarning()` / `buildCompressWarning()` (each maps `RepoDetail` +
 `repoId` → a `WarningDef` whose `targets` are the counted files and whose `apply` enqueues the matching
 background jobs), wired into `buildMetricWarning()`'s `switch` (the `transcribable` / `describable` /
 `compressibleVideos` / `compressibleImages` cases) and ranked in `topRecommendation()` (§2.7). The tiles
-still mount through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx`
+still mount through `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx`
 — `MetricsStrip` (unchanged: it already opens whatever `WarningDef` the resolver returns, else falls back to
 `onOpen`).
 
@@ -386,11 +386,11 @@ each `FileRow` against the special-files classifier and the storage index so the
   4 existed no row could have `gitignore === false` and the old `bigNotIgnored` count was **always 0**.
 
 The per-tab metric counts are computed by the backend in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 `computeRepoDetail` (which now attaches `detail.taskMetrics`, joining `composeFileRows` with
 `classifySpecial` from `modules/scanner/special-file.service.ts` and `readStorageIndex`), and resolved per
 tile in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` —
 `metricCount()` (with `gitIgnoreCandidates()` for the Git Ignore tile).
 
 ### 2.5.1 The two DECISION tiles — Add to IPFS + Git Ignore (LOCKED; there is no "Undecided" tile)
@@ -418,11 +418,11 @@ A decision has **always been two independent axes** — **Add to IPFS** and **gi
   ([one_repo.mdx §1 / §4.1](./one_repo.mdx)). Nobody may "clean up" the wire value.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `MetricId`,
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `MetricId`,
 `METRIC_CATALOG`, `metricCount()`, `gitIgnoreCandidates()`;
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `buildAddToIpfsWarning()` / `buildGitIgnoreWarning()` (wired into `buildMetricWarning()`); tile order per tab
-in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`.
+in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`.
 
 ### 2.7 The per-metric blue header primary — every actionable metric can be the recommendation (LOCKED)
 
@@ -484,9 +484,9 @@ verb**, white text, with a **trailing right chevron `›`**:
 
 The worst-first pick (now including the transcribe / describe / compress builders), the per-metric label,
 and the blue/red fill are resolved in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` —
 `topRecommendation()` (returns `{ metricId, warning, label }`, the order above) and the header render in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (the `scanDue ? "Scan now" : topRec ? <primary label={topRec.label} …> : null` ternary, fill from
 `topRec.warning.state === "bad" ? var(--lfb-bad) : var(--lfb-primary)`).
 
@@ -528,14 +528,14 @@ the **WeCitizens.social** / **ACT 3 Filmmaking** external links and the account/
   never covers the row the user is reading and the panels need no inline prose.
 
 The publish API and the forwarder are rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` —
 `setHoverInfo()` (module-level store, unchanged signature) and `HoverInfoBridge` (the render-nothing
 component), publishing through
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` —
 `useHoverInfoPublisher`, and rendered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` —
 `HoverInfoPanel` (the `"text"` block kind). The strip that mounts the bridge is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`.
 
 ---
 
@@ -734,15 +734,15 @@ This section says only where the **tabs** put it:
   [ipfs_ui.mdx §21.1](./ipfs_ui.mdx#211-what-the-tabs-panels-count-once-a-peers-manifest-arrives-locked).
 
   The tab's default sort is declared in code:
-  `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS.ipfs.defaultSort`.
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS.ipfs.defaultSort`.
 * **`Large files only` does not hide them** on any tab ([tables.mdx §4e](./tables.mdx#4e-remote-only-rows-in-a-file-table-locked-site-wide)):
   a remote-only row is a large file, not an `analysisOnly` row. It is unaffected by the OCR tab's default-OFF
   exception (§4.6) because the OCR tab does not show it at all.
 
 The tab that admits or excludes a remote-only row is the tab's own `rowFilter` in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/taskTabs.config.ts` — `TASK_TABS`
 (the analysis tabs' `could`/`done` predicates already exclude `na`), over the rows composed by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`,
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()`,
 whose per-tile counts come from `computeTaskMetrics()`.
 
 ---
@@ -785,9 +785,9 @@ transcript.
   default sort puts the red/orange "could" rows first.
 
 The Transcribe status icon (three states, click-to-transcribe / click-to-view) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/TranscribeStatusIcon.tsx` —
 `TranscribeStatusIcon` (state from `FileRow.transcribe`; done-blue token `--lfb-pin` in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/styles.css`, via the shared `StatusActionIcon`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/styles.css`, via the shared `StatusActionIcon`).
 
 ### 5.1 The Transcribable metric → popup → Confirm → Processing flow (LOCKED)
 
@@ -817,10 +817,10 @@ to transcribe**):
 
 This confirm flow (default-checked 58 → uncheck → solid-blue "Transcribe N files" → enqueue → Processing) is
 rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup`
-and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — the
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `TranscribeBatchPopup`
+and `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — the
 `transcribable` panel's `onOpen` (opens the same popup, gated by `withModelReady()` from
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/transcribe.ts`).
 
 > **The `Create Transcriptions` page action-link opens this SAME popup (LOCKED — [dialogs.mdx §6.1](./dialogs.mdx)).**
 > On the One-repo page the **Create Transcriptions** / **Create AI descriptions** links in the action-links
@@ -863,10 +863,10 @@ The **AI descriptions** tab (§4.5) shows a per-row **Describe status icon** bui
   default sort puts the red/orange "could" rows first.
 
 The Describe status icon (three states, click-to-describe / click-to-view) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/DescribeStatusIcon.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/DescribeStatusIcon.tsx` —
 `DescribeStatusIcon` (state from the new `FileRow.describe` field; done-teal token `--lfb-describe-done`,
 via the shared `StatusActionIcon` — the same component `TranscribeStatusIcon` and `CompressStatusIcon` use).
-Its click is wired through `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`
+Its click is wired through `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`
 — `OneRepoPage` `onDescribeActivate()` (the describe analog of `onTranscribeActivate()`; the "could" branch
 runs behind the describe consent gate, then enqueues).
 
@@ -896,10 +896,10 @@ transcribe confirm flow (§5.1):
 
 This confirm flow (default-checked candidates → uncheck → solid-blue "Describe N files" → provider/model
 gate → enqueue → Processing) is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup`
-(the describe analog of `TranscribeBatchPopup`) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `DescribeBatchPopup`
+(the describe analog of `TranscribeBatchPopup`) and `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx`
 — `buildDescribeWarning()` (the `AI Describable` tile's / header primary's `WarningDef`, gated by the describe
-consent check in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/describe.ts`).
+consent check in `~/repos/LargeFileBridge/code/packages/frontend/src/lib/describe.ts`).
 
 ### 5.3 The three status icons at a glance (LOCKED)
 
@@ -942,13 +942,13 @@ user's computers via the sync-repo mirror — so an in-place-compressed video (s
 extension heuristic alone would offer forever) flips to **Done** on every machine. Without this signal the
 `compressible videos` count could never converge after a compress.
 The per-row status verdict is computed in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` —
 `compressStatusFor()` (name verdict + the shared probe's `"compression"` signal from
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` —
 `analysisOutputs()` / `compressionRecordFresh()`).
 
 The Compress status icon is rendered in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` —
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/CompressStatusIcon.tsx` —
 `CompressStatusIcon` (state from `FileRow.compress`).
 
 ---
@@ -998,7 +998,7 @@ export const TASK_TAB_ORDER: TaskTabId[] =
   nothing is hovered (§3).
 
 The active-tab column/sort/filter/metric selection is applied in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage`
 (reads `TASK_TABS[activeTab]`, passes the projected `columns` + `defaultSort` to `DataTable` and the
 filtered `data`, and the tab's `metrics` to `MetricsStrip`).
 

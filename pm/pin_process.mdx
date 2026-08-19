@@ -51,7 +51,7 @@ explicit, user-confirmed action, and it never quietly mutates a repo.
 > when in fact LFB knew it perfectly well and was merely not pinning it yet.
 
 Discovering and registering every git working tree with no user action (identity + `pinned` seeded off, i.e. pinning-not-yet-opted-in) is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo`
 
 Wording rule for all specs and UI copy: prefer **"every repo on this computer"** / **"known repo"** /
 **"opted in to IPFS pinning"** over **"managed repo."** "Managed" survives only where it plainly means
@@ -87,11 +87,11 @@ within twice its interval is **run in-process** and its OS job is **repaired**, 
 never silently halt the pass while the app is up. This backstop — and the full taxonomy of ways the flow
 can stall and how each self-heals or is surfaced — is specified in
 [backbone_resilience.mdx](./backbone_resilience.mdx) (§3 the watchdog, §7 the overdue signal), implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/schedule/watchdog.service.ts` —
 `startWatchdog()`.
 
 The full pass over **every repo plus the computer unit**, and a manual Pin now that pins the clicked repo first (as the priority unit) then runs the pass over the remaining units in the background, are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll({ priorityDone })` (repos fan out via `runPool`, then `pinComputerUnit()`; both repo and computer share one generic `runUnitPin` core), invoked after the priority repo by `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/pin`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll({ priorityDone })` (repos fan out via `runPool`, then `pinComputerUnit()`; both repo and computer share one generic `runUnitPin` core), invoked after the priority repo by `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/pin`
 
 ---
 
@@ -117,7 +117,7 @@ The selection Set is keyed by `fileId`, never by path — mapping it is mandator
 must also **show its count on the label** so its scope is legible before the click.
 
 Mapping the checked set to the path form each route speaks is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()` (pin + decisions) / `selectedAbsPaths()` (compress + the producing trio).
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/selection.ts` — `selectedRelPaths()` (pin + decisions) / `selectedAbsPaths()` (compress + the producing trio).
 
 **THE SCOPE BINDS EVERY HALF OF THE PASS, and it binds what the pass WRITES BACK.** A paths-scoped run is
 one the user asked for over specific files — the bulk **Pin now (selected)**, and the targeted pin every
@@ -142,7 +142,7 @@ scheduleTask that fires mid-pass). The **priority unit is always pinned by its o
 never dropped by the guard — only the shared *remainder* fan-out is de-duplicated.
 
 Answering with the priority repo's detail immediately, then running the remainder pass in the background under the in-flight guard, is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll` (`passInFlight` guard) + `repos.router.ts` `POST /:repoId/pin` (`void pinAll({ priorityDone })`)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinAll` (`passInFlight` guard) + `repos.router.ts` `POST /:repoId/pin` (`void pinAll({ priorityDone })`)
 
 ---
 
@@ -186,7 +186,7 @@ Sequential pinning is a **defect to fix**, not an acceptable baseline. Any place
 
 **Two budgets, because there are two resources.** The **unit** fan-out is CPU-shaped and keeps the canonical
 **RESPONSIVE budget** (`cores − 2`) defined in [parallelization.mdx §1](./parallelization.mdx) and exposed as
-`responsiveBudget()` in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`:
+`responsiveBudget()` in `~/repos/LargeFileBridge/code/packages/backend/src/shared/concurrency.ts`:
 the pin pass is its **reference consumer** — work that runs *alongside* interactive use, leaving 2 cores for
 the web app + IPFS node rather than running hot at ~90% like the mass-compute budget the job queue draws
 ([performance.mdx P-26](./performance.mdx)). The **transfer** ceiling is the hard 8 above and is deliberately
@@ -195,7 +195,7 @@ resource, and "how many cores" can never answer "how many streams fit down this 
 
 The two-level fan-out — a `cores − 2` pool across units and one shared **hard-8** limiter that caps ALL
 per-file add/pin/fetch work — is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `IPFS_TRANSFER_CONCURRENCY` (per-file `Promise.all` through the limiter)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runPool` + `PIN_CONCURRENCY` (units) and `ipfsLimiter` + `IPFS_TRANSFER_CONCURRENCY` (per-file `Promise.all` through the limiter)
 
 ---
 
@@ -238,10 +238,10 @@ user's click behind a three-hour background sweep, with a spinner and no explana
   another pull wrote meanwhile. That short read-modify-write is the one moment a pull takes the unit lock.
 
 *Implemented in:*
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `fetchesInFlight` +
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `fetchesInFlight` +
 `inFlightKey` (per-file single flight), `repoPullInFlight(repoRoot)` (what the sweeps ask), and the
 `healedCids` re-read at the end of `pullMissingInner`. The note's composition is
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts` — `WorkNote.compose()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts` — `WorkNote.compose()`.
 
 ---
 
@@ -264,9 +264,9 @@ For **every** known unit the pass visits, it always **reconciles** (no opt-in re
    already pinned under another profile and **adopts that CID** rather than re-adding a duplicate. Full rules
    and the honest boundary (why we do NOT auto-hash undecided files on the hot path) live in
    [knowledge/ipfs.mdx §5.1](../knowledge/ipfs.mdx#51-the-same-file-can-have-several-different-cids--never-compare-cid-strings-raw-locked-learned-from-a-defect).
-   Implemented in `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` —
+   Implemented in `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` —
    `canonicalCid()` / `canonicalPinnedSet()` / `contentPinnedCid()`; applied at the reconcile seams in
-   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`.
+   `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`.
 3. **Reconcile any incoming Sync List** — never trusted, always reconciled per
    [sync_list.mdx §5](./sync_list.mdx#5-trust--reconciliation-the-load-bearing-rule).
 4. **Write `status.yaml`** — last pin time, counts, errors — so the UI reflects the visit.
@@ -293,10 +293,10 @@ commit for the backbone to push. A **failed** `pin ls` leaves every claim untouc
 an empty pinset, and dropping our claims on it would tell the user's other computers this machine had lost
 the bytes.
 Self-claim verification for units whose pin pass does not run, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
 `healSelfPinClaims()`, called from `pinRepoFolderInner()` and `pinStorageUnitInner()` on the
 `pinned: false` branch. The paired rule that stops new ones arriving lives at the merge:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` —
 `mergeManifests(local, incoming, selfLabel)`.
 
 **Device write-back is explicitly NOT gated by `pinned`.** Writing **this computer's own**
@@ -307,7 +307,7 @@ configured repo, with **no** outward footprint. So a Git-backed storage runs its
 above waits on the opt-in. This is the
 guarantee the [every-10-minute device-registration worker](./devices.mdx#11-the-device-registration-write-back--every-10-minutes-locked)
 is built around, and it is applied to this pin pass too — implemented in
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` —
 `pinStorageUnit(id)` (git backbone cycle + `writeSelfDevice` outside the `pinned` gate; only `runUnitPin` inside it).
 
 **A manual Pin now is itself the opt-in.** Clicking Pin now on a not-yet-opted-in repo is an explicit
@@ -316,7 +316,7 @@ scheduleTask keeps it fresh. (This is the exact bug §6 records: the manual path
 same `pinned:false` guard as the background scheduler and silently did nothing.)
 
 The manual-vs-background gating — the background scheduler respects `pinned:false`, a manual Pin now moves bytes and flips the unit's opt-in on — is handled in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder(folder, onlyPaths, { manual })`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolder(folder, onlyPaths, { manual })`
 
 ---
 
@@ -376,17 +376,17 @@ This is a **design smell to hunt for everywhere**: any action whose success UI i
 whether it did anything. Flag and fix such silent no-ops on sight.
 
 Reporting the honest per-cause tally is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()` returning `PinCounts`, rendered by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `pinSummary()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()` returning `PinCounts`, rendered by
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `pinSummary()`.
 
 Streaming live progress into the dock is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — the `PinReport` callback threaded through `pinRepoFolder()` → `runUnitPin()`, and `pinAll()`'s own per-unit `track("pin", "every repo and storage on this computer", …)` registration.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — the `PinReport` callback threaded through `pinRepoFolder()` → `runUnitPin()`, and `pinAll()`'s own per-unit `track("pin", "every repo and storage on this computer", …)` registration.
 
 Composing the step line each phase reports is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts` — class `WorkNote`, methods `phase()` / `start()` / `detail()` / `detailLazy()` / `finish()`, plus `yieldToLoop()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/work-note.ts` — class `WorkNote`, methods `phase()` / `start()` / `detail()` / `detailLazy()` / `finish()`, plus `yieldToLoop()`.
 
 Turning a fetching pin's DAG-node stream into the byte reading that line shows is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()`'s `onNodes` callback and `approxFetchedBytes()`; the true byte counts come from `addFile()`'s `onBytes` (Kubo `add?progress=true`) and `catToFile()`'s `onBytes`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `pinAdd()`'s `onNodes` callback and `approxFetchedBytes()`; the true byte counts come from `addFile()`'s `onBytes` (Kubo `add?progress=true`) and `catToFile()`'s `onBytes`.
 
 ---
 
@@ -417,7 +417,7 @@ A disagreement it cannot settle by editing a record is therefore **reported**, n
 
 **What it checks, per manifest entry.** Deciding the verdict from `onDisk` × `heldHere` × `claimed` and
 correcting the record is implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` — function
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` — function
 `reconcileEntry()`; the per-repo pass that folds both manifests, writes them back and bumps the repo's
 topics is `reconcileRepo()` / `reconcileRepoInner()` in the same file.
 
@@ -457,14 +457,14 @@ commit. So a claim is dropped only when this pass actually established the absen
 errored probe leaves the record exactly as found, counts as `claimsUnverified`, and does **not** count as a
 change (or the manifests would be rewritten and committed every pass on any repo big enough to exhaust the
 budget). Adding a claim needs no such caution — `held` is only ever true because we saw the pin. Implemented
-in code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` —
+in code: `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` —
 `reconcileEntry()` STEP 1/STEP 2. Locked test: `modules/pin/claim-verification.spec.ts`.
 
 **The other record on a repo.** The machine-local frozen `decisions:` enum is a projection of the shared
 ledger, and every read path trusts the projection rather than re-folding it, so drift there is the same
 class of defect as a stale pin claim. The pass re-projects rather than re-deriving its own answer.
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
 `reconcile()`, called per repo from `reconcileRepoInner()`.
 
 **Two invariants outrank "make the records agree", and the pass yields to both.**
@@ -482,7 +482,7 @@ Implemented in code:
 **A pass that cannot see does nothing.** An unreachable node answers "unknown", never "nothing is pinned"
 (§5.1). Read as empty, every rule above fires the wrong way at once and a single pass could strip a repo's
 whole manifest, so the pass declines to run instead of guessing. Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinnedCidSet()`
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinnedCidSet()`
 returning `null`, checked at the top of `reconcileRepoInner()`.
 
 **Concurrency and cost.** It takes the SAME per-repo unit lock the pin pass takes — both write the manifest
@@ -498,13 +498,13 @@ still coming up. There is no launchd/schtasks/systemd job and nothing for the us
 re-arming timer inside the running server, armed once at boot. The due time is persisted for the reason
 pull-retry persists its own: a restart must RESUME the remaining wait, not reset it, or a long-interval pass
 never runs on a machine that restarts often. Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/reconciler.service.ts` —
 `startReconciler()` and `nextReconcileDelayMs()`; armed from `code/packages/backend/src/main.ts`.
 
 **Asking for it now.** A user who does not want to wait for the next tick can run one repo's repair on
 demand; the response carries the refreshed detail so the metric tiles show corrected numbers without a
 second round trip. Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` —
 `POST /api/repos/:repoId/reconcile`.
 
 Locked tests: `code/packages/backend/src/modules/pin/reconciler.spec.ts`.

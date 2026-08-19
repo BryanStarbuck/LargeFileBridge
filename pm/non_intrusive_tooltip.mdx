@@ -47,7 +47,7 @@ Siblings this builds on and does not repeat:
   beyond is dropped (§3). It must never push the account slot down or overlap it.
 
 The reserved white block + the panel mount sit between the nav list and the account slot in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — `Sidebar` (a fixed-height `<div>` inserted between the closing `</nav>` and the account-slot `div`), rendering `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel`.
 
 ---
 
@@ -83,11 +83,11 @@ moving off clears it (a short debounce prevents flicker between adjacent chips):
 > path's full text) are unaffected.
 
 Each hoverable element registers itself as a source via one shared hook, in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `useHoverInfoSource(payload)` (returns `{ onMouseEnter, onMouseLeave, onFocus, onBlur }` that set/clear the app-level hover state), consumed by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` (per chip) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the row + the folder glyph).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `useHoverInfoSource(payload)` (returns `{ onMouseEnter, onMouseLeave, onFocus, onBlur }` that set/clear the app-level hover state), consumed by `~/repos/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` (per chip) and `~/repos/LargeFileBridge/code/packages/frontend/src/pages/fs/FileSystemPage.tsx` — `FsRow` (the row + the folder glyph).
 
 The One-repo sources use the **imperative** form of the same publish path — they are not one element but
 dozens of tiles, cells and icons — in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo(text)` / `setHoverInfo(null)` (a tiny module-level store) and `HoverInfoBridge` (renders nothing; mounted once by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`) which forwards the store into the provider via `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo(text)` / `setHoverInfo(null)` (a tiny module-level store) and `HoverInfoBridge` (renders nothing; mounted once by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip`) which forwards the store into the provider via `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()`.
 
 ---
 
@@ -138,7 +138,7 @@ would destroy it.
   competes with code-key or detail blocks for the reserved height.
 
 The three block kinds and the text block's wrapped, clamped rendering are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoBlock` (the `"code" | "detail" | "text"` union) and `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `Block` (the `kind === "text"` branch, 5-line clamp).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoBlock` (the `"code" | "detail" | "text"` union) and `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `Block` (the `kind === "text"` branch, 5-line clamp).
 
 ### 3.3 Only what fits (LOCKED)
 
@@ -157,7 +157,7 @@ The three block kinds and the text block's wrapped, clamped rendering are implem
   scrolled or crammed.
 
 The block list, the two sections, the priority order, and the fit-or-drop layout (measure the reserved height, render blocks until the next would overflow, never scroll/grow) are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (builds the ordered `blocks[]` from the active `HoverInfo` payload; the fit-or-drop pass), with the payload shape in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfo` / `HoverInfoBlock` (`{ kind: "code", chip, name, line } | { kind: "detail", title, lines } | { kind: "text", text }`).
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` (builds the ordered `blocks[]` from the active `HoverInfo` payload; the fit-or-drop pass), with the payload shape in `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfo` / `HoverInfoBlock` (`{ kind: "code", chip, name, line } | { kind: "detail", title, lines } | { kind: "text", text }`).
 
 ---
 
@@ -178,7 +178,7 @@ chip to a row cleanly swaps the content.
   context with a STABLE identity**: **publishers read the setter context; readers read the main one.**
 
 The provider, the single-slot hover state, the setter-only context, and the clear debounce are implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoProvider` / `useHoverInfo()` (read) / `useHoverInfoSource()` (declarative write) / `HoverInfoSetterContext` (the stable setter-only context), mounted at the app root in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/main.tsx`, with the imperative reader in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoContext.tsx` — `HoverInfoProvider` / `useHoverInfo()` (read) / `useHoverInfoSource()` (declarative write) / `HoverInfoSetterContext` (the stable setter-only context), mounted at the app root in `~/repos/LargeFileBridge/code/packages/frontend/src/main.tsx`, with the imperative reader in `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()`.
 
 ---
 
@@ -258,7 +258,7 @@ active page's default hint) into the app-wide provider the panel reads.
   which is why §6.1's teaching rule can be stated site-wide.
 
 Implemented in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo()` (the module-level store), `setHoverDefault()` / `useHoverDefault()` (the at-rest hint) and `HoverInfoBridge` (renders nothing; forwards the store + `defaultHint` into the provider), mounted **once** at `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, using `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()` and rendered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` / `Block`. The One-repo per-tab at-rest hint is registered by `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` calling `useHoverDefault(defaultHint)`.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `setHoverInfo()` (the module-level store), `setHoverDefault()` / `useHoverDefault()` (the at-rest hint) and `HoverInfoBridge` (renders nothing; forwards the store + `defaultHint` into the provider), mounted **once** at `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, using `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/useHoverInfoPublisher.ts` — `useHoverInfoPublisher()` and rendered by `~/repos/LargeFileBridge/code/packages/frontend/src/components/hoverinfo/HoverInfoPanel.tsx` — `HoverInfoPanel` / `Block`. The One-repo per-tab at-rest hint is registered by `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/MetricsStrip.tsx` — `MetricsStrip` calling `useHoverDefault(defaultHint)`.
 
 ### 6.1 It also explains the five icon control columns (LOCKED)
 
@@ -274,10 +274,10 @@ same role it already plays for the code badges. The per-kind explanation strings
 tiles and rows use.
 
 Publishing the icon-column explanation on hover is wired in code:
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TaskIconHeader` /
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/taskIcons.tsx` — `TaskIconHeader` /
 `TaskStatusCell` (each calls `setHoverInfo` with the kind's explanation), forwarded to the left-bar panel by
-`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoBridge`,
-which is mounted **globally** in `~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, so this works on every table on every page, not just One-repo.
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/HoverInfoRegion.tsx` — `HoverInfoBridge`,
+which is mounted **globally** in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/app/AppShell.tsx` — `AppShell`, so this works on every table on every page, not just One-repo.
 
 <!--
   The NON-INTRUSIVE hover-info panel pinned to the BOTTOM of the left bar, directly ABOVE the external
