@@ -71,6 +71,9 @@ import { track } from "../progress/progress.registry.js";
 import { WorkNote, yieldToLoop } from "../progress/work-note.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
+// The RECORDED foreign-pin discovery (foreign_pin_discovery.mdx §5) — a flag read, never a hash, so it
+// is safe on the per-file pin path. Used to publish an already-pinned file without re-adding it.
+import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
 import { pinsetHasContent } from "./cid-equivalence.service.js";
 import { recordCidCorrection } from "./cid-correction.js";
 import { noteSupersededCid, supersededCid, supersededPairs, adoptSupersededCids } from "./superseded-cids.service.js";
@@ -331,6 +334,43 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
               verdict === "superseded"
                 ? `Adopted existing pin for ${rel} -> ${already} and replaced the wrapper-directory CID the manifest recorded.`
                 : `Adopted existing foreign-profile pin for ${rel} -> ${already} (no duplicate add; manifest CID ${existing.cid} left as recorded).`,
+            );
+            return;
+          }
+        }
+        // NEW-ENTRY FOREIGN ADOPTION (foreign_pin_discovery.mdx §5/§6, acceptance criterion 6: a pin
+        // another tool created is "discovered and shown but NEVER re-pinned"). The adoption branch above
+        // is bounded to `existing?.cid` — files ALREADY in the manifest. That left the case this whole
+        // subsystem exists for unhandled: a file the background pass discovered is pinned here under a
+        // foreign CID, which the user has NOW decided to sync. With no manifest entry there is nothing
+        // for the branch above to compare, so it fell straight through to `addFile()` and re-uploaded
+        // bytes this node already holds, under a SECOND CID — a duplicate pin of an identical file, and
+        // the manifest publishing our CID rather than the real one the IPFS page already names.
+        //
+        // Measured on charlie-kirk (2026-08-19): 49 videos, 2.0 GB, every one of them in this state.
+        //
+        // Reads the RECORDED discovery only — never a hash on this path (§3 honest boundary). The live
+        // `pinset` is the authority on whether that discovery is still true: if another tool has since
+        // `pin rm`'d the bytes the record is stale, we fall through and add normally (§5.1).
+        if (!existing?.cid) {
+          const discovered = foreignPinByAbsPath(abs);
+          const discoveredCanon = discovered ? ipfs.canonicalCid(discovered.cid) : null;
+          if (discovered && discovered.size === st.size && discoveredCanon && pinset.has(discoveredCanon)) {
+            byPath.set(rel, {
+              path: rel,
+              cid: discovered.cid, // the ACTUAL CID the bytes are pinned under, recorded verbatim (§5)
+              size: st.size,
+              modified_at: st.mtime.toISOString(),
+              sha256: null,
+              pinned_by: [t.label],
+            });
+            // `added`, not `pinned`: the manifest gained an entry, but no byte was uploaded and no new
+            // pin was taken — the pass must not claim work it did not do (§6 truthful counts).
+            counts.added++;
+            log.info(
+              "pin",
+              `Published existing foreign pin for ${rel} -> ${discovered.cid} (${discovered.profile}; ` +
+                `no duplicate add — bytes were already pinned on this computer).`,
             );
             return;
           }

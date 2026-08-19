@@ -48,13 +48,19 @@ const MATCH: Record<FilesListCategoryKey, (r: FileRow) => boolean> = {
   // Bytes exist on another of the user's computers and not here: a manifest-composed remote-only row,
   // or a decided (sync) file whose local pinset verifiably lacks the CID (pinnedHere === false).
   pull_down: (r) => r.presence === "remote-only" || (r.decision === "sync" && r.pinnedHere === false),
-  // No durable copy anywhere we can see: present locally, no sync decision, no device claims a pin,
-  // and no foreign pin discovered. Lose this disk, lose the file (cli.mdx §4.2).
+  // No durable copy anywhere we can see: present locally, no sync decision, no device claims a pin.
+  // Lose this disk, lose the file (cli.mdx §4.2).
+  //
+  // A DISCOVERED FOREIGN PIN IS NOT A BACKUP. This predicate used to exclude `pinnedForeign` rows, on the
+  // reading that the bytes are pinned so the file is safe. They are pinned on exactly ONE node — THIS one —
+  // and a foreign-pinned undecided file has no manifest entry, so no other computer of the user's can even
+  // see its CID, let alone fetch it (foreign_pin_discovery.mdx §5/§6). That is the definition of this
+  // bucket, not an exception to it: on charlie-kirk it hid 49 videos / 2.0 GB behind a reported 0.
+  // `peers` already carries the only durability that counts — another machine claiming the file.
   not_backed_up: (r) =>
     r.presence !== "remote-only" &&
     r.decision !== "sync" &&
     (r.peers?.length ?? 0) === 0 &&
-    r.pinnedForeign !== true &&
     r.analysisOnly !== true,
   transcribe: (r) => r.transcribe === "could",
   describe: (r) => r.describe === "could",

@@ -237,6 +237,39 @@ recorded-flag read, no hashing — the honest boundary holds):
   offered for **Import** ([ipfs.mdx §4](./ipfs.mdx#4-import--the-load-bearing-feature)). Import records the
   **discovered** CID (the real one) into tracking — metadata only, no re-pin.
 
+* **Deciding to sync a discovered file PUBLISHES the discovered CID — it never re-adds the bytes.** The
+  green pin says "Click to have Large File Bridge sync it too", and the click writes a `sync` decision.
+  The next pin pass then puts the file into the manifest **using the CID the discovery recorded**, claims
+  the pin under this computer's label, and uploads **nothing** — the bytes are already in this node's
+  blockstore. This is the same "never a duplicate re-add" rule §5/§6 states for **Import**, applied to the
+  decision path, and it is what makes the file reachable by the user's other computers at last.
+  * The live pinset is the authority, not the record. If another tool has `pin rm`'d the bytes since
+    discovery, the recorded CID is stale and the pass adds normally (§5.1) — publishing a CID whose blocks
+    are gone would leave the other computer fetching forever.
+  * A size mismatch between the record and the file on disk means the file changed under the pin; that
+    also falls through to a normal add.
+  * **No hashing on this path.** It reads the RECORDED discovery and tests it against the pinset this pass
+    already read — the honest boundary of §3 holds.
+* **A discovered pin is NOT a backup, and no surface may present it as one.** A foreign pin exists on
+  exactly ONE node — this one — and an undecided file has no manifest entry, so no other computer of the
+  user's can see its CID, let alone fetch it. `Not backed up anywhere` therefore **counts** an undecided
+  foreign-pinned file that no peer claims, and the To Do batch **recommends** `ipfs` for it. Both used to
+  exclude `pinnedForeign` rows on the reading that pinned bytes are safe bytes.
+  * Scoped to **undecided**. An `ignore` decision is the user saying "do not replicate this"; a durability
+    alarm on it nags about a choice already made.
+  * *Measured on `charlie-kirk`, 2026-08-19:* 49 videos / 2.0 GB in this state, with `Not backed up
+    anywhere` reporting **0**, `Undecided` reporting **1**, the To Do batch emitting **nothing**, and the
+    second computer reporting **0 missing** because it had never been told the files exist.
+
+Publication of a discovered pin is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`, the NEW-ENTRY FOREIGN ADOPTION branch (reads `foreignPinByAbsPath`, writes the discovered CID into the manifest, never calls `addFile`)
+The durability arithmetic that stops calling a foreign pin a backup:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `isUnpublishedForeignPin()`, consumed by `computeTaskMetrics()` and `repoRowStats()`
+The `not backed up` query bucket and the To Do recommendation:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/files-query/files-query.service.ts` — `MATCH.not_backed_up`, and `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — the `pinnedForeign` arm of the pin/git_ignore scan
+Verified end to end in:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/foreign-pin-publish.spec.ts`
+
 The repo row's foreign-pin reality flag is populated in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` (reads the recorded discovery; sets `FileRow.pinnedForeign`), field defined in `~/BGit/Bryan_git/LargeFileBridge/code/packages/shared/src/types.ts` — `FileRow`
 
@@ -288,6 +321,13 @@ The specific-file verification is exercised in code:
 6. We stay **compatible** with other pinning software: a pin they created is discovered and shown but
    **never re-pinned**; a pin they later remove is **dropped** on the next pass; a changed file is
    re-discovered (§5.1).
+7. Deciding to sync a discovered file **publishes the discovered CID** into the manifest and uploads
+   nothing, so the user's other computers can fetch it — the decision path obeys the same "never a
+   duplicate re-add" rule as Import (§6). A stale record (bytes since unpinned, or the file changed) falls
+   through to a normal add rather than publishing a CID this node cannot serve.
+8. No surface presents a discovered pin as a **backup**. An undecided foreign-pinned file that no other
+   computer claims is counted by `Not backed up anywhere` and recommended for `ipfs` by the To Do batch,
+   because it lives on exactly one disk and no peer can even see its CID (§6).
 7. The **repo file row** reflects node reality for a discovered pin (`pinnedForeign`), distinct from the
    sync **intent** decision; the **IPFS page** resolves and offers **Import** (§6).
 8. Chunkers/codecs we **cannot** reproduce are **surfaced and logged**, never silently reported as "all

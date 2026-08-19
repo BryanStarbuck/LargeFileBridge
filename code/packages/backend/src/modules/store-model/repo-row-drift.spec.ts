@@ -59,6 +59,18 @@ function fromDetailFiles(files: FileRow[]) {
       } else counts.pending++;
       if (f.transfer === "pinned" && !f.peers.some((p) => p !== SELF)) notBackedUp++;
     }
+    // A foreign pin nobody else claims is ALSO a single copy on this disk: the bytes are pinned here by
+    // some other tool, the file has no manifest entry, and no other computer can see or fetch it
+    // (foreign_pin_discovery.mdx §5/§6). Outside the decision branches because it is not a decision state,
+    // and excluded for remote-only rows, which have no bytes here to be a single copy of. Mirrors
+    // isUnpublishedForeignPin() in units.service.ts — this oracle exists to catch the two drifting apart.
+    if (
+      f.presence !== "remote-only" &&
+      f.decision === "undecided" &&
+      f.pinnedForeign &&
+      !f.peers.some((p) => p !== SELF)
+    )
+      notBackedUp++;
   }
   return { counts, peerCount: peers.size, notBackedUp, missingHere, bytes };
 }
@@ -184,7 +196,11 @@ describe("Repos-table aggregates — the cheap path and the composed path agree 
       expect(row.peerCount).toBeLessThanOrEqual(PEERS.length);
       // The two out-of-sum columns are subsets, never extra rows.
       expect(row.missingHere).toBeLessThanOrEqual(files);
-      expect(row.notBackedUp).toBeLessThanOrEqual(c.pinned);
+      // `notBackedUp` counts rows whose bytes are on THIS disk and nowhere else. Two count buckets hold
+      // rows with local bytes: `pinned` (decided + pinned by us) and `pinnedForeign` (pinned here by
+      // another tool, never published — foreign_pin_discovery.mdx §5/§6). The bound was `c.pinned` alone
+      // while the second bucket was silently treated as backed up; it is a subset of both, never extra rows.
+      expect(row.notBackedUp).toBeLessThanOrEqual(c.pinned + c.pinnedForeign);
       expect(row.bytes.pinned).toBeLessThanOrEqual(row.bytes.total);
 
       if (c.pinnedForeign > 0) sawForeign++;

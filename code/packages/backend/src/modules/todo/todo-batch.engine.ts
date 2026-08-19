@@ -144,17 +144,29 @@ export async function recalcRepo(folder: string): Promise<TodoBatchDoc | null> {
     for (const f of detail.files) {
       if (seen.has(f.path)) continue;
       if (f.decision === "undecided" && f.sizeBytes >= threshold && !f.neverIpfs) {
-        // Foreign-pinned rows (green state, one_repo.mdx §4.9): the bytes are already pinned on this
-        // node, so never recommend `ipfs` for them — a pin nag about a pinned file. The git-ignore axis
-        // is independent and still owed; already-ignored foreign pins need nothing at all.
+        // Foreign-pinned rows (green state, one_repo.mdx §4.9): the bytes are already pinned on this node.
+        //
+        // That is NOT the same as "handled". A foreign pin has no manifest entry, so the user's other
+        // computers cannot see its CID and can never fetch it (foreign_pin_discovery.mdx §5/§6) — and this
+        // branch used to `seen.add()` an already-git-ignored foreign pin and emit NOTHING, which is how 49
+        // charlie-kirk videos ended up with no surface anywhere that would let the user act on them.
+        //
+        // So: if another computer already claims the file, the original reasoning holds and there is
+        // nothing to recommend. If NOBODY else has it, recommend `ipfs` — not as a nag to pin bytes that
+        // are already pinned (the pin pass now publishes the DISCOVERED CID rather than re-adding, see
+        // pin.service.ts new-entry foreign adoption), but as the one action that gets the file off this
+        // single disk and onto the user's other machines.
         if (f.pinnedForeign) {
+          const heldElsewhere = (f.peers?.length ?? 0) > 0;
           if (!f.gitignore) {
             items.push({
               path: f.path,
               sizeBytes: f.sizeBytes,
               category: "git_ignore",
-              recommend: { gitignore: true },
+              recommend: heldElsewhere ? { gitignore: true } : { ipfs: true, gitignore: true },
             });
+          } else if (!heldElsewhere) {
+            items.push({ path: f.path, sizeBytes: f.sizeBytes, category: "pin", recommend: { ipfs: true } });
           }
           seen.add(f.path);
         } else if (f.gitignore) {
