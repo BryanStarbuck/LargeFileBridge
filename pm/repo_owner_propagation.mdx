@@ -69,8 +69,8 @@ schema_version: 1
 company_id: "co_acmecorp"
 assertions:
   # keyed by the repo's git REMOTE — the only identity portable across members' machines
-  "github.com/ACT3ai/jfksocial_server":
-    remote: "git@github.com:ACT3ai/jfksocial_server.git"   # the canonical remote, as captured
+  "github.com/ACT3ai/we_the_citizens":
+    remote: "git@github.com:ACT3ai/we_the_citizens.git"   # the canonical remote, as captured
     asserted_by: "bryan@act3ai.com"     # who declared it (from the auth session)
     asserted_at: 2026-07-14T09:41:00Z
     withdrawn: false                    # true after an un-assign (§6) — a tombstone, never a hard delete
@@ -118,7 +118,7 @@ doesn't have that repo. It stays in `owner_map.yaml` and becomes pending if/when
 export interface PendingCompanyMapping {
   repoId: string;          // the local repo this resolves to (matched by remote)
   repoName: string;        // display name for the row
-  remoteKey: string;       // "github.com/ACT3ai/jfksocial_server" — the matched key
+  remoteKey: string;       // "github.com/ACT3ai/we_the_citizens" — the matched key
   companyId: string;       // the asserting company
   companyName: string;     // its friendly display name (storage_company.mdx §6)
   assertedBy: string;      // who asserted it — shown so the member knows the source
@@ -148,7 +148,7 @@ Route: **`/company-mappings/review`**.
  │  Large File Bridge tracking state will sync into the shared company repo.       │
  ├───────────────────────────────────────────────────────────────────────────────┤
  │        Repo                        Remote                     Asserted by       │
- │  (•) Move to company   ☑  jfksocial_server   github.com/ACT3ai/…   bryan@…      │
+ │  (•) Move to company   ☑  we_the_citizens    github.com/ACT3ai/…   bryan@…      │
  │  ( ) Keep personal                                                              │
  │                                                                                 │
  │  (•) Move to company   ☑  ai-service         github.com/ACT3ai/…   bryan@…      │

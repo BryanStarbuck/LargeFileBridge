@@ -91,8 +91,8 @@ handles the common forge URL shapes:
 
 | Remote form | Example | host | owner | repo |
 | --- | --- | --- | --- | --- |
-| **SCP-like SSH** | `git@github.com:ACT3ai/jfksocial_server.git` | `github.com` | `ACT3ai` | `jfksocial_server` |
-| **HTTPS** | `https://github.com/ACT3ai/jfksocial_server.git` | `github.com` | `ACT3ai` | `jfksocial_server` |
+| **SCP-like SSH** | `git@github.com:ACT3ai/we_the_citizens.git` | `github.com` | `ACT3ai` | `we_the_citizens` |
+| **HTTPS** | `https://github.com/ACT3ai/we_the_citizens.git` | `github.com` | `ACT3ai` | `we_the_citizens` |
 | **SSH URL** | `ssh://git@gitlab.com/acme/tools.git` | `gitlab.com` | `acme` | `tools` |
 | **git://** | `git://codeberg.org/user/thing.git` | `codeberg.org` | `user` | `thing` |
 | **sr.ht** | `https://git.sr.ht/~sircmpwn/aerc` | `git.sr.ht` | `~sircmpwn` | `aerc` |
@@ -107,7 +107,7 @@ the host is the owner, the **second** is the repo.
 export interface RemoteOwnerParse {
   host: string | null;   // "github.com" · null when unparseable / no remote
   owner: string | null;  // "ACT3ai" · null when the URL has no owner segment
-  repo: string | null;   // "jfksocial_server" (".git" stripped)
+  repo: string | null;   // "we_the_citizens" (".git" stripped)
   knownForge: boolean;   // host ∈ {github.com, gitlab.com, bitbucket.org, codeberg.org, git.sr.ht}
 }
 export function parseRemoteOwner(remoteUrl: string | null): RemoteOwnerParse { /* … */ }
@@ -289,7 +289,7 @@ Owner   ( ) Personal    (•) Company:  [ ACT3ai ▾ ]   (auto-detected)      [ 
 * The **(auto-detected)** tag shows while `source === "auto"`; picking anything flips `source` to `"manual"` and
   hides the tag. **Reset to auto** returns `source` to `"auto"` and re-runs §3.
 * A one-line **explain string** under the control states the basis: *"Auto-detected as ACT3ai from the remote
-  github.com/ACT3ai/jfksocial_server"* or *"Manually assigned to ACT3 AI."*
+  github.com/ACT3ai/we_the_citizens"* or *"Manually assigned to ACT3 AI."*
 
 ### 5.2 Persistence — the override lives in the repo's `config.yaml` (LOCKED)
 
@@ -317,7 +317,7 @@ So "the override is per-computer" and "company ownership propagates" are both tr
 
 ```yaml
 # pin/r/<repo>/config.yaml  (excerpt)
-repo: { name: jfksocial_server, path: /Users/…/AI_Coding, remote: "git@github.com:ACT3ai/jfksocial_server.git" }
+repo: { name: we_the_citizens, path: /Users/…/AI_Coding, remote: "git@github.com:ACT3ai/we_the_citizens.git" }
 bookmarked: false
 owner_override:                 # ABSENT unless the user reassigned (source becomes "manual" only when present)
   kind: company                 # personal | company

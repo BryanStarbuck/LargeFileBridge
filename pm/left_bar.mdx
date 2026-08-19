@@ -221,7 +221,7 @@ as the hover-info panel (§4.1) — the bar shows a small set of **external prod
 that **opens in a new browser tab**, not an in-app route.
 
 * **The links (content source of truth = `pm/left_bar.yaml` `external_links`):**
-  * **JFK Social.com** → `https://JFKSocial.com/`
+  * **WeCitizens.social** → `https://m.wecitizens.social/`
   * **ACT 3 Filmmaking** → `https://ACT3ai.com/`
 * **New tab, safely.** Each renders as a real `<a target="_blank" rel="noopener noreferrer">` — clicking
   opens the URL in a **new tab** and never navigates the app itself away.
@@ -322,7 +322,7 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
    belong to a company, the **Storages** item shows a runtime **count badge** of pending company-mapping
    reviews and links to **`/company-mappings/review`** ([repo_owner_propagation.mdx §4](./repo_owner_propagation.mdx));
    it is a reopen affordance and nothing is applied silently.
-10. **External product links (§4.2):** a block of outbound links — **JFK Social.com** (`https://JFKSocial.com/`)
+10. **External product links (§4.2):** a block of outbound links — **WeCitizens.social** (`https://m.wecitizens.social/`)
     and **ACT 3 Filmmaking** (`https://ACT3ai.com/`) — renders **between the bottom of the nav list and the
     account slot**, **left-aligned on the same grid as the nav items** (same mx-2/px-3/py-2/gap-2.5 with a
     leading `ExternalLink` icon, so every label in the bar starts at the identical x); each is an
@@ -352,7 +352,7 @@ Resolving a nav item's lucide icon by name (unknown name renders nothing) is han
   CONTENTION RULE (§4.2): hover panel → external links → account slot stack in one bottom region; the panel's
   FIXED height is what protects the links and the slot — longer prose CLAMPS, the panel NEVER grows, so
   nothing below it ever moves. Hover prose also never influences the 200px width (§5).
-  §4.2: EXTERNAL PRODUCT LINKS — a block of OUTBOUND links (JFK Social.com → https://JFKSocial.com/, ACT 3
+  §4.2: EXTERNAL PRODUCT LINKS — a block of OUTBOUND links (WeCitizens.social → https://m.wecitizens.social/, ACT 3
   Filmmaking → https://ACT3ai.com/) rendered between the bottom of the nav list and the account slot, evenly
   LEFT-ALIGNED on the nav grid (leading ExternalLink icon; they were centered — the only ragged rows in the
   bar), each an <a target="_blank" rel="noopener noreferrer"> (new tab, never navigates the app).

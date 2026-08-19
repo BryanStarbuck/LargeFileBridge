@@ -60,7 +60,7 @@ export interface RepoOwner {
 export interface PendingCompanyMapping {
   repoId: string; // the local repo this resolves to (matched by remote)
   repoName: string; // display name for the row
-  remoteKey: string; // "github.com/ACT3ai/jfksocial_server" — the matched normalized-remote key
+  remoteKey: string; // "github.com/ACT3ai/we_the_citizens" — the matched normalized-remote key
   companyId: string; // the asserting company (its company storage id)
   companyName: string; // its friendly display name (storage_company.mdx §6)
   assertedBy: string; // who asserted it — shown so the member knows the source

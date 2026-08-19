@@ -4,7 +4,7 @@
 // status icon, the File cell — carry no prose. Their explanation used to appear in a region DOCKED to the
 // right of the One-repo metrics strip. It no longer does: that region ate ≥25% of the row and forced the
 // metric tiles to wrap onto a second line. The text now goes to the ONE place the app already reserves for
-// non-intrusive hover prose — the panel at the bottom of the left bar, above the JFK Social / ACT 3
+// non-intrusive hover prose — the panel at the bottom of the left bar, above the WeCitizens.social / ACT 3
 // Filmmaking links and the account slot (left_bar.mdx §4.1). The metrics strip gets the full page width.
 //
 // TWO SEPARATE INPUTS, ONE OUTPUT:

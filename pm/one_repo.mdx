@@ -127,7 +127,7 @@ tiles any more (§3.2).
 ││hover-info││ ├──────────────────────────────────────────────────────────────────────────┤   ⌘/Ctrl/middle-click a row → new tab
 ││ panel    ││ │  173 files                                    page 1 / 1        [500 ▾]     │
 │└──────────┘│ └──────────────────────────────────────────────────────────────────────────┘
-│ JFK Social │ ← the hover explanation for a tile / row / icon lands in the LEFT BAR panel (§3.2),
+│ WeCitizens │ ← the hover explanation for a tile / row / icon lands in the LEFT BAR panel (§3.2),
 │ ACT 3 Film │   the reserved white block above the external links and the account slot.
 │ [account]  │
 └────────────┴───────────────────────────────────────────────────────────────────────────┘
@@ -319,7 +319,7 @@ govern how it occupies the page, and they replace the old width-budget arrangeme
 
 **Where the explanation went — the left-bar hover-info panel.** The tiles stay deliberately terse (a label
 over a number, no prose), so the words still have to live somewhere. They go to the **non-intrusive
-hover-info panel at the BOTTOM OF THE LEFT BAR** — the reserved white block above the **JFK Social** /
+hover-info panel at the BOTTOM OF THE LEFT BAR** — the reserved white block above the **WeCitizens.social** /
 **ACT 3 Filmmaking** external links and the account/login slot
 ([left_bar.mdx](./left_bar.mdx), [non_intrusive_tooltip.mdx](./non_intrusive_tooltip.mdx)).
 
@@ -1180,7 +1180,7 @@ The verdict itself, and the `unknown` set that means "git could not answer", are
     tiles** — that ≥25% reservation, and the balanced second row it forced, are **gone**. Every hover source
     (metric tile, **File** cell, the five icon control columns, the **Compress** status icon) publishes via
     the same `setHoverInfo(text)`, and `HoverInfoBridge` forwards it to the **left-bar hover-info panel** —
-    the reserved white block above the JFK Social / ACT 3 Filmmaking links and the account slot — which
+    the reserved white block above the WeCitizens.social / ACT 3 Filmmaking links and the account slot — which
     shows the active tab's `defaultHint` at rest (§3.2).
 11b. **Two decision tiles, not one "Undecided" tile** (§3.2.2): **Add to IPFS** (`addToIpfs`; files with no
     pin decision, excluding foreign-pinned rows — exactly the old Undecided number; opens
@@ -1247,7 +1247,7 @@ The verdict itself, and the `unknown` set that means "git could not answer", are
   METRICS STRIP (§3.2, LOCKED): FULL page width, ONE row, NEVER wraps (flex-nowrap + shrink-0 tiles;
   overflow-x scroll is the only escape). The docked hover-info region to the RIGHT is DELETED — its ≥25%
   width reservation was what forced the balanced second row. The explanation now goes to the LEFT-BAR
-  hover-info panel (the reserved white block above the JFK Social / ACT 3 links and the account slot):
+  hover-info panel (the reserved white block above the WeCitizens.social / ACT 3 links and the account slot):
   every source still calls setHoverInfo(text) and a render-nothing HoverInfoBridge forwards it into the
   app-wide HoverInfoProvider; at rest it shows the active tab's defaultHint.
   DECISION TILES (§3.2.2, LOCKED): the "Undecided" TILE is GONE, split into TWO tiles — Add to IPFS

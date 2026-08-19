@@ -211,9 +211,9 @@ Left_Nav:
       # external site, not an in-app route. These are the ONLY nav entries that leave the app. Add/remove a
       # product link here (content source of truth); Sidebar.tsx renders them from this list.
       external_links:
-        - id: jfk_social
-          label: "JFK Social.com"
-          url: "https://JFKSocial.com/"
+        - id: we_citizens_social
+          label: "WeCitizens.social"
+          url: "https://m.wecitizens.social/"
         - id: act3_filmmaking
           label: "ACT 3 Filmmaking"
           url: "https://ACT3ai.com/"
