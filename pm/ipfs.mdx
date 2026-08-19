@@ -193,6 +193,27 @@ Reading the reprovide strategy, gateway posture, and GC state for the card is ha
 The **Node** reachability verdict and the **PeerID** shown on the card are read in code:
 `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `health()` / `peerId()`
 
+**A probe that TIMED OUT is not a probe that was REFUSED.** The verdict is a control call capped at 15s,
+and a daemon that is alive and answering blows through that cap routinely — a stale pooled keep-alive
+socket it has already dropped, a GC sweep, a `pin ls` over a large pinset. `unreachable` is the most
+expensive word in the product (a pin pass returns on it before examining one file, and the repo, Scans,
+Settings and MediaViewer surfaces all go red on it), so it is only said when the node is really gone: a
+**timeout is re-probed on a fresh socket** first, while a **refusal is conclusive and reported at once**
+(`waitForStopped` polls for exactly that and must not wait out a retry). Concurrent callers — the node
+card, the repos list, each unit of a pin pass — share **one** probe, so a wedged daemon cannot turn every
+polling surface into its own stalled request.
+
+Deciding timeout-vs-refusal, retrying, and single-flighting the probe is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `health()` / `probeHealth()`
+Regression test: `code/packages/backend/src/modules/ipfs/health-timeout.spec.ts`.
+
+**A CID-shaped string that is not a CID never reaches the daemon.** Kubo answers garbage with
+`500 invalid path …`, which reads in the fault trail as an IPFS failure and — because the manifest entry
+carrying it is retried on every pass — repeats forever against a healthy node. Such an entry is refused
+before the RPC and reported as what it is: a corrupt manifest entry, not a node fault. Checked in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `looksLikeCid()`, enforced at the top of `pinAdd()`
+Regression test: `code/packages/backend/src/modules/ipfs/malformed-cid.spec.ts`.
+
 | Field | Meaning | Compliant value |
 | --- | --- | --- |
 | **Node** | Is the local Kubo daemon reachable? | `ok` (green) / `unreachable` (red — Rescan/imports disabled, tooltip). |

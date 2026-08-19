@@ -38,6 +38,7 @@ import {
 } from "./manifest.service.js";
 import { listStorageIds, ensureBackingLocations, getStorageRow } from "../storage/storage.service.js";
 import { readStorageIndex } from "../storage/tracking.service.js";
+import { normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { writeSelfDevice, resolveGraftedPath, readPeerSupersededCids } from "../storage/devices.service.js";
 import {
   getStoragePinned,
@@ -183,6 +184,11 @@ interface UnitTarget {
   // has a ledger to tombstone into; the computer/storage units leave this undefined and simply stop
   // re-fetching the orphan. Best-effort: a throw is logged and the rest of the pass continues.
   tombstone?: (rels: string[]) => Promise<void>;
+  // "Is another unit on THIS computer holding this file's bytes on disk right now?" — the veto that keeps a
+  // second registration of the same repo from reading as a deletion (see `bytesHeldByLocalTwin` in
+  // orphans.service.ts). Only a repo unit can have a twin (two clones of one remote); the computer and
+  // storage units leave it undefined, which is exactly the prior behavior.
+  bytesHeldByLocalTwin?: (rel: string) => boolean;
 }
 
 async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinReport): Promise<PinCounts> {
@@ -395,6 +401,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     prior: t.status.orphans ?? {},
     nowMs: Date.now(),
     graceMs: ORPHAN_GRACE_MS,
+    bytesHeldByLocalTwin: t.bytesHeldByLocalTwin,
   });
   counts.missing = neverHere.length;
   counts.orphaned = Object.keys(orphans).length;
@@ -603,6 +610,53 @@ export function pinRepoFolder(
   return withUnitLock(key, () => pinRepoFolderInner(folder, onlyPaths, opts));
 }
 
+/**
+ * "Is another registration of THIS SAME repo on this computer holding `rel`'s bytes on disk right now?"
+ *
+ * A repo can be registered twice on one machine — two clones of the same remote, e.g.
+ * `~/BGit/work/charlie-kirk` and `~/BGit/Bryan_git/charlie-kirk`. They share one IPFS node (one pinset) and
+ * one computer label, which are the two facts `classifyAbsent` reads as "we had these bytes". So the clone
+ * that HAS a file pins its CID, and the clone that does NOT then mistakes that pin for proof the user
+ * deleted the file here: it stops fetching it, and 24h later unpins it and resets the decision to Undecided.
+ * Measured on bryan-mac-pro 2026-08-19 — 41 charlie-kirk videos arriving from the laptop, pinned on this
+ * node, never written into `~/BGit/Bryan_git/charlie-kirk/videos/`, every pass logging `deleted here 41`.
+ *
+ * Twins are matched on the NORMALIZED REMOTE, not the path, because that is what makes them the same repo
+ * (`repo-identity.ts`). The sibling list is resolved ONCE per pass (registrations do not change mid-pass);
+ * only the per-file `statOrNull` is paid per path, and only for the handful of absent ones. No twin (the
+ * overwhelmingly common case) returns undefined so the pass keeps its exact prior behavior.
+ */
+function localTwinProbe(
+  folder: string,
+  remote: string | null,
+  repoPath: string,
+): ((rel: string) => boolean) | undefined {
+  const key = normalizeRemoteKey(remote);
+  if (!key) return undefined; // no remote → no shared identity → nothing can be a twin
+  const twins: string[] = [];
+  for (const other of listRepoFolders()) {
+    if (other === folder) continue;
+    try {
+      const oc = getRepoConfig(other);
+      if (!sameRemoteKey(normalizeRemoteKey(oc.repo.remote ?? null), key)) continue;
+      const op = expandHome(oc.repo.path || "");
+      if (op && path.resolve(op) !== path.resolve(repoPath)) twins.push(op);
+    } catch {
+      /* an unreadable sibling config simply is not a twin */
+    }
+  }
+  if (twins.length === 0) return undefined;
+  log.info(
+    "pin",
+    `${folder}: same repo is also registered at ${twins.join(", ")} — bytes present there will not be read as a deletion here.`,
+  );
+  return (rel) =>
+    twins.some((root) => {
+      const abs = joinRelConfined(root, rel);
+      return !!abs && (statOrNull(abs)?.isFile() ?? false);
+    });
+}
+
 async function pinRepoFolderInner(
   folder: string,
   onlyPaths?: Set<string>,
@@ -686,6 +740,7 @@ async function pinRepoFolderInner(
       // A repo has the shared ledger, so a staled orphan is returned to Undecided there — attributed to the
       // deletion itself, never to a person who did not make that choice (decisions.mdx §12).
       tombstone: (rels) => recordDecision(folder, rels, {}, "deleted", { asked: false }),
+      bytesHeldByLocalTwin: localTwinProbe(folder, cfg.repo.remote ?? null, repoPath),
     },
     onlyPaths,
     opts.report,

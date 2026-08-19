@@ -43,6 +43,23 @@ export interface ClassifyAbsentArgs {
   prior: Readonly<Record<string, OrphanRecord>>;
   nowMs: number;
   graceMs: number;
+  /**
+   * VETO on the deletion verdict: "some OTHER unit on this computer is holding these exact bytes on disk
+   * right now, at this same relative path."
+   *
+   * Both delete signals below are computer-wide facts, not unit-local ones. `pinned_by` carries this
+   * COMPUTER's label (every unit on the machine publishes the same one), and `heldHere` asks the ONE IPFS
+   * node, whose pinset every unit shares. So when the same repo is registered twice — two clones of one
+   * remote, `~/BGit/work/charlie-kirk` and `~/BGit/Bryan_git/charlie-kirk` — the clone that DOES have the
+   * bytes puts the CID in the shared pinset, and the clone that does not then reads that pin as proof it
+   * once held the file and the user deleted it. Measured on bryan-mac-pro 2026-08-19: 41 videos, every
+   * pass logging `deleted here 41`, never fetched, and 24h from being unpinned and reset to Undecided.
+   *
+   * A twin holding the bytes explains the pin WITHOUT a deletion, so the file falls back to the healthy
+   * never-here answer and the pull-down materializes it. Optional: omitted ⇒ no twin ⇒ prior behavior
+   * exactly, which is what every single-registration unit sees.
+   */
+  bytesHeldByLocalTwin?: (rel: string) => boolean;
 }
 
 export interface ClassifyAbsentResult {
@@ -84,7 +101,7 @@ export function mergeOrphans(
 }
 
 export function classifyAbsent(args: ClassifyAbsentArgs): ClassifyAbsentResult {
-  const { absent, entryFor, heldHere, label, prior, nowMs, graceMs } = args;
+  const { absent, entryFor, heldHere, label, prior, nowMs, graceMs, bytesHeldByLocalTwin } = args;
   const missing: string[] = [];
   const orphans: Record<string, OrphanRecord> = {};
   for (const rel of absent) {
@@ -92,7 +109,11 @@ export function classifyAbsent(args: ClassifyAbsentArgs): ClassifyAbsentResult {
     // "We had these bytes" — the delete signal. No CID means we never recorded the file at all, which
     // cannot be a deletion of something we pinned.
     const heldByUs = !!entry?.cid && (entry.pinned_by.includes(label) || heldHere(entry.cid));
-    if (!heldByUs) {
+    // ...unless a TWIN unit on this same computer is holding those bytes on disk right now. Both halves of
+    // the signal above are computer-wide (see `bytesHeldByLocalTwin`), so a second registration of the same
+    // repo satisfies them without this unit ever having had the file. The twin explains the pin; there is
+    // no deletion to infer, and this stays the healthy never-here pull-down offer.
+    if (!heldByUs || bytesHeldByLocalTwin?.(rel)) {
       missing.push(rel);
       continue;
     }

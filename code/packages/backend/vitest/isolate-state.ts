@@ -11,7 +11,7 @@
 //
 // RESTORE-IF-MISSING, never overwrite: a spec that deliberately sets its own dir keeps it (several
 // assert on the files they write there). Only an absent variable — the deleted case — is refilled.
-import { beforeEach, afterEach } from "vitest";
+import { beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 
 // Read once, at worker start, before any spec has had the chance to delete them.
 const BASELINE: Record<string, string | undefined> = {
@@ -24,7 +24,14 @@ function restoreMissing(): void {
   for (const [k, v] of Object.entries(BASELINE)) if (v && !process.env[k]) process.env[k] = v;
 }
 
-// `afterEach` matters as much as `beforeEach`: a spec that deletes in ITS afterEach would otherwise leave
-// the next test FILE unprotected during import-time module evaluation, which runs before any beforeEach.
+// All four hooks, and `afterAll` is the one that actually closes the hole. A test FILE is imported —
+// and its module-level code runs, registering units, resolving the state root — BEFORE any of its own
+// hooks fire. So the window that matters is between one file's teardown and the next file's import, and
+// most of the offenders delete in `afterAll`. Vitest runs "after" hooks in reverse registration order,
+// and a setup file registers before any spec does, so this `afterAll` runs LAST: after the spec deleted
+// the variables, before the next file is imported. `beforeEach`/`afterEach` cover the same trick done
+// per-test; `beforeAll` covers a worker whose first file deleted them during collection.
+beforeAll(restoreMissing);
 beforeEach(restoreMissing);
 afterEach(restoreMissing);
+afterAll(restoreMissing);

@@ -16,9 +16,11 @@ function run(opts: {
   pinset?: string[];
   prior?: Record<string, OrphanRecord>;
   nowMs?: number;
+  twinHas?: string[];
 }) {
   const entries = opts.entries ?? {};
   const pinset = new Set(opts.pinset ?? []);
+  const twin = opts.twinHas ? new Set(opts.twinHas) : null;
   return classifyAbsent({
     absent: opts.absent,
     entryFor: (rel) => entries[rel],
@@ -27,8 +29,52 @@ function run(opts: {
     prior: opts.prior ?? {},
     nowMs: opts.nowMs ?? NOW,
     graceMs: DAY,
+    ...(twin ? { bytesHeldByLocalTwin: (rel: string) => twin.has(rel) } : {}),
   });
 }
+
+// The same repo registered TWICE on one computer (two clones of one remote). Both delete signals —
+// `pinned_by` carrying this computer's label, and the shared IPFS pinset — are computer-wide, so the clone
+// that HAS the bytes makes the clone that does not look like it deleted them. Measured on bryan-mac-pro
+// 2026-08-19: 41 charlie-kirk videos arrived from the laptop, were pinned on this node by the OTHER clone,
+// and every pass logged `deleted here 41` while never writing one of them into this clone's working tree.
+describe("classifyAbsent — a twin registration is not a deletion", () => {
+  it("stays a pull-down offer when a twin unit on this computer holds the bytes", () => {
+    const r = run({
+      absent: ["videos/clip.mp4"],
+      entries: { "videos/clip.mp4": { cid: "bafy1", pinned_by: [ME, PEER] } },
+      pinset: ["bafy1"],
+      twinHas: ["videos/clip.mp4"],
+    });
+    expect(r.missing).toEqual(["videos/clip.mp4"]);
+    expect(r.orphans).toEqual({});
+    expect(r.stale).toEqual([]);
+  });
+
+  it("never stales a twin-held file, even long past the grace period", () => {
+    const r = run({
+      absent: ["videos/clip.mp4"],
+      entries: { "videos/clip.mp4": { cid: "bafy1", pinned_by: [ME] } },
+      pinset: ["bafy1"],
+      twinHas: ["videos/clip.mp4"],
+      prior: { "videos/clip.mp4": { first_seen_at: new Date(NOW - 30 * DAY).toISOString(), cid: "bafy1" } },
+      nowMs: NOW,
+    });
+    expect(r.stale).toEqual([]);
+    expect(r.missing).toEqual(["videos/clip.mp4"]);
+  });
+
+  it("still reads a real deletion as a deletion when the twin does NOT have the file", () => {
+    const r = run({
+      absent: ["videos/clip.mp4"],
+      entries: { "videos/clip.mp4": { cid: "bafy1", pinned_by: [ME] } },
+      pinset: ["bafy1"],
+      twinHas: ["videos/other.mp4"],
+    });
+    expect(r.missing).toEqual([]);
+    expect(r.orphans["videos/clip.mp4"]).toBeDefined();
+  });
+});
 
 describe("classifyAbsent — deleted here vs. never here", () => {
   it("treats a file only a PEER ever pinned as never-here, not a deletion", () => {
