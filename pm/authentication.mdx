@@ -91,6 +91,37 @@ The browser side of the handshake (start redirect, complete callback) is handled
 backed by `RealAuthCore.authenticateWithRedirect()` / `completeRedirectCallback()` in
 `~/BGit/Bryan_git/OpenAuthFederated/code/packages/auth-react/src/core.ts`
 
+### 3.1 The mount follows the credentials file, live (LOCKED)
+
+`/api/v1` is mounted **once**, at boot, but **what it dispatches to is re-derived from the credentials
+file on every request**. When no Google credentials are present the mount is a **passthrough** (the app
+still boots and shows the sign-in screen); when they are present it is the real OpenAuthFederated router.
+
+That decision must **not** be frozen at boot, because **the credentials arrive after boot in the normal
+setup flow**: the sign-in screen's setup card names the file for the user to create, and `ensureApiSecret()`
+itself creates that same file **during boot** with only the `api` block. So the ordering "process starts
+with no `google` block → user pastes one in a minute later" is the *expected* first-run sequence.
+
+* **The rule.** Credentials **appearing** mounts the real router; credentials **changing** (a corrected
+  client id) rebuilds it; credentials **being removed** falls back to the passthrough. All three take
+  effect on the **next request** — never a restart. The check is a fingerprint compare over an
+  mtime/size-cached read, so the steady-state cost is one `statSync`.
+* **Why it is an invariant, not a nicety.** `GET /api/health/auth-config` re-reads the file live, so a
+  frozen mount makes the product **contradict itself**: the setup card reports `oauthConfigured: true`
+  while `GET /api/v1/sign_in/sso` matches no route and Express answers the raw
+  **`Cannot GET /api/v1/sign_in/sso`** — a 404 with no diagnosis, on the one action the user came to
+  perform. (Observed 2026-08-19; see §10 invariant 5.)
+* **A bad edit degrades, it does not 500.** Unparsable JSON reads as "no credentials", and a failed
+  rebuild keeps serving the previously-built middleware — one broken paste cannot take down every
+  `/api/v1` request, and it is attempted once per distinct credentials value, not once per request.
+
+Keeping the live middleware in step with the credentials file is handled in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/auth/auth-frontend.ts` —
+`ensureFreshAuthFrontend()` (called from the handler `buildAuthFrontend()` returns), comparing
+`googleCredsFingerprint()` in
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts`.
+Covered by `auth-frontend.spec.ts` (mutates the credentials file under a running server).
+
 ---
 
 ## 4. Token model — one durable cookie, disposable Bearers
@@ -371,6 +402,7 @@ The lifetime policy is set in code:
 | Concern | Location |
 | --- | --- |
 | Build/hot-swap the embedded auth middleware; lifetime + cookie policy | `auth-frontend.ts` — `constructAuthFrontend` / `buildAuthFrontend` / `rebuildAuthFrontend` |
+| Re-mount when the credentials file changes under a running process (§3.1) | `auth-frontend.ts` — `ensureFreshAuthFrontend()`; `config/credentials-file.ts` — `googleCredsFingerprint()` |
 | Allowed sign-in redirect origins | `auth-frontend.ts` — `allowedRedirectOrigins()` |
 | Per-request principal + allow-list gate | `modules/auth/identify.ts` — `identify`, `requireAllowListed`, `requireAdmin` |
 | `GET /api/auth/me` | `modules/auth/auth.router.ts` |
@@ -398,6 +430,10 @@ The lifetime policy is set in code:
    is invalidated — treat that as a P0 regression (§5, cause C).
 4. **Auth state lives under the state root, never in a hand-editable config** (`user.yaml`/settings). A
    config backup must never carry a live session.
+5. **What the app REPORTS about credentials and what it SERVES with them are the same read.** If
+   `GET /api/health/auth-config` says `oauthConfigured: true`, then `GET /api/v1/sign_in/sso` starts a
+   sign-in — no restart in between (§3.1). A bare `Cannot GET /api/v1/sign_in/sso` is Express saying the
+   auth router was never mounted, and is always this bug.
 5. **The Bearer is disposable and short-lived** (15 min), minted from the cookie, refreshed proactively;
    it is never persisted client-side.
 6. **No anonymous account in any reachable deployment.** Every session belongs to an allow-listed Google

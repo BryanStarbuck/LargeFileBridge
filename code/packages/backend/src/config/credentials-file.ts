@@ -99,6 +99,8 @@ interface FileDerivedCreds {
 let fileCredsCache: FileDerivedCreds | null = null;
 let lastWarnedRepairedHash: string | null = null;
 let lastWarnedFailureHash: string | null = null;
+// Last presence value hasGoogleCreds() logged, so the line is emitted on transitions only (see below).
+let lastCredsPresence: boolean | null = null;
 
 function hashOf(s: string): string {
   return crypto.createHash("sha256").update(s, "utf8").digest("hex");
@@ -109,6 +111,7 @@ export function _resetCredsCacheForTests(): void {
   fileCredsCache = null;
   lastWarnedRepairedHash = null;
   lastWarnedFailureHash = null;
+  lastCredsPresence = null;
 }
 
 export function loadGoogleCreds(): GoogleCreds {
@@ -194,8 +197,33 @@ export function loadGoogleCreds(): GoogleCreds {
 export function hasGoogleCreds(): boolean {
   const c = loadGoogleCreds();
   const ok = Boolean(c.clientId && c.clientSecret);
-  if (!ok) log.info("auth", "Google OAuth credentials not configured (sign-in disabled).");
+  // Log only on a STATE CHANGE. identify.ts consults this on (near) every request and the auth
+  // middleware now re-checks it on every /api/v1 hit, so an unconditional log.info here wrote the
+  // same "not configured" line hundreds of times and buried the one moment that matters — the
+  // transition. Both directions are logged: creds appearing is the event that re-mounts the
+  // Frontend API (auth-frontend.ts credsFingerprint), creds disappearing un-mounts it.
+  if (ok !== lastCredsPresence) {
+    lastCredsPresence = ok;
+    log.info(
+      "auth",
+      ok
+        ? "Google OAuth credentials found (sign-in enabled)."
+        : "Google OAuth credentials not configured (sign-in disabled).",
+    );
+  }
   return ok;
+}
+
+/**
+ * Fingerprint of the CURRENT Google creds — a sha256 of the id/secret pair, never the values
+ * themselves, so nothing that holds this is holding a second plaintext copy of the secret. The auth
+ * middleware compares this against the fingerprint it was BUILT with to decide whether it must be
+ * rebuilt (auth-frontend.ts). Empty creds hash to a stable value, so absent → present → changed →
+ * absent are all distinguishable transitions.
+ */
+export function googleCredsFingerprint(): string {
+  const c = loadGoogleCreds();
+  return hashOf(`${c.clientId}\u0000${c.clientSecret}`);
 }
 
 // ── CLI ↔ web app shared API secret (cli.mdx §3) ─────────────────────────────

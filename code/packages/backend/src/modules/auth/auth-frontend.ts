@@ -8,7 +8,11 @@ import {
   FileSessionStore,
   loadOrCreateSecret,
 } from "@auth/backend";
-import { loadGoogleCreds, hasGoogleCreds } from "../../config/credentials-file.js";
+import {
+  loadGoogleCreds,
+  hasGoogleCreds,
+  googleCredsFingerprint,
+} from "../../config/credentials-file.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { authSecretPath } from "../../shared/store/scopes.js";
 import { oafAllowedDomains } from "../security/security.service.js";
@@ -80,6 +84,10 @@ export function allowedRedirectOrigins(): string[] {
 // `allowedRedirectOrigins` at construction (no live getter), so hot-swapping the whole middleware is
 // the only way to make an allow-list edit take effect WITHOUT a process restart (security.mdx §6.3).
 let activeMiddleware: RequestHandler | null = null;
+// Fingerprint of the Google creds `activeMiddleware` was BUILT from (googleCredsFingerprint —
+// a hash, never the values). The credentials file is edited by hand, out-of-repo, AFTER the app is
+// already running, so this is the thing that tells a live middleware it has gone stale.
+let builtCredsFingerprint: string | null = null;
 
 /**
  * Construct the auth middleware from the current config + creds. When Google credentials are absent we
@@ -162,7 +170,49 @@ function constructAuthFrontend(): RequestHandler {
  */
 export function rebuildAuthFrontend(): void {
   ensureEmbeddedVerification();
+  // Sample the fingerprint BEFORE constructing, so creds written during the build are not mistaken
+  // for creds this middleware already knows about (they'd be missed until the next change).
+  const fingerprint = googleCredsFingerprint();
   activeMiddleware = constructAuthFrontend();
+  builtCredsFingerprint = fingerprint;
+}
+
+/**
+ * Re-mount the Frontend API when the credentials file has changed under the running process.
+ *
+ * THE BUG THIS FIXES: `constructAuthFrontend()` decides once — at boot — whether to mount the real
+ * OpenAuthFederated router or a passthrough, and that decision was permanent. But the documented
+ * setup flow puts the creds in place AFTER boot: the sign-in screen tells the user which file to
+ * create (`credentialsFileInfo`), and `ensureApiSecret()` itself creates that very file at boot with
+ * only the `api` block. A user who pastes the `google` block in a minute later got a process whose
+ * /api/v1 was a passthrough forever, so `GET /api/v1/sign_in/sso` fell through every route and
+ * Express answered with a bare "Cannot GET /api/v1/sign_in/sso" — while `/api/health/auth-config`
+ * (which re-reads the file live) cheerfully reported `oauthConfigured: true`. The UI said configured;
+ * the router 404'd; only a manual restart reconciled them.
+ *
+ * So the mount decision is re-derived per request from the SAME live read the UI reports from. The
+ * check is a fingerprint compare over an mtime/size-cached read — a `statSync` in the common case,
+ * the same cost identify.ts already pays — and it rebuilds only on an actual change: creds appearing
+ * (mount the real router), changing (pick up a corrected client id), or being removed (fall back to
+ * passthrough).
+ */
+function ensureFreshAuthFrontend(): void {
+  const fingerprint = googleCredsFingerprint();
+  if (activeMiddleware && fingerprint === builtCredsFingerprint) return;
+  const first = activeMiddleware === null;
+  // Record BEFORE building: if construction throws, we must not retry it on every subsequent request
+  // (that would spam the fault trail once per hit). One attempt per distinct creds value is enough —
+  // the next edit to the file re-arms it.
+  builtCredsFingerprint = fingerprint;
+  try {
+    activeMiddleware = constructAuthFrontend();
+    if (!first) log.info("auth", "Google credentials changed on disk — auth Frontend API re-mounted.");
+  } catch {
+    // constructAuthFrontend() already logged the failure to the fault trail. Keep serving whatever
+    // was mounted before (or a passthrough on the very first build) so one bad creds edit degrades
+    // sign-in instead of 500-ing every /api/v1 request.
+    if (!activeMiddleware) activeMiddleware = (_req, _res, next) => next();
+  }
 }
 
 /**
@@ -174,6 +224,10 @@ export function buildAuthFrontend(): RequestHandler {
   // Always seed embedded verification at boot — this runs regardless of whether Google creds exist,
   // so identify.ts verifies stale/any Bearer token via the HS256 path (never the JWKS path).
   ensureEmbeddedVerification();
-  if (!activeMiddleware) rebuildAuthFrontend();
-  return (req, res, next) => activeMiddleware!(req, res, next);
+  ensureFreshAuthFrontend();
+  return (req, res, next) => {
+    // Per-request staleness check — the creds file is edited while we run (see ensureFreshAuthFrontend).
+    ensureFreshAuthFrontend();
+    activeMiddleware!(req, res, next);
+  };
 }
