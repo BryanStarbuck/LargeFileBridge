@@ -1251,7 +1251,7 @@ slug** whose ~80% popup (§9) Apply enqueues background `ocr` jobs. The engine *
 > asymmetry §0 exists to prevent. The names below are the *intended* shape when all three land together.
 
 The OCR calc engine and its route **would** live in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/ocr-scan.engine.ts` — class `WhatCanBeOcredCalcEngine`, methods `scanStorage()` / `scanAll()` (the sibling of `transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine`); route `POST /api/todo/ocr-scan` on `todo.router.ts`. Frontend: `~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `OcrBatchPopup` / `ShowOcrableLink`.
+**Not yet written** (§ below: "specified, not written") — planned as `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/ocr-scan.engine.ts` with `scanStorage()` / `scanAll()` and a `POST /api/todo/ocr-scan` route on `todo.router.ts`. Build it against the shipped sibling `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` (exported `scanAll()` / `scanStorage(scopeId)`), whose route is the only `*-scan` one `todo.router.ts` serves today. Frontend: `~/repos/LargeFileBridge/code/packages/frontend/src/pages/todo/TodoPage.tsx` — `OcrBatchPopup` / `ShowOcrableLink`.
 
 ---
 

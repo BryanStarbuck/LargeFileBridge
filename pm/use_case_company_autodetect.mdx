@@ -62,7 +62,7 @@ lands in the right bucket without manual filing, while staying **correctable**.
 
 Parsing the remote owner/host, classifying org-vs-personal from local config, and reading/writing the
 company registry are handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `parseRemoteOwner(remote)` / `classifyOwner(owner, host)` / `readCompanies()` / `upsertCompany()` / `assignRepoCompany(repoKey, companyId)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-identity.ts` — `parseRemoteOwner(remote)` / `KNOWN_FORGES` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveRepoOwner(cfg, personalAccounts)` (the built equivalent of the specified `classifyOwner`) · `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `discoverOrganizations()` / `buildCandidates()` / `createCompanyStorage(org)` / `setOrganizationDismissed(org)` · `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — `getStorageRow(id)`. **Naming note:** the single `company-mapping.service.ts` with `classifyOwner` / `readCompanies` / `upsertCompany` / `assignRepoCompany` in this spec was never built under those names; the behaviour landed split across the four files above.
 
 ---
 
@@ -124,7 +124,7 @@ Opening the **AcmeCorp** child shows a company view listing its repos — curren
 
 Deriving a company from a repo's remote on add (auto-create when the owner classifies as an org, tag the
 repo, insert the Storages child) is handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `onRepoAdded(repo)` (calls `company-mapping.service.ts` `classifyOwner()` then `upsertCompany()` + `assignRepoCompany()`); the runtime Storages children are assembled in `~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` from the discovered companies.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `registerRepo(absPath)`, reached from `POST /api/repos` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts`. **There is no `onRepoAdded` classify-on-add hook:** ownership is derived LAZILY whenever a repo row is composed — `ownerForRepoConfig(cfg)` (same file) → `resolveRepoOwner()` — and a manual override is persisted by `POST /api/repos/:repoId/owner`. Company storages are created by `createCompanyStorage()` from the discovery pass, not as a side effect of adding a repo. The runtime Storages children are assembled in `~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` from the discovered companies.
 
 **What we double-check (Step 1):**
 * The remote owner `AcmeCorp` is parsed and classified **org** from **local config only** (no forge API
@@ -161,7 +161,7 @@ match ([storage_company.mdx §2](./storage_company.mdx)).
 
 Renaming a company (updating `display_name`, never `source.org`) and re-labeling the Storages child are
 handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `renameCompany(companyId, displayName)`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts` — the company storage row's `companyName` (read back by `getStorageRow()`, surfaced through `ownerForRepoConfig()` in `modules/store-model/units.service.ts`). **Not built as** a `renameCompany(companyId, displayName)` entry point.
 
 **What we double-check (Step 2):**
 * Only `display_name` changes; `source.org` is untouched.
@@ -223,7 +223,7 @@ repo_company:
 
 Classifying an owner as ambiguous, defaulting to Personal, and surfacing/dismissing the promote offer are
 handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `classifyOwner()` returns `{ kind: "ambiguous" }`; the offer state (`owner_ambiguous`, `offer_dismissed`) rides the per-repo tag written by `assignRepoCompany()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `resolveRepoOwner()` (the built stand-in for `classifyOwner`); the dismiss state is per-ORGANIZATION and lives in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-discovery.service.ts` — `setOrganizationDismissed(org)`. **Not built as** an `{ kind: "ambiguous" }` result or a per-repo `owner_ambiguous` tag.
 
 **What we double-check (Steps 3 & 4):**
 * A repo whose owner is a **known personal handle** classifies **Personal** with **no** company created.
@@ -259,7 +259,7 @@ company, or a new one, regardless of what auto-detect guessed — the guess is o
 
 Reassigning a repo's company (including creating a hand-named company with `source: null`) is handled in
 code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/company` (via `company-mapping.service.ts` `assignRepoCompany()` / `upsertCompany()`); the Company control renders in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `POST /api/repos/:repoId/owner` (**not** the specified `PATCH /:repoId/company`), which persists the repo unit's `owner_override` via `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts`; the Company control renders in `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/RepoSettingsPage.tsx`.
 
 **What we double-check (Step 5):**
 * Reassigning `dotfiles` to Acme Marketing re-tags it (tag change only, no relocation) and it regroups in
@@ -328,7 +328,7 @@ sync repo governs only the **tracking** mirror, never content placement. (See
 
 Materializing a company storage on sync-repo configuration and mirroring its repos' Local-Storage tracking
 are handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/company-mapping.service.ts` — `setCompanySyncRepo(companyId, path)` (writes the company `storage.yaml` via `storage.service.ts` and updates `companies.yaml`); the mirror target is resolved by `tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns the company's `<syncRepo>/repos/<repoKey>/` for a company-mapped repo) and written by `tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
+**No `setCompanySyncRepo(companyId, path)` was built.** The sync repo is a PER-REPO opt-out toggle instead: `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /api/repos/:repoId/settings` (writes `sync_repo.enabled`, then repoints the Local-Storage marker); the mirror target is resolved by `tracking-root.service.ts` — `resolveStateSyncRepo(repoRoot)` (returns the company's `<syncRepo>/repos/<repoKey>/` for a company-mapped repo) and written by `tracking-sync.service.ts` — `mirrorToSyncRepo(repoRoot)`.
 
 **What we double-check (Step 6):**
 * Setting the sync repo materializes a real company storage (`storage.yaml`, `type: company`,
@@ -441,8 +441,8 @@ sync repo turns the single-computer assignment into a travelling, consent-gated 
   (§7): default Personal; detection local not forge-API; org auto-creates renamable company (source.org
   immutable match key); always correctable (ambiguous+offer, manual reassign, manual wins); assignment is a
   TAG not a move; sync repo is an ADDITIVE tracking mirror. Code:
-  company-mapping.service.ts parseRemoteOwner/classifyOwner/readCompanies/upsertCompany/assignRepoCompany/
-  renameCompany/setCompanySyncRepo; repos.service.ts onRepoAdded; repos.router.ts PATCH
+  repo-identity.ts parseRemoteOwner; git.service.ts resolveRepoOwner; company-discovery.service.ts discoverOrganizations/createCompanyStorage (classifyOwner/readCompanies/upsertCompany/assignRepoCompany unbuilt)/
+  renameCompany/setCompanySyncRepo (unbuilt — see §above); units.service.ts registerRepo; repos.router.ts PATCH
   /api/repos/:id/company; Sidebar.tsx company children; RepoSettingsPage.tsx Company control;
   tracking-root.service.ts resolveStateSyncRepo + tracking-sync.service.ts mirrorToSyncRepo. Reuses
   repo_company_mapping, storage_company, storage_personal, storages, left_bar, repo_settings,

@@ -357,7 +357,7 @@ keep or delete.
 
 Deleting the Local-Storage `repos/<repoKey>/` tree on repo removal (and never mutating the repo working tree
 on remove) is handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.service.ts` — `removeRepo(repoId)` (calls `rm -rf` on the `resolveTrackingRoot()` directory; a repo that merely went **missing**, e.g. an unmounted drive, retains its directory).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `unregisterRepo(folder)` (`rm -rf` on `repoUnitDir()`, the unit tree under the state root — `shared/store/scopes.ts`; the user's repo folder and local bytes are never touched). Reached from `DELETE /api/repos/:repoId` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts`. A repo that merely went **missing**, e.g. an unmounted drive, is not unregistered and retains its directory.
 
 **What we double-check (Week 6):**
 * `~/T/_large_files_bridge/repos/<repoKey>/` is **gone** after removal — no orphaned Local-Storage tracking
@@ -569,7 +569,7 @@ the keep-`.lfbridge/` consent decides *whether content may sit in the repo*.
   tracking; sync repo is additive mirror. Code: tracking-root.service.ts resolveTrackingRoot (Local Storage)
   / resolveStateSyncRepo; repo-storage.service.ts refreshCounts; file-sidecar.service.ts appendFileEvent;
   tracking-sync.service.ts mirrorToSyncRepo/reconcileFromSyncRepo; storage.service.ts ensureRepoStorage;
-  repos.service.ts removeRepo; transcribe.service.ts resolveTranscriptPath (Category-A radio). Reuses
+  units.service.ts unregisterRepo; transcribe.service.ts resolveTranscriptPath (Category-A radio). Reuses
   artifact_placement_policy, repo_tracking_scheme, storage_local, Transcribe, ai_description, decisions,
   use_case_two_computers.
 -->

@@ -770,7 +770,7 @@ transcribe`) — the shared To-Do batch area whose schema is
 
 The on-demand per-storage / all-storage walk (transcribable-and-no-sidecar candidate test, one
 `kind: transcribe` batch written per storage) is implemented in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — class `WhatCanBeTranscribedCalcEngine`, methods `scanStorage()` / `scanAll()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — the exported functions `scanAll()` / `scanStorage(scopeId)` (a module, not a `WhatCanBeTranscribedCalcEngine` class); route `POST /api/todo/transcribe-scan` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts`.
 The link that triggers it posts a scan route, implemented in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`.
 
@@ -931,7 +931,7 @@ in one place.
   (§2) entry points: MediaViewer button + Transcription tab (instant Transcribing… pending), file ⋮
        Transcribe…, batch, dir/repo/storage "Transcribe all files…". Always explicit user action.
   (§8) BULK DISCOVERY: on-demand What Can Be Transcribed Calc Engine (transcribe-scan.engine.ts
-       WhatCanBeTranscribedCalcEngine.scanStorage/scanAll; POST /api/todo/transcribe-scan) — triggered ONLY
+       transcribe-scan.engine.ts scanStorage/scanAll; POST /api/todo/transcribe-scan) — triggered ONLY
        by To-Do "Show what could be transcribed" link, NEVER the scheduled scan. Walks each storage for
        transcribable (special_files.mdx §3) audio/video with NO .transcription sidecar → one kind:transcribe
        batch per storage in _do_batches/ (to_do_batches.mdx §4). Renders as a transcribe slug (to_do.mdx §7);

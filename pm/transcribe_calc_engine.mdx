@@ -45,7 +45,7 @@ leaves them alone (they are a distinct `kind`); the user re-runs the link to ref
 
 Triggering the on-demand scan is served in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `POST /api/todo/transcribe-scan`, calling
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — `WhatCanBeTranscribedCalcEngine.scanStorage(storage)` / `scanAll()`.
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/transcribe-scan.engine.ts` — the exported functions `scanStorage(scopeId)` / `scanAll()` (a module, not a `WhatCanBeTranscribedCalcEngine` class).
 
 ---
 

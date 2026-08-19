@@ -442,7 +442,7 @@ The payload-scaled timeout and the long-hold WARN belong in code:
 
 ### 🟡 P-34 — The in-flight map is empty at postmortem time · observability
 
-- **Where:** `code/packages/backend/src/shared/progress.registry.ts` — `end()` **deletes** the job
+- **Where:** `code/packages/backend/src/modules/progress/progress.registry.ts` — `end()` **deletes** the job
   record.
 - **Symptom:** The registry is a **live view**, correct by design for the dock. But it means that at
   the moment we most want to know **which 24 files were in flight when the heap hit 4.1 GB**, the map
@@ -456,7 +456,7 @@ The payload-scaled timeout and the long-hold WARN belong in code:
   archaeology dig through `launcher.log`.
 
 The terminal-record handoff from the live registry to the durable log belongs in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/shared/progress.registry.ts` — `end()` (append to the transactions log before delete)
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/progress/progress.registry.ts` — `end()` (append to the transactions log before delete)
 
 ---
 
