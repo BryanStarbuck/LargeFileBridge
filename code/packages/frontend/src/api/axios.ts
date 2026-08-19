@@ -114,8 +114,24 @@ export async function unwrap<T>(p: Promise<{ data: { ok: boolean; data?: T; erro
   } catch (e) {
     // A non-2xx response still carries our { ok:false, error } envelope — surface the SERVER'S reason
     // ("the computer holding it looks offline"), not axios's generic "Request failed with status 502".
+    //
+    // OVERRIDE THE MESSAGE ON THE AXIOS ERROR — NEVER REBUILD THE ERROR. Throwing `new Error(reason)`
+    // is the obvious-looking way to do this and it silently broke both backend-down gates: a plain
+    // Error carries no `isAxiosError`, no `code` and no `response.status`, which is precisely what
+    // isTransientNetworkError() reads to tell "a GATEWAY says the backend is absent" (a proxy 502/504
+    // — ride it out) from "the backend answered no" (surface it). Stripped of those fields the dev
+    // proxy's own 502 was judged authoritative, so react-query stopped retrying (no self-heal when the
+    // backend came back) and the boot gate showed "…ran into a problem starting up. / backend
+    // unavailable" instead of "Reconnecting…" — for the one condition the app exists to ride out.
+    // Mutating the message preserves every discriminant, including any axios adds later, where
+    // hand-copying a field list would drift out of step with the predicate.
     const serverError = (e as { response?: { data?: { error?: string } } })?.response?.data?.error;
-    throw serverError ? new Error(serverError) : e;
+    if (!serverError) throw e;
+    if (e instanceof Error) {
+      e.message = serverError;
+      throw e;
+    }
+    throw new Error(serverError); // a non-Error rejection has no metadata to preserve
   }
   if (!res.data.ok) throw new Error(res.data.error || "request failed");
   return res.data.data as T;
