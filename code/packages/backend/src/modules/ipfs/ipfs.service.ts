@@ -13,7 +13,12 @@ import { noteOwnWrite } from "../watcher/self-writes.js";
 import { log } from "../../shared/logging.js";
 
 function apiBase(): string {
-  const addr = getAppConfig().ipfs.api_addr; // e.g. /ip4/127.0.0.1/tcp/5001
+  // `LFB_IPFS_API_ADDR` overrides the configured address. Two jobs: an escape hatch for a daemon on a
+  // non-default port without editing config.yaml, and — the reason it exists — a hard stop between the
+  // TEST suite and the user's LIVE daemon. Specs that forget to mock this module otherwise issue real
+  // `pin/add` calls against the running node with fixture CIDs; vitest.config.ts points this at a closed
+  // port so such a call fails fast instead of touching real pins.
+  const addr = process.env.LFB_IPFS_API_ADDR || getAppConfig().ipfs.api_addr; // e.g. /ip4/127.0.0.1/tcp/5001
   const m = addr.match(/\/ip4\/([\d.]+)\/tcp\/(\d+)/);
   const host = m ? m[1] : "127.0.0.1";
   const port = m ? m[2] : "5001";
@@ -167,22 +172,67 @@ async function* ndjsonLines(res: Response, guard: StallGuard): AsyncGenerator<st
   if (buf.trim()) yield buf;
 }
 
+// ── Health: a probe that TIMED OUT is not a probe that was REFUSED ───────────────────────────────────
+// `rpc` aborts at RPC_TIMEOUT_MS, and several routine conditions blow through 15s on a daemon that is
+// alive and answering: a stale pooled keep-alive socket the daemon already dropped (undici hands the
+// request to a dead connection and it just sits there), a GC sweep, a `pin ls` over a large pinset.
+// Treating that blip as death was expensive: `runUnitPin` (pin.service.ts) returns the moment health is
+// not "ok" — before it examines a single file — and stamps a persistent red "IPFS node unreachable" on
+// the unit, so ONE slow RPC abandoned an entire pin pass over a node with peers that answers instantly.
+// A REFUSED connection is proof nothing is listening and is reported immediately (that is the signal
+// `waitForStopped` polls for); a TIMEOUT is only "no answer yet", so it is re-probed on a fresh socket
+// before we call the daemon gone.
+const HEALTH_PROBE_ATTEMPTS = 2;
+const HEALTH_RETRY_MS = 500;
+
+/**
+ * One probe serves every concurrent caller.
+ *
+ * health() is on the hot path of several pollers (the node card, the repos list, the settings page, each
+ * unit of a pin pass). When the daemon is unresponsive each of those calls used to hold a socket for the
+ * full 15s cap — now up to two probes — all asking the same question at the same time. Single-flighting
+ * them costs nothing when the node is healthy and keeps a wedged daemon from turning every surface in the
+ * app into a queue of identical stalled requests. Deliberately NOT a time-based cache: `waitForHealthy` /
+ * `waitForStopped` poll this in a loop and must see each transition on the probe after it happens.
+ */
+let healthInFlight: Promise<IpfsHealth> | null = null;
+
 export async function health(): Promise<IpfsHealth> {
+  if (healthInFlight) return healthInFlight;
+  healthInFlight = probeHealth();
   try {
-    await rpc("id");
-    unreachableProbes = 0;
-    return "ok";
-  } catch (e) {
-    // The daemon being off is routine, not a fault — keep it out of error.err (debug only).
-    log.debug("ipfs", `health probe unreachable: ${(e as Error).message}`);
-    // ONE failed probe is not "down". `rpc` aborts at RPC_TIMEOUT_MS, and a daemon busy with a large pin
-    // pass or a GC sweep can miss that deadline while it is still running — and still un-adopted. Clearing
-    // `pendingComplianceRestart` on that blip would be PERMANENT (nothing re-sets the flag once the config
-    // already matches what enforcement would write), so the card would go green over a node that is still
-    // a relay. So a daemon has to be MISSING across consecutive probes before we call it gone. Our own
-    // restarts never rely on this: `waitForStopped` watched the stop and says so via `noteDaemonStopped`.
-    if (++unreachableProbes >= DOWN_CONFIRM_PROBES) pendingComplianceRestart = false;
-    return "unreachable";
+    return await healthInFlight;
+  } finally {
+    healthInFlight = null;
+  }
+}
+
+async function probeHealth(): Promise<IpfsHealth> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      await rpc("id");
+      unreachableProbes = 0;
+      return "ok";
+    } catch (e) {
+      // No answer within the cap ≠ nobody home. Retry on a new socket before declaring the node dead;
+      // a refusal or any other protocol-level failure is conclusive and falls straight through.
+      if (isAbortError(e) && attempt < HEALTH_PROBE_ATTEMPTS) {
+        log.debug("ipfs", `health probe timed out (attempt ${attempt}) — re-probing before calling it down`);
+        await delay(HEALTH_RETRY_MS);
+        continue;
+      }
+      // The daemon being off is routine, not a fault — keep it out of error.err (debug only).
+      log.debug("ipfs", `health probe unreachable: ${(e as Error).message}`);
+      // ONE failed probe is not "down". `rpc` aborts at RPC_TIMEOUT_MS, and a daemon busy with a large pin
+      // pass or a GC sweep can miss that deadline while it is still running — and still un-adopted. Clearing
+      // `pendingComplianceRestart` on that blip would be PERMANENT (nothing re-sets the flag once the config
+      // already matches what enforcement would write), so the card would go green over a node that is still
+      // a relay. So a daemon has to be MISSING across consecutive probes before we call it gone. Our own
+      // restarts never rely on this: `waitForStopped` watched the stop and says so via `noteDaemonStopped`.
+      // The counter advances once per health() CALL, never once per retry attempt within one.
+      if (++unreachableProbes >= DOWN_CONFIRM_PROBES) pendingComplianceRestart = false;
+      return "unreachable";
+    }
   }
 }
 

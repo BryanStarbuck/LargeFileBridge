@@ -40,7 +40,15 @@ export default defineConfig({
     env: {
       LFB_LOG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "lfb-vitest-logs-")),
       LFB_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "lfb-vitest-state-")),
+      // And keep the suite off the user's LIVE IPFS daemon. A spec that forgets to mock ipfs.service
+      // otherwise issues real `pin/add` calls against the running node (fixture CIDs 500-ing in the
+      // production error.err is how this was found). Port 9 is the discard port: refused, instantly.
+      LFB_IPFS_API_ADDR: "/ip4/127.0.0.1/tcp/9",
     },
+    // The env above is only a BASELINE — specs that redirect it then `delete` the variables were
+    // removing it for every spec that ran after them, re-exposing the real state root. This restores
+    // any variable a spec deleted, without overwriting one a spec deliberately set.
+    setupFiles: ["./vitest/isolate-state.ts"],
     // Fingerprint tests decode real images with sharp; the import-graph walk reads the tree.
     // Both are CPU-bound and short — the default pool is fine, just give them room.
     testTimeout: 30_000,
