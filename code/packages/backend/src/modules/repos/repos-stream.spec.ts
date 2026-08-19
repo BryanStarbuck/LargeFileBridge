@@ -55,6 +55,13 @@ beforeAll(async () => {
     c.access.allowed_emails = ["stream@localhost"];
     // Scope the freshness self-heal's background scan to the fixture — never the developer's home dir.
     c.scanner.roots = [repoRoot];
+    // …and then keep it from firing at all. A fresh state root has `last_run_at: null`, which reads as
+    // stale, so EVERY request below kicked a background discovery scan (scan-job.ts
+    // `maybeTriggerStaleScan`). That scan rewrites this fixture's hand-written candidate sizes (4096)
+    // with the real one-byte files on disk, so whether the buffered and streamed reads agree came down
+    // to whether the walk happened to finish between them — a race this spec lost as soon as anything
+    // slowed the first request down. Stamping a recent run makes the comparison deterministic.
+    c.scan_process.last_run_at = new Date().toISOString();
     return c;
   });
 

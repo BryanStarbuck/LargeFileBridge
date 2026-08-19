@@ -203,10 +203,15 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     return counts;
   }
   note.phase("checking the IPFS node");
+  // This returns before a single file is examined and stamps a RED, persisting `last_error` on the unit,
+  // so it must only fire on a node that is genuinely gone. `health()` no longer believes one timed-out
+  // probe (ipfs.service.ts): a busy or slow daemon is re-probed on a fresh socket first, and only a
+  // refusal — or a second silent probe — gets here. Say what actually happened, in the user's words.
   const health = await ipfs.health();
   if (health !== "ok") {
-    markUnitError(t, "IPFS node unreachable");
-    counts.error = "IPFS node unreachable";
+    const msg = "IPFS node unreachable — nothing was pinned this pass; start your IPFS node and it will retry";
+    markUnitError(t, msg);
+    counts.error = msg;
     return counts;
   }
   await ipfs.enforceCompliance();
@@ -1490,6 +1495,19 @@ export async function pullMissing(
   // three BACKGROUND callers — auto-sync-in, pull-retry, and the To Do apply — showed literally nothing:
   // bytes moved for minutes while the app looked idle. Registering here rather than at each call site is
   // deliberate — the job then exists no matter which of the four entry points started it.
+  // A REPO WHOSE WORKING TREE IS NOT HERE CANNOT RECEIVE FILES. All four entry points sweep every
+  // configured unit, and a unit's path goes away for ordinary reasons: an external drive unmounted, a
+  // clone deleted, a folder renamed, a spec that registered a temp dir the OS has since reaped. Pulling
+  // for one of those spends real IPFS work per file and then either writes nothing or RE-CREATES a
+  // directory tree the user deliberately removed. Refuse it here — one choke point for every caller —
+  // and report NOTHING ATTEMPTED (`failed: 0`) rather than "still pending", so a timer that re-arms on
+  // pending work does not chase a repo that is not on this computer.
+  const rootStat = statOrNull(repoRoot);
+  if (!rootStat?.isDirectory()) {
+    const msg = `${path.basename(repoRoot)}: this repo's folder is not on this computer (${repoRoot}) — nothing pulled`;
+    log.warn("pin", `pullMissing: ${msg}`);
+    return { pulled: 0, failed: 0, errors: [msg] };
+  }
   const rootKey = path.resolve(repoRoot);
   pullsPerRepo.set(rootKey, (pullsPerRepo.get(rootKey) ?? 0) + 1);
   try {

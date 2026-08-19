@@ -554,6 +554,23 @@ async function pinAddOnce(
 }
 
 /**
+ * Cheap shape check: could this string be a CID at all?
+ *
+ * A string that cannot be one must never reach the daemon. Kubo answers garbage with
+ * `500 invalid path "…": path does not have enough components`, which lands in the fault trail looking
+ * like an IPFS failure — and because the manifest entry carrying it is retried on EVERY pin pass, it
+ * repeats forever (hundreds of identical ERROR lines a day in a live error.err, against a perfectly
+ * healthy node). The fault is in the manifest, not the daemon, and no retry can fix it.
+ *
+ * Deliberately permissive about WHICH CID form: base32 CIDv1 (`bafy…`), base58 CIDv0 (`Qm…`), base36
+ * (`k…`) and the uppercase variants all pass. The only thing it rejects is a string too short to be any
+ * of them (a real one is ≥46 characters) or carrying characters no multibase alphabet uses.
+ */
+export function looksLikeCid(cid: string): boolean {
+  return /^[A-Za-z0-9]{46,}$/.test(cid.trim());
+}
+
+/**
  * Pin a CID recursively, fetching its bytes if needed. Retries an abort/stall (a peer that went away, a
  * daemon busy with GC) before giving up, and THROWS when the pin did not land — callers must treat that
  * as "not pinned here" and never record a pin claim for it (see pin.service `runUnitPin`/`pullMissing`).
@@ -569,6 +586,13 @@ export async function pinAdd(
   // faster. Background pin passes keep the generous default. `discoveryMs` is deliberately NOT tightened in
   // step with it: finding a provider takes as long as it takes on either path, and a short interactive
   // deadline applied to discovery kills pulls that were about to succeed.
+  // PERMANENT failures do not get the retry ladder. `attempts` exists for a peer that went away or a
+  // daemon mid-GC; a string that is not a CID will fail identically forever, so it is refused here —
+  // before any RPC — and reported as what it is: a corrupt manifest entry, not an IPFS fault.
+  if (!looksLikeCid(cid)) {
+    log.warn("ipfs", `refusing to pin "${cid}": that is not a CID — the manifest entry carrying it is corrupt`);
+    throw new Error(`malformed CID "${cid}" — not pinnable`);
+  }
   const stallMs = opts.stallMs ?? PIN_ADD_STALL_MS;
   const discoveryMs = Math.max(opts.discoveryMs ?? PIN_ADD_DISCOVERY_MS, stallMs);
   const attempts = opts.attempts ?? PIN_ADD_ATTEMPTS;
