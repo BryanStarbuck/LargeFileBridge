@@ -249,6 +249,16 @@ time** from a growing sample set.
   instead).
 * **Never add a `.gitignore` entry automatically for anyone.** We only surface and
   offer.
+  * **This governs the CHOOSING, not the carrying.** Once a person has chosen — a
+    click here, a teammate's click on their computer, or the per-repo auto-decide
+    policy the team switched on — that choice is a record in the shared decision
+    ledger, and it travels between the user's computers. Making an
+    **already-recorded** decision true on a computer that has not heard about it
+    yet is not deciding for anyone; refusing to is just the pairing failing on
+    every machine but the one where the click happened. So the assert writer
+    (`ensureFilesIgnored`, git_ignore.mdx §5.6) is in bounds, and it is fenced:
+    recorded intent only, the anchored single-file line only, and never a line a
+    rule already covers.
 * We **do** point out files that are **big but not git-ignored**, and give an easy
   **one-click** option to git-ignore them.
 

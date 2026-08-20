@@ -17,6 +17,13 @@
 //     writing is append-only + idempotent (§5.4). The ONE removal carve-out is `unignorePaths()` — the
 //     toggle's OFF direction — which deletes ONLY an exact anchored single-file line and verifies the
 //     result, never a broad/pattern rule (§5.5).
+//
+// AND ONE WRITER WITH NO DIALOG BEHIND IT (§5.6): `ensureFilesIgnored()` — the ASSERT. It carries a decision
+// the shared ledger ALREADY records onto a computer that never heard about it (a teammate's ⊘, a policy
+// auto-decision taken on another machine). The charter's "never add a `.gitignore` entry automatically"
+// governs the CHOOSING, which happened elsewhere; see that function's header for the bounds that make an
+// unattended writer safe — recorded intent only, the anchored single-file line only, and nothing a rule
+// already covers.
 // Node fs only (no shell `find`) + the shared git helpers.
 import fs from "node:fs";
 import path from "node:path";
@@ -28,9 +35,15 @@ import type {
   UnignoreOutcome,
 } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
-import { nearestGitAtOrAbove, checkIgnore, checkIgnoreVerbose } from "./git.service.js";
+import {
+  nearestGitAtOrAbove,
+  checkIgnore,
+  checkIgnoreRules,
+  checkIgnoreVerbose,
+  listTrackedFiles,
+} from "./git.service.js";
 import { RESERVED_SDL_ROOT_NAMES, resolveStorageType, usesLfbridgeDir } from "../storage/storage-type.service.js";
-import { relPosix } from "../../shared/rel-path.js";
+import { relPosix, healWindowsPath, joinRelConfined } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
 /** One classified target: an existing file/dir, its owning repo, and its repo-root-relative POSIX path. */
@@ -182,6 +195,130 @@ export function applyGitIgnore(req: GitIgnoreRequest): GitIgnoreResult {
       `(${plan.alreadyIgnored} already ignored, ${plan.notInRepo} not in a repo)`,
   );
   return { written, repos, alreadyIgnored: plan.alreadyIgnored, notInRepo: plan.notInRepo };
+}
+
+/** What {@link ensureFilesIgnored} did, for the caller's log line. */
+export interface EnsureIgnoredResult {
+  /** Anchored lines actually appended to `<repo>/.gitignore` this call. */
+  written: number;
+  /** Paths a rule already covered (an anchored line of ours, or anyone's broader rule) — nothing to do. */
+  alreadyIgnored: number;
+  /** Paths decided git-ignore but ALREADY TRACKED — a line cannot un-track them, so none was written. */
+  tracked: number;
+  /** Paths refused: outside the repo, or LFB's own travelling text (§5.3). */
+  refused: number;
+}
+
+/**
+ * ASSERT an ALREADY-RECORDED git-ignore decision on this computer's working tree
+ * ([decisions.mdx §7](../../../../pm/decisions.mdx), "git-ignore axis → the working tree").
+ *
+ * This is NOT a second way to decide — it never chooses a file. Every path handed here is one the ledger
+ * already carries as `gitignore: true`, i.e. a human (or the team's opt-in §9 policy) said so. The charter's
+ * "never add a `.gitignore` entry automatically for anyone" governs the CHOOSING; carrying a choice that was
+ * already made onto the computer it has not reached yet is the opposite of acting on our own.
+ *
+ * It exists because the axis used to be applied at exactly ONE instant — inside `recordDecision`, on the
+ * machine where the click happened. A teammate's ⊘ decision travelling in over the sync repo, or a policy
+ * auto-decision made on another computer, folded into this computer's ledger and then did nothing: the file
+ * stayed committable here forever, and the pin pass would happily materialize its bytes into a working tree
+ * that git was still offering to commit.
+ *
+ * Why not {@link planGitIgnore}: that engine serves the DIALOG, so it stats each target to shape a file vs.
+ * directory line and drops whatever is not on disk. Here the paths are ledger keys — always FILES, and very
+ * often NOT on disk yet (that is the whole point: the line must exist BEFORE the bytes land). So the line
+ * shape is fixed (`/<rel>`, §5.2 FILE) and nothing is stat'd.
+ *
+ * Same content rules as the dialog engine otherwise: repo-root-relative and ANCHORED (§5.1), append-only and
+ * idempotent (§5.4), never a line that would ignore LFB's own travelling text (§5.3), and a path that does
+ * not land inside `repoRoot` is refused rather than written. Never throws.
+ */
+export function ensureFilesIgnored(repoRoot: string, relPaths: string[]): EnsureIgnoredResult {
+  const out: EnsureIgnoredResult = { written: 0, alreadyIgnored: 0, tracked: 0, refused: 0 };
+  if (relPaths.length === 0) return out;
+  const root = path.resolve(expandHome(repoRoot));
+  // The lines are anchored at `root`, so `root` must BE the repo — a registered path that sits inside some
+  // other repo would get lines relative to the wrong root. Nothing to assert either way.
+  if (nearestGitAtOrAbove(root) !== root) return out;
+
+  // rel (a POSIX ledger key) → the absolute path git is asked about. De-duped: a ledger legitimately holds
+  // the same file under a `\`- and a `/`-spelling (repo__list_syns.mdx §6.1a), which heal to one line.
+  const byLine = new Map<string, { rel: string; abs: string }>();
+  for (const raw of relPaths) {
+    // NOT normalized beyond the `\` heal: a ledger key is relative BY CONTRACT (relPosix), so a leading
+    // `/` means the key is wrong, not that it wants trimming. Stripping it would hand `joinRelConfined` a
+    // relative path and defeat the very guard that refuses an absolute key from a merged ledger.
+    const rel = healWindowsPath(String(raw ?? "").trim());
+    if (!rel) continue;
+    const abs = joinRelConfined(root, rel);
+    if (!abs) {
+      out.refused++; // `..`, absolute, or a drive letter — a merged ledger can carry any of them
+      continue;
+    }
+    if (isLfbridgePath(abs) || isSdlRootPayload(abs)) {
+      out.refused++; // never ignore the SDL's / the repo's travelling text (§5.3)
+      continue;
+    }
+    byLine.set(`/${rel}`, { rel, abs });
+  }
+  if (byLine.size === 0) return out;
+
+  // Cheap pass first: a line already IN the file needs no git at all. On a settled repo this is every
+  // path, so the steady state costs one small read and no spawn.
+  const existing = readGitignoreLineSet(root);
+  for (const line of [...byLine.keys()]) {
+    if (existing.has(line)) {
+      byLine.delete(line);
+      out.alreadyIgnored++;
+    }
+  }
+  if (byLine.size === 0) return out;
+
+  // Then ask git, ONCE, about the rest: anything a BROADER rule already covers (`*.mp4`, a folder rule,
+  // someone else's) must not collect a redundant per-file line. `checkIgnoreRules` (`--no-index`) so a
+  // file that is tracked DESPITE such a rule is also left alone — one more anchored line would not
+  // un-track it, and the checked-in-big-file nudge (scan.mdx §4.2) is what surfaces that case.
+  const covered = checkIgnoreRules(root, [...byLine.values()].map((v) => v.abs));
+  const candidates: { line: string; rel: string }[] = [];
+  for (const [line, v] of byLine) {
+    if (covered.has(v.abs)) out.alreadyIgnored++;
+    else candidates.push({ line, rel: v.rel });
+  }
+  if (candidates.length === 0) return out;
+
+  // LAST, and only for what is still standing: a `.gitignore` line does NOTHING to a file that is already in
+  // the index. Writing one anyway is the shape that ruins a shared `.gitignore` — measured on a real repo
+  // here, 1,880 of 1,896 candidates were already tracked, so a naive assert would have appended 1,880 rules
+  // that cannot fire, to a 128-line file, and pushed them to every teammate. What those files actually need
+  // is `git rm --cached`, which is destructive ACROSS computers (a teammate's pull deletes their copy of a
+  // file only IPFS still holds) and is therefore never ours to run. So: skip, count, and say so — the
+  // checked-in-big-file triage (scan.mdx §4.2) is the surface that asks the user to resolve it.
+  // UNKNOWN (null) proceeds: applying a recorded decision is this function's job, and a redundant line is a
+  // far cheaper mistake than a big file left committable because one `ls-files` failed.
+  const tracked = listTrackedFiles(root);
+  const lines: string[] = [];
+  for (const c of candidates) {
+    if (tracked?.has(c.rel)) out.tracked++;
+    else lines.push(c.line);
+  }
+  if (out.tracked > 0) {
+    log.info(
+      "git",
+      `${root}: ${out.tracked} file(s) are decided git-ignore but are already tracked by git — no line ` +
+        `written (a .gitignore rule cannot un-track a committed file; they need \`git rm --cached\`)`,
+    );
+  }
+  if (lines.length === 0) return out;
+
+  out.written = appendIgnoreLines(root, lines);
+  if (out.written > 0) {
+    log.info(
+      "git",
+      `${root}: asserted ${out.written} recorded git-ignore decision(s) into .gitignore ` +
+        `(${out.alreadyIgnored} already covered, ${out.tracked} already tracked, ${out.refused} refused)`,
+    );
+  }
+  return out;
 }
 
 /**

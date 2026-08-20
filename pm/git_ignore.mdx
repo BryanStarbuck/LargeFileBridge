@@ -327,6 +327,51 @@ The un-ignore engine (group by repo, one verbose check per repo, exact-line test
 Deciding whether a row's toggle is interactive or locked (the SAME accept condition as `unignorePaths()`, or the UI would offer a removal the engine refuses) is implemented in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `gitIgnoreAxis()`.
 
+### 5.6 The ASSERT writer: carrying a RECORDED decision onto a computer it never reached (LOCKED)
+
+Everything above §5.5 describes the **dialog** — the user is present, the click is the confirm. There is one
+writer with no dialog behind it, and it exists because the decision was **already made, somewhere else**.
+
+A git-ignore decision is a per-file record in the shared ledger ([decisions.mdx §1](./decisions.mdx)), and
+the ledger travels between the user's computers through the sync repo. Applying the axis only at the
+instant of the click therefore honored it on exactly **one** machine: a teammate's ⊘, or a §9 policy
+auto-decision taken on another computer, merged into this machine's ledger, folded correctly, showed as
+ignored in the UI (which reads the ledger) — and this machine's `.gitignore` never learned. Git kept
+offering to commit the file, and the pin pass that folded the decision went on to **fetch the bytes into
+that repo**, which is LFB itself putting a big file somewhere git will take it.
+
+**Asserting a recorded decision is not "adding a `.gitignore` entry automatically".** The charter rule
+governs the **choosing**; here the choosing already happened, and the only thing left is to make it true on
+a computer that has not heard about it yet. Refusing to carry it is not restraint — it is the product
+failing at the one job the pairing exists for.
+
+Because the assert runs **unattended**, it is bounded harder than the dialog:
+
+* **Only a recorded intent.** Only paths the folded ledger carries as `asked && gitignore: true`. A pinned
+  file with no git-ignore decision is untouched — the two axes stay independent
+  ([decisions.mdx §1](./decisions.mdx)) — and a tombstone (`asked:false`) is Undecided, not a standing
+  ignore.
+* **Only the anchored single-file line** `/<rel>` (§5.2 FILE). It never emits a directory or pattern rule,
+  so a line it writes can only ever match the one file its record names.
+* **Nothing redundant, ever.** A path already covered by any rule is skipped — including a file that is
+  **tracked despite** such a rule. Git deliberately withholds an ignore verdict for a tracked path, which
+  reads as "not ignored"; writing the line anyway changes nothing (only `git rm --cached` un-tracks it) and
+  grows a shared `.gitignore` by one dead rule per file, on every computer, forever. The assert therefore
+  asks with **`--no-index`**, which is the "would this line be redundant?" question. (The **plain** probe
+  stays as it is everywhere else: a tracked big file IS a check-in hazard and must keep being surfaced by
+  the ⊘ column and the nudge — §5.4.1.)
+* **It works on a file that is NOT ON DISK.** That is the point: the line must exist **before** the bytes
+  land. This is why the assert cannot go through `planGitIgnore()`, which stats each target to shape a
+  file-vs-directory line and drops whatever is absent.
+* **Same refusals as §5.3**, plus one: a ledger key that does not resolve **inside** the repo (a `..`
+  segment, an absolute path, a drive letter — any of which can reach us through a merged ledger) is refused
+  rather than written.
+
+The assert writer (normalize + confine the ledger keys, drop lines already present, one `--no-index` probe for the rest, append) is implemented in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/gitignore.service.ts` — `ensureFilesIgnored(repoRoot, relPaths)`, using `~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `checkIgnoreRules()` (the `--no-index` form).
+
+Its two callers are [decisions.mdx §7](./decisions.mdx): `reconcile()` asserts the whole repo on every scan and after every backbone fold, and `ensureDecidedIgnores()` asserts just the paths a caller is about to materialize, immediately before the pin pass's fetch-missing and the interactive Pull down write them.
+
 ---
 
 ## 6. Apply → returns, then the badge lights up (LOCKED)

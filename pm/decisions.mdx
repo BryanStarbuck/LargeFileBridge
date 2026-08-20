@@ -481,16 +481,34 @@ a decision is recorded, LFB reconciles:
 > `METRIC_CATALOG`; *the frozen enum in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` —
 > `reconcile()`.
 * **git-ignore axis → the working tree.** For each folded record with `gitignore: true`, ensure the file
-  is git-ignored via the existing engine ([git_ignore.mdx](./git_ignore.mdx)) — anchored, idempotent,
+  is git-ignored via the existing engine ([git_ignore.mdx §5.6](./git_ignore.mdx)) — anchored, idempotent,
   skip-already-ignored. The record's `gitignore: true` is the durable "already decided to ignore" memory,
   so the "N big files aren't git-ignored" offer ([warnings.mdx §10.2](./warnings.mdx)) does not re-nag on
   files already decided.
+
+  > **This half is what makes the axis CROSS-COMPUTER (LOCKED).** For a long time only the IPFS-axis
+  > projection above was built, so the git-ignore axis was applied at exactly ONE instant — inside
+  > `recordDecision`, on the computer where the click happened. A decision that **arrived** instead of being
+  > made here — a teammate's ⊘, or a §9 policy auto-decision taken on another machine — merged into this
+  > computer's ledger, folded correctly, and rendered as ignored in the UI (which reads the ledger) while
+  > this computer's `.gitignore` never learned a thing. Git went on offering to commit the file, and the
+  > very same pass that folded the decision also **fetched the bytes into that repo**. Asserting a recorded
+  > decision is not the charter's "never git-ignore on our own": the choosing already happened, on a
+  > computer that is not this one.
+  >
+  > Because the assert runs unattended it is bounded harder than the dialog: it writes only the anchored
+  > single-file line, only for `asked && gitignore` records, and it writes **nothing** for a path any
+  > broader rule already covers — including a file that is **tracked despite** such a rule, where one more
+  > line would not un-track it and would only grow a shared `.gitignore` by a dead rule per file, forever
+  > ([git_ignore.mdx §5.6](./git_ignore.mdx)).
 * **The reconciliation never fights the user.** It projects recorded decisions; it does not invent them.
   A file with no record stays Undecided; a re-scan reconciles without clobbering a teammate's recorded
   choice ([storage_local.mdx §7](./storage_local.mdx), "the scanner reconciles, it never clobbers").
 
 Projecting the folded ledger onto the machine-local `decisions:` enum map (IPFS axis) and ensuring the git-ignore axis via the gitignore engine, on every pass and after each write, is handled in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, inline from `PATCH /:repoId/files`, and from `tracking-sync.service.ts` — `reconcileMirroredRepos()` right after every backbone pull folds a mirrored ledger, so a teammate's arriving decision reaches the pin engine without waiting for the next scan).
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `reconcile(repoRoot)` (called from `scanner.service.ts` `scanAll` and `pin.service.ts`, inline from `PATCH /:repoId/files`, and from `tracking-sync.service.ts` — `reconcileMirroredRepos()` right after every backbone pull folds a mirrored ledger, so a teammate's arriving decision reaches the pin engine without waiting for the next scan). Its git-ignore half calls `gitignore.service.ts` — `ensureFilesIgnored(repoRoot, relPaths)` ([git_ignore.mdx §5.6](./git_ignore.mdx)).
+
+The same assert, SCOPED to the paths a caller is about to materialize, is `decisions.service.ts` — `ensureDecidedIgnores(repoRoot, relPaths)`. It exists because within ONE pin pass the repos are pinned BEFORE the storage unit pulls the sync repo ([pin_process.mdx §2](./pin_process.mdx)), so a decision arriving on this pass would not reach `.gitignore` until the next one — and the fetch in between is exactly when the bytes land. Both byte-writing paths call it immediately before writing: `pin.service.ts` — `runUnitPin()` (the `ensureIgnored` unit hook, supplied only by the repo unit) and `pullMissingInner()` (the interactive Pull down).
 
 ---
 

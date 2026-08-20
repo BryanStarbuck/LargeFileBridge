@@ -33,7 +33,7 @@ import { serializeLedger } from "./ledger-merge.js";
 import { storageSid } from "./storage.service.js";
 import { normalizeRemoteKey } from "./repo-identity.js";
 import { readStorageSettings } from "./storage-settings.service.js";
-import { applyGitIgnore, unignorePaths } from "../git/gitignore.service.js";
+import { applyGitIgnore, ensureFilesIgnored, unignorePaths } from "../git/gitignore.service.js";
 import { classifyRemoteVisibility } from "../git/git.service.js";
 import { classifySpecial } from "../scanner/special-file.service.js";
 import { effectiveFlags, getAppConfig } from "../store-model/config.service.js";
@@ -504,10 +504,65 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
     }
     return c;
   });
+  // ── git-ignore axis → THE WORKING TREE (decisions.mdx §7, second bullet) ─────────────────────────────
+  // The spec has always required this half; only the IPFS-axis projection above was ever built. So the
+  // `gitignore` axis was applied at exactly ONE instant — `recordDecision`, on the computer where the click
+  // happened — and a decision that ARRIVED here instead of being made here did nothing at all. That is the
+  // whole cross-computer case: a teammate ⊘-ignores a video, the event rides the sync repo into this
+  // machine's ledger, folds correctly, shows as ignored in the UI (which reads the ledger) — and this
+  // computer's `.gitignore` never learns, so git goes on offering to commit the file. Worse, the same pass
+  // that folds the decision also FETCHES the bytes, so LFB itself writes a big file into a working tree it
+  // knows is not ignoring it.
+  //
+  // This is an ASSERT of a recorded decision, never a new one (see `ensureFilesIgnored` on why the charter's
+  // "never git-ignore on our own" is not in tension with it): only `asked && gitignore` records, and the
+  // engine drops everything already covered. Best-effort — a repo whose `.gitignore` cannot be written must
+  // not fail the reconcile that projected the IPFS axis.
+  const toIgnore = [...folded.values()].filter((r) => r.asked && r.gitignore).map((r) => r.path);
+  if (toIgnore.length > 0) {
+    try {
+      const r = ensureFilesIgnored(repoRoot, toIgnore);
+      if (r.written > 0) {
+        log.info(
+          "decisions",
+          `${repoRoot}: applied ${r.written} recorded git-ignore decision(s) to this computer's .gitignore`,
+        );
+      }
+    } catch (e) {
+      log.warn("decisions", `${repoRoot}: git-ignore axis could not be applied: ${(e as Error).message}`);
+    }
+  }
   // Teammates' folded decisions just landed. Throttled: the pin pass reconciles every repo in a burst,
   // and the shared `repos` topic must not fire once per repo (performance.mdx Aspect 6b flood rule).
   if (changed.length > 0) bumpTopicsThrottled(repoBumpTopics(folder));
   return { changed };
+}
+
+/**
+ * The SAME assert, scoped to the paths a caller is ABOUT TO MATERIALIZE (pin_process.mdx §3 fetch-missing,
+ * and the interactive Pull down). `reconcile()` covers the repo wholesale on every scan and after every
+ * backbone fold, but within ONE pin pass the repos are pinned BEFORE the storage unit pulls the sync repo —
+ * so a decision arriving on this pass would not reach `.gitignore` until the next one, and the fetch in
+ * between is exactly when the bytes land. Asserting right before the write closes that window.
+ *
+ * Reads the ledger (never writes it) and honors the same rule as `reconcile`: only paths the ledger already
+ * carries as `gitignore: true` are asserted; every other path is left alone. Never throws.
+ */
+export function ensureDecidedIgnores(repoRoot: string, relPaths: string[]): number {
+  if (relPaths.length === 0) return 0;
+  try {
+    const folded = foldLedger(readLedger(repoRoot));
+    const want = relPaths
+      .map((p) => healWindowsPath(p))
+      .filter((p) => {
+        const rec = folded.get(p);
+        return !!rec && rec.asked && rec.gitignore;
+      });
+    return ensureFilesIgnored(repoRoot, want).written;
+  } catch (e) {
+    log.warn("decisions", `${repoRoot}: pre-fetch git-ignore assert skipped: ${(e as Error).message}`);
+    return 0;
+  }
 }
 
 // ── §9 default-decision policy (read / write / apply) ────────────────────────

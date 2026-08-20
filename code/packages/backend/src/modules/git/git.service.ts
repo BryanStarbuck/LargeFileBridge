@@ -1594,6 +1594,61 @@ export function checkIgnore(repoRoot: string, absPaths: string[]): Set<string> {
   return checkIgnoreDetailed(repoRoot, absPaths).ignored;
 }
 
+/**
+ * "Is a `.gitignore` RULE already covering this path?" — `check-ignore --no-index`.
+ *
+ * The plain {@link checkIgnore} answers a DIFFERENT question: git deliberately withholds a verdict for a
+ * path that is TRACKED, because a tracked file is committed whatever the rules say. That is the right
+ * answer for the ⊘ column and the "big files aren't git-ignored" nudge — a tracked big file IS a
+ * check-in hazard and must keep being surfaced.
+ *
+ * It is the WRONG answer for the one caller that is about to WRITE a line (`gitignore.service`
+ * `ensureFilesIgnored`): a tracked `hero.mp4` under an existing `*.mp4` rule reads as "not ignored", so the
+ * writer appends a `/…/hero.mp4` line that changes nothing (the file stays tracked — only `git rm --cached`
+ * un-tracks it) and grows a shared `.gitignore` by one dead rule per file, forever. `--no-index` asks about
+ * the RULES alone, which is exactly the "would this line be redundant?" question.
+ */
+export function checkIgnoreRules(repoRoot: string, absPaths: string[]): Set<string> {
+  const ignored = new Set<string>();
+  if (absPaths.length === 0) return ignored;
+  const res = runCheckIgnore(repoRoot, absPaths, false, true);
+  for (const line of res.out.split("\n")) {
+    const p = line.trim();
+    if (p) ignored.add(p);
+  }
+  return ignored;
+}
+
+/**
+ * Every path git currently TRACKS in `repoRoot`, as repo-root-relative POSIX keys — one `git ls-files -z`.
+ *
+ * Answers the question `check-ignore` cannot: a `.gitignore` line has NO effect on a file that is already
+ * in the index. So the assert writer (`gitignore.service` `ensureFilesIgnored`) uses this to avoid writing
+ * a line that cannot do what the decision asked — un-tracking is `git rm --cached`, which is a destructive,
+ * cross-computer act LFB does not take on anyone's behalf (a teammate's pull would delete their copy of a
+ * file only IPFS still holds).
+ *
+ * `null` = we could not ask (not a repo, spawn failed, output past the buffer). Callers must treat that as
+ * UNKNOWN, not "nothing is tracked", and decide for themselves which way to fail.
+ */
+export function listTrackedFiles(repoRoot: string): Set<string> | null {
+  try {
+    const out = execFileSync(stableGitBin(), [...QUOTEPATH_ARGS, "ls-files", "-z", "--full-name"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: { ...process.env, GIT_TERMINAL_PROMPT: "0" },
+      maxBuffer: 128 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    const tracked = new Set<string>();
+    for (const p of out.split("\0")) if (p) tracked.add(p);
+    return tracked;
+  } catch (e) {
+    log.warn("git", `ls-files failed for ${repoRoot}: ${(e as Error).message}`);
+    return null;
+  }
+}
+
 /** The one `.gitignore` rule that causes a path to be ignored, as git reports it under `-v`. */
 export interface IgnoreRule {
   source: string; // the file holding the rule — usually "<repo>/.gitignore", but can be .git/info/exclude or a global
@@ -1762,14 +1817,14 @@ function checkIgnoreRepoUsable(repoRoot: string, tag: string): boolean {
 }
 
 /** The shared `git check-ignore --stdin` invocation, batched. Paths it could not answer for land in `unknown`. */
-function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean): CheckIgnoreOutcome {
+function runCheckIgnore(repoRoot: string, absPaths: string[], verbose: boolean, noIndex = false): CheckIgnoreOutcome {
   if (absPaths.length === 0) return { out: "", unknown: [] };
   if (!checkIgnoreRepoUsable(repoRoot, "")) return { out: "", unknown: absPaths.slice() };
   const budget = { bisects: CHECK_IGNORE_MAX_BISECT_SPAWNS };
   let out = "";
   const unknown: string[] = [];
   for (const batch of checkIgnoreBatches(absPaths)) {
-    const r = runCheckIgnoreBatch(repoRoot, batch, verbose, 0, budget);
+    const r = runCheckIgnoreBatch(repoRoot, batch, verbose, 0, budget, noIndex);
     out += r.out;
     if (r.unknown.length > 0) unknown.push(...r.unknown);
   }
@@ -1783,9 +1838,16 @@ function runCheckIgnoreBatch(
   verbose: boolean,
   splits: number,
   budget: { bisects: number },
+  noIndex = false,
 ): CheckIgnoreOutcome {
   if (absPaths.length === 0) return { out: "", unknown: [] };
-  const args = [...QUOTEPATH_ARGS, "check-ignore", ...(verbose ? ["-v"] : []), "--stdin"];
+  const args = [
+    ...QUOTEPATH_ARGS,
+    "check-ignore",
+    ...(verbose ? ["-v"] : []),
+    ...(noIndex ? ["--no-index"] : []),
+    "--stdin",
+  ];
   try {
     const out = execFileSync(stableGitBin(), args, {
       cwd: repoRoot,
@@ -1818,12 +1880,12 @@ function runCheckIgnoreBatch(
       splits < MAX_SUBMODULE_SPLITS ? splitOnSubmoduleFatal(repoRoot, absPaths, err.stderr?.toString()) : null;
     if (split) {
       const inside = isGitWorkingTree(split.subRoot)
-        ? runCheckIgnoreBatch(split.subRoot, split.inside, verbose, splits + 1, budget)
+        ? runCheckIgnoreBatch(split.subRoot, split.inside, verbose, splits + 1, budget, noIndex)
         : // No usable nested tree (stale worktree, pruned submodule) — these paths are UNANSWERABLE, and the
           // three-valued contract above says unanswerable must surface as UNKNOWN, never fold into "not
           // ignored" (this branch used to return unknown: [] and silently misclassified every inside path).
           { out: "", unknown: split.inside };
-      const rest = runCheckIgnoreBatch(repoRoot, split.rest, verbose, splits + 1, budget);
+      const rest = runCheckIgnoreBatch(repoRoot, split.rest, verbose, splits + 1, budget, noIndex);
       return { out: rest.out + inside.out, unknown: [...rest.unknown, ...inside.unknown] };
     }
     // Unattributable failure (a fatal we can't parse, or an `EPIPE` that swallowed stderr): halve the batch
@@ -1832,8 +1894,8 @@ function runCheckIgnoreBatch(
     if (absPaths.length > 1 && budget.bisects > 0) {
       budget.bisects -= 2;
       const mid = absPaths.length >> 1;
-      const a = runCheckIgnoreBatch(repoRoot, absPaths.slice(0, mid), verbose, splits, budget);
-      const b = runCheckIgnoreBatch(repoRoot, absPaths.slice(mid), verbose, splits, budget);
+      const a = runCheckIgnoreBatch(repoRoot, absPaths.slice(0, mid), verbose, splits, budget, noIndex);
+      const b = runCheckIgnoreBatch(repoRoot, absPaths.slice(mid), verbose, splits, budget, noIndex);
       return { out: a.out + b.out, unknown: [...a.unknown, ...b.unknown] };
     }
     log.warn(

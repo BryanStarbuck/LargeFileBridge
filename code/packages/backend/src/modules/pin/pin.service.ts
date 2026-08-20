@@ -62,7 +62,7 @@ import {
   mergeManifests,
 } from "../storage/tracking-sync.service.js";
 import { foldManifestFiles } from "../storage/manifest-merge.js";
-import { recordDecision } from "../storage/decisions.service.js";
+import { ensureDecidedIgnores, recordDecision } from "../storage/decisions.service.js";
 import { appendFileEvent, readSidecar } from "../storage/file-sidecar.service.js";
 import { appendHistory } from "../storage/history-log.service.js";
 import { enqueue } from "../jobqueue/jobqueue.service.js";
@@ -192,6 +192,10 @@ interface UnitTarget {
   // orphans.service.ts). Only a repo unit can have a twin (two clones of one remote); the computer and
   // storage units leave it undefined, which is exactly the prior behavior.
   bytesHeldByLocalTwin?: (rel: string) => boolean;
+  // Assert the RECORDED git-ignore decision for the files this pass is about to write into the working tree
+  // (decisions.mdx §7). Only a repo unit has a ledger and a `.gitignore`; the computer and storage units
+  // leave it undefined. Best-effort — a throw is logged and the fetch proceeds.
+  ensureIgnored?: (rels: string[]) => void;
 }
 
 async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinReport): Promise<PinCounts> {
@@ -520,6 +524,17 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     });
     total += fetchTargets.length;
     report?.({ done, total, unit: "files" });
+    // WRITING A BIG FILE INTO A WORKING TREE IS THE MOMENT ITS IGNORE HAS TO ALREADY EXIST. Every path below
+    // is one LFB is about to materialize; if the ledger says it is git-ignored, make that true HERE rather
+    // than on some later reconcile — otherwise the file lands untracked-and-unignored and git offers to
+    // commit the very bytes this product exists to keep out of git (decisions.mdx §7).
+    if (t.ensureIgnored) {
+      try {
+        t.ensureIgnored(fetchTargets.map((e) => e.path));
+      } catch (e) {
+        log.warn("pin", `${t.name}: git-ignore assert before fetch failed: ${(e as Error).message}`);
+      }
+    }
     note.phase("");
     await Promise.all(
       fetchTargets.map((entry) =>
@@ -781,6 +796,7 @@ async function pinRepoFolderInner(
       // deletion itself, never to a person who did not make that choice (decisions.mdx §12).
       tombstone: (rels) => recordDecision(folder, rels, {}, "deleted", { asked: false }),
       bytesHeldByLocalTwin: localTwinProbe(folder, cfg.repo.remote ?? null, repoPath),
+      ensureIgnored: (rels) => ensureDecidedIgnores(repoPath, rels),
     },
     onlyPaths,
     opts.report,
@@ -1711,6 +1727,10 @@ async function pullMissingInner(
   // unknown means "assume not pinned and do the work": re-pinning something already pinned is a cheap
   // no-op, whereas refusing a pull the user just asked for is the failure they are complaining about.
   const pinset = (await pinnedCidSet()) ?? new Set<string>();
+  // Same rule as the pin pass's fetch-missing: the ignore has to exist BEFORE the bytes do. A pull is the
+  // interactive twin of that write, and it is the likelier one to race a reconcile — the user clicks it the
+  // moment the peer's row appears, which is the same pass that folded the decision (decisions.mdx §7).
+  ensureDecidedIgnores(repoRoot, checkedPaths);
   note.phase("");
   const by = opts.by ?? null;
   let pulled = 0;
