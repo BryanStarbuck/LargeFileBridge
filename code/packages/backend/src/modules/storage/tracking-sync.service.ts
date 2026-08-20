@@ -477,9 +477,105 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
  * Best-effort and non-throwing: this runs inside the git cycle, and a bad repo unit must never fail the pull.
  * Returns how many repos were folded in.
  */
+/**
+ * FOLD DUPLICATE SPELLINGS of one repo's mirror subtree into a single directory (artifact_placement_policy.mdx
+ * §3.1a). Returns how many extra directories were absorbed and removed.
+ *
+ * WHY THIS EXISTS. §3.1 renamed `repos/83e62afc2c80/` to `repos/charlie-kirk-83e62afc2c80/`. A computer still
+ * on the pre-§3.1 build keeps writing the BARE name, pushes it, and after the merge the shared repo holds
+ * BOTH spellings for one repo. That is not merely untidy — it is silent data loss in a specific direction:
+ * `resolveStateSyncRepo` resolves to ONE directory and prefers the named one, so from that moment every
+ * event the older computer mirrors into the bare twin is invisible to every updated computer. Measured on
+ * the Act3 company repo 2026-08-20: 67 duplicated subtrees, 19,417 files.
+ *
+ * So a duplicate must be MERGED, never chosen between, and merged with the SAME rules a pulled subtree gets
+ * (§8.4.3): union the manifest, union the decision ledger, merge sidecars and history logs per entry. Only
+ * once the extra's content is folded in is the extra removed — the delete is the last step, never the first.
+ *
+ * Idempotent and self-limiting: on a fully-updated fleet nothing ever writes a second spelling, so this finds
+ * nothing and costs one readdir per pull.
+ */
+function foldDuplicateMirrorSubtrees(mirrorDir: string): number {
+  let folded = 0;
+  let entries: string[];
+  try {
+    entries = fs.readdirSync(mirrorDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+  } catch {
+    return 0;
+  }
+  // Group by the 12-hex key every spelling ends with. A directory that is not key-shaped is not ours.
+  const groups = new Map<string, string[]>();
+  for (const name of entries) {
+    const key = /(?:^|-)([0-9a-f]{12})$/.exec(name)?.[1];
+    if (!key) continue;
+    (groups.get(key) ?? groups.set(key, []).get(key)!).push(name);
+  }
+  for (const [key, names] of groups) {
+    if (names.length < 2) continue;
+    // The NAMED spelling is canonical — it is what every updated computer resolves to. If somehow several
+    // are named, keep the one this build would produce, else the first, so the choice is deterministic.
+    const named = names.filter((n) => n !== key).sort();
+    const canonical = named[0] ?? names[0]!;
+    for (const extra of names) {
+      if (extra === canonical) continue;
+      const src = path.join(mirrorDir, extra);
+      const dst = path.join(mirrorDir, canonical);
+      try {
+        mergeSubtree(src, dst);
+        fs.rmSync(src, { recursive: true, force: true });
+        folded++;
+        log.info("storage", `folded duplicate mirror subtree ${extra} into ${canonical} (key ${key})`);
+      } catch (e) {
+        // Never delete what we could not fold — the duplicate simply survives to the next pull.
+        log.warn("storage", `fold of ${extra} into ${canonical} failed, leaving both: ${(e as Error).message}`);
+      }
+    }
+  }
+  return folded;
+}
+
+/** Merge one mirror subtree into another, by the §8.4.3 rules. Both sides are MIRROR copies (already
+ *  scrubbed of machine-local fields), so this is a pure union — there is no local state to protect. */
+function mergeSubtree(src: string, dst: string): void {
+  fs.mkdirSync(dst, { recursive: true });
+  const incomingManifest = path.join(src, "manifest.yaml");
+  if (fs.existsSync(incomingManifest)) {
+    const dstManifest = path.join(dst, "manifest.yaml");
+    const merged = mergeManifests(
+      readManifestBestEffort(dstManifest, "repo"),
+      readManifestBestEffort(incomingManifest, "repo"),
+      computerLabel(),
+      { incomingIsWire: true, supersededCid },
+    );
+    writeIfDifferent(dstManifest, serializeManifest(merged));
+  }
+  const incomingLedger = path.join(src, "decisions.yaml");
+  if (fs.existsSync(incomingLedger)) {
+    const dstLedger = path.join(dst, "decisions.yaml");
+    writeIfDifferent(
+      dstLedger,
+      serializeLedger(
+        unionLedgerEvents(
+          parseLedgerBestEffort(readFileOrNull(dstLedger)),
+          parseLedgerBestEffort(readFileOrNull(incomingLedger)),
+        ),
+      ),
+    );
+  }
+  // `repo_storage.yaml` needs no special case here: both copies are scrubbed mirrors, so whichever the
+  // canonical already has stands, and copyTreeExcept below leaves it alone.
+  // Everything else — sidecars and history logs — merges per entry inside copyTrackedFile.
+  copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"]));
+}
+
 export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
   const mirrorDir = path.join(path.resolve(sdlRoot), "repos");
   if (!fs.existsSync(mirrorDir)) return 0;
+  // FIRST, heal any duplicate spellings that arrived in this pull (§3.1a). Must run BEFORE the per-repo
+  // match below: that match resolves to ONE directory, so an unfolded twin's events would be skipped and
+  // then silently overwritten on the next mirror out.
+  const foldedDupes = foldDuplicateMirrorSubtrees(mirrorDir);
+  if (foldedDupes) log.info("storage", `reconcile: folded ${foldedDupes} duplicate mirror subtree(s) in ${sdlRoot}`);
   let folded = 0;
   try {
     // LAZY import — units.service → repo-storage.service → (here) is a cycle if imported statically.

@@ -157,3 +157,50 @@ describe("the mirror subtree resolves by KEY SUFFIX, named or bare (§3.1)", () 
     expect(await reconcileMirroredRepos(path.join(tmp, "sdl"))).toBe(1);
   });
 });
+
+// A DUPLICATE SPELLING MUST BE MERGED, NEVER CHOSEN BETWEEN (§3.1a).
+//
+// After the §3.1 rename, a computer still on the old build keeps writing `repos/<uid>/` while updated
+// computers write `repos/<slug>-<uid>/`. Both end up in the shared repo. Because `resolveStateSyncRepo`
+// resolves to ONE directory and prefers the named one, everything the older computer mirrors into the bare
+// twin becomes invisible — silent, directional data loss. Measured on the real Act3 company repo on
+// 2026-08-20: 67 duplicated subtrees, 19,417 files. The fold is what makes the rename safe for a fleet.
+describe("duplicate mirror subtrees fold instead of shadowing each other (§3.1a)", () => {
+  it("keeps the BARE twin's manifest entry — the peer's file is not lost", async () => {
+    const uid = path.basename(mirrorDir);
+    const parent = path.dirname(mirrorDir);
+    const named = path.join(parent, `charlie-kirk-${uid}`);
+
+    // The old build wrote the bare one; an updated computer wrote the named one. Different files in each.
+    write(path.join(mirrorDir, "manifest.yaml"), manifest([{ path: "videos/from-old-build.mp4", cid: "bafyOLD" }]));
+    write(path.join(named, "manifest.yaml"), manifest([{ path: "videos/from-new-build.mp4", cid: "bafyNEW" }]));
+    write(
+      path.join(mirrorDir, "history", "laptop.txt"),
+      "2026-08-20T11:07:00Z  observed videos/from-old-build.mp4\n",
+    );
+
+    write(
+      path.join(process.env.LFB_STATE_DIR!, "pin", "r", "charlie-kirk", "config.yaml"),
+      ["repo:", "  name: charlie-kirk", `  path: ${repoRoot}`, `  remote: ${REMOTE}`].join("\n"),
+    );
+    await reconcileMirroredRepos(path.join(tmp, "sdl"));
+
+    // The bare directory is gone, and BOTH files survive in the surviving one.
+    expect(fs.existsSync(mirrorDir)).toBe(false);
+    const surviving = YAML.parse(fs.readFileSync(path.join(named, "manifest.yaml"), "utf8"));
+    const paths = (surviving.files as { path: string }[]).map((f) => f.path).sort();
+    expect(paths).toEqual(["videos/from-new-build.mp4", "videos/from-old-build.mp4"]);
+    // ...and the old build's history log came across too.
+    expect(fs.existsSync(path.join(named, "history", "laptop.txt"))).toBe(true);
+  });
+
+  it("does NOTHING when there is only one spelling — the steady state costs one readdir", async () => {
+    write(path.join(mirrorDir, "manifest.yaml"), manifest([{ path: "videos/a.mp4", cid: "bafy1" }]));
+    write(
+      path.join(process.env.LFB_STATE_DIR!, "pin", "r", "charlie-kirk", "config.yaml"),
+      ["repo:", "  name: charlie-kirk", `  path: ${repoRoot}`, `  remote: ${REMOTE}`].join("\n"),
+    );
+    await reconcileMirroredRepos(path.join(tmp, "sdl"));
+    expect(fs.existsSync(mirrorDir)).toBe(true); // still the only spelling, untouched
+  });
+});

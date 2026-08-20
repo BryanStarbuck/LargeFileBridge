@@ -165,7 +165,7 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
   // have, so it emitted zero frames and the task FAILED — 28 files silently left with no OCR text. The
   // name is still what ADMITS a file to this pipeline (cheap, no I/O); the sniff only decides which reader
   // runs, once, on a file we are opening anyway. An unrecognized header keeps the name's answer.
-  const kind = effectiveMediaKind(abs, nameKind);
+  const kind = effectiveMediaKind(abs, nameKind, ["image", "video", "pdf"] as const);
   if (kind !== nameKind) {
     log.info("ocr", `${name}: extension says ${nameKind}, bytes say ${kind} — reading it as ${kind}`);
   }

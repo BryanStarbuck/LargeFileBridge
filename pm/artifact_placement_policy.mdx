@@ -389,11 +389,36 @@ Personal sync repo this computer mirrors into:
 * **First run on this machine (2026-08-20):** 196 Local-Storage + 164 sync-repo directories renamed, 0
   collisions, 391 left bare (no repo registered here owns them — mostly de-listed repos and teammates').
 
-**Residual, accepted:** if a fleet member on a pre-§3.1 build writes into the bare `<uid>` directory *after*
-another computer has renamed it, both spellings exist for one repo. Rule 4 makes each machine pick one and
-keep working; the migration then refuses the rename (destination occupied) and logs which two directories to
-compare. Nothing is lost — the state is split until someone merges it by hand. Self-update closes the window
-in practice, and a boot migration is the wrong place to run a tracking-state merge engine.
+### 3.1b A duplicate spelling is MERGED, never chosen between (LOCKED)
+
+The mixed-fleet case above is not hypothetical and it is not benign — it happened within minutes of the
+first rename, and **the first version of this section got it wrong.** It called the duplication untidy and
+said self-update would close the window. Both halves were wrong:
+
+* **Scale.** Within one hour the Act3 company repo held **67 duplicated subtrees / 19,417 files**, from a
+  single computer (`bryanstarbuck-macbook-pro`) still on the old build. One un-upgraded machine is enough.
+* **Severity.** It is **silent, directional data loss**, not clutter. `resolveStateSyncRepo` resolves to ONE
+  directory and rule 1 makes it prefer the named one — so from the moment the rename lands, every event the
+  older computer mirrors into the bare twin is **invisible to every updated computer**, and is then
+  overwritten by the next mirror out. The state travels perfectly and is never read: the same failure shape
+  as §8.4.1, re-created by the fix for a naming problem.
+
+So the rename is only safe **because of the fold**, and the fold is part of the rule, not a cleanup nicety:
+
+7. **When two directories share a key, their contents are UNIONED into the named one and the extra is
+   removed** — by the same §8.4.3 rules a pulled subtree gets (union the manifest, union the decision
+   ledger, per-entry merge of sidecars and history logs). The **delete is the last step**: an extra that
+   could not be folded is left in place and logged, never removed on a failed merge.
+8. **It runs on every reconcile, not once at boot** — the duplicate arrives by `git pull`, so healing must
+   live where pulls are processed. On an updated fleet nothing writes a second spelling, so it finds nothing
+   and costs one `readdir` per pass.
+
+Folding duplicate spellings is done in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `foldDuplicateMirrorSubtrees(mirrorDir)` and `mergeSubtree(src, dst)`, called at the top of `reconcileMirroredRepos()`.
+
+**Residual, accepted:** until every computer runs a §3.1 build, an old one keeps recreating its bare
+spelling and each pull folds it again — a small, bounded commit churn (one fold per pass per stale repo),
+never data loss. It ends by itself the moment that machine updates.
 
 ---
 

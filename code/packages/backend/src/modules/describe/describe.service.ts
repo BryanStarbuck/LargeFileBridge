@@ -376,7 +376,7 @@ export async function describeOne(
   // ASK THE BYTES, not the extension (ocr.mdx §1.7.2). Describe's failure here was quieter than OCR's and
   // therefore worse: 28 JPEGs named `*.mp4` got the VIDEO prompt and came back as `kind: video` describing
   // "this clip", for what is a static screenshot. A plausible, wrong answer that nothing flags.
-  const kind = effectiveMediaKind(abs, nameKind);
+  const kind = effectiveMediaKind(abs, nameKind, ["image", "video"] as const);
   if (kind !== nameKind) {
     log.info("describe", `${name}: extension says ${nameKind}, bytes say ${kind} — describing it as ${kind}`);
   }
