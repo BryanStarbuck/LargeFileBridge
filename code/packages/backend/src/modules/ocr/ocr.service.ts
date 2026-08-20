@@ -13,6 +13,8 @@ import path from "node:path";
 import YAML from "yaml";
 import type { OcrBlock, OcrKind, OcrLevel, OcrResult, OcrBatchResult, OcrView, OcrEngineId, OcrEnginesStatus, EnqueuePlan, PreviewPlan } from "@lfb/shared";
 import { mediaKindForName, isPdfName } from "@lfb/shared";
+// The bytes-not-extension corrector (ocr.mdx §1.7.2) — a leaf module (fs only).
+import { effectiveMediaKind } from "../../shared/media-sniff.js";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { expandHome } from "../fs/badges.js";

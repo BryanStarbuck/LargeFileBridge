@@ -84,15 +84,22 @@ export function sniffMediaKind(absFile: string): SniffedKind | null {
 }
 
 /**
- * The kind a pipeline should actually RUN for `absFile`, given what its NAME said.
+ * The kind a pipeline should actually RUN for `absFile`, given what its NAME said and which kinds that
+ * pipeline can actually handle.
  *
- * Correction is deliberately one-directional in effect: the sniff can only replace `nameKind` with a
- * different **confident** kind. A null sniff (unknown header, unreadable file, a network mount that is
- * momentarily away) changes nothing, so the worst case is exactly today's behavior.
+ * `allowed` is not a formality — it is the safety rail. OCR handles image|video|pdf and describe handles
+ * image|video, so an `.mp4` that sniffs as **audio** (a mislabeled MP3) must NOT be handed to either as
+ * "audio": there is no such pipeline, and silently switching would trade a clear failure for a crash. In
+ * that case the name's answer stands and the file fails the way it already did.
+ *
+ * The correction therefore only ever fires when the sniff is CONFIDENT *and* the pipeline can act on it.
+ * A null sniff (unknown header, unreadable file, a network mount momentarily away) changes nothing, so the
+ * worst case is exactly today's behavior.
  */
-export function effectiveMediaKind<T extends string>(absFile: string, nameKind: T): T | SniffedKind {
+export function effectiveMediaKind<T extends SniffedKind>(absFile: string, nameKind: T, allowed: readonly T[]): T {
   const sniffed = sniffMediaKind(absFile);
-  return sniffed && sniffed !== nameKind ? sniffed : nameKind;
+  if (!sniffed || sniffed === nameKind) return nameKind;
+  return (allowed as readonly string[]).includes(sniffed) ? (sniffed as T) : nameKind;
 }
 
 function readHeader(absFile: string): Buffer | null {

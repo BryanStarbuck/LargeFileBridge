@@ -11,6 +11,8 @@ import path from "node:path";
 import YAML from "yaml";
 import type { DescribeKind, DescribeResult, DescribeBatchResult, DescribeView, DescribeRejectionView, DescribeProvidersStatus, DescribeAiConfig, DescribeAiConfigPatch, AiCredentialsInfo, EnqueuePlan, PreviewPlan, ProviderHealthView, ProviderResumeResult } from "@lfb/shared";
 import { mediaKindForName } from "@lfb/shared";
+// The bytes-not-extension corrector (ocr.mdx §1.7.2) — a leaf module (fs only).
+import { effectiveMediaKind } from "../../shared/media-sniff.js";
 import { HARD_SKIP } from "../../shared/scan-filters.js";
 import { collectFilesRecursive } from "../../shared/fs-walk.js";
 import { expandHome } from "../fs/badges.js";
@@ -366,10 +368,17 @@ export async function describeOne(
   }
   const bytes = sizeOf(abs);
 
-  const kind = describeKindFor(name);
-  if (!kind) {
+  const nameKind = describeKindFor(name);
+  if (!nameKind) {
     ledgerNoWork(abs, { bytes }, "blocked", "unsupported_kind");
     return result(abs, "unsupported", null, null, "only images and videos can be AI-described");
+  }
+  // ASK THE BYTES, not the extension (ocr.mdx §1.7.2). Describe's failure here was quieter than OCR's and
+  // therefore worse: 28 JPEGs named `*.mp4` got the VIDEO prompt and came back as `kind: video` describing
+  // "this clip", for what is a static screenshot. A plausible, wrong answer that nothing flags.
+  const kind = effectiveMediaKind(abs, nameKind);
+  if (kind !== nameKind) {
+    log.info("describe", `${name}: extension says ${nameKind}, bytes say ${kind} — describing it as ${kind}`);
   }
 
   const { root, descriptionPath, rejectedPath, needsSetup } = resolveDescriptionPath(abs);
