@@ -71,3 +71,19 @@ export function repoUidFor(remote: string | null): string | null {
   if (!key) return null;
   return crypto.createHash("sha1").update(key.toLowerCase()).digest("hex").slice(0, 12);
 }
+
+/**
+ * The repo's MACHINE-INDEPENDENT display slug — the repo name out of its remote, lowercased
+ * (artifact_placement_policy.mdx §3.1). It prefixes the shared mirror subtree, so
+ * `<syncRepo>/repos/83e62afc2c80/` reads as `<syncRepo>/repos/charlie-kirk-83e62afc2c80/`.
+ *
+ * Derived from the REMOTE, never from the local directory basename: the same repo is checked out at
+ * `~/BGit/Bryan_git/charlie-kirk` on one computer and `~/BGit/work/charlie-kirk` on another (both exist on
+ * this machine right now), and a shared directory name that disagreed between computers would plant two
+ * subtrees for one repo — the exact §8.4.1 defect the uid was introduced to fix. Returns null when the
+ * remote has no parseable name, in which case the bare uid stays the directory name.
+ */
+export function repoSlugFor(remote: string | null): string | null {
+  const p = parseRemoteOwner(remote);
+  return p?.repo ? p.repo.toLowerCase() : null;
+}

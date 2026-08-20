@@ -153,10 +153,19 @@ export async function ocrOne(input: string, opts: { overwrite?: boolean; engine?
   }
   const bytes = sizeOf(abs);
 
-  const kind = ocrKindFor(name);
-  if (!kind) {
+  const nameKind = ocrKindFor(name);
+  if (!nameKind) {
     ledgerNoWork(abs, { bytes }, "blocked", "unsupported_kind");
     return result(abs, "unsupported", null, null, null, "only images, videos, and PDFs have text to read");
+  }
+  // ASK THE BYTES, not the extension (§1.7.2). `videos/<cid>.mp4` in charlie-kirk was 28 JPEGs and PNGs
+  // wearing a video extension; the video path plans its frame stride from a duration those files do not
+  // have, so it emitted zero frames and the task FAILED — 28 files silently left with no OCR text. The
+  // name is still what ADMITS a file to this pipeline (cheap, no I/O); the sniff only decides which reader
+  // runs, once, on a file we are opening anyway. An unrecognized header keeps the name's answer.
+  const kind = effectiveMediaKind(abs, nameKind);
+  if (kind !== nameKind) {
+    log.info("ocr", `${name}: extension says ${nameKind}, bytes say ${kind} — reading it as ${kind}`);
   }
 
   const { root, ocrPath, needsSetup } = resolveOcrPath(abs);

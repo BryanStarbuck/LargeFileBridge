@@ -29,6 +29,7 @@ import { log } from "../shared/logging.js";
 import { resolveHome } from "../shared/home-path.js";
 import { hasWindowsSeparator, healWindowsPath } from "../shared/rel-path.js";
 import { mergeSidecarFiles } from "../modules/storage/sidecar-heal.js";
+import { resolveNamedKeyDir } from "../shared/store/keyed-dir.js";
 
 const MARKER = ".posix-paths-repaired";
 
@@ -254,13 +255,15 @@ function mergeSidecarInto(strayFile: string, keepFile: string): boolean {
   return true;
 }
 
-/** This repo's subtree in the company/Personal sync repo, from its `.sync-repo` marker (two lines: the
- *  sync-repo root, then the repo's machine-independent uid). Null when the repo does not mirror. */
+/** This repo's subtree in the company/Personal sync repo, from its `.sync-repo` marker (three lines: the
+ *  sync-repo root, the repo's machine-independent uid, then its display slug). Null when the repo does not
+ *  mirror. Resolved through `resolveNamedKeyDir` so it finds the `<slug>-<uid>` directory and the legacy
+ *  bare-`<uid>` one alike (artifact_placement_policy.mdx §3.1). */
 function syncRepoSubtree(repoStateDir: string): string | null {
   try {
-    const [root, uid] = fs.readFileSync(path.join(repoStateDir, ".sync-repo"), "utf8").split("\n");
+    const [root, uid, slug] = fs.readFileSync(path.join(repoStateDir, ".sync-repo"), "utf8").split("\n");
     if (!root?.trim() || !uid?.trim()) return null;
-    return path.join(root.trim(), "repos", uid.trim());
+    return resolveNamedKeyDir(path.join(root.trim(), "repos"), uid.trim(), slug?.trim() || null);
   } catch {
     return null;
   }

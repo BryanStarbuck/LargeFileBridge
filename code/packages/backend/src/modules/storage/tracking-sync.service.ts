@@ -13,7 +13,8 @@ import path from "node:path";
 import YAML from "yaml";
 import { RepoStorageDocSchema, type Manifest, type ManifestFile } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
-import { repoUidFor } from "./repo-identity.js";
+import { repoUidFor, repoSlugFor } from "./repo-identity.js";
+import { namedKeyDir, isDirForKey } from "../../shared/store/keyed-dir.js";
 // THIS computer's device label — the identity a manifest's `pinned_by` is keyed by. Both directions of
 // the mirror hand it to `mergeManifests` so an arriving claim about US is never adopted (ipfs.mdx §1.1).
 import { computerLabel } from "../store-model/config.service.js";
@@ -41,19 +42,21 @@ import { log } from "../../shared/logging.js";
 // Machine-local files under `repos/<repoKey>/` that must NOT travel to the sync repo.
 const LOCAL_ONLY = new Set([".sync-repo", ".durable-artifact"]);
 
-/** Turn the per-repo sync-repo mirror ON (write the marker) or OFF (remove it). The marker is TWO lines —
+/** Turn the per-repo sync-repo mirror ON (write the marker) or OFF (remove it). The marker is THREE lines —
  *  the owning storage's sync-repo absolute path, then this repo's `repoUid` (its machine-independent
- *  identity, storage_company.mdx §8.4.1) — because the mirror subtree is `<syncRepo>/repos/<repoUid>/` and
- *  a path-derived key would differ on every computer. Called from the per-repo settings PATCH when the
- *  toggle flips (repo_settings.mdx) and from `ensureSyncRepoMarker()`. Best-effort; a marker write failure
- *  just leaves the repo Local-Storage-only. */
+ *  identity, storage_company.mdx §8.4.1), then its remote-derived `repoSlug` — because the mirror subtree is
+ *  `<syncRepo>/repos/<repoSlug>-<repoUid>/` and a path-derived key would differ on every computer. The slug
+ *  is naming only (artifact_placement_policy.mdx §3.1); the uid remains the identity. Called from the
+ *  per-repo settings PATCH when the toggle flips (repo_settings.mdx) and from `ensureSyncRepoMarker()`.
+ *  Best-effort; a marker write failure just leaves the repo Local-Storage-only. */
 export function setSyncRepoMarker(repoRoot: string, syncRepoRoot: string | null, remote?: string | null): void {
   const marker = syncRepoMarkerPath(repoRoot);
   try {
     if (syncRepoRoot && syncRepoRoot.trim()) {
       const uid = repoUidFor(remote ?? null);
+      const slug = repoSlugFor(remote ?? null);
       fs.mkdirSync(path.dirname(marker), { recursive: true });
-      fs.writeFileSync(marker, `${path.resolve(syncRepoRoot.trim())}\n${uid ?? ""}\n`);
+      fs.writeFileSync(marker, `${path.resolve(syncRepoRoot.trim())}\n${uid ?? ""}\n${slug ?? ""}\n`);
     } else {
       fs.rmSync(marker, { force: true });
     }
@@ -98,13 +101,24 @@ export function ensureSyncRepoMarker(
   }
   const current = readSyncRepoMarker(repoRoot);
   const uid = repoUidFor(remote);
+  const slug = repoSlugFor(remote);
   if (!target) {
     if (current) setSyncRepoMarker(repoRoot, null);
     return null;
   }
-  if (!current || path.resolve(current.syncRepo) !== path.resolve(target) || current.repoUid !== uid) {
+  // The slug is part of the comparison so a marker written by a build that predates §3.1 (two lines, no
+  // slug) is upgraded on the very next scan pass rather than staying nameless forever.
+  if (
+    !current ||
+    path.resolve(current.syncRepo) !== path.resolve(target) ||
+    current.repoUid !== uid ||
+    current.repoSlug !== slug
+  ) {
     setSyncRepoMarker(repoRoot, target, remote);
-    log.info("storage", `repo ${repoRoot} mirrors tracking state to ${target}/repos/${uid}`);
+    log.info(
+      "storage",
+      `repo ${repoRoot} mirrors tracking state to ${target}/repos/${namedKeyDir(slug, uid ?? "")}`,
+    );
   }
   return target;
 }
@@ -473,14 +487,20 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
       "../store-model/units.service.js"
     );
     const { readRepoTrackingManifest } = await import("../pin/manifest.service.js");
-    const present = new Set(fs.readdirSync(mirrorDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name));
-    if (present.size === 0) return 0;
+    // Membership is tested on the KEY SUFFIX, never on the exact name (artifact_placement_policy.mdx §3.1).
+    // The mirror subtree is now `<slug>-<uid>` (`charlie-kirk-83e62afc2c80`), so an exact `has(uid)` would
+    // match NOTHING after the rename and this receive path would go quietly dead — every pulled subtree
+    // silently unreconciled, which is the same shape as the §8.4.1 defect that made the mirror unfindable
+    // in the first place. Both spellings must resolve, in both directions, for a mixed fleet.
+    const present = fs.readdirSync(mirrorDir, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+    if (present.length === 0) return 0;
+    const hasSubtreeFor = (uid: string): boolean => present.some((name) => isDirForKey(name, uid));
     for (const folder of listRepoFolders()) {
       try {
         const cfg = getRepoConfig(folder);
         const repoPath = cfg.repo.path;
         const uid = repoUidFor(cfg.repo.remote ?? null);
-        if (!repoPath || !uid || !present.has(uid)) continue;
+        if (!repoPath || !uid || !hasSubtreeFor(uid)) continue;
         // Make sure this repo points at THIS sync repo before folding, so a repo whose marker was never
         // written (the default-ON case on a fresh computer) still receives its peer's state.
         ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);

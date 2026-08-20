@@ -96,6 +96,15 @@ export function readRepoStorage(repoRoot: string): RepoStorageDoc {
  */
 export function writeRepoStorage(repoRoot: string, doc: RepoStorageDoc): void {
   const normalized = RepoStorageDocSchema.parse(doc); // fill defaults + fix key set
+  // BACKFILL `name` HERE, at the one choke point every writer passes through — not in the seeder.
+  // `ensureRepoStorageDoc()` was supposed to stamp the name on enlist, but its only caller
+  // (storage.service.ts `ensureRepoStorage`) is itself never called, so in practice this file is FIRST
+  // created by `refreshCounts()` writing a schema-default doc, and `name` defaulted to `""` and stayed
+  // that way. On 2026-08-20 all 109 `repo_storage.yaml` files in the Act3 company repo and every local
+  // one read `name: ""` — so neither the directory (bare 12-hex, before §3.1) nor the file inside it could
+  // answer "which repo is this?". Costs one comparison per write and cannot churn git: an already-named
+  // doc re-serializes byte-identically.
+  if (!normalized.repo_storage.name) normalized.repo_storage.name = path.basename(path.resolve(repoRoot));
   const dir = trackingDir(repoRoot);
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -130,14 +139,24 @@ export function writeRepoStorage(repoRoot: string, doc: RepoStorageDoc): void {
 
 /**
  * Seed `repo_storage.yaml` on enlist if it doesn't exist yet (repo_tracking_scheme.mdx §2) — stamps the LFB
- * name (repo folder name), the enlist provenance (at/on_device), and default policy. Idempotent: an
- * existing file is returned unchanged. Called from storage.service.ts `ensureRepoStorage`.
+ * name (repo folder name), the enlist provenance (at/on_device), and default policy. Called from
+ * storage.service.ts `ensureRepoStorage`.
+ *
+ * It also HEALS an existing file whose `name` is blank — see `writeRepoStorage`, which owns that backfill
+ * because it is the choke point every writer actually reaches (this seeder is not: its only caller,
+ * storage.service.ts `ensureRepoStorage`, has no callers of its own, which is precisely how `name` came to
+ * be `""` in every file on disk).
  */
 export function ensureRepoStorageDoc(repoRoot: string): RepoStorageDoc {
-  if (fs.existsSync(repoStoragePath(repoRoot))) return readRepoStorage(repoRoot);
+  if (fs.existsSync(repoStoragePath(repoRoot))) {
+    const existing = readRepoStorage(repoRoot);
+    if (existing.repo_storage.name) return existing;
+    writeRepoStorage(repoRoot, existing); // writeRepoStorage fills the blank `name`
+    return readRepoStorage(repoRoot);
+  }
   const doc = RepoStorageDocSchema.parse({
     repo_storage: {
-      name: path.basename(repoRoot),
+      name: path.basename(path.resolve(repoRoot)),
       enlisted: { at: new Date().toISOString(), by: null, on_device: selfDeviceName() },
     },
   });

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Local Storage, Config & Pin State
-description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of pin unit stored OUTSIDE user dirs because they are computer-wide — pin/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and pin/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY pin unit). Each pin unit carries its own config.yaml (pinned on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the per-repo tracking directory repos/<repoKey>/ that is the ALWAYS-home for every repo's Category-B tracking state (repo_storage.yaml, files.yaml, sidecars, history, decisions.yaml, manifest.yaml, compression records) — never committed to a working repo, additionally mirrored to a configured company/Personal sync repo — the manifest that travels via the sync repo's git backbone while IPFS carries the bytes, the background pin process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Also pins TWO facts locked by storage_company.mdx §8: a repo's CID/pin facts live in TWO files on this computer — the pin-unit manifest pin/r/<repo_name>/manifest.yaml that the One-Repo file rows read, and the Local-Storage tracking manifest repos/<repoKey>/manifest.yaml that the pull-down reader and the sync-repo mirror read — so a reconcile must land in BOTH and the pull action must read the same one the pull-down list was built from (§9.2.1); and the travelling mirror subtree is keyed by repoUid (a short hash of the normalized git remote), NOT by the path-derived repoKey, which stays machine-local on purpose. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
+description: How LargeFileBridge persists state on disk — the no-database state root at ~/T/_large_files_bridge/, the computer-wide app-level config.yaml, the per-logged-in-user config under users/<email>/config.yaml (no anonymous account — every key is a verified allow-listed Google email), and the heart of the app: the two kinds of pin unit stored OUTSIDE user dirs because they are computer-wide — pin/computer/ (everything on the filesystem OUTSIDE registered repos, with repo sub-hierarchies masked out) and pin/r/<repo_name>/ (one folder per discovered Git repo, the PRIMARY pin unit). Each pin unit carries its own config.yaml (pinned on/off + all per-unit settings) and a manifest of large git-ignored files mapped to their IPFS CIDs and pin state across the user's computers. Also covers the filesystem scanner that discovers repos, the per-repo tracking directory repos/<repoKey>/ that is the ALWAYS-home for every repo's Category-B tracking state (repo_storage.yaml, files.yaml, sidecars, history, decisions.yaml, manifest.yaml, compression records) — never committed to a working repo, additionally mirrored to a configured company/Personal sync repo — the manifest that travels via the sync repo's git backbone while IPFS carries the bytes, the background pin process (launchd, every 15 min — installed vs on/off, toggled from the web app), the OpenAuthFederated session store, the two log files, and the store module that fronts all of it. Also pins TWO facts locked by storage_company.mdx §8: a repo's CID/pin facts live in TWO files on this computer — the pin-unit manifest pin/r/<repo_name>/manifest.yaml that the One-Repo file rows read, and the Local-Storage tracking manifest repos/<repoKey>/manifest.yaml that the pull-down reader and the sync-repo mirror read — so a reconcile must land in BOTH and the pull action must read the same one the pull-down list was built from (§9.2.1); and the travelling mirror subtree is keyed by repoUid (a short hash of the normalized git remote), NOT by the path-derived repoKey, which stays machine-local on purpose. Every per-repo directory in BOTH trees is NAMED as well as keyed — repos/<slug>-<repoKey>/ locally (slug = the repo's directory basename) and <syncRepo>/repos/<slug>-<repoUid>/ in the mirror (slug = the repo name from the git remote, so every computer agrees) — e.g. repos/charlie-kirk-bad3cd4187d0/. The slug is a prefix on the directory NAME only: nothing keys or compares on it, so every repos/<repoKey>/ path in this spec is unchanged in meaning, and a legacy bare-<key> directory still resolves by key suffix. See artifact_placement_policy.mdx §3.1. Works identically on a laptop and on a server; only the resolved state root and the logged-in user change.
 ---
 
 # LargeFileBridge — Local Storage, Config & Pin State
@@ -150,7 +150,9 @@ Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is ha
 │   ├── repo_<name>_2_do.yaml   #   one per repo WITH WORK (clean repos have none)
 │   └── <scope>_<name>_transcribe_2_do.yaml  # transcribe batches (transcribe_calc_engine.mdx)
 ├── repos/                      # per-repo CATEGORY-B TRACKING STATE — one dir per repo, ALWAYS (§2.2b)
-│   └── <repoKey>/              #   repoKey = shortHash(resolve(repoPath)) — the storageSid() scheme
+│   └── <slug>-<repoKey>/       #   e.g. charlie-kirk-bad3cd4187d0 — slug = the repo's directory BASENAME,
+│                               #   repoKey = shortHash(resolve(repoPath)) — the storageSid() scheme. The
+│                               #   slug NAMES the directory; the key is still the whole identity (§2.2b)
 │       ├── repo_storage.yaml   #     repo-wide file, re-stamped freely here (never touches git)
 │       ├── files.yaml          #     fast per-file fingerprint index
 │       ├── files/              #     per-file <name>.yaml sidecars, path-mirrored
@@ -159,8 +161,9 @@ Resolving the state root and the `LFB_STATE_DIR` / `LFB_LOG_DIR` overrides is ha
 │       ├── manifest.yaml       #     large-file → IPFS CID + pin state (Local-Storage-always; travels via sync repo)
 │       ├── analysis/<rel>/compression.yaml  #  compression records (compression.mdx §8)
 │       └── origin.txt          #     the absolute repo path this <repoKey> maps to (collision guard)
-│   #   ↑ ALL of the above is additionally mirrored to <syncRepo>/repos/<repoKey>/ when the owning
-│   #     company/Personal storage has a sync repo configured AND the per-repo toggle is on (default off)
+│   #   ↑ ALL of the above is additionally mirrored to <syncRepo>/repos/<slug>-<repoUid>/ when the owning
+│   #     company/Personal storage has a sync repo configured AND the per-repo toggle is on (default off).
+│   #     There the slug comes from the REMOTE's repo name, not the basename, so every computer agrees.
 ├── .auth_session_secret        # stable HS256 signing secret (auto-created; never in .env) (§10)
 ├── log.log                     # INFO/DEBUG/VERBOSE — the normal event trail (§12)
 └── error.err                   # WARN/ERROR/FATAL — the fault trail (§12)
@@ -199,7 +202,14 @@ There are three tiers, and one of them is unusual on purpose:
 The `_do_batches/` path under the state root is resolved by `resolveTodoBatchesDir()` (honoring `LFB_STATE_DIR`) in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — beside `resolveStateDir()` / `resolveLogDir()`; read/written by `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batches.store.ts`.
 
-### 2.2b `repos/<repoKey>/` — the per-repo tracking directory, the ALWAYS-home (LOCKED)
+### 2.2b `repos/<slug>-<repoKey>/` — the per-repo tracking directory, the ALWAYS-home (LOCKED)
+
+> **Naming.** Each directory here is `<slug>-<repoKey>` — `charlie-kirk-bad3cd4187d0`, not a bare
+> `bad3cd4187d0`. The slug is the repo's directory basename and is a prefix on the **name** only: nothing
+> keys, hashes or compares on it, so every `repos/<repoKey>/` path written elsewhere in this spec still
+> means the same directory, and a legacy bare-key directory still resolves (matched on the key suffix).
+> The rule and the one-time rename are
+> [artifact_placement_policy.mdx §3.1](./artifact_placement_policy.mdx).
 
 `repos/` holds **one directory per repo** for that repo's **Category-B tracking state** — the repo-wide
 `repo_storage.yaml`, the `files.yaml` index, the per-file `files/…` sidecars, the `history/…` logs, the

@@ -14,11 +14,12 @@ import path from "node:path";
 import fs from "node:fs";
 import crypto from "node:crypto";
 import { resolveRepoStateDir } from "../../config/state-dir.js";
+import { resolveNamedKeyDir } from "../../shared/store/keyed-dir.js";
 
 // A repo's MACHINE-INDEPENDENT identity (storage_company.mdx §8.4.1) — re-exported here because this module
 // is the one place callers look for "how a repo is keyed". `repoKeyFor` (below) keys Local Storage by path;
 // `repoUidFor` keys the SHARED sync-repo mirror by the normalized git remote. Two keys, two jobs.
-export { repoUidFor, normalizeRemoteKey } from "./repo-identity.js";
+export { repoUidFor, repoSlugFor, normalizeRemoteKey } from "./repo-identity.js";
 
 /** Stable 12-hex key for a repo/root — sha1 of its resolved absolute path (the same scheme storage.service's
  *  `shortHash`/`storageSid` uses). Keys the Local-Storage per-repo state directory and the sync-repo subtree. */
@@ -26,11 +27,20 @@ export function repoKeyFor(root: string): string {
   return crypto.createHash("sha1").update(path.resolve(root)).digest("hex").slice(0, 12);
 }
 
-/** The Local-Storage per-repo tracking dir: `~/T/_large_files_bridge/repos/<repoKey>/` — the ALWAYS home for
- *  `repo_storage.yaml`, sidecars, history, `decisions.yaml`, and `manifest.yaml`. Never touches git
+/** The repo's MACHINE-LOCAL display slug — its directory basename (artifact_placement_policy.mdx §3.1). It
+ *  prefixes the Local-Storage directory name only; `repoKeyFor` is still the identity. The basename is the
+ *  right source HERE precisely because Local Storage is path-keyed: two clones of one repo get two
+ *  directories, and their basenames are what tells them apart. The SHARED mirror uses `repoSlugFor`
+ *  (remote-derived) instead, because a basename differs across computers. */
+export function repoSlugForPath(root: string): string {
+  return path.basename(path.resolve(root));
+}
+
+/** The Local-Storage per-repo tracking dir: `~/T/_large_files_bridge/repos/<slug>-<repoKey>/` — the ALWAYS
+ *  home for `repo_storage.yaml`, sidecars, history, `decisions.yaml`, and `manifest.yaml`. Never touches git
  *  (artifact_placement_policy.mdx §2/§3). */
 export function repoStateDir(root: string): string {
-  return resolveRepoStateDir(repoKeyFor(root));
+  return resolveRepoStateDir(repoKeyFor(root), repoSlugForPath(root));
 }
 
 const ARTIFACT_LATCH = ".durable-artifact";
@@ -77,20 +87,25 @@ export function resolveTrackingRoot(
 }
 
 /** The marker file (in the Local-Storage per-repo state dir) recording where this repo's tracking state
- *  mirrors to. TWO lines (storage_company.mdx §8.4.1):
+ *  mirrors to. THREE lines (storage_company.mdx §8.4.1, artifact_placement_policy.mdx §3.1):
  *    line 1 — the absolute path of the owning company/Personal storage's SYNC REPO
  *    line 2 — this repo's `repoUid`, its MACHINE-INDEPENDENT identity (hash of the normalized git remote)
+ *    line 3 — its `repoSlug`, the remote-derived name that PREFIXES the mirror directory so it reads as
+ *             `repos/charlie-kirk-83e62afc2c80/`. Cosmetic-only: line 2 is still the identity, and a marker
+ *             written before line 3 existed resolves through the key suffix (keyed-dir.ts) exactly as before.
  *  Absent → no sync repo → Local-Storage-only. A legacy one-line marker is still honored (it just cannot
  *  name a shared subtree, so it resolves to null and the next `ensureSyncRepoMarker()` pass rewrites it). */
 const SYNC_REPO_MARKER = ".sync-repo";
 
-/** Read the two-line sync-repo marker → `{ syncRepo, repoUid }`, or null when absent/blank. */
-export function readSyncRepoMarker(root: string): { syncRepo: string; repoUid: string | null } | null {
+/** Read the three-line sync-repo marker → `{ syncRepo, repoUid, repoSlug }`, or null when absent/blank. */
+export function readSyncRepoMarker(
+  root: string,
+): { syncRepo: string; repoUid: string | null; repoSlug: string | null } | null {
   try {
     const raw = fs.readFileSync(path.join(repoStateDir(root), SYNC_REPO_MARKER), "utf8");
-    const [syncRepo, repoUid] = raw.split("\n").map((l) => l.trim());
+    const [syncRepo, repoUid, repoSlug] = raw.split("\n").map((l) => l.trim());
     if (!syncRepo) return null;
-    return { syncRepo, repoUid: repoUid || null };
+    return { syncRepo, repoUid: repoUid || null, repoSlug: repoSlug || null };
   } catch {
     return null; // no marker → default: Local-Storage-only
   }
@@ -109,7 +124,10 @@ export function readSyncRepoMarker(root: string): { syncRepo: string; repoUid: s
 export function resolveStateSyncRepo(root: string): string | null {
   const marker = readSyncRepoMarker(root);
   if (!marker || !marker.repoUid) return null;
-  return path.join(marker.syncRepo, "repos", marker.repoUid);
+  // `<syncRepo>/repos/<repoSlug>-<repoUid>/`, falling back to a bare `<repoUid>/` directory a peer computer
+  // (or an older build of this one) already planted. Matching on the uid SUFFIX is what keeps a fleet that
+  // is mid-upgrade coherent: whichever spelling exists is the one everybody writes into.
+  return resolveNamedKeyDir(path.join(marker.syncRepo, "repos"), marker.repoUid, marker.repoSlug);
 }
 
 /** The path of the sync-repo marker in this repo's Local-Storage state dir (written/removed by

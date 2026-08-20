@@ -18,8 +18,9 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
-import { setSyncRepoMarker, reconcileFromSyncRepo } from "./tracking-sync.service.js";
+import { setSyncRepoMarker, reconcileFromSyncRepo, reconcileMirroredRepos } from "./tracking-sync.service.js";
 import { repoStateDir } from "./tracking-root.service.js";
+import { isDirForKey, clearKeyedDirCache } from "../../shared/store/keyed-dir.js";
 
 const REMOTE = "https://github.com/ACT3ai/charlie-kirk.git";
 let tmp: string;
@@ -103,5 +104,56 @@ describe("reconcileFromSyncRepo — an idempotent pass is not an arrival", () =>
 
   it("stays quiet with no mirror at all, rather than reporting an arrival from an empty directory", () => {
     expect(reconcileFromSyncRepo(repoRoot)).toBe(false);
+  });
+});
+
+// THE RECEIVE PATH MUST NOT GO DEAD WHEN THE MIRROR DIRECTORY IS NAMED.
+//
+// artifact_placement_policy.mdx §3.1 renamed the mirror subtree from `repos/83e62afc2c80/` to
+// `repos/charlie-kirk-83e62afc2c80/`. `reconcileMirroredRepos` matched incoming subtrees with an EXACT
+// `present.has(uid)` — which after that rename matches nothing, so every pulled subtree would be skipped
+// and the fold would silently never happen. That is the same failure shape as the §8.4.1 path-vs-remote
+// key: the state travels perfectly and is never found. Membership must be tested on the KEY SUFFIX, and
+// both spellings must work so a half-upgraded fleet stays coherent.
+describe("the mirror subtree resolves by KEY SUFFIX, named or bare (§3.1)", () => {
+  it("finds a NAMED `<slug>-<uid>` subtree the migration (or a peer) wrote", () => {
+    const named = path.join(path.dirname(mirrorDir), `charlie-kirk-${path.basename(mirrorDir)}`);
+    fs.renameSync(mirrorDir, named);
+    clearKeyedDirCache(); // the rename is exactly what invalidates a memoized resolution
+
+    write(path.join(named, "manifest.yaml"), manifest([{ path: "videos/a.mp4", cid: "bafy1" }]));
+    expect(reconcileFromSyncRepo(repoRoot)).toBe(true);
+    expect(reconcileFromSyncRepo(repoRoot)).toBe(false);
+  });
+
+  it("still finds a LEGACY bare-`<uid>` subtree, so a peer on an older build is not orphaned", () => {
+    write(path.join(mirrorDir, "manifest.yaml"), manifest([{ path: "videos/a.mp4", cid: "bafy1" }]));
+    expect(reconcileFromSyncRepo(repoRoot)).toBe(true);
+  });
+
+  it("matches on the suffix, never the exact name — the membership test reconcileMirroredRepos uses", () => {
+    const uid = path.basename(mirrorDir);
+    expect(isDirForKey(uid, uid)).toBe(true); // legacy bare
+    expect(isDirForKey(`charlie-kirk-${uid}`, uid)).toBe(true); // ours
+    expect(isDirForKey(`ck-mirror-${uid}`, uid)).toBe(true); // a peer that slugged it differently
+    expect(isDirForKey("charlie-kirk-0123456789ab", uid)).toBe(false); // a DIFFERENT repo
+  });
+
+  // The real thing, end to end. An exact-name membership test passes the two cases above and STILL skips
+  // every repo here, which is why this one is written against reconcileMirroredRepos itself.
+  it("FOLDS a named subtree — reconcileMirroredRepos must not skip it", async () => {
+    const uid = path.basename(mirrorDir);
+    const named = path.join(path.dirname(mirrorDir), `charlie-kirk-${uid}`);
+    fs.renameSync(mirrorDir, named);
+    clearKeyedDirCache();
+    write(path.join(named, "manifest.yaml"), manifest([{ path: "videos/a.mp4", cid: "bafy1" }]));
+
+    // The repo must be a registered pin unit for reconcileMirroredRepos to consider it at all.
+    write(
+      path.join(process.env.LFB_STATE_DIR!, "pin", "r", "charlie-kirk", "config.yaml"),
+      ["repo:", "  name: charlie-kirk", `  path: ${repoRoot}`, `  remote: ${REMOTE}`].join("\n"),
+    );
+
+    expect(await reconcileMirroredRepos(path.join(tmp, "sdl"))).toBe(1);
   });
 });

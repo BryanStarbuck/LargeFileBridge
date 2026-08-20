@@ -55,6 +55,7 @@ import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.j
 import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
 import { migrateSyncRepoDefault, repairEmptySyncRepoBlocks } from "./config/migrate-sync-repo-default.js";
 import { migratePosixPaths } from "./config/migrate-posix-paths.js";
+import { migrateRepoDirNames } from "./config/migrate-repo-dir-names.js";
 import { log, flushLogs, logError } from "./shared/logging.js";
 import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
 import { recordSessionStart } from "./shared/session.js";
@@ -325,6 +326,13 @@ async function main(): Promise<void> {
   // repo root (`jfk\training\clip.mp4`) to the path that name always meant. Runs before the state is read,
   // so the first scan/pin pass already sees one spelling per file. Never destructive, never throws.
   migratePosixPaths(resolveStateDir());
+  // Give the anonymous 12-hex per-repo tracking directories their repo's NAME
+  // (artifact_placement_policy.mdx §3.1): `repos/bad3cd4187d0/` -> `repos/charlie-kirk-bad3cd4187d0/`, in
+  // Local Storage and in every company/Personal sync repo this computer mirrors into. Runs AFTER the
+  // sync→pin migration (it reads pin/r/<repo>/config.yaml for the names) and BEFORE anything resolves a
+  // per-repo directory. Rename-only, never destructive; a directory no repo here can name stays as it is
+  // and is still found by its key suffix.
+  migrateRepoDirNames(resolveStateDir());
 
   // One-time, idempotent backfill of the SHARED per-file decision ledger from the legacy machine-local
   // `decisions:` enum (decisions.mdx §13). Runs AFTER the sync→pin migration (it reads pin/r/<repo>/config.yaml)

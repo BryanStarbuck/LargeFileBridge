@@ -2,6 +2,9 @@
 import os from "node:os";
 import path from "node:path";
 import fs from "node:fs";
+// Leaf helper (fs/path + sanitize only, no project edges) that turns a bare hash key into the readable
+// `<slug>-<key>` directory name and finds a legacy bare-key directory that predates it.
+import { resolveNamedKeyDir } from "../shared/store/keyed-dir.js";
 
 export function resolveStateDir(): string {
   const dir =
@@ -62,12 +65,14 @@ export function resolveQueueDir(): string {
 }
 
 // The machine-local per-repo tracking directory (artifact_placement_policy.mdx §3):
-// ~/T/_large_files_bridge/repos/<repoKey>/ — the PRE-THRESHOLD home for a repo's noisy tracking state
+// ~/T/_large_files_bridge/repos/<slug>-<repoKey>/ — the PRE-THRESHOLD home for a repo's noisy tracking state
 // (repo_storage.yaml, sidecars, history) so a repo that has never been transcribed/described NEVER gets a
 // `.lfbridge/` written into its git working tree (no churn, no stray check-ins). `repoKey` is the stable
-// 12-hex hash of the repo's absolute path (see tracking-root.service.ts `repoKeyFor`). Created on demand.
-export function resolveRepoStateDir(repoKey: string): string {
-  const dir = path.join(resolveStateDir(), "repos", repoKey);
+// 12-hex hash of the repo's absolute path (see tracking-root.service.ts `repoKeyFor`); `slug` is the repo's
+// directory basename, present ONLY so the directory says WHICH repo it is (§3.1) — the key is still the
+// identity. A legacy bare-`<repoKey>` directory is still found (keyed-dir.ts). Created on demand.
+export function resolveRepoStateDir(repoKey: string, slug?: string | null): string {
+  const dir = resolveNamedKeyDir(path.join(resolveStateDir(), "repos"), repoKey, slug);
   ensureDir(dir);
   return dir;
 }

@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — Artifact & Tracking-State Placement Policy (the data-category split)
-description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. TWO orthogonal rules. Rule ONE (§0, the storage-KIND rule) — .lfbridge/ exists ONLY inside a working git repo (Git Storage, e.g. ~/repos/charlie-kirk/.lfbridge/videos/), where LFB is a guest and quarantines its files in one hidden corner; a DEDICATED LFB FILE REPO (the Personal/Company/Community SDL storage, e.g. ~/BGit/Bryan_git/personal_large_files_bridge/) has NO .lfbridge/ AT ALL — the SDL repo root IS the .lfbridge area, so artifacts AND the SDL's own metadata (storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml, devices/, analysis/) all sit at the ROOT (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…, NOT .lfbridge/_Mirror/…). Keyed on resolved storage KIND via trackingBaseDir()/usesLfbridgeDir() (storage-type.service.ts), never on a path or name; default is `repo` (keeps .lfbridge/); an SDL's own .git/ never demotes it to a working repo; a pre-existing SDL .lfbridge/ is migrated to the root by migrate-sdl-lfbridge.ts with a read-fallback until migrated. Rule TWO (§1+, the DATA-CATEGORY split, not a content threshold) — Category A, the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description), lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), repo_owner_propagation.mdx (how the repo→company ownership that decides WHICH sync repo a repo mirrors to travels to teammates and is consent-gated), and scan.mdx. TWO REFINEMENTS LOCKED BY storage_company.mdx §8 (the one-file-two-computers use case): (1) the SYNC-REPO MIRROR SUBTREE IS KEYED BY repoUid — a short hash of the NORMALIZED GIT REMOTE (host/owner/name) — NOT by repoKey (the machine-local path hash), because a path hash differs on every computer so two machines wrote different directories in the same sync repo and nothing ever matched; Local Storage stays repoKey-keyed on purpose (two keys, two jobs: "this repo on this computer" vs "this repo, anywhere"), and a repo with NO git remote cannot mirror at all and the product says so; and (2) the SDL manifest-path rule is explicit — an SDL's committed manifest.yaml belongs at the SDL ROOT, resolved through trackingBaseDir(), so manifest.service.ts's hardcoded <root>/.lfbridge/manifest.yaml is a §0 VIOLATION that leaves two divergent manifests in one company storage. Reconciling a pulled mirror is a per-entry MERGE (union by path, union pinned_by, newer modified_at wins, absence is never a delete), never a wholesale copy.
+description: The authoritative, cross-cutting policy for WHERE LargeFileBridge writes its per-repo state. TWO orthogonal rules. Rule ONE (§0, the storage-KIND rule) — .lfbridge/ exists ONLY inside a working git repo (Git Storage, e.g. ~/repos/charlie-kirk/.lfbridge/videos/), where LFB is a guest and quarantines its files in one hidden corner; a DEDICATED LFB FILE REPO (the Personal/Company/Community SDL storage, e.g. ~/BGit/Bryan_git/personal_large_files_bridge/) has NO .lfbridge/ AT ALL — the SDL repo root IS the .lfbridge area, so artifacts AND the SDL's own metadata (storage.yaml, mapped_dirs.yaml, files.yaml, manifest.yaml, bookmarks.yaml, devices/, analysis/) all sit at the ROOT (~/BGit/Bryan_git/personal_large_files_bridge/_Mirror/…, NOT .lfbridge/_Mirror/…). Keyed on resolved storage KIND via trackingBaseDir()/usesLfbridgeDir() (storage-type.service.ts), never on a path or name; default is `repo` (keeps .lfbridge/); an SDL's own .git/ never demotes it to a working repo; a pre-existing SDL .lfbridge/ is migrated to the root by migrate-sdl-lfbridge.ts with a read-fallback until migrated. Rule TWO (§1+, the DATA-CATEGORY split, not a content threshold) — Category A, the user's derived CONTENT (transcripts .transcription + AI descriptions .ai_description), lives in the working repo's committed .lfbridge/, path-mirrored, and travels with the repo. Category B — LFB's noisy COMPRESSION / BIG-FILE / GIT-IGNORE tracking state (repo_storage.yaml with its per-scan last_scan + counts, files.yaml, per-file <name>.yaml sidecars, history/<device>.txt, decisions.yaml, manifest.yaml, compression records) — NEVER enters the working repo. Category B lives in LOCAL STORAGE at ~/T/_large_files_bridge/repos/<repoKey>/ (repoKey = shortHash of the resolved absolute repo path) ALWAYS — machine-local, never touching git, so it can never merge-conflict — and is ADDITIONALLY mirrored to the owning company/Personal storage's SYNC REPO at <syncRepo>/repos/<repoKey>/ when that sync repo is configured and the per-repo toggle is on (default OFF), so the state can travel across the user's computers without polluting the working repo. This supersedes the earlier content-threshold three-tier model: there is no tier that writes tracking state into the working repo. Logs (launcher.log / log.log / error.err) live ONLY in Local Storage and are NEVER committed or mirrored anywhere. Documents the per-scan refreshCounts churn, the decisions.yaml/manifest.yaml traveller reconciliation, the sync-repo reconcile (append-only merge + union-merge), repoKey derivation and collision guard, and a catalogue of non-default and error cases. Sibling of storage_local.mdx (the state root that hosts repos/<repoKey>/), repo_tracking_scheme.mdx (the Category-B files this policy places), repo_settings.mdx (the per-repo sync-repo toggle), storage_company.mdx / storage_personal.mdx (the owning storage that configures the sync repo), Transcribe.mdx / ai_description.mdx (the two Category-A artifacts), placement_radios.mdx (the artifact placement radio), repo_owner_propagation.mdx (how the repo→company ownership that decides WHICH sync repo a repo mirrors to travels to teammates and is consent-gated), and scan.mdx. TWO REFINEMENTS LOCKED BY storage_company.mdx §8 (the one-file-two-computers use case): (1) the SYNC-REPO MIRROR SUBTREE IS KEYED BY repoUid — a short hash of the NORMALIZED GIT REMOTE (host/owner/name) — NOT by repoKey (the machine-local path hash), because a path hash differs on every computer so two machines wrote different directories in the same sync repo and nothing ever matched; Local Storage stays repoKey-keyed on purpose (two keys, two jobs: "this repo on this computer" vs "this repo, anywhere"), and a repo with NO git remote cannot mirror at all and the product says so; and (2) the SDL manifest-path rule is explicit — an SDL's committed manifest.yaml belongs at the SDL ROOT, resolved through trackingBaseDir(), so manifest.service.ts's hardcoded <root>/.lfbridge/manifest.yaml is a §0 VIOLATION that leaves two divergent manifests in one company storage. Reconciling a pulled mirror is a per-entry MERGE (union by path, union pinned_by, newer modified_at wins, absence is never a delete), never a wholesale copy. A THIRD REFINEMENT (§3.1, LOCKED): every per-repo tracking directory is NAMED as well as keyed — `repos/<slug>-<key>/` (e.g. repos/charlie-kirk-83e62afc2c80/) in BOTH trees, because a tree of bare 12-hex names (579 locally + 109 in the Act3 company repo on 2026-08-20, every one with repo_storage.yaml `name: ""`) told nobody which repo it held, and the sync repo is exactly where an agent later comes looking for a repo's .ocr / .ai_description / tracking state by NAME. The slug is a prefix on the directory NAME only — nothing keys, hashes or compares on it — and it is DETERMINISTIC, never discovery-ordered: the directory basename for the path-keyed Local-Storage tree, the remote-derived repo name for the remote-keyed shared mirror (carried on line 3 of the .sync-repo marker), so two computers compute the SAME shared directory name. Resolution matches on the KEY SUFFIX (keyed-dir.ts resolveNamedKeyDir), so a legacy bare-<key> directory still resolves and a mixed fleet degrades to an ugly name, never a missing one; migrate-repo-dir-names.ts renames what is already on disk, rename-only and never inventing a name for a repo this computer does not have.
 ---
 
 # LargeFileBridge — Artifact & Tracking-State Placement Policy
@@ -317,7 +317,83 @@ Category B's always-home is a per-repo directory under the state root:
   the first tracking write, removed when the repo is de-listed (retained on a temporarily-missing drive).
 
 The per-repo state-root directory path is resolved in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey)` → `<stateDir>/repos/<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`.
+`~/repos/LargeFileBridge/code/packages/backend/src/config/state-dir.ts` — `resolveRepoStateDir(repoKey, slug)` → `<stateDir>/repos/<slug>-<repoKey>/` (honors `LFB_STATE_DIR`; created on demand). The `repoKey` is computed by `shortHash()` / `storageSid()` in `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage.service.ts`.
+
+---
+
+## 3.1 The directory is NAMED, not just keyed: `<slug>-<key>` (LOCKED)
+
+**A key identifies; a name is what a person reads.** §3 and §4.1 fix the two keys and they do not change —
+but a directory called **only** `bad3cd4187d0` tells nobody which repo it holds. On 2026-08-20 this machine
+had **579** such directories in Local Storage and **109** in the Act3 company sync repo, and
+`repo_storage.yaml`'s `name:` field was `""` in **every one of them**, so there was no in-file answer
+either. Finding one repo's tracking state meant opening directories until one matched.
+
+That cost lands hardest exactly where the sync repo is most valuable: an agent (or a person) coming back
+later to read a repo's `.ocr` / `.ai_description` / tracking state, who knows the repo's **name** and
+nothing else. So the directory carries the name:
+
+```
+~/T/_large_files_bridge/repos/charlie-kirk-bad3cd4187d0/     slug = the repo's directory BASENAME
+<syncRepo>/repos/charlie-kirk-83e62afc2c80/                  slug = the repo NAME from the git remote
+```
+
+**The rules (all LOCKED):**
+
+1. **The key is unchanged and is still the identity.** `<slug>-` is a prefix on the directory *name* only.
+   Nothing hashes, compares, or keys on the slug. Collision-freedom, cross-computer agreement and the
+   two-keys-two-jobs split of §4.1 are exactly as they were.
+2. **The slug is DETERMINISTIC, never discovery-ordered.** A "first one wins, append `-2` on collision"
+   scheme is forbidden here: two computers would assign different suffixes and plant two subtrees for one
+   repo inside the same shared sync repo — the §8.4.1 defect all over again. The slug is a pure function of
+   an input both machines already agree on.
+3. **The two slugs come from DIFFERENT sources, on purpose, matching their keys.** Local Storage is
+   path-keyed, so its slug is the **directory basename** — two clones of one repo get two directories and
+   the basenames are what tell them apart. The shared mirror is remote-keyed, so its slug is the **repo name
+   out of the normalized remote** — `~/BGit/Bryan_git/charlie-kirk` and `~/BGit/work/charlie-kirk` (both
+   present on this machine) must produce the *same* mirror directory.
+4. **Resolution matches on the KEY SUFFIX**, so a legacy bare-`<key>` directory — written by an older build,
+   or by a fleet member who has not upgraded — is still found and still written into. A mixed fleet degrades
+   to an ugly directory name, **never** to a missing or duplicated one.
+5. **No slug ⇒ bare key.** A repo whose remote has no parseable name keeps the plain `<uid>` directory. The
+   name is a courtesy; its absence is never an error.
+6. **`repo_storage.yaml` carries `name:` too.** The directory name and the in-file name are independent
+   answers to the same question, and both must work.
+
+The `<slug>-<key>` name is built and resolved in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/store/keyed-dir.ts` — `namedKeyDir(slug, key)` (the name to create) and `resolveNamedKeyDir(parent, key, slug)` (the named directory, the legacy bare-key one, or any sibling ending `-<key>`).
+
+The machine-local slug (basename) and the machine-shared slug (remote-derived) are computed in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `repoSlugForPath(root)`, and `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-identity.ts` — `repoSlugFor(remote)`.
+
+The shared slug travels to the mirror resolver on **line 3 of the `.sync-repo` marker** (line 1 = sync-repo
+root, line 2 = `repoUid`, line 3 = `repoSlug`); a two-line marker written before this rule existed still
+resolves, through the key-suffix match of rule 4, and is upgraded on the next scan pass:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `setSyncRepoMarker()` / `ensureSyncRepoMarker()`.
+
+The blank `name:` field is healed on the next `repo_storage.yaml` read-through:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/repo-storage.service.ts` — `ensureRepoStorageDoc()`.
+
+### 3.1a Migrating the directories already on disk
+
+Existing bare-key directories are renamed **once at startup**, in Local Storage and in every company /
+Personal sync repo this computer mirrors into:
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-repo-dir-names.ts` — `migrateRepoDirNames(stateDir)`, called from `main.ts` after `migratePosixPaths()`.
+
+* It **only renames**, and only when the destination is free. Nothing is deleted, merged or overwritten.
+* It **never invents a name.** The slug comes from the repos this computer has registered
+  (`pin/r/<folder>/config.yaml`), so a directory belonging to a teammate's repo we have never seen is left
+  bare — their computer names it when they upgrade, and rule 4 finds it either way in the meantime.
+* Renaming inside a sync repo is a **git rename**, picked up and pushed by the storage's git backbone like
+  any other tracking write.
+* **First run on this machine (2026-08-20):** 196 Local-Storage + 164 sync-repo directories renamed, 0
+  collisions, 391 left bare (no repo registered here owns them — mostly de-listed repos and teammates').
+
+**Residual, accepted:** if a fleet member on a pre-§3.1 build writes into the bare `<uid>` directory *after*
+another computer has renamed it, both spellings exist for one repo. Rule 4 makes each machine pick one and
+keep working; the migration then refuses the rename (destination occupied) and logs which two directories to
+compare. Nothing is lost — the state is split until someone merges it by hand. Self-update closes the window
+in practice, and a boot migration is the wrong place to run a tracking-state merge engine.
 
 ---
 
@@ -361,8 +437,11 @@ off) is handled in code:
 this section only records what it means for placement.
 
 ```
-ALWAYS  →  ~/T/_large_files_bridge/repos/<repoKey>/     repoKey = shortHash(resolve(repoPath))   ← MACHINE-LOCAL
-ALSO    →  <syncRepo>/repos/<repoUid>/                  repoUid = shortHash(host/owner/name)     ← MACHINE-SHARED
+ALWAYS  →  ~/T/_large_files_bridge/repos/<slug>-<repoKey>/  repoKey = shortHash(resolve(repoPath))  ← MACHINE-LOCAL
+ALSO    →  <syncRepo>/repos/<slug>-<repoUid>/               repoUid = shortHash(host/owner/name)    ← MACHINE-SHARED
+
+           The `<slug>-` prefix is NAMING ONLY (§3.1): the key after it is still the whole identity, and
+           a bare `<key>` directory from an older build resolves identically.
 ```
 
 * **Two keys, two jobs.** `repoKey` names **"this repo on this computer"**; `repoUid` names **"this repo,
