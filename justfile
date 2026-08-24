@@ -173,9 +173,13 @@ db-reset confirm="":
     @node "{{db}}" reset {{confirm}}
     @just db-migrate
 
+# Deliberately takes NO arguments. `just` interpolates `*args` unquoted, so `just db-psql -c "select
+# count(*) …"` reaches bash as bare parentheses and a stripped backslash — `\dt` arrived at psql as `dt`.
+# A prompt is what the recipe is for; for one-off SQL, run psql directly.
+#
 # Interactive psql against the app database, with the app's own search_path.
-db-psql *args:
-    @node "{{db}}" psql {{args}}
+db-psql:
+    @node "{{db}}" psql
 
 # Report the three states: nothing on :5432 / listening but unprovisioned / provisioned with N applied.
 db-status:
