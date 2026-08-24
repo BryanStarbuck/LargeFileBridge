@@ -65,6 +65,10 @@ import { log } from "../../shared/logging.js";
 // (manifest-merge.ts). Leaf module: it reads one local YAML and `canonicalCid`, so no cycle.
 import { supersededCid } from "../pin/superseded-cids.service.js";
 import { expandHome } from "../../shared/home-path.js";
+// The Postgres half of `folderForRepoId` (database.mdx §9 slice 4). Leaf modules: `db.ts` is the pool +
+// helpers, `unit.repo.ts` is SQL only — neither reaches back into this file, so no cycle.
+import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
+import { pinFolderForRepoId } from "./unit.repo.js";
 
 export function repoIdFromPath(absPath: string): string {
   return crypto.createHash("sha1").update(path.resolve(absPath)).digest("hex").slice(0, 16);
@@ -183,13 +187,47 @@ export function writeComputerManifest(manifest: Manifest): void {
   writeYaml(unitManifestPath(computerUnitDir()), { ...manifest });
 }
 
-/** Resolve a repoId (from the UI) to its state-root folder name. */
-export function folderForRepoId(repoId: string): string | null {
+/**
+ * Resolve a repoId (from the UI) to its state-root folder name — BY LINEAR SCAN.
+ *
+ * This is the original implementation, and it stays for two jobs (R3 / database.mdx §9 slice 4):
+ *   1. the FALLBACK whenever Postgres is absent, unreachable, or simply has no row yet — which is the
+ *      default posture of this app and the state of every machine before the backfill has run;
+ *   2. the VERIFICATION ORACLE. A read that cuts over needs something to be checked against, and the thing
+ *      it is checked against has to be the code that was correct before the cutover, not a second opinion
+ *      written at the same time as the new path.
+ *
+ * The cost is what makes the cutover worth doing: 105 `pin/r/<folder>/config.yaml` parsed on EVERY
+ * `/api/repos/:repoId*` request — 413 KB of YAML, and `YAML.parse` already owned ~40% of `GET /api/repos`
+ * before it was cached (`yaml-store.ts:15-19`).
+ */
+export function folderForRepoIdByScan(repoId: string): string | null {
   for (const folder of listRepoFolders()) {
     const cfg = getRepoConfig(folder);
     if (cfg.repo.path && repoIdFromPath(cfg.repo.path) === repoId) return folder;
   }
   return null;
+}
+
+/**
+ * Resolve a repoId to its state-root folder name — ONE UNIQUE-INDEX LOOKUP (`unit_repo_id_uq`, 0003).
+ *
+ * THE ONE READ THIS SLICE CUTS OVER. `repo_id` is `sha1(resolve(abs_path))[0:16]`, computed in TypeScript
+ * and stored as a literal on the unit row (R7), so the index answers the exact question the scan answered —
+ * with one row instead of 105 documents.
+ *
+ * IT FALLS BACK IN EVERY UNHAPPY CASE, and that is deliberate rather than defensive: `dbEnabled()` false
+ * (no Postgres — the default on a fresh machine), a query error, or a MISSING ROW (the backfill has not run
+ * yet, or this repo was registered since it did) all land on `folderForRepoIdByScan`. A repo that Postgres
+ * has never heard of must still be findable, or registering a repo would break the page that registered it.
+ */
+export async function folderForRepoId(repoId: string): Promise<string | null> {
+  if (!dbEnabled()) return folderForRepoIdByScan(repoId);
+  return tryDb(
+    async () => (await pinFolderForRepoId(repoId)) ?? folderForRepoIdByScan(repoId),
+    () => folderForRepoIdByScan(repoId),
+    "units.folderForRepoId",
+  );
 }
 
 /** The per-repo placement choice for its transcripts / AI descriptions / OCR text (repo_settings.mdx §4-5,
@@ -198,7 +236,12 @@ export function folderForRepoId(repoId: string): string | null {
  *  describe.service / ocr.service to decide WHERE the artifact is written (via artifactPathForPlacement). */
 export function repoArtifactPlacement(root: string, which: "transcription" | "aiDescription" | "ocr"): PlacementChoice {
   try {
-    const folder = folderForRepoId(repoIdFromPath(root));
+    // DELIBERATELY THE SCAN, not the indexed lookup. This function is SYNCHRONOUS and is called from inside
+    // the artifact writers (transcribe / describe / ocr), several of which have no `await` to give. Making it
+    // async would cascade through those write paths for no measured gain: this is a once-per-artifact
+    // resolution, not the per-request one the cutover exists for. Kept honest here rather than fixed with a
+    // cache that could disagree with the row.
+    const folder = folderForRepoIdByScan(repoIdFromPath(root));
     if (!folder) return "lfbridge";
     const a = getRepoConfig(folder).artifacts;
     if (which === "transcription") return a.transcription_placement;
@@ -216,7 +259,7 @@ export async function registerRepo(absPath: string): Promise<{ folder: string; r
     throw new Error("Not a git working tree");
   }
   const repoId = repoIdFromPath(resolved);
-  const existing = folderForRepoId(repoId);
+  const existing = await folderForRepoId(repoId);
   if (existing) throw new Error("Repo already registered");
 
   const name = path.basename(resolved);

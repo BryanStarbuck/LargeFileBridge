@@ -35,6 +35,7 @@ import {
 } from "../../config/migration-state.js";
 import { blocking, recordCooperative } from "../blocking.js";
 import { log } from "../logging.js";
+import { noteDbHealth } from "./db.js";
 import { ledgerHead, readPgEpoch, runSchemaMigrations, type MigrateResult } from "./migrate.js";
 import { activeUrlSafe, getPool, probeDatabase, resolveDbMode, type DbMode, type DbProbe } from "./pool.js";
 
@@ -182,6 +183,12 @@ async function connectAndMigrate(report: DatabaseBootReport): Promise<void> {
   // offering a service to anyone but us, and a Postgres bound to a routable address on a laptop is the same
   // class of mistake as running a public IPFS gateway — just as invisible until someone finds it.
   report.probe = await probeDatabase();
+  // Hand the verdict to db.ts's health latch. `dbEnabled()` has to answer SYNCHRONOUSLY (its call sites are
+  // choosing between the Postgres path and the YAML path, and half of them are synchronous themselves), so it
+  // answers from a remembered fact rather than a live probe. Without this line the first callers after boot
+  // would all read "unknown", take the YAML path, and the cut-over read would stay on its fallback on a
+  // machine whose database is perfectly healthy.
+  noteDbHealth(report.probe.reachable);
   recordCooperative("boot.db.connect", performance.now() - t0);
   if (!report.probe.reachable) throw new Error(report.probe.error ?? "not reachable");
 

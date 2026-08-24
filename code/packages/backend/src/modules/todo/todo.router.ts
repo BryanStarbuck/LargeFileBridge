@@ -147,7 +147,7 @@ todoRouter.post("/batches/:id/apply", async (req, res) => {
     // (their pin/fetch is done by pullMissing below).
     const acted = new Set<string>();
     if (doc.scope === "repo" && doc.repoId) {
-      const folder = folderForRepoId(doc.repoId);
+      const folder = await folderForRepoId(doc.repoId);
       if (folder) {
         const combos = new Map<string, { ipfs: boolean; gitignore: boolean; paths: string[] }>();
         for (const i of chosen) {

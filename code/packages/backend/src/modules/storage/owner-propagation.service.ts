@@ -276,7 +276,7 @@ export async function applyPendingMappings(
         summary.skipped++;
         continue;
       }
-      const folder = folderForRepoId(sel.repoId);
+      const folder = await folderForRepoId(sel.repoId);
       if (!folder) {
         summary.skipped++;
         continue;

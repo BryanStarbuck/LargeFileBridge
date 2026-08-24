@@ -442,7 +442,7 @@ reposRouter.post("/rescan", (_req, res) => {
 // the user has trimmed what the repo carries. Returns how many files were indexed and how many were
 // dropped, so the caller never has to infer completeness.
 reposRouter.post("/:repoId/index", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const root = getRepoConfig(folder).repo.path;
   if (!root) return res.status(400).json({ ok: false, error: "repo has no path" });
@@ -467,7 +467,7 @@ reposRouter.get("/scan-status", (_req, res) => {
 reposRouter.post("/:repoId/bookmark", async (req, res) => {
   const body = z.object({ bookmarked: z.boolean() }).safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "bookmarked (boolean) required" });
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     await updateRepoConfig(folder, (c) => ({ ...c, bookmarked: body.data.bookmarked }));
@@ -492,7 +492,7 @@ const OwnerReassignBody = z.union([
 reposRouter.post("/:repoId/owner", async (req, res) => {
   const body = OwnerReassignBody.safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "reset:true or { kind, companyId? } required" });
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
 
   // The NEW override to persist (null clears → auto). A company kind requires a KNOWN company storage id.
@@ -538,8 +538,8 @@ reposRouter.post("/:repoId/owner", async (req, res) => {
 
 // DELETE /api/repos/:repoId — remove repo (unregister, menus.mdx §5.1). Unregisters from LFB ONLY;
 // never deletes the folder or any local file on disk (menus.mdx §6.2). Idempotent.
-reposRouter.delete("/:repoId", (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+reposRouter.delete("/:repoId", async (req, res) => {
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     unregisterRepo(folder);
@@ -577,7 +577,7 @@ function touchRepoFreshness(folder: string): void {
 // page had every fact it needed to draw the table and drew nothing. Rows stream with `pinnedHere`
 // undefined, which is the already-defined "not known yet" state (never a false red), until `pins` lands.
 reposRouter.get("/:repoId/detail/stream", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   // Answer the 404 as ORDINARY JSON — before any NDJSON header is set, so a bad id is a normal HTTP error
   // the client's error path already understands rather than a 200 stream carrying one error line.
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
@@ -657,7 +657,7 @@ reposRouter.get("/:repoId/detail/stream", async (req, res) => {
 
 // GET /api/repos/:repoId — the One-repo detail (header + status strip + files).
 reposRouter.get("/:repoId", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     touchRepoFreshness(folder);
@@ -681,7 +681,7 @@ reposRouter.get("/:repoId", async (req, res) => {
 
 // GET /api/repos/:repoId/files — just the file rows.
 reposRouter.get("/:repoId/files", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     const detail = await repoDetailWithPins(folder);
@@ -715,7 +715,7 @@ reposRouter.patch("/:repoId/files", async (req, res) => {
   if (!body.success || (body.data.decision === undefined && body.data.ipfs === undefined && body.data.gitignore === undefined)) {
     return res.status(400).json({ ok: false, error: "paths + (ipfs/gitignore) or decision required" });
   }
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
 
   const decidedBy = currentUser(req).email; // who decided — from the authenticated session (decisions.mdx §3.3)
@@ -806,7 +806,7 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
     .object({ paths: z.array(z.string()).min(1), compress: z.boolean().optional() })
     .safeParse(req.body);
   if (!body.success) return res.status(400).json({ ok: false, error: "paths (>=1) required" });
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const by = currentUser(req).email;
   try {
@@ -885,7 +885,7 @@ reposRouter.post("/:repoId/pull", async (req, res) => {
 // instead of waiting for the 6-hourly background pass (reconciler.service.ts `reconcileRepo`). Returns the
 // refreshed detail, so the metric tiles show the corrected numbers without a second round trip.
 reposRouter.post("/:repoId/reconcile", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   if (reconcilerRunning()) {
     return res.status(409).json({ ok: false, error: "A check is already running — it will finish shortly." });
@@ -907,7 +907,7 @@ reposRouter.post("/:repoId/reconcile", async (req, res) => {
 // STRICTLY READ-ONLY toward the user's work: it is the same `fetch` + `merge --ff-only` the background
 // converge runs — never a rebase, never a reset, never a force.
 reposRouter.post("/:repoId/sync-check", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     const r = await recheckWorkingRepoConvergence(repoRootFor(folder));
@@ -922,7 +922,7 @@ reposRouter.post("/:repoId/sync-check", async (req, res) => {
 // POST /api/repos/:repoId/pin — Pin now (whole repo or selected files).
 reposRouter.post("/:repoId/pin", async (req, res) => {
   const body = z.object({ paths: z.array(z.string()).optional() }).safeParse(req.body ?? {});
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const only = body.success && body.data.paths ? new Set(body.data.paths) : undefined;
   try {
@@ -951,8 +951,8 @@ reposRouter.post("/:repoId/pin", async (req, res) => {
 });
 
 // GET /api/repos/:repoId/settings — per-repo settings (repo_settings.mdx).
-reposRouter.get("/:repoId/settings", (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+reposRouter.get("/:repoId/settings", async (req, res) => {
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     res.json({ ok: true, data: toRepoSettings(req.params.repoId, folder) });
@@ -964,7 +964,7 @@ reposRouter.get("/:repoId/settings", (req, res) => {
 
 // PATCH /api/repos/:repoId/settings
 reposRouter.patch("/:repoId/settings", async (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const patch = RepoSettingsPatch.safeParse(req.body);
   if (!patch.success) return res.status(400).json({ ok: false, error: patch.error.message });
@@ -1017,8 +1017,8 @@ reposRouter.patch("/:repoId/settings", async (req, res) => {
 
 // GET /api/repos/:repoId/decision-policy — the SHARED per-repo default-decision + attribution policy plus
 // whether decisions made here actually reach a team (decisions.mdx §9/§14/§15, repo_settings.mdx §2.7/§2.8).
-reposRouter.get("/:repoId/decision-policy", (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+reposRouter.get("/:repoId/decision-policy", async (req, res) => {
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     res.json({
@@ -1034,8 +1034,8 @@ reposRouter.get("/:repoId/decision-policy", (req, res) => {
 // PATCH /api/repos/:repoId/decision-policy — merge a partial policy into the shared doc (decisions.mdx §9).
 // Changing the policy is itself an audited decision: stamp who set it (set_by) from the authenticated session
 // so a later auto-decide can attribute `policy:<set_by>`. Returns the updated policy.
-reposRouter.patch("/:repoId/decision-policy", (req, res) => {
-  const folder = folderForRepoId(req.params.repoId);
+reposRouter.patch("/:repoId/decision-policy", async (req, res) => {
+  const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   const patch = DecisionPolicyPatch.safeParse(req.body);
   if (!patch.success) return res.status(400).json({ ok: false, error: patch.error.message });

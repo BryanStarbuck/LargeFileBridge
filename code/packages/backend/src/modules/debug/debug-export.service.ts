@@ -218,7 +218,7 @@ export async function exportDebugInfo(opts: ExportDebugOptions): Promise<DebugEx
     throw new Error(target.reason ?? "No personal storage repo is connected.");
   }
 
-  const folders = foldersInScope(opts);
+  const folders = await foldersInScope(opts);
   const doc = await buildDebugDocument(opts, folders, target.computer);
 
   // ONE document, written to EVERY destination (§3): every connected company sync repo — so it reaches
@@ -272,12 +272,12 @@ export async function exportDebugInfo(opts: ExportDebugOptions): Promise<DebugEx
   };
 }
 
-function foldersInScope(opts: ExportDebugOptions): string[] {
+async function foldersInScope(opts: ExportDebugOptions): Promise<string[]> {
   if (opts.scope === "repo") {
     if (!opts.repoId) throw new Error("repoId is required for a repo-scoped debug export");
     // Direct lookup. An earlier version scanned every folder calling computeRepoDetail until the ids
     // matched — which made a ONE-repo export pay the whole-computer cost (measured 5.1 s for 303 files).
-    const folder = folderForRepoId(opts.repoId);
+    const folder = await folderForRepoId(opts.repoId);
     if (!folder) throw new Error(`unknown repo ${opts.repoId}`);
     return [folder];
   }

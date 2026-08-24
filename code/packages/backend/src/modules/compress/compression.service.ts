@@ -1207,7 +1207,7 @@ export async function compressFile(input: string, opts?: CompressFileOpts | stri
         // on; re-stamp the team's existing pin/ignore choice onto the new path so a decided file stays
         // decided. Skipped for an in-place compress (same path → decision key unchanged).
         if (isConvert) {
-          const folder = folderForRepoId(repoIdFromPath(repoRoot));
+          const folder = await folderForRepoId(repoIdFromPath(repoRoot));
           if (folder) {
             const oldRel = relPosix(repoRoot, abs);
             await restampOnTransform(folder, oldRel, relFinal, o.by ?? null);
