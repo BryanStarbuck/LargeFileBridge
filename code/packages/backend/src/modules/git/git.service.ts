@@ -16,6 +16,8 @@ import type { RepoOwner, PersonalAccount } from "@lfb/shared";
 import fs from "node:fs";
 import path from "node:path";
 import { execFileSync, execFile } from "node:child_process";
+// Name a synchronous stretch in the event-loop stall report (shared/blocking.ts, performance.mdx P-46).
+import { blocking } from "../../shared/blocking.js";
 import YAML from "yaml";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { canonicalize } from "../../shared/store/yaml-store.js";
@@ -1674,6 +1676,14 @@ export function checkIgnoreRules(repoRoot: string, absPaths: string[]): Set<stri
  * UNKNOWN, not "nothing is tracked", and decide for themselves which way to fail.
  */
 export function listTrackedFiles(repoRoot: string): Set<string> | null {
+  // NAMED for the stall report. `execFileSync` holds the event loop for the WHOLE life of the child, and on
+  // a repo with tens of thousands of tracked paths that is not a control call. It is deliberately kept on
+  // the write path only — but "deliberately kept off the hot path" is a claim that decays, and an anonymous
+  // multi-second freeze is exactly what this pass existed to stop (shared/blocking.ts, performance.mdx P-46).
+  return blocking("git.ls-files (sync)", () => listTrackedFilesInner(repoRoot), repoRoot);
+}
+
+function listTrackedFilesInner(repoRoot: string): Set<string> | null {
   try {
     const out = execFileSync(stableGitBin(), [...QUOTEPATH_ARGS, "ls-files", "-z", "--full-name"], {
       cwd: repoRoot,
@@ -1891,7 +1901,9 @@ function runCheckIgnoreBatch(
     "--stdin",
   ];
   try {
-    const out = execFileSync(stableGitBin(), args, {
+    // Same reasoning as `listTrackedFiles`: the sync twin is for write paths, and if it ever reaches a hot
+    // one the loop-watch report must be able to say so by name rather than leaving the stall anonymous.
+    const out = blocking("git.check-ignore (sync)", () => execFileSync(stableGitBin(), args, {
       cwd: repoRoot,
       input: absPaths.join("\n") + "\n",
       encoding: "utf8",
@@ -1901,7 +1913,7 @@ function runCheckIgnoreBatch(
       // handled submodule fatal ("Pathspec … is in submodule …") spammed the launcher log as raw noise.
       // The fatal is still fully captured on err.stderr for splitOnSubmoduleFatal.
       stdio: ["pipe", "pipe", "pipe"],
-    });
+    }), repoRoot);
     return { out, unknown: [] };
   } catch (e) {
     // check-ignore exits 1 when NONE of the inputs are ignored — expected, not an error. Its stdout

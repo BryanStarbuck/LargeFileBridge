@@ -25,7 +25,7 @@ import YAML from "yaml";
 import {
   flushMemo,
   mirrorToSyncRepo,
-  mirrorToSyncRepoYielding,
+  reconcileFromSyncRepoYielding,
   reconcileFromSyncRepo,
   resetLedgerSyncMemo,
   setSyncRepoMarker,
@@ -290,7 +290,8 @@ describe("the yielding driver is interruptible", () => {
     }
 
     mirrorToSyncRepo(repoRoot);
-    const mirrorAfterBlocking = stamps(mirrorDir());
+    reconcileFromSyncRepo(repoRoot);
+    const localAfterBlocking = stamps(repoStateDir(repoRoot));
 
     // Defeat the memos so the yielding pass does the FULL walk rather than a settled no-op.
     resetLedgerSyncMemo();
@@ -305,12 +306,12 @@ describe("the yielding driver is interruptible", () => {
       firedDuring = !walkDone;
     }, 0);
 
-    await mirrorToSyncRepoYielding(repoRoot);
+    await reconcileFromSyncRepoYielding(repoRoot);
     walkDone = true;
     clearTimeout(timer);
 
     expect(firedDuring).toBe(true);
     // Interruptible, and identical: the two drivers share one generator, so this is what stops them drifting.
-    expect(stamps(mirrorDir())).toEqual(mirrorAfterBlocking);
+    expect(stamps(repoStateDir(repoRoot))).toEqual(localAfterBlocking);
   });
 });

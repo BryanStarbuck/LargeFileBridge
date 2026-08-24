@@ -27,8 +27,29 @@ import { log } from "../shared/logging.js";
 const OLD_LAUNCHD_LABEL = "com.largefilebridge.sync";
 const NEW_LAUNCHD_LABEL = "com.largefilebridge.pin";
 
+/**
+ * LATCH FILE — the same one every other migration in this directory uses (`.posix-paths-repaired`,
+ * `.repo-dir-names-migrated`, `.sync-repo-default-migrated`). This one had none, and it is the most
+ * expensive of them: `migrateUnitFiles` reads and YAML-parses `config.yaml` AND `status.yaml` for every
+ * unit dir under `pin/r|s|c/*` — 210+ parses on this machine — on EVERY boot, to find nothing.
+ *
+ * Measured 2026-08-24 with the boot window attributed for the first time:
+ * `boot.migrate.sync-to-pin 754ms/1 call`. That is 754 ms of the event loop, on every restart, spent
+ * re-answering a question that was settled the first time (performance.mdx P-46).
+ *
+ * Safe to latch: this migration only ever reads and rewrites THIS computer's own state root, which only
+ * this app writes. Once the legacy `sync`-era shapes are gone from it they cannot reappear — nothing that
+ * arrives from a peer lands in `pin/`, and a downgrade to a build that writes the old shape would be
+ * writing shapes this build no longer reads anyway. Deleting the marker re-runs it.
+ */
+const MARKER = ".sync-to-pin-migrated";
+
 export function migrateSyncToPin(stateDir: string): void {
   try {
+    const marker = path.join(stateDir, MARKER);
+    if (fs.existsSync(marker)) return;
+    enumerationFailed = false;
+
     let dirRenamed = false;
     let unitFilesUpdated = 0;
     let appConfigUpdated = false;
@@ -56,6 +77,24 @@ export function migrateSyncToPin(stateDir: string): void {
       );
     } else {
       log.info("migrate", "nothing to migrate");
+    }
+    // The latch is written LAST and only on a run that COMPLETED. Two ways a run can fail to complete, and
+    // both must leave the marker unwritten or a transient fault becomes a permanent skip:
+    //   * it threw — the catch below runs instead of this block;
+    //   * it could not READ something. That one is the trap: every helper here is best-effort and answers
+    //     an unreadable directory with `[]`, which is indistinguishable from "empty" to the walk. Latching
+    //     on it would record "nothing to migrate" for a state root we never actually looked at.
+    if (enumerationFailed) {
+      log.warn("migrate", `sync→pin: a directory could not be read this pass — not latching, it will re-run next boot`);
+      return;
+    }
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      fs.writeFileSync(marker, new Date().toISOString(), "utf8");
+    } catch (e) {
+      // An unwritable state root is someone else's problem to report; the migration itself succeeded, and
+      // paying for it again next boot is the correct degradation.
+      log.warn("migrate", `sync→pin: could not write ${MARKER} (it will re-run next boot): ${errMsg(e)}`);
     }
   } catch (err) {
     // Absolute backstop — a broken migration must never crash boot.
@@ -254,10 +293,21 @@ function listDirs(dir: string): string[] {
       .readdirSync(dir, { withFileTypes: true })
       .filter((e) => e.isDirectory())
       .map((e) => e.name);
-  } catch {
+  } catch (e) {
+    // "MISSING" and "COULD NOT READ" are the same value here — `[]` — and that conflation is fine for the
+    // walk (either way there is nothing to migrate this pass) but NOT for the latch: an unreadable state
+    // root would otherwise look like a completed migration and be recorded as one, permanently. So the
+    // failure is remembered for `migrateSyncToPin` to consult before it writes the marker.
+    if ((e as NodeJS.ErrnoException)?.code !== "ENOENT") enumerationFailed = true;
     return [];
   }
 }
+
+/**
+ * Did any directory listing in this pass fail for a reason other than "it isn't there"? Reset at the start
+ * of each `migrateSyncToPin` call. It exists solely to keep the latch honest — see the marker write.
+ */
+let enumerationFailed = false;
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === "object" && v !== null && !Array.isArray(v);

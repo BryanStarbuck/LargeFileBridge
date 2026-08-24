@@ -63,6 +63,10 @@ import { startHeapWatch, stopHeapWatch } from "./shared/heap-watch.js";
 // The OTHER half of "why is the app slow?": heap-watch explains why the machine crawls, loop-watch
 // explains why nothing gets ANSWERED (loop-watch.ts).
 import { startLoopWatch, stopLoopWatch } from "./shared/loop-watch.js";
+// The BOOT window is the one window every restart produces, and it was the only one left saying
+// "BLOCKED BY: nothing measured" — the migrations run before any wrapped code (performance.mdx P-46).
+import { blocking, recordBlocking } from "./shared/blocking.js";
+import { performance } from "node:perf_hooks";
 // …and the THIRD half of the same question: WHICH request was the user waiting on. loop-watch says the
 // loop stopped, blocking.ts says what stopped it, request-watch.ts says who was left spinning while it did
 // (performance.mdx P-46).
@@ -334,39 +338,46 @@ async function main(): Promise<void> {
   // dirs, `sync_process`/`synced`/`sync:`/`last_sync_at` keys, and the old `com.largefilebridge.sync`
   // LaunchAgent) into the new `pin` shape BEFORE any config is read/written below. Best-effort; never
   // throws. Runs only in the instance that holds the single-instance lock.
-  migrateSyncToPin(resolveStateDir());
+  blocking("boot.migrate.sync-to-pin", () => migrateSyncToPin(resolveStateDir()));
   // Clear the `sync_repo.enabled: false` the OLD schema default persisted into every repo config.
   // Without this the tracking mirror stays off for every pre-existing repo and the cross-computer
   // feature works only on a fresh install (storage_company.mdx §8.4.2).
-  migrateSyncRepoDefault(resolveStateDir());
+  blocking("boot.migrate.sync-repo-default", () => migrateSyncRepoDefault(resolveStateDir()));
   // Repair the bare `sync_repo:` (= null) that the FIRST version of the migration above left behind when it
   // removed the block's only child. It made every repo unit config unreadable; this must run before anything
   // below reads one.
-  repairEmptySyncRepoBlocks(resolveStateDir());
+  blocking("boot.migrate.repair-sync-repo-blocks", () => repairEmptySyncRepoBlocks(resolveStateDir()));
   // Repair the Windows-separator damage a peer's `\`-spelled paths left on disk (repo__list_syns.mdx §6.1):
   // rewrite the `\` keys in this computer's unit state and MOVE the stray files a pull materialized at the
   // repo root (`jfk\training\clip.mp4`) to the path that name always meant. Runs before the state is read,
   // so the first scan/pin pass already sees one spelling per file. Never destructive, never throws.
-  migratePosixPaths(resolveStateDir());
+  blocking("boot.migrate.posix-paths", () => migratePosixPaths(resolveStateDir()));
   // Give the anonymous 12-hex per-repo tracking directories their repo's NAME
   // (artifact_placement_policy.mdx §3.1): `repos/bad3cd4187d0/` -> `repos/charlie-kirk-bad3cd4187d0/`, in
   // Local Storage and in every company/Personal sync repo this computer mirrors into. Runs AFTER the
   // sync→pin migration (it reads pin/r/<repo>/config.yaml for the names) and BEFORE anything resolves a
   // per-repo directory. Rename-only, never destructive; a directory no repo here can name stays as it is
   // and is still found by its key suffix.
-  migrateRepoDirNames(resolveStateDir());
+  blocking("boot.migrate.repo-dir-names", () => migrateRepoDirNames(resolveStateDir()));
 
   // One-time, idempotent backfill of the SHARED per-file decision ledger from the legacy machine-local
   // `decisions:` enum (decisions.mdx §13). Runs AFTER the sync→pin migration (it reads pin/r/<repo>/config.yaml)
   // and is consent-aware + best-effort (never throws).
-  await migrateDecisionsToLedger();
+  // Timed by hand rather than wrapped: it is async, and `blocking()` deliberately refuses async work —
+  // an `await` inside would end the synchronous stretch it claims to measure. `recordBlocking` puts the
+  // wall time in the same window tally so the boot window is fully attributed either way.
+  {
+    const t0 = performance.now();
+    await migrateDecisionsToLedger();
+    recordBlocking("boot.migrate.decisions-ledger", performance.now() - t0);
+  }
 
   // One-time, idempotent on-disk migration of every SDL's `.lfbridge/` up to its ROOT
   // (artifact_placement_policy.mdx §0.3): a dedicated LFB file repo has NO `.lfbridge/` — its root IS the
   // tracking area. Merges rather than clobbers, `git mv`s so history follows, and never throws. Runs BEFORE
   // the app serves anything so readers see the migrated layout; whatever it can't move is still found by the
   // legacy read-fallback, so a partial run degrades to an extra path segment, never a missing artifact.
-  migrateSdlLfbridge();
+  blocking("boot.migrate.sdl-lfbridge", () => migrateSdlLfbridge());
 
   await bootstrapState();
   const cfg = getAppConfig();

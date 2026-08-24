@@ -295,14 +295,23 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
   return blocking("storage.mirror", () => drainSync(mirrorGen(repoRoot)), repoRoot);
 }
 
-/**
- * The mirror, INTERRUPTIBLE — same generator, drained in {@link SLICE_MS} slices with the event loop
- * handed back between them. Every ASYNCHRONOUS caller should prefer this: the walk is the same work either
- * way, but this version cannot be the reason a page spins (performance.mdx P-47).
- */
-export async function mirrorToSyncRepoYielding(repoRoot: string): Promise<boolean> {
-  return drainYielding("storage.mirror.yielding", repoRoot, mirrorGen(repoRoot));
-}
+// THERE IS DELIBERATELY NO `mirrorToSyncRepoYielding`. The two directions are not symmetric, and the
+// asymmetry is a safety one, not a taste one:
+//
+//   * The RECONCILE reads the sync repo and writes LOCAL STORAGE. Nothing it writes is inside a git working
+//     tree, so a pass that spans several event-loop turns cannot collide with a git cycle. It is also
+//     called from INSIDE the cycle (`reconcileMirroredRepos`, right after the pull), where the worktree
+//     gate is already held on our behalf — so yielding there is if anything safer than not yielding.
+//   * The MIRROR writes INTO the sync repo's working tree. `deferWhileBusy` protects that with a check at
+//     the START of the pass, which is sound only because the pass is atomic: an interruptible mirror could
+//     begin before a git cycle and still be writing when one starts, which is exactly the
+//     "Your local changes to the following files would be overwritten by merge" abort that worktree-gate.ts
+//     exists to prevent. Making the mirror interruptible therefore requires re-checking the gate at every
+//     slice boundary, and that is a change to make deliberately, with its own test — not a twin to add
+//     speculatively because the reconcile has one.
+//
+// After P-45 the mirror is ~30 ms on the largest repo here anyway, so the pressure that motivated the
+// reconcile's driver does not exist on this side.
 
 function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
   const dst = resolveStateSyncRepo(repoRoot);

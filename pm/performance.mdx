@@ -1423,7 +1423,7 @@ In code:
 | P-43 | **Three smaller faults from the same read** — `spawn E2BIG` on a >1 MiB pathspec silently un-landed the pre-merge checkpoint, so the merge that follows was refused and the storage's backbone stalled (the merge-conflict and push-rejected warnings beside it were the SAME fault); the stream path had no 401 re-mint backstop, so a reconnect re-sent the dead token in a loop; and `case heal` was 3,219 of ~5,700 lines in one log generation, burying every other diagnostic | `backend/modules/git/git.service.ts`, `frontend/src/lib/streamNdjson.ts`, `backend/modules/storage/sidecar-heal.ts`; guards: `checkpoint-e2big.spec.ts`, `streamNdjson.spec.ts` |
 | P-44 | **What the profile found under P-40** — the ledger union now runs at most once per (unchanged src, unchanged dst) pair, keyed on `(ino, size, mtime)`, instead of parsing a 3.1 MB `decisions.yaml` twice per repo per pass to re-derive a file `writeIfDifferent` then declined to write; and `sameBytes` stopped allocating 2 MiB of scratch per file (~40 GB of churn per pass over ~20,000 files that average a kilobyte) | `backend/modules/storage/tracking-sync.service.ts`, `backend/modules/storage/tracked-file-merge.ts`; guard: `ledger-sync-memo.spec.ts` |
 
-### 🔴 STILL OPEN after this pass — the mirror walk is one uninterrupted synchronous stretch
+### 🔴 ~~STILL OPEN~~ CLOSED BY P-47 — the mirror walk was one uninterrupted synchronous stretch
 
 P-40 and P-44 removed the *per-file work*; they did not change the *shape of the walk*. `copyTree` /
 `reconcileFromSyncRepo` are **synchronous** and traverse ~29,000 files across 105 repos with no yield
@@ -1468,6 +1468,13 @@ Two things make this harder than P-37's fix, and both need deciding before anyon
 `loop-watch` (P-39) is what makes this measurable now, and it should stay the acceptance test: the pass is
 done when no 60 s window reports a stall above ~1 s on this machine's state.
 
+> **Closed 2026-08-24 by [P-47](#-p-47--the-mirror-walk-was-one-uninterrupted-synchronous-stretch--t3).**
+> Both obstacles named above were real and both were answered by the same move: ONE generator, drained two
+> ways. The synchronous callers keep a synchronous driver; every asynchronous caller gets a driver that
+> hands the loop back every 8 ms — so the yield lands *inside* the per-repo walk, which is what the
+> `charlie-kirk` objection required. The eighth pass also found that the warm-up cost the table below
+> measures was never a warm-up at all: two memos were invalidating each other on every pass (P-45).
+
 
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop
@@ -1477,3 +1484,297 @@ too (`GET /api/fs/stream`); a `?limit`/`?after` cursor for hosted server mode
 (Aspect 7); read the scanner's persisted `status.yaml` to warm the index (one walk,
 many readers); backend downscaled image previews (P-13); extract a single shared
 windowed-body primitive so the windowed tables can't drift (P-19).
+
+---
+
+## Eighth pass (P-45…P-49) — "the pages are spinning" · T3/T4/T6
+
+Opened 2026-08-24 from the same two-sentence report the seventh pass came from — *"this web app is hanging,
+the pages are spinning"* — with one difference: `loop-watch` (P-39) existed this time, so the pass started
+from a number instead of an impression. `error.err` for the day carried **110 warned windows**, worst stalls
+of **1,469–7,310 ms**, recurring all day rather than only after a boot. The seventh pass's closing table had
+predicted the settled app would go quiet; it had not.
+
+Two things were wrong with that prediction, and they are the two halves of this pass:
+
+1. The warm-up cost never ended, because the memos it depended on were **fighting each other**: the mirror
+   leg rewrote a file unconditionally, which moved the mtime the reconcile leg's memo was keyed on, so
+   neither ever held. Fixing that is P-45.
+2. Nobody could have known, because the stall report **named no culprit** — `loop-watch` reports delay, not
+   identity, and there was no per-request timing of any kind. Fixing that is P-46, and it is what found
+   P-48.
+
+### 🔴 P-45 — The mirror re-derived multi-megabyte documents on every pass · T3
+
+- **Where:** `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` —
+  `mirrorToSyncRepo()` / `reconcileFromSyncRepo()`.
+- **Measured, 2026-08-24, on this machine's live state:** a warm mirror + reconcile over **105 repos and
+  29,412 tracked files cost 7,285 ms of uninterrupted synchronous time** — which is exactly the 7,310 ms
+  stall `loop-watch` was reporting. Phase timings on the two biggest repos:
+
+  | | `charlie-kirk` | `all` |
+  |---|---|---|
+  | `YAML.parse(decisions.yaml)` | **458 ms** (3.11 MB) | 263 ms (1.86 MB) |
+  | `YAML.parse(manifest.yaml)` | **110 ms** (0.89 MB) | 91 ms (0.78 MB) |
+  | recursive readdir | 23 ms | 108 ms |
+  | `statSync` every file | 10 ms (3,266 files) | 13 ms (4,209 files) |
+  | `readFileSync` every file | 63 ms | 79 ms |
+
+  The walk was never the cost. **The YAML was**, and each pass paid for it four to six times over.
+- **Root cause — three faults compounding.**
+  1. **The manifest merge had no memo at all.** P-44 memoized the ledger union; the manifest is the other
+     multi-megabyte document and it was missed. `writeIfDifferent` declined the WRITE while both parses and
+     the serialize in front of it ran in full, on every mirror AND every reconcile, for every repo.
+  2. **The mirror leg's writes were unconditional** (`fs.writeFileSync`, not `writeIfDifferent`) — so the
+     mirror re-stamped `decisions.yaml`'s mtime every pass, which is the identity P-44's ledger memo is
+     keyed on. **The memo could therefore never hold in the running system**, only in a test that called one
+     leg twice. The two directions were invalidating each other.
+  3. **The copy and the merge were inseparable.** `copyTree` stamped this computer's copy over the mirror's
+     and the merge legs then put the union back, so skipping the (expensive) merge would have left the
+     (cheap) wholesale overwrite standing — i.e. the last-writer-wins erase the merge exists to prevent.
+- **Fix (done).** The shared documents are **MERGED, NEVER COPIED**: `MERGED_NEVER_COPIED` holds them out of
+  the tree walk entirely, which is what makes each merge independently skippable. Both merges then run at
+  most once per *(unchanged dst, unchanged src)* pair, keyed on **(ino, size, mtimeNs)** — nanoseconds, not
+  milliseconds, because a false "unchanged" here is silent data loss between the user's computers, and a
+  rewrite can land in the same millisecond at the same size. Every write on both legs goes through
+  `writeIfDifferent`.
+- **And the per-file comparison stopped reading.** With the YAML gone, the remaining 2,709 ms was the walk
+  itself: ~59,000 `sameBytes` comparisons at ~46 µs each, of which essentially all is `open`/`read`/`close`
+  on files that are byte-identical (20,059 of 20,062 sidecars, measured). A proof of equality stays true
+  while neither file changes, so it is now remembered by the same nanosecond identity — 2 stats instead of
+  2 stats + 2 opens + 2 reads + 2 closes. The key is a **hash** of the two paths: at 30,000 files × two
+  120-character absolute paths, storing the strings would have cost ~20 MB of long-lived heap to save 2 s
+  of CPU. A hash collision cannot manufacture a false positive on its own, because the value still carries
+  both inodes, both sizes and both nanosecond mtimes.
+- **And the memo now OUTLIVES THE PROCESS.** An in-memory memo makes a settled app quiet and leaves a
+  restarted one paying full price — and this app restarts constantly (`just run`, a `tsx watch` reload, a
+  launchd boot, a crash), so "quiet after the first minute" was a promise the user rarely collected on.
+  Both halves of the report that opened this pass were from exactly that window. The memo is a statement
+  about FILES, not about process state, so it is written to `<state>/mirror-memo.json` (debounced, atomic,
+  flushed on shutdown) and restored at first use. Every failure mode degrades to "do the work".
+
+| result | before | after |
+|---|---|---|
+| warm mirror + reconcile, 105 repos | **7,285 ms** | **1,021 ms** |
+| warm mirror, `charlie-kirk` alone | 1,469 ms | **30 ms** |
+| cold (first pass of a fresh process) | 7,558 ms | **~1,600 ms** (the memo is restored, not rebuilt) |
+
+The two merges, their memos, the persisted store and the per-file equality memo are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mergeManifestInto()` / `syncLedgerInto()` / `pairSettled()` / `markPairSettled()` / `loadMemo()` / `flushMemo()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `sameBytes()` / `byteId()` / `pairKey()`; guard: `mirror-cost.spec.ts`
+
+### 🔴 P-46 — The stall report named no culprit, and no request was ever timed · T6
+
+- **Where:** nowhere. `loop-watch` (P-39) reports *delay*; a libuv histogram cannot report *identity*. And
+  the backend had **no per-request timing of any kind**, so the user's sentence ("the pages are spinning")
+  and the server's fault trail had no line in common. Every investigation started by attaching a CPU
+  profiler to a live backend and catching a stall by hand.
+- **Fix (done) — three cooperating signals, all into `error.err`.**
+  1. **`blocking(label, fn)`** wraps a synchronous stretch, WARNs when one call alone exceeds 250 ms, and
+     accumulates **per-label totals for the current `loop-watch` window**. The totals are the half that
+     matters: a 7-second window is rarely one 7-second call, it is 105 repos × 70 ms, and no single-call
+     threshold would ever have fired. `loop-watch`'s WARN now carries the ranked list, so the report reads
+     `BLOCKED BY … storage.reconcile 3776ms/105 calls, worst 1466ms on charlie-kirk` instead of
+     `something blocked for 3.4s`. When nothing is measured it says so, and says to wrap the suspect path —
+     an honest "I don't know" beats a confident silence.
+  2. **`requestWatch`** — mounted FIRST in the express chain, so the duration it reports is the duration the
+     BROWSER sees (a request queued four seconds behind a blocked loop is a four-second request to the
+     person watching the spinner). It WARNs a finished request over 1 s, **ERRORs one still open after
+     10 s** — the spinner reported *while it is on screen*, which is the only signal that survives a request
+     that never completes at all — and reports a request whose client hung up with nothing sent. It also
+     feeds `loop-watch`: the requests open ACROSS a stall are the pages that were spinning during it.
+  3. **`perfWatch.ts` in the browser** — the half no server-side log can see. A `longtask` observer reports
+     the rolling window's total (the shape that freezes a tab is 200 × 60 ms far more often than 1 × 12 s),
+     and a route watchdog reports a page still waiting on react-query fetches after 10 s **with the query
+     keys it is waiting for**. Queries retrying a transient network error are excluded: while the backend
+     restarts the app already says "Reconnecting…", and an alarm that fires when nothing is wrong is an
+     alarm people learn to skip.
+
+It found P-48 within a minute of being armed, from both ends at once — the browser reporting
+`PAGE STILL SPINNING after 10319ms … waiting on ["todo","batches"]` and the server reporting
+`SLOW: GET /api/todo/batches -> 200 took 11985ms`.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/blocking.ts` — `blocking()` / `recordCooperative()` / `takeBlockingTally()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/request-watch.ts` — `requestWatch()` / `startRequestWatch()` / `inFlightSummary()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/loop-watch.ts` — `closeWindow()` (which now prints both);
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/perfWatch.ts` — `startPerfWatch()` / `checkRoute()` / `noteRouteChange()`
+
+### 🔴 P-47 — The mirror walk was one uninterrupted synchronous stretch · T3
+
+This is the item the seventh pass closed as **STILL OPEN**. Its two stated obstacles were real: `copyTree`
+is reached from synchronous callers that cannot become `async`, and yielding *between repos* would not have
+helped, because one repo holds 20,062 of the 29,287 sidecars.
+
+- **Fix (done) — one walk, two drivers.** `copyTreeGen` is a generator that yields **once per entry**;
+  `drainSync` drains it in a tight loop (byte-for-byte the old behaviour, for the write-path callers), and
+  `drainYielding` drains it in 8 ms slices, handing the loop back with `setImmediate` between them. Both
+  drive the SAME generator, so they cannot drift — the failure mode a hand-written async copy would have
+  had. `mirrorToSyncRepo`/`reconcileFromSyncRepo` keep their synchronous signatures, and
+  `reconcileFromSyncRepoYielding` is what the pin pass and `reconcileMirroredRepos` (the leg that runs for
+  all 105 repos on every backbone pull) now call.
+- **Only the RECONCILE gets a yielding twin, and the asymmetry is a safety property.** The reconcile writes
+  LOCAL STORAGE — nothing inside a git working tree — and is itself called from inside the git cycle, where
+  the worktree gate is already held on our behalf. The MIRROR writes INTO the sync repo's working tree, and
+  `deferWhileBusy` guards that with a check at the START of the pass, which is sound *only because the pass
+  is atomic*: an interruptible mirror could begin before a git cycle and still be writing when one starts —
+  the "Your local changes to the following files would be overwritten by merge" abort that
+  `worktree-gate.ts` exists to prevent. Making it interruptible therefore means re-checking the gate at
+  every slice boundary, which is a change to make deliberately with its own test, not a twin to add for
+  symmetry. After P-45 the mirror is ~30 ms on the largest repo here anyway, so the pressure that motivated
+  the reconcile's driver does not exist on this side.
+- **`setImmediate`, not a resolved promise.** A microtask drains before the loop ever advances, so
+  `await Promise.resolve()` in a tight loop blocks exactly as hard as no await at all. This is the
+  difference between an interruptible walk and a decorative one, and it is why the guard test asserts that
+  a `setTimeout(…, 0)` armed before the walk fires **during** it.
+- **Cooperative time is accounted, never warned.** `recordCooperative` puts the accumulated synchronous
+  time in the window's ranking under a `(yielded)` label. 1.4 s taken in 8 ms slices is real CPU and belongs
+  in the report; it did not block anything, and warning about it would devalue the warnings that mean
+  something.
+- **Measured effect**, same machine, first pass after a restart: worst stall in the window
+  **3,374 ms → 1,201 ms**, with the same total work done (`storage.reconcile.yielding … 105 calls`).
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `copyTreeGen()` / `drainSync()` / `drainYielding()` / `mirrorToSyncRepoYielding()` / `reconcileFromSyncRepoYielding()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinRepoFolderInner()`; guard: `mirror-cost.spec.ts`
+
+### 🔴 P-48 — A read waited for its own write, on the sidebar of every page · T4
+
+**The single most literal instance of the report this pass came from**, and the one the new instrumentation
+found rather than a person.
+
+- **Where:** `~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `GET /batches`.
+- **Symptom.** `await maybeRecalc()` in front of the read, throttled to once per 30 s. `recalcAll()` walks
+  every repo and every storage, so the endpoint took **11,985 ms** — measured live, by the `request-watch`
+  line it produced. And it is **not the To Do page's problem**: the SIDEBAR issues this exact query for its
+  badge count, and the sidebar is on every screen. So once every 30 s, whichever page the user happened to
+  open sat on a spinner for twelve seconds waiting for a filesystem walk it never asked for.
+- **Fix (done).** **A read must not wait for a write.** The batches on disk are the answer; the recalc only
+  makes them fresher, and it already announces itself — `writeBatch` bumps `TODO_TOPIC`, the live event
+  stream tells the page, the page refetches (Aspect 6a). So: answer from disk now, start the recalc behind
+  the response (`recalcAll` is already single-flighted, so a burst of page loads still produces one pass),
+  and let the bus close the loop. The recalc **also yields between repos** — moving a 12-second walk off the
+  request path is not a fix if it then blocks everything else from the background. And the sidebar's badge
+  subscribes to the topic, because a count that only updates on the next navigation reads as a wrong count.
+- **Measured: 11,985 ms → 32 ms** (26 ms warm).
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo.router.ts` — `kickRecalc()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/todo/todo-batch.engine.ts` — `recalcAll()` / `handBackTheLoop()`;
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/layout/Sidebar.tsx` — the `["todo","batches"]` `useLiveRefresh`
+
+### 🟠 P-49 — Two latent faults the new guard test found
+
+Neither was reachable from any existing test, and both are the same shape: a failure that degrades to a
+WARN in a `catch` and then presents as *nothing happening*.
+
+1. **`mergeManifests` threw on an entry with no `pinned_by`.** `readManifestBestEffort` casts a parsed YAML
+   `files:` list straight to `ManifestFile[]` with **no validation**, so an entry arriving from a peer — an
+   older build, a hand-edit, a half-merged file — could legitimately lack the field. Two spreads
+   (`foldManifestFiles`, `serializeManifest`) then threw `f.pinned_by is not iterable`, every call site
+   wraps the merge in a try/catch that WARNs, and the visible consequence was that **the manifest silently
+   stopped travelling between the user's computers** — the exact silent-loss failure that module exists to
+   prevent, reached through a missing optional field. Both spreads now default to `[]`.
+2. **`repo_storage.yaml` was copied and then rewritten, on every pass, forever.** The mirror leg copied the
+   file across and `scrubVolatileRepoStorage` rewrote it in place to reset the machine-local fields — an
+   arrangement that **cannot converge by construction**, because the mirror's copy is the scrubbed one and
+   the local copy carries a live `last_scan`, so they always differ, so the copy fires and the scrub rewrites
+   it. The bytes came out identical either way (git never committed anything, nothing looked wrong), but the
+   mtime moved every time — and the mtime is the identity every memo in the module is keyed on. It now
+   PROJECTS from the local file to the mirror in one `writeIfDifferent`.
+3. **A "one-time" migration ran in full on every boot.** With the boot window attributed for the first
+   time, the largest item left in it was `boot.migrate.sync-to-pin 754ms/1 call`. `migrateSyncToPin` reads
+   and `YAML.parse`s `config.yaml` AND `status.yaml` for every unit dir under `pin/r|s|c/*` — 210+ parses
+   here — and it had **no marker file**, unlike every sibling migration in the same directory
+   (`.posix-paths-repaired`, `.repo-dir-names-migrated`, `.sync-repo-default-migrated`). It now latches on
+   `.sync-to-pin-migrated`, and the latch is written **only on a run that completed**: not merely "did not
+   throw", but "did not fail to READ anything either" — every helper in that module answers an unreadable
+   directory with `[]`, which is indistinguishable from "empty" to the walk, so latching on it would have
+   recorded "nothing to migrate" for a state root nobody looked at. That trap was found by the guard test,
+   not by review. `boot.migrate.sync-to-pin` no longer appears in the boot window at all.
+4. **A valid EMPTY document is not a corrupt one.** The "refuse to overwrite what we could not read" guard
+   tested `files.length > 0` / `events.length > 0`, which reads a brand-new mirror subtree's `files: []` as
+   unparseable — refusing to seed it forever while reporting a data-loss ERROR about a file that is
+   perfectly fine. Parse failure is now detected as parse failure (`readManifestChecked`,
+   `ledgerIsUnreadable`).
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/manifest-merge.ts` — `foldManifestFiles()` / `serializeManifest()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `projectRepoStorageToMirror()` / `readManifestChecked()` / `refuseUnparseableMirror()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` — `ledgerIsUnreadable()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-sync-to-pin.ts` — `migrateSyncToPin()` / `listDirs()`'s `enumerationFailed`; guard: `migrate-sync-to-pin.spec.ts`
+
+### What the browser said — the hypothesis this pass did NOT confirm
+
+The report that opened this pass came with a theory: *"I think there are things that are happening on the UI
+render thread that need to be pushed into the background."* It is the right instinct — T1 and T2 above are
+exactly that disease, and they were real when they were catalogued. **This time the measurements did not
+support it, and that is worth writing down rather than quietly not mentioning.**
+
+With `perfWatch` armed and a tab open on the Repos list and the One-Repo detail for the largest repo on this
+machine, the browser recorded **20 `client:perf` lines and not one `perf.longtask`** — i.e. the main thread
+never accumulated even 500 ms of long tasks in any 10-second window. Every spinner it reported was a
+`perf.route` line whose pending query the SERVER had not answered, and each one had a matching
+`request-watch` line on the backend at the same moment. The first pass's hardening (P-01 windowed rows, no
+`Number.MAX_SAFE_INTEGER` page size, P-10 route code-splitting, P-18 rAF-coalesced scroll) is holding.
+
+Two things follow. First, the fix belonged on the server, which is where it went. Second — and this is the
+durable part — **that conclusion is now a measurement rather than an opinion**: if a future change does put
+work back on the render thread, `perf.longtask` says so, in the same file as everything else, without
+anyone having to reproduce a hang by hand.
+
+### The rule this pass leaves behind
+
+**Every recurring pass must be cheap when nothing changed, and interruptible when something did.** Those are
+two different properties and this codebase has now been bitten by each of them separately:
+
+* *Cheap when nothing changed* is a MEMO on the work's inputs — keyed on (ino, size, mtimeNs), recorded
+  after the write, persisted so a restart does not re-pay, and never consulted for anything but skipping
+  work we have already done.
+* *Interruptible when something did* is a GENERATOR with two drivers — never a second, hand-written async
+  copy of the same walk, and never `await Promise.resolve()`, which yields nothing.
+
+And **a read endpoint may never wait for a recalculation.** Serve what is on disk, start the work behind the
+response, and let the event bus say when it lands (Aspect 6a). The sidebar is on every page: anything it
+queries is, in practice, on the critical path of every screen in the product.
+
+### The acceptance test, and what it now reads
+
+P-39 set the bar and this pass keeps it: **the work is done when no 60-second window reports a stall above
+~1 s on this machine's state.** Measured on 2026-08-24, same machine, same 105 repos and 29,412 tracked
+files:
+
+| | before this pass | after |
+|---|---|---|
+| warned windows in a day of `error.err` | **110**, worst 1,469–7,310 ms, all day | boot window only |
+| steady-state windows | every one warned, indefinitely | **clean** |
+| worst stall, first window of a fresh process | 3,374 ms | **~1,200 ms** |
+| that window's synchronous mirror/reconcile cost | 3,776 ms over 105 calls, uninterrupted | 1,509 ms over 105 calls, **yielded** (worst repo 273 ms) |
+| that window's migrations | unmeasured; `boot.migrate.sync-to-pin` alone was 754 ms | 21 ms total, itemized |
+| warm mirror + reconcile, all repos | 7,285 ms | **1,021 ms** |
+| `GET /api/todo/batches` (the sidebar's query, on every page) | **11,985 ms** | **26–41 ms** |
+| `GET /api/repos` on a quiet loop | 140–340 ms | 77–320 ms (unchanged — it was never the problem) |
+
+**Be precise about what is left in that boot window.** Its worst single stretch (~1.2 s) is NOT attributed
+to any `blocking()` section — the sections that ran in it account for 1,509 ms of *cooperative* time and
+21 ms of migrations, neither of which is an uninterrupted 1.2 s. The most likely remaining cause is `tsx`
+compiling module subtrees for the several `await import(...)` calls on the boot path, which a built
+deployment does not do; that is a hypothesis, not a measurement, and it is why the WARN now labels the first
+window as a boot window rather than letting a reader compare it with a steady-state one. Confirming or
+refuting it is the first thing to do if boot latency ever matters more than it does today.
+
+### Still open after this pass
+
+* **The atom is a multi-megabyte `YAML.parse`.** When a big ledger genuinely changes, the union is one
+  ~500 ms parse that no yield point can split. The next step is a worker thread for the merge legs (the same
+  follow-up P-22 names for the walk), or a parsed-document cache primed by the writer that already holds the
+  events it just serialized (`decisions.service.ts` `writeLedger` re-reads and re-parses the file it wrote).
+* `GET /api/ipfs` still returns a **1.69 MB** payload; P-09 narrowed the sidebar's subscription but not the
+  response.
+* **The reconcile runs 2–4× per repo per pass** (once from the pin pass, once per SDL root from
+  `reconcileMirroredRepos`). Each is now ~10–20 ms and yields, so it is no longer a hang — but it is
+  ~1.5 s of CPU per pass spent re-answering the same question. Coalescing per (repo, pass) is the obvious
+  next win and needs care: both callers legitimately want fresh state after a pull.
+* `GET /api/ipfs/node` takes ~2.2 s. It is on the Tools and IPFS-off pages only, and the time is a child
+  process, not the loop — but it is still two seconds of spinner on those two screens.
+* The follow-ups listed at the end of the seventh pass all still stand.

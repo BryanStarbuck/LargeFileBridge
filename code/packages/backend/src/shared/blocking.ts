@@ -120,8 +120,13 @@ export function takeBlockingTally(): string {
   tally = new Map();
   return rows
     .map(([label, t]) => {
-      const worst = t.calls > 1 ? `, worst ${Math.round(t.worstMs)}ms${t.worstDetail ? ` on ${t.worstDetail}` : ""}` : "";
-      return `${label} ${Math.round(t.totalMs)}ms/${t.calls} call${t.calls === 1 ? "" : "s"}${worst}`;
+      // The DETAIL is printed whenever we have one, including for a single call. It was originally omitted
+      // in the one-call case as redundant with the total — and the first real stall this tool caught after
+      // that reasoning was `storage.mirror 2457ms/1 call` with no repo name, i.e. the exact fact the reader
+      // needed, withheld. A tally that can say WHICH must always say which.
+      const worst = t.calls > 1 ? `, worst ${Math.round(t.worstMs)}ms` : "";
+      const on = t.worstDetail ? ` on ${t.worstDetail}` : "";
+      return `${label} ${Math.round(t.totalMs)}ms/${t.calls} call${t.calls === 1 ? "" : "s"}${worst}${on}`;
     })
     .join(" · ");
 }

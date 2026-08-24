@@ -63,6 +63,8 @@ const INFO_P99_MS = Math.max(10, Number(process.env.LFB_LOOP_INFO_P99_MS) || 100
 
 let histogram: IntervalHistogram | null = null;
 let timer: NodeJS.Timeout | null = null;
+/** Is the window we are about to close the FIRST one of this process? See `closeWindow`. */
+let firstWindow = true;
 
 /** Last window's readings, for the diagnostics surface. Null until the first window closes. */
 export interface LoopDelaySample {
@@ -106,6 +108,14 @@ function closeWindow(): void {
   const culprits = takeBlockingTally();
   const waiting = inFlightSummary();
 
+  // THE FIRST WINDOW IS NOT COMPARABLE TO THE REST, and saying so is the difference between a signal and a
+  // false alarm. It contains process start-up: under `tsx` the whole TypeScript import graph is compiled on
+  // the fly, the migrations run, and the first backbone pass reconciles state no memo has seen yet. Those
+  // are real milliseconds and they are worth reporting — but a reader who treats a boot window like a
+  // steady-state one goes looking for a bug in an app that is merely starting.
+  const boot = firstWindow ? ` [FIRST WINDOW AFTER BOOT — includes process start-up: module compilation under tsx, the migrations, and the first backbone pass. Compare against a later window before treating this as a fault.]` : "";
+  firstWindow = false;
+
   if (sample.maxMs >= WARN_MAX_MS) {
     log.warn(
       "loop-watch",
@@ -120,6 +130,7 @@ function closeWindow(): void {
           : `\n    BLOCKED BY: nothing measured — the stall came from code no blocking() section wraps yet. ` +
             `Wrap the suspect path (shared/blocking.ts) rather than guessing.`) +
         (waiting ? `\n    STILL WAITING (requests open across the stall — these are the spinning pages): ${waiting}` : "") +
+        boot +
         `\n    Look for synchronous work on a hot path — a whole-store JSON.parse/stringify, a readFileSync ` +
         `over a multi-megabyte file, or an unbounded loop over a pinset. See performance.mdx T3.`,
     );
@@ -165,6 +176,7 @@ export function startLoopWatch(): void {
 }
 
 export function stopLoopWatch(): void {
+  firstWindow = true;
   if (timer) clearInterval(timer);
   timer = null;
   try {

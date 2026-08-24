@@ -28,7 +28,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { performance } from "node:perf_hooks";
 import { log } from "./logging.js";
-import { blocking, recordBlocking } from "./blocking.js";
+import { blocking } from "./blocking.js";
 
 /** A finished request slower than this is worth a line. One second is the threshold at which a person
  *  stops reading the page and starts looking at the spinner. */
@@ -98,8 +98,10 @@ export function requestWatch(req: Request, res: Response, next: NextFunction): v
     inFlight.delete(id);
     const ms = performance.now() - startedAt;
     try {
-      if (how === "close" && !res.writableEnded) {
+      if (how === "close" && !res.writableEnded && !LONG_LIVED.test(path)) {
         // The client hung up with nothing sent. This is the ONLY trace a page the user gave up on leaves.
+        // Streams are excluded: a browser that navigates away from an open NDJSON/SSE response aborts it
+        // with nothing written, which is the NORMAL end of a stream's life, not an unanswered request.
         log.warn(
           "request",
           `NEVER ANSWERED: ${method} ${path} — the client closed the connection after ${Math.round(ms)}ms ` +
@@ -158,9 +160,10 @@ export function startRequestWatch(): void {
         const age = now - r.startedAt;
         if (age < STUCK_MS) continue;
         r.reported = true;
-        // Charge the stall to the section tally too, so the loop-watch window names it even if the
-        // blocking code itself is not wrapped: a request open for 10 s IS 10 s somebody waited.
-        recordBlocking("http.stuck", 0, `${r.method} ${r.path}`);
+        // Deliberately NOT recorded into the blocking tally. That tally measures who HELD the loop; a stuck
+        // request is the opposite — someone WAITING on it — and filing it as a 0 ms section would put a
+        // meaningless row in a ranked list of milliseconds. The waiting side already reaches the same
+        // report through `inFlightSummary()`, which loop-watch prints as "STILL WAITING".
         log.error(
           "request",
           `STILL OPEN after ${Math.round(age)}ms: ${r.method} ${r.path}. The browser is showing a spinner ` +

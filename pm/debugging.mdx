@@ -109,6 +109,47 @@ the machine in front of you. Resolved in:
 **Start here. Every node is one command.** Do not skip a node — the 2026-07-15 incident was misdiagnosed
 for six hours precisely by skipping node 1.
 
+**If the report is "it hangs" or "the pages are spinning", start at Node 0 instead** — that symptom has its
+own signal now, and it names the culprit directly.
+
+### Node 0 — "It hangs / the pages just spin"
+
+**This is now one grep, not an investigation.** Until 2026-08-24 it was the hardest report in the product to
+act on: `loop-watch` could say the event loop stopped for 7,310 ms but not *what* stopped it, and there was
+no per-request timing at all — so the user's sentence and the fault trail had no line in common
+([performance.mdx](./performance.mdx) P-46).
+
+```bash
+grep -aE "EVENT LOOP BLOCKED|BLOCKED BY|STILL WAITING|STILL OPEN|NEVER ANSWERED|SLOW: |perf.route|perf.longtask" \
+  ~/T/_large_files_bridge/error.err | tail -40
+```
+
+Four kinds of line come back, and **which ones appear together is the diagnosis**:
+
+| what you see | what it means | where to go |
+|---|---|---|
+| `BLOCKED BY … <section> Nms/M calls` | The named section held the loop. The **totals** matter more than the worst single call: a 7 s window is usually 105 repos × 70 ms, not one 7 s call. | Fix that section — it is synchronous work on a hot path (T3). |
+| `BLOCKED BY: nothing measured` | The stall came from code no `blocking()` section wraps yet. | Wrap the suspect path (`shared/blocking.ts`). An honest "I don't know" is the signal to instrument, not to guess. |
+| `STILL OPEN after Nms: GET /api/…` | A request the browser is **watching a spinner for right now**. | If it names an endpoint, that endpoint is the hang. |
+| `PAGE STILL SPINNING … waiting on ["x","y"]` | The BROWSER's own report, with the query keys it is waiting for. | Cross-check against the server lines — see below. |
+
+**The cross-check is the whole method.** A spinner has exactly two possible owners:
+
+* the browser names a query **and** the server has a `SLOW:`/`STILL OPEN` line for the same endpoint at the
+  same moment → **the server never answered**. A backend problem; read the `BLOCKED BY` line beside it.
+* the browser names a query and the server has **no** slow line → the answer arrived and the **tab could
+  not render it**. A frontend problem; read the `perf.longtask` lines (T1/T2 — a list rendering every row
+  instead of a window, state every row subscribes to).
+
+A `(yielded)` suffix on a `BLOCKED BY` row means that work ran **cooperatively** — it accumulated real CPU
+but handed the loop back between slices, so it is not what froze anything. Rank it, do not chase it.
+
+The three watches, and the browser one, are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/loop-watch.ts` — `startLoopWatch()` / `closeWindow()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/blocking.ts` — `blocking()` / `takeBlockingTally()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/request-watch.ts` — `requestWatch()` / `startRequestWatch()`;
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/perfWatch.ts` — `startPerfWatch()`
+
 ### Node 1 — Is the backend actually alive?
 
 ```bash

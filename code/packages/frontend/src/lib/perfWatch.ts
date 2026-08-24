@@ -27,6 +27,7 @@
 // signals 2 and 3 work everywhere because they are our own timers.
 import { clientLog } from "./clientLog.js";
 import { queryClient } from "../api/queryClient.js";
+import { isTransientNetworkError } from "./transientError.js";
 
 /** Report the rolling window when the main thread was blocked for at least this much of it. 500 ms out of
  *  10 s is a tab that visibly stutters; below that is ordinary render work and not worth a line. */
@@ -109,12 +110,24 @@ function startLongTaskWatch(): void {
 
 // ── 2 & 3. routes that never finish loading ─────────────────────────────────────────────────────────
 
-/** The query keys still fetching, as a short readable list — this is what the page is waiting FOR. */
+/**
+ * The query keys still fetching, as a short readable list — this is what the page is waiting FOR.
+ *
+ * Queries that are RETRYING A TRANSIENT NETWORK FAILURE are excluded, and that exclusion is what keeps this
+ * signal worth reading. While the backend is restarting (`just run`, a `tsx watch` reload, a brief offline)
+ * every query in the app is "pending" for as long as the restart takes, and the app is ALREADY telling the
+ * user so — main.tsx shows "Reconnecting to Large File Bridge…", by design, on the same predicate. Calling
+ * that a spinning page would file a 50-second ERROR for the app behaving exactly as intended, and an alarm
+ * that fires when nothing is wrong is an alarm people learn to skip past.
+ *
+ * A query with `failureCount > 0` and a transient error is not a hang; it is a wait with a known cause.
+ */
 function pendingQueryKeys(limit = 6): string[] {
   try {
     return queryClient
       .getQueryCache()
       .findAll({ fetchStatus: "fetching" })
+      .filter((q) => !(q.state.fetchFailureCount > 0 && isTransientNetworkError(q.state.fetchFailureReason)))
       .slice(0, limit)
       .map((q) => JSON.stringify(q.queryKey));
   } catch {
@@ -126,6 +139,8 @@ let routePath = "";
 let routeStartedAt = 0;
 let routeSettled = false;
 let routeReportedStuck = false;
+/** Consecutive checks that found nothing in flight. See `checkRoute` for why one is not enough. */
+let routeQuietChecks = 0;
 
 /**
  * Tell the watch that the app navigated. Called from the router's own subscription, so "when did this page
@@ -136,6 +151,7 @@ export function noteRouteChange(path: string): void {
   routeStartedAt = performance.now();
   routeSettled = false;
   routeReportedStuck = false;
+  routeQuietChecks = 0;
 }
 
 function checkRoute(): void {
@@ -143,7 +159,13 @@ function checkRoute(): void {
   const age = performance.now() - routeStartedAt;
   const pending = pendingQueryKeys();
   if (pending.length === 0) {
-    // Nothing in flight: the page has the data it asked for. Report it only if getting here was slow.
+    // TWO consecutive quiet checks, not one. Every route in this app is code-split, so for the first
+    // seconds after a navigation the page is downloading its chunk and has issued NO queries yet — an
+    // empty in-flight set at that moment means "hasn't started", not "finished". Settling on it would
+    // retire the watchdog before the page ever asked for anything, and the slow load that follows would
+    // go unreported: a watchdog that reliably declares success early is worse than none.
+    routeQuietChecks += 1;
+    if (routeQuietChecks < 2) return;
     routeSettled = true;
     if (age >= SLOW_ROUTE_MS) {
       clientLog.warn(
@@ -155,6 +177,7 @@ function checkRoute(): void {
     }
     return;
   }
+  routeQuietChecks = 0; // something IS in flight — any earlier quiet check was the chunk still loading
   if (age >= STUCK_MS && !routeReportedStuck) {
     routeReportedStuck = true;
     clientLog.error(
