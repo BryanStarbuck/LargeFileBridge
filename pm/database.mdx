@@ -1,0 +1,550 @@
+---
+title: The Database — Postgres as the local storage engine
+status: in-progress
+owner: engineering
+scope: code/packages/backend/src/shared/persistence, code/packages/backend/src/modules
+---
+
+# The Database
+
+Large File Bridge keeps its machine-local state in **PostgreSQL**, and keeps every
+byte that crosses between the user's computers in **YAML files on disk**. This spec
+is the single source of truth for that split: which data moves, which deliberately
+does not, the schema, the indexes, and the fence that stops the two halves leaking
+into each other.
+
+It replaces the "there is no database" sentence in
+[storage_local.mdx](./storage_local.mdx) §0 — see §1.3 for exactly what that
+sentence meant, why it was right when it was written, and what changed.
+
+Companion specs:
+
+* [database_migration.mdx](./database_migration.mdx) — the migration engine, the
+  `migration_state.yaml` ledger, the YAML→Postgres backfill, and rollback.
+* [performance.mdx](./performance.mdx) — the measured problems this work exists to
+  fix. Its **Ninth pass** section is the entry point.
+* [syncable_data_location.mdx](./syncable_data_location.mdx) — the travelling half,
+  which this spec must never own.
+* [storage_local.mdx](./storage_local.mdx) — the state root, which this spec
+  re-homes into Postgres one document class at a time.
+
+---
+
+## 1. Why a database, and why only for half the data
+
+### 1.1 The problem, measured
+
+Every number below was measured on this machine on 2026-08-24, against the live
+state root. None of it is estimated.
+
+| Store | On disk | Records | Access shape |
+|---|---|---|---|
+| `repos/<slug>-<key>/files/**/*.yaml` (sidecars) | 23.1 MB in **~119 MB** of 4 KiB blocks | 29,138 | read-modify-write whole file |
+| `pin/r/<repo>/status.yaml` | 5.17 MB | **30,762** candidates | read-modify-write whole file |
+| `repos/<slug>-<key>/decisions.yaml` | 4.97 MB | 18,234 events | full-scan fold, no cache |
+| `foreign-pin-cache.json` + `foreign-pins.json` | 8.47 MB | 38,870 | whole-file rewrite |
+| `repos/<slug>-<key>/manifest.yaml` | 1.68 MB | 4,184 | read-modify-write whole file |
+
+The shape is the problem, not the size. 8 MB is nothing for a database and brutal
+for a document that must be parsed, mutated in memory, re-serialized and re-fsynced
+to change one field.
+
+Four consequences are already in the record:
+
+* **`YAML.parse` owned ~40% of `GET /api/repos`** — measured with a JIT-resolved CPU
+  profile, and written into the code that fixed it
+  (`shared/store/yaml-store.ts:15-19`).
+* **The sidecar mirror re-merged 20,059 unchanged files every pass.** A profile
+  attributed **7.9 s of 17 s** non-idle time to `readYamlDoc` plus 1.65 s to
+  serialize; `loop-watch` reported `EVENT LOOP BLOCKED … up to 13858ms`
+  (performance.mdx P-40). On any given pass **99.98%** of those sidecars are
+  byte-identical.
+* **The decision fold has no cache.** `charlie-kirk`'s 11,423 events fold to 2,189
+  distinct paths — a 5.2× write amplification on a log that is re-parsed and
+  re-folded *in memory* on every read, once per repo while composing the Repos list
+  (`units.service.ts:970`) and again per decision request
+  (`repos.router.ts:831`).
+* **A whole-file rewrite of the foreign-pin cache caused a 4 GB RSS incident**
+  on 2026-07-20.
+
+Live today, in `error.err`: `storage.reconcile.yielding (yielded) 9139ms/105 calls,
+worst 2143ms` and `storage.mirror 3639ms/101 calls, worst 1567ms`.
+
+### 1.2 The fix is a storage engine, not another cache
+
+Every one of those symptoms is the same disease: **we hold a whole document in
+order to read or change one record.** Caching the parse (which we did, and which
+helped) reduces the constant. It cannot change the shape.
+
+Postgres changes the shape. A decision becomes a row, a pin claim becomes a row, a
+candidate becomes a row — and "which files in this repo are big, undecided, and not
+yet pinned" becomes an indexed query instead of a fold over 11,423 events.
+
+### 1.3 What "there is no database" meant, and what changed
+
+`storage_local.mdx` opens by saying LFB has no database and that Local Storage is
+*"effectively LFBridge's database replacement."* That was the right call and it is
+still the right call **for the travelling half**. What it was protecting against is
+real and permanent:
+
+> A database that is the only copy of something a second computer needs is a
+> database that has silently become the sync protocol.
+
+So the sentence is narrowed, not reversed:
+
+* **Local Storage is now backed by Postgres.** It was always described as the thing
+  that *"if you wiped it and re-scanned, it would rebuild"* — that is a cache with
+  extra steps, and a cache belongs in a database.
+* **The Syncable Data Locations stay YAML, forever.** They are the sync protocol.
+  Postgres may feed their serializers values; it may never be in their write path.
+
+The seam that makes this safe already exists in the code, and it is the single most
+important fact in this document:
+
+> Category-B tracking state **already** lives in Local Storage as its always-home,
+> and is only **additionally** mirrored to the sync repo.
+> — `modules/storage/tracking-root.service.ts:5-11`
+
+So moving Local Storage into Postgres requires **no change to the sync contract at
+all**. The mirror keeps copying files; it just stops walking 29,614 of them to
+discover that 20,059 did not change.
+
+---
+
+## 2. The boundary (LOCKED)
+
+Three categories. Every store in the app is exactly one of them, and the category
+decides where it lives.
+
+| Category | Where it lives | Postgres role |
+|---|---|---|
+| **LOCAL_ONLY** — this computer's own bookkeeping, rebuildable by re-scanning | Postgres | **source of truth** |
+| **MIRRORED_BOTH** — Category-B tracking state: local always-home + additive SDL mirror | Postgres (working copy) **and** the YAML file | source of truth for the working copy; **feeds** the file's serializer |
+| **SDL_TRAVELS** — bytes another computer will read | YAML under an SDL | **never** in the write path |
+
+### 2.1 The four documents that escape today
+
+Verified in code, not inferred. `LOCAL_ONLY` is `{".sync-repo", ".durable-artifact"}`
+(`tracking-sync.service.ts:50`); `MERGED_NEVER_COPIED` is the three names at `:61`;
+and `copyTreeGen` applies **both sets only at `rel === ""`** (`:196`), falling through
+to `fs.copyFileSync` for everything deeper.
+
+Therefore these four travel today as plain last-writer-wins copies. They are **live
+data-loss bugs**, found by this analysis and fixed in slice 3 *before* any Postgres
+write lands:
+
+| Document | What is lost | Fix |
+|---|---|---|
+| `decisions_policy.yaml` | shared user intent — whose default-decision mode wins | field-wise merge (newest `set_at`, ties by `set_by`) |
+| `decisions.conflicted.yaml` | this machine's failed-merge quarantine, overwritten by a peer's | add to `LOCAL_ONLY` |
+| `manifest.conflicted.yaml` | same | add to `LOCAL_ONLY` |
+| `files.yaml` | machine-local content in a mirrored path — two computers with different subsets overwrite each other every cycle | add to `LOCAL_ONLY`; content becomes `lfb.file` |
+
+That last one is the exact ping-pong the `repo_storage.yaml` `counts:` scrub was
+written to stop (`tracking-sync.service.ts:386-390`).
+
+### 2.2 The fence, as an enforceable rule
+
+> A byte that will be read by another of the user's computers must be produced by a
+> **designated serializer** writing a file under a Syncable Data Location, and
+> Postgres must appear nowhere in that write's causal chain except as the source of
+> the values the serializer is handed.
+
+**One serializer per travelling document, and it does not change.** Postgres feeds
+these functions their arguments; it never emits YAML itself, and this work creates
+no new YAML writer:
+
+| Document | Serializer | Module |
+|---|---|---|
+| `decisions.yaml` | `serializeLedger` | `modules/storage/ledger-merge.ts` |
+| `manifest.yaml` | `serializeManifest` | `modules/storage/manifest-merge.ts` |
+| `repo_storage.yaml` | `YAML.stringify {sortMapEntries:true}` | `modules/storage/repo-storage.service.ts` |
+| `files/<rel>.yaml` | `YAML.stringify {sortMapEntries:true}` | `modules/storage/file-sidecar.service.ts` |
+| `history/<device>.txt` | `appendHistory` | `modules/storage/history-log.service.ts` |
+| `decisions_policy.yaml` | `writeDecisionPolicy` | `modules/storage/decisions.service.ts` |
+| `analysis/**/compression.yaml` | `writeLedger` | `modules/compress/compress-ledger.ts` |
+| `<sdl>/devices/<self>.yaml` | `writeSelfDevice` | `modules/storage/devices.service.ts` |
+
+**The wire-format rules survive intact and may not be re-implemented in SQL:**
+
+* `projectRepoStorageToMirror` scrubs `last_scan` and `counts` on the way out
+  (`tracking-sync.service.ts:447`, `MACHINE_LOCAL_REPO_STORAGE` at `:432`).
+* `mergeManifests` strips our own `pinned_by` claim from arriving entries and passes
+  every peer's through unchanged (`manifest-merge.ts:123-128,157`). `pin_claim.origin`
+  plus the `lfb_pin_claim_guard` trigger mirror this **inside** Postgres so the two
+  cannot diverge.
+* `serializeLedger` compacts. Nothing else compacts.
+* The tie-break for two CIDs at the same `modified_at` is a total order on the value
+  with plain `<`, never `localeCompare` — two computers must not disagree because of
+  collation.
+
+### 2.3 How we detect a violation
+
+**The render equality gate.** For every `(unit, doc)` row in `lfb.doc_render`, render
+the document from Postgres through its designated serializer and compare `sha256`
+against the bytes on disk. **Zero diffs, or the cutover does not happen.** Scope: all
+29,745 documents in the two SDL trees plus the local copies.
+
+This is the right test because `tracking-sync.service.ts:225-234` records that 58 of
+the last 60 device commits were a lone `updated_at` line. A renderer that is one byte
+off turns every mirror pass into a commit, and two computers into a re-render loop.
+
+The gate runs in CI, blocks the cutover, and then runs nightly.
+
+---
+
+## 3. The naming law
+
+This resolves every place two subsystems invented different keys for the same thing.
+Implemented in `code/packages/backend/src/shared/persistence/migrations/0003_unit.sql`
+and the data-access layer `modules/store-model/unit.repo.ts`.
+
+**One unit identity.** `lfb.unit.unit_id bigint` is the only FK target. The five
+spellings the code already uses are **columns on that one row**, so no caller changes
+its vocabulary:
+
+| Column | Value | Source |
+|---|---|---|
+| `abs_path` | the natural key (UNIQUE); everything derives from it | — |
+| `repo_key` | `sha1(resolve(abs_path))[0:12]` | `tracking-root.service.ts:26` |
+| `repo_id` | `sha1(resolve(abs_path))[0:16]` | `units.service.ts:69` |
+| `storage_sid` | `repo_key` for a repo; `'personal'`; or the community id | `storage.service.ts:75` |
+| `pin_folder` | the `pin/r/<folder>` directory name | — |
+| `repo_uid` | `sha1(lower(host/owner/repo))[0:12]`, NULL when no remote | `repo-identity.ts` `repoUidFor` |
+
+`repo_key`, `repo_id` and `storage_sid` are the same sha1 at different lengths. They
+are **stored, not recomputed** — Postgres cannot reproduce the TypeScript hash and
+must never disagree with it.
+
+**One file identity.** `(unit_id, rel_posix)`.
+
+* `rel_path` is the **byte-exact** spelling last seen on disk, required to re-render
+  YAML.
+* `rel_posix` is a **STORED GENERATED** column, `replace(rel_path,'\','/')`, and it is
+  the primary-key component.
+
+Verified on 16.15: a PK over a stored generated column works, and it collapses
+`a\b.mp4` and `a/b.mp4` into one row — which makes the stray-path fork
+(`file-sidecar.service.ts` `sidecarPath`) **structurally impossible** instead of
+healed by hand. It reproduces `foldLedger`'s `healWindowsPath` key exactly
+(`decisions.service.ts:145-157`).
+
+**One CID identity.** `cid_canon` (canonical CIDv1 base32) is the join key; `cid_text`
+is the verbatim value as the fleet recorded it and is **never** locally rewritten.
+Postgres cannot compute `canonicalCid` (`ipfs.service.ts:757` is a base58→base32
+rewrap in TS), so the app supplies it and a CHECK forbids NULL.
+
+**One device identity.** `lfb.device.device_id smallint`. `pinned_by` labels and
+`history/<device>.txt` filenames are **different spellings of one computer**
+(`history-log.service.ts` sanitizes; `pinned_by` does not) — both are columns.
+
+---
+
+## 4. The schema
+
+35 tables in schema `lfb`, database `largefilebridge`, role `lfb`. The full DDL lives
+in the migration files, one file per migration, and is not duplicated here:
+
+`code/packages/backend/src/shared/persistence/migrations/`
+
+| # | Migration | Adds |
+|---|---|---|
+| 0001 | `schema_role_extensions` | schema, `pg_trgm`, `citext`, the `schema_migration` ledger |
+| 0002 | `dimensions` | 11 enums; `device`, `person`, `cid`, `sync_repo` |
+| 0003 | `unit` | `unit` (+ 5 identity spellings), `unit_setting`, `unit_scan`, `unit_orphan`, `unit_rollup` |
+| 0004 | `file_core` | `file` — the generated `rel_posix` PK, fillfactor 85, denormalized current state |
+| 0005 | `file_tabs_and_search` | the per-tab partial indexes, two trigram indexes, the tile indexes |
+| 0006 | `decisions` | `decision_event`, `file_decision`, `unit_decision_policy`, `decision_handle`, the fold trigger |
+| 0007 | `manifest_and_pins` | `manifest_entry` (+ `stage`), `pin_claim` (+ origin guard trigger), `local_pin`, `cid_alias` |
+| 0008 | `foreign_pins` | `foreign_pin`, `fingerprint_probe` |
+| 0009 | `events_artifacts_gitignore` | `file_event`, `file_artifact`, `file_gitignore`, `file_variant`, `file_fingerprint` |
+| 0010 | `history_compression_baseline` | `history_entry`, `compression_record`, `compression_sample` |
+| 0011 | `directory_rollup_indexes` | the four charter category-rollup partial indexes |
+| 0012 | `sync_fence` | `doc_render`, `sdl_ingest` — the fence's evidence table |
+| 0013 | `derived_projections` | `batch_manifest`, `batch_item`, `backfill_mirror` |
+| 0014 | `autovacuum_policy` | per-table autovacuum tuning for `file`, `manifest_entry`, `pin_claim` |
+| 0015 | `fs_dir_rollup` | `fs_dir` — **GATED**, see §7 |
+
+### 4.1 The decisions that are not obvious
+
+**`file_decision` is a maintained fold, not a view.** `decision_event` is the
+append-only truth; a trigger (`lfb.fold_decision`) maintains one current-state row per
+`(unit_id, rel_posix)`. This is what turns the 96 ms per-unit fold into a 0.23 ms
+lookup. `readLedger`/`foldLedger` keep working unchanged and become the **verification
+oracle** — CI asserts `file_decision` equals `foldLedger(readLedger(root))` for every
+unit, after every mirror-in.
+
+**`pin_claim.origin` encodes the merge asymmetry.** `manifest-merge.ts:123-128` strips
+our own claim from arriving entries and passes peers' through. An `origin` enum
+(`'local' | 'wire'`) plus the `lfb_pin_claim_guard` trigger makes that asymmetry a
+database invariant, so the SQL path and the YAML path cannot drift. This is the exact
+correctness area the foreign-pin work keeps reopening: **"pinned" means pinned on THIS
+computer by ANY local software; a peer's claim is never pinned-here.**
+
+**`manifest_entry.stage` preserves the two-manifest split.** `pin/r/<repo>/manifest.yaml`
+and `repos/<key>/manifest.yaml` are **not** twins to be collapsed — they are two stages
+of a pipeline, and the tracking copy is written only when `publish_manifest` is on
+(`pin.service.ts:793`). Collapsing them would start publishing manifests for repos the
+user opted out of.
+
+**`file_event` uses `UNIQUE NULLS NOT DISTINCT`.** 18 of 29,138 sidecars carry
+`by: null`; a default `NULLS DISTINCT` constraint would re-insert them forever.
+
+**`compression_sample` carries a UNIQUE idempotency key.** Without it a backfill re-run
+doubles every sample and moves the mean — which would silently corrupt the charter's
+learned baseline.
+
+---
+
+## 5. The indexes, and the query each one serves
+
+Index choices are justified by a named UI surface, not by intuition. Full
+`CREATE INDEX` statements live beside the tables in the migration files.
+
+| Surface | Query | Target |
+|---|---|---|
+| Repos list — `GET /api/repos`, 105 rows | rollup join, sort `bookmark DESC` | **3 ms** |
+| One-Repo files, tab All, page 1 of 500 | `file_tab_all` index-only scan | **2 ms** |
+| One-Repo tabs Compress / Transcribe / Describe / OCR | per-tab partial index | **3 ms** |
+| One-Repo tab IPFS — sort (peers ASC, size DESC) | `file_tab_ipfs` | **3 ms** |
+| Decision provenance for every visible row | `file_decision` PK probe | **1 ms** |
+| Cross-repo "Not backed up anywhere" / "Pull down" | tile partial indexes | **8 ms** |
+| Charter category rollup, unit level | `unit_rollup` | **1 ms** |
+| Charter category rollup, directory level | `text_pattern_ops` prefix on `dir_posix` | **6 ms** |
+| Table search box, case-insensitive contains | `file_path_trgm` / `file_name_trgm` | **3 ms** |
+| IPFS page pinset (3,824 local pins) | `local_pin` | **5 ms** |
+| Devices page — what each peer holds | `pin_claim` by device | **4 ms** |
+| Compression classifier — "does this look compressed?" | `compression_sample_cell` | **2 ms** |
+| SDL mirror change gate | `doc_render_dirty` | **20 ms** |
+
+Two index notes that cost real correctness:
+
+* **Directory-prefix range bounds use the `p||'0'` successor, never `p||chr(255)`.**
+  The latter provably drops emoji-named paths.
+* **`text_pattern_ops` is required** on the `dir_posix` prefix indexes for the
+  `LIKE 'prefix%'` directory scope to be index-usable under a non-C collation.
+
+### 5.1 Autovacuum is part of the schema
+
+Migration 0014 sets `autovacuum_vacuum_scale_factor=0.02` and
+`autovacuum_analyze_scale_factor=0.01` on `file`, `manifest_entry` and `pin_claim`.
+**Measured reason:** a single pin-pass-shaped UPDATE of one unit's rows took Heap
+Fetches on the covering index from 0 to non-zero — i.e. the index-only scans this
+design is built on stop being index-only under default vacuum settings.
+
+---
+
+## 6. What deliberately does NOT move
+
+These are not leftovers. Each is on disk because moving it would make the product
+worse, and each reason is a mechanism.
+
+1. **The three Syncable Data Locations, in full** — 125 MB / 10,049 files (personal),
+   137 MB / 19,696 files (act3), plus every working repo's `.lfbridge/`. The
+   disqualifying constraint, and it is absolute.
+
+2. **The local copy of every Category-B document.** Postgres becomes the authoritative
+   *working* copy, but the file keeps being written by its designated serializer,
+   because `mirrorToSyncRepo` copies **the file**, not a query result. Putting Postgres
+   in the mirror's read path would mean a database bug ships corrupted state to the
+   user's other computers over git — a class of failure that does not exist today.
+
+3. **`.sync-repo` and `.durable-artifact`** — 105 markers and 105 latches, read by
+   `tracking-root.service.ts`, a deliberate **leaf module** (fs + path + crypto only)
+   that exists to break an import cycle. Giving it a database client recreates exactly
+   the cycle it was written to avoid. `.sync-repo`'s first line is also an absolute
+   path on **this** computer.
+
+4. **All 35 MB of logs.** Three sufficient reasons: `error.err` is written
+   **synchronously so it survives a crash-exit** (a fault trail that needs a working
+   database is unavailable precisely when the database is what broke); `launcher.log`
+   is the **only** place a V8 out-of-memory abort appears, because `abort(3)` runs no
+   JavaScript; and we do not own the file descriptors for `launcher.log` or the
+   ipfs/launchd logs. A queryable *index* over `transactions.log` is a good idea and is
+   an open question (§8) — the files stay regardless.
+
+5. **`config.yaml` and the small app-level YAML.** 3,539 bytes behind two caches; a
+   cache-hit read is a single `statSync` at ~0.7 µs against a ~0.25 ms loopback round
+   trip — **340× worse** in Postgres, and `effectiveFlags()` is called *per file*. More
+   importantly `config.yaml` carries the `access:` block, which `security.service.ts:86-97`
+   reads live and **fails closed** on every auth decision. Behind Postgres, an
+   unreachable database is not "settings unavailable" — it is every user locked out of
+   sign-in, on a product whose charter is *"runs locally first."*
+
+6. **`.auth_session_secret` and the session store.** The 64-byte secret is the
+   bootstrap root of trust and must be readable **before** any authenticated surface
+   exists. A session store you cannot reach means signed out — and the sister app's
+   2026-08-15 incident (19 admin logouts when batch work consumed every pooled
+   connection) is exactly this failure.
+
+7. **The job queue.** `queue/queue.jsonl` stays. Its stated payoff for moving — letting
+   the launchd worker claim work directly — **is unreachable**: the three launchd
+   workers are `scan`, `pin` and `device` (`internal.router.ts:27-41`), none of which
+   executes a job-queue task, and `single-instance.ts` forbids a second backend.
+   Worse, the naive `FOR UPDATE SKIP LOCKED` claim with a snapshot `COUNT` cap
+   **provably oversubscribes**: run against this server with `cap=4` in two concurrent
+   transactions, it yielded **8 rows running**. Moving it would trade a working
+   fsync'd commit-point design for a broken concurrency one.
+
+8. **`worker-misses.json`** — written by `code/deploy/launchd/run-worker.mjs`, a
+   different, dependency-free process, in exactly the case where the backend is
+   **down**. A Postgres write there is impossible and pointless.
+
+9. **`mirror-memo.json` — the `src` half.** The `dst` half becomes `lfb.doc_render`.
+   The `src` half must stay: `pairSettled` means "this job ran to completion and
+   *neither* file has moved" (`tracking-sync.service.ts:666-670`), and the SDL side's
+   `ino/size/mtimeNs` is the identity of a file Postgres must never own.
+
+10. **`merge-quarantine/`** — its entire value is being the **exact bytes** that were
+    about to be lost. Re-encoding a byte-preserving forensic copy into rows destroys
+    the only property it has.
+
+11. **The 3.25-million-file filesystem index — not built.** Measured under `$HOME`:
+    **726,503 directories vs 3,254,966 files**, of which only 6,647 are ≥100 MB. A full
+    file index is ~629 MB for data the product has no opinion about.
+
+12. **`_do_batches/` and `_batches/` as sources.** `_do_batches` is explicitly
+    disposable and recalculate-and-replace. `_batches` is O(1)-append by deliberate
+    design (chosen to avoid O(n²) on the exact 1,440-file batch it was built for), and
+    its meaning lives in the **absence** of a terminal record. Postgres indexes
+    `_batches` read-only; it never writes it.
+
+---
+
+## 7. Runtime
+
+Implemented in `code/packages/backend/src/shared/persistence/pool.ts`.
+
+* **Database** `largefilebridge`, role `lfb`, schema `lfb`.
+  `LOCAL_DEV_DATABASE_URL = postgresql://lfb:lfb@localhost:5432/largefilebridge`.
+* **`DB_MODE`** — `auto` (default: use Postgres if reachable, else YAML with a loud
+  WARN), `required` (server mode: an unusable database is a hard boot failure), `off`.
+* **Pool** max 8, with a **3-connection interactive reserve** for session and config
+  reads — the direct lesson of the sister app's 2026-08-15 logout incident.
+* `options='-c search_path=lfb,public -c statement_timeout=15000'`,
+  `application_name='lfb-web'`.
+* **Secrets follow the house rule**: `DATABASE_URL_FILE` for a real deployment; the
+  plain env var only for a throwaway local database. Nothing logs a URL that has not
+  been through `safeUrl`.
+
+### 7.1 The loopback posture is a compliance rule
+
+The charter forbids this machine becoming a public gateway or relay. Postgres gets the
+equivalent posture, and it is **asserted at boot**, mirroring the existing
+`ipfs.public_gateway=false` check:
+
+> In `server.mode='local'`, `SELECT current_setting('listen_addresses')` and WARN
+> loudly if it is anything but `localhost` / `127.0.0.1` / `::1`.
+
+Verified on this machine today: `listen_addresses=localhost`, `ssl=off`, bound only to
+`127.0.0.1:5432` and `[::1]:5432`. **Compliant.**
+
+`isLoopbackDatabaseUrl` is **parsed, not pattern-matched, and fails closed** — the
+sister app's regex searched the whole string and returned a false positive on a remote
+URL whose *password* contained `@localhost`.
+
+### 7.2 First run types nothing
+
+`just db-up` provisions role, database and extensions. `DB_MODE=auto` means a user who
+has never heard of Postgres gets the YAML path and a WARN, not an error. Recipes:
+`db-up`, `db-down`, `db-reset`, `db-psql`, `db-status`, `db-migrate`.
+
+`just db-status` reports three distinct states: nothing on `:5432` / listening but
+unprovisioned / provisioned with N migrations applied.
+
+> **Housekeeping:** a leftover `lfb_bench` database exists on this machine from the
+> benchmark run behind this spec, and should be dropped.
+
+---
+
+## 8. Open questions
+
+These are decisions, not gaps. Each is written down because getting it wrong quietly
+is worse than deciding it late.
+
+1. **The filesystem rollup (`fs_dir`, migration 0015) is unjustified until re-measured.**
+   Two of the three numbers used to argue for it do not survive the code as written:
+   `GET /api/repos` measures **0 ms** of synchronous handler time in the loop-watch
+   breakdown, and the Full Paths walk truncates on `FLAT_ITER_BUDGET` alone.
+   **Decide by measuring** `listDirectory('~')` cold and warm *after* the slice-12
+   watcher fix. If warm is already 3-6 ms, **delete `lfb.fs_dir` from the schema**
+   rather than ship a 726,503-row table for a page that is not slow.
+
+2. **Sub-3-character search has no index.** `pg_trgm` cannot serve a term shorter than
+   3 characters (verified: 2-char ILIKE fell back to a bitmap scan + filter at 5.6 ms
+   against 0.41 ms at 5 chars). Proposed: the API refuses a <3-char term and the client
+   filters the fetched page. That is right for a page and **wrong for a repo with 2,743
+   candidates where the match is on page 6.** Decide: accept it, add a prefix btree on
+   `base_name`, or require 3 characters in the UI.
+
+3. **Nobody has scheduled the git-ignore axis.** The source is `git check-ignore`, which
+   `units.service.ts:519-520` measures at **2.3 s for 1,875 paths** — git's own
+   evaluation, not process startup. That cost **survives the migration in full**. Options:
+   fill on the scan pass (+2.3 s per repo per scan), fill lazily per page with a stale-row
+   refresh (renders UNDETERMINED until git answers — the current behaviour, and honest),
+   or a low-priority background sweep. **This is the largest unaddressed cost on the
+   One-Repo page and it is not a Postgres problem.**
+
+4. **`decisions_policy.yaml` — merge or hold out?** It is *shared user intent*. Adding it
+   to `MERGED_NEVER_COPIED` stops the loss but means two computers' policies never
+   reconcile. A field-wise merge needs a conflict rule — probably newest `set_at` wins,
+   ties by `set_by` lexical, matching `foldLedger` — but **that is a product decision
+   about whose policy wins**, not a technical one.
+
+5. **`pin_claim`'s inline CHECK is a placeholder.** Enforcement lives in the
+   `lfb_pin_claim_guard` trigger because a CHECK cannot read another table. Decide: drop
+   the inline CHECK (cleaner; intent stops being visible in `\d`) or denormalize
+   `device.is_self` onto `pin_claim` as a generated column so a real CHECK can enforce it.
+
+6. **A derived index over `transactions.log` and `error.err`.** Both stay on disk
+   unconditionally. But `transactions.log` is 8,823 lines of BEGIN/END pairs (4,090 each)
+   and the questions it exists to answer are aggregates grep cannot express: which BEGINs
+   never got an END, p95 ms by op, heap trend across the heartbeats preceding a gap.
+   Cheap and high-value. The blocker: the tailer must key on **inode, not path**, because
+   `rollChain` renames the file underneath it, and a fast 5 MiB burst inside one poll
+   interval can still lose lines — **which must be recorded as a gap, not papered over**.
+
+7. **The compression baseline starts below its own confidence floor.** Seeding from the 74
+   existing records yields ~110 samples, under the n≥12-per-cell threshold in most
+   (media, pixel_bucket, duration_bucket) cells. The classifier will correctly answer
+   "unknown" and the extension heuristic stays in charge for months. Decide whether that
+   is acceptable, or bootstrap by ffprobing a sample of the 30,762 known candidates and
+   labelling by in-file codec markers (more samples, weaker labels).
+
+8. **Resolved: the CLI does not bypass Postgres.** `cli/code/src/client.ts:12` shows the
+   CLI is a **loopback API client** (`http://127.0.0.1:<port>/api`); its only direct file
+   write is `credentials.ts:57`. There is no second writer to reconcile.
+
+---
+
+## 9. Implementation order
+
+Twelve slices, each independently shippable. Slice 3 **must** land before any Postgres
+write, because it is the fence.
+
+| # | Slice | Independent value |
+|---|---|---|
+| 1 | Runtime: pool, mode, provisioning, just recipes | zero readers, zero writers, zero behaviour change |
+| 2 | Migration engine + `migration_state.yaml` | adopts the 5 sentinels + 105 latches, keeps the files |
+| 3 | **Close the four sync-boundary escapes** | fixes 4 live data-loss bugs; no Postgres at all |
+| 4 | Units, devices, people | kills `folderForRepoId`'s 105-config scan |
+| 5 | The file plane — census, tabs, search | One-Repo page 1 becomes an index-only scan |
+| 6 | Decisions — the maintained fold | **96 ms → 0.23 ms** per unit; 135 ms → 0.37 ms fleet-wide |
+| 7 | Manifests and pin claims | the merge asymmetry becomes a database invariant |
+| 8 | Foreign pins | retires 8.47 MB resident JSON + the 40,000-entry eviction cap |
+| 9 | Sidecars, artifacts, git-ignore | deletes 29,138 inodes of read amplification |
+| 10 | The sync fence + the render gate | attacks `storage.mirror`, the genuinely blocking section |
+| 11 | Rollups, history, compression baseline | first time the charter's learned baseline exists at all |
+| 12 | Derived projections + the **gated** filesystem rollup | must not be taken on faith — see §8.1 |
+
+Cutover discipline, applied to every data slice:
+
+* **Dual-write first.** Every existing YAML writer is untouched; a Postgres upsert is
+  added behind it.
+* **Reads cut over one surface at a time**, behind the tab or endpoint id, so a
+  regression is scoped to one tab.
+* **The old function becomes the oracle.** `foldLedger`, `readLedger` and friends keep
+  working and are asserted equal to the SQL result in CI.
+* **No slice claims more than it does.** Slice 10 expects roughly *half* of
+  `storage.mirror` to survive, because `reconcileGen` still parses arriving SDL YAML by
+  the fence.

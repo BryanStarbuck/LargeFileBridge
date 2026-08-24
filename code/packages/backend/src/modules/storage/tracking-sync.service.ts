@@ -12,7 +12,13 @@ import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import YAML from "yaml";
-import { RepoStorageDocSchema, type Manifest, type ManifestFile } from "@lfb/shared";
+import {
+  RepoStorageDocSchema,
+  DecisionPolicyDocSchema,
+  type DecisionPolicyDoc,
+  type Manifest,
+  type ManifestFile,
+} from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
 import { repoUidFor, repoSlugFor } from "./repo-identity.js";
 import { namedKeyDir, isDirForKey } from "../../shared/store/keyed-dir.js";
@@ -47,7 +53,29 @@ import { log } from "../../shared/logging.js";
 import { blocking, recordCooperative } from "../../shared/blocking.js";
 
 // Machine-local files under `repos/<repoKey>/` that must NOT travel to the sync repo.
-const LOCAL_ONLY = new Set([".sync-repo", ".durable-artifact"]);
+//
+// THE FOUR ADDITIONS BELOW WERE LIVE DATA-LOSS BUGS (database.mdx §2.1). This set and
+// `MERGED_NEVER_COPIED` are applied by `copyTreeGen` ONLY at `rel === ""` (:196); everything else falls
+// through to `fs.copyFileSync` in BOTH directions. All four of these documents sit at the tracking ROOT
+// (`repoStateDir(root)` / `resolveTrackingRoot`), so they were in scope of the gate and simply were not
+// named in it — which made them plain last-writer-wins copies between computers:
+//
+//   * `files.yaml` is MACHINE-LOCAL CONTENT sitting in a mirrored path. It is derived from THIS computer's
+//     disk, so two computers holding different subsets overwrite each other on every cycle — the exact
+//     ping-pong the `repo_storage.yaml` `counts:` scrub was written to stop (see :386-390 below).
+//   * `decisions.conflicted.yaml` / `manifest.conflicted.yaml` are a quarantine of THIS machine's FAILED
+//     merge (decisions.service.ts:78, manifest.service.ts:42). Their whole value is being the local
+//     evidence of a local failure; a peer's copy overwriting ours destroys the only thing they are for.
+//
+// `decisions_policy.yaml` is deliberately NOT here — it is SHARED user intent and needs a merge, not a
+// hold-out. It is in `MERGED_NEVER_COPIED` and folded by `mergePolicyInto`.
+const LOCAL_ONLY = new Set([
+  ".sync-repo",
+  ".durable-artifact",
+  "files.yaml",
+  "decisions.conflicted.yaml",
+  "manifest.conflicted.yaml",
+]);
 
 /**
  * The SHARED documents that are MERGED in both directions and therefore never plain-copied in either.
@@ -61,6 +89,13 @@ const LOCAL_ONLY = new Set([".sync-repo", ".durable-artifact"]);
 const MERGED_NEVER_COPIED: ReadonlySet<string> = new Set([
   "manifest.yaml",
   "decisions.yaml",
+  // SHARED user intent (decisions.mdx §9/§14): the per-repo default-decision mode plus attribution. It
+  // used to fall through to `fs.copyFileSync` in both directions, so the last computer to mirror silently
+  // imposed its policy on the fleet — and, worse, an OLDER policy arriving on the reconcile leg could
+  // overwrite a NEWER local one, because a copy has no idea which is which. It is folded by
+  // `mergePolicyInto` instead: newest `set_at` wins, ties by `set_by` lexical, which is a TOTAL ORDER, so
+  // every computer converges on the same document without anyone having to mirror last (database.mdx §2.1).
+  "decisions_policy.yaml",
   // `repo_storage.yaml` belongs here too, and did not use to. The mirror leg COPIED it and then rewrote it
   // in place to reset the machine-local fields — so the mirror's copy, which by construction can never
   // equal the local one (that is the entire point of the scrub), was stamped over and rewritten on EVERY
@@ -74,6 +109,12 @@ const MERGED_NEVER_COPIED: ReadonlySet<string> = new Set([
 /** The same set on the way IN — the reconcile leg merges `repo_storage.yaml` FIELD-WISE, because it must
  *  preserve THIS computer's own machine-local fields against the scrubbed copy arriving from the mirror. */
 const RECONCILE_MERGED_NEVER_COPIED: ReadonlySet<string> = MERGED_NEVER_COPIED;
+
+// Read-only views for sync-fence.spec.ts. Exported so a test can assert the gate's CONTENTS — removing a
+// name from either set is a silent cross-computer data-loss regression, and the only way to catch it is to
+// name the members (database.mdx §2.1).
+export const LOCAL_ONLY_FOR_TEST: ReadonlySet<string> = LOCAL_ONLY;
+export const MERGED_NEVER_COPIED_FOR_TEST: ReadonlySet<string> = MERGED_NEVER_COPIED;
 
 /** Turn the per-repo sync-repo mirror ON (write the marker) or OFF (remove it). The marker is THREE lines —
  *  the owning storage's sync-repo absolute path, then this repo's `repoUid` (its machine-independent
@@ -373,6 +414,18 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
     }
+    try {
+      // The SHARED policy travels by FOLD, not copy (see `mergePolicyInto`). Same direction as the ledger:
+      // local is the source, the mirror is the destination — but the rule is symmetric, so the reconcile
+      // leg applying it in reverse converges on the same document rather than fighting this one.
+      mergePolicyInto(
+        path.join(dst, "decisions_policy.yaml"),
+        path.join(localStateDir, "decisions_policy.yaml"),
+        JOB_MIRROR_POLICY,
+      );
+    } catch (e) {
+      log.warn("storage", `mirrorToSyncRepo(${repoRoot}): policy merge write failed: ${(e as Error).message}`);
+    }
     // Announce the write so the owning SDL's git backbone commits + pushes it (storage_company.mdx §8.7).
     // Without this the mirrored text sits in the SDL's working tree until the 10-minute device worker
     // happens by — a decision the user just made would take minutes to reach their other computer, and
@@ -590,6 +643,8 @@ const sameFileId = (a: FileId | null, b: FileId | null): boolean =>
 
 /** Job names — one per (kind of merge, direction), so two directions can never share a memo entry. */
 const JOB_LEDGER = "ledger-union";
+const JOB_POLICY = "policy-merge";
+const JOB_MIRROR_POLICY = "mirror-policy";
 const JOB_MIRROR_LEDGER = "mirror-ledger";
 const JOB_MIRROR_MANIFEST = "mirror-manifest";
 const JOB_RECONCILE_MANIFEST = "reconcile-manifest";
@@ -711,6 +766,75 @@ function syncLedgerInto(dstFile: string, srcFile: string, job: string = JOB_LEDG
 }
 
 /**
+ * Fold the SHARED default-decision policy (decisions.mdx §9/§14) into `dstFile`, at most once per
+ * (unchanged dst, unchanged src) pair — the same memo discipline as the ledger above.
+ *
+ * WHY A FOLD AND NOT A COPY. This document travelled as a plain `fs.copyFileSync` in BOTH directions until
+ * database.mdx §2.1 caught it: `LOCAL_ONLY` / `MERGED_NEVER_COPIED` are applied by `copyTreeGen` only at
+ * `rel === ""`, and this name was in neither set. A copy cannot tell an older policy from a newer one, so
+ * the reconcile leg could — and on a fleet where one machine mirrors more often, reliably would — drop a
+ * deliberate policy change on the floor. Losing SHARED USER INTENT silently is the worst failure class this
+ * module has, and it is exactly what the ledger union and the manifest merge exist to prevent.
+ *
+ * THE CONFLICT RULE IS A TOTAL ORDER, which is the only property that makes it safe:
+ *   1. a document with `set_at` beats one without (an unset policy is the schema default — never a choice);
+ *   2. newer `set_at` wins;
+ *   3. ties break on `set_by` lexically, with a set `set_by` beating a null one.
+ * Every computer applies the same rule to the same two inputs and lands on the same document, so nobody has
+ * to mirror last to win, and the pass converges instead of ping-ponging. This mirrors `foldLedger`'s
+ * tie-break discipline (decisions.service.ts:145-176) and, like it, uses plain `<`/`>` on the VALUE and
+ * never `localeCompare` — two computers must not disagree because of collation (database.mdx §2.2 R3).
+ *
+ * Whole-document, not field-wise, on purpose: `media` and `other` are a coherent pair with `attribution`,
+ * and interleaving fields from two machines can synthesize a policy neither person ever chose.
+ */
+function policyRank(doc: DecisionPolicyDoc | null): [number, string, string] | null {
+  if (!doc) return null;
+  // `set_at` absent ⇒ this is the schema default, not a decision. Rank 0 so any real choice outranks it.
+  return [doc.set_at ? 1 : 0, doc.set_at ?? "", doc.set_by ?? ""];
+}
+
+function parsePolicyBestEffort(raw: string | null): DecisionPolicyDoc | null {
+  if (raw === null) return null;
+  try {
+    const parsed = DecisionPolicyDocSchema.safeParse(YAML.parse(raw) ?? {});
+    return parsed.success ? parsed.data : null;
+  } catch {
+    return null; // unparseable: treated as ABSENT, so the other side's real policy survives
+  }
+}
+
+/**
+ * The pure conflict rule, exported so it can be tested without a filesystem. `mine` wins every tie, so a
+ * caller that passes (local, incoming) never rewrites a document that is not strictly beaten — which is what
+ * keeps a settled fleet from re-writing (and therefore re-committing) the same policy forever.
+ */
+export function pickPolicy(mine: DecisionPolicyDoc | null, theirs: DecisionPolicyDoc | null): DecisionPolicyDoc | null {
+  const a = policyRank(mine);
+  const b = policyRank(theirs);
+  if (!a) return theirs;
+  if (!b) return mine;
+  for (let i = 0; i < 3; i++) {
+    if (a[i] === b[i]) continue;
+    return a[i] > b[i] ? mine : theirs;
+  }
+  return mine; // fully equal — keep what is already there so the write is skipped
+}
+
+function mergePolicyInto(dstFile: string, srcFile: string, job: string = JOB_POLICY): boolean {
+  if (pairSettled(job, dstFile, srcFile)) return false;
+  const winner = pickPolicy(
+    parsePolicyBestEffort(readFileOrNull(dstFile)),
+    parsePolicyBestEffort(readFileOrNull(srcFile)),
+  );
+  let changed = false;
+  if (winner) changed = writeIfDifferent(dstFile, YAML.stringify(winner, { sortMapEntries: true }));
+  // AFTER the write, for the same reason the ledger memo is stamped late.
+  markPairSettled(job, dstFile, srcFile);
+  return changed;
+}
+
+/**
  * Merge the local and mirror manifests and write the result to `dstFile`, at most once per (unchanged dst,
  * unchanged other side) pair. `mergeManifests` is ASYMMETRIC — `mine` keeps this computer's own `pinned_by`
  * claims while `incoming` is read as the WIRE — so BOTH legs pass (local, mirror) in that order no matter
@@ -804,6 +928,13 @@ function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
     const incomingLedger = path.join(src, "decisions.yaml");
     if (fs.existsSync(incomingLedger)) {
       changed = syncLedgerInto(path.join(dst, "decisions.yaml"), incomingLedger) || changed;
+    }
+    // 2a. the SHARED default-decision policy — a FOLD, for the same reason as the ledger. This is the leg
+    // that used to lose intent: a copy on the way IN replaced a policy this computer had just set with
+    // whatever the mirror happened to hold, with no comparison of which was newer (database.mdx §2.1).
+    const incomingPolicy = path.join(src, "decisions_policy.yaml");
+    if (fs.existsSync(incomingPolicy)) {
+      changed = mergePolicyInto(path.join(dst, "decisions_policy.yaml"), incomingPolicy) || changed;
     }
     // 2b. repo_storage.yaml — a MERGE that PRESERVES this computer's own {@link MACHINE_LOCAL_REPO_STORAGE}
     // fields. The mirror's copy is scrubbed of them on purpose (see mirrorToSyncRepo); a wholesale copy
@@ -928,10 +1059,14 @@ function mergeSubtree(src: string, dst: string): void {
   if (fs.existsSync(incomingLedger)) {
     syncLedgerInto(path.join(dst, "decisions.yaml"), incomingLedger);
   }
+  const incomingPolicy = path.join(src, "decisions_policy.yaml");
+  if (fs.existsSync(incomingPolicy)) {
+    mergePolicyInto(path.join(dst, "decisions_policy.yaml"), incomingPolicy);
+  }
   // `repo_storage.yaml` needs no special case here: both copies are scrubbed mirrors, so whichever the
   // canonical already has stands, and copyTreeExcept below leaves it alone.
   // Everything else — sidecars and history logs — merges per entry inside copyTrackedFile.
-  copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"]));
+  copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml", "decisions_policy.yaml"]));
 }
 
 export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {

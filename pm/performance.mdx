@@ -1778,3 +1778,100 @@ refuting it is the first thing to do if boot latency ever matters more than it d
 * `GET /api/ipfs/node` takes ~2.2 s. It is on the Tools and IPFS-off pages only, and the time is a child
   process, not the loop — but it is still two seconds of spinner on those two screens.
 * The follow-ups listed at the end of the seventh pass all still stand.
+
+---
+
+## Ninth pass (P-50) — the storage engine · T3/T7
+
+The eighth pass closed with an admission: **"The atom is a multi-megabyte `YAML.parse`.
+When a big ledger genuinely changes, the union is one ~500 ms parse that no yield point
+can split."** Every fix before this one made that atom cheaper to avoid. None of them
+made it smaller, because none of them could: the atom is the *document*, and the
+document is the storage format.
+
+This pass changes the storage format. Full design:
+**[database.mdx](./database.mdx)** and **[database_migration.mdx](./database_migration.mdx)**.
+
+### 🔴 P-50 — We hold a whole document to read or change one record · T3
+
+This is a **fifth root-cause theme**, and it underlies P-35, P-37, P-40, P-45, P-47 and
+P-48 — all of which were treated as separate problems and fixed separately:
+
+> **T7 — The unit of storage is the document, not the record.** Every read of one field
+> parses every field. Every write of one field re-serializes and re-fsyncs every field.
+> Caching the parse changes the constant; nothing changes the shape except changing the
+> unit.
+
+**Evidence (measured 2026-08-24 against the live state root):**
+
+| Store | On disk | Records | Access shape |
+|---|---|---|---|
+| sidecars `files/**/*.yaml` | 23.1 MB in **~119 MB** of 4 KiB blocks (76% slack) | 29,138 | read-modify-write whole file |
+| `pin/r/<repo>/status.yaml` | 5.17 MB | **30,762** candidates | read-modify-write whole file |
+| `decisions.yaml` | 4.97 MB | 18,234 events | full-scan fold, **no cache** |
+| `foreign-pin-cache.json` + `foreign-pins.json` | 8.47 MB | 38,870 | whole-file rewrite |
+| `manifest.yaml` | 1.68 MB | 4,184 | read-modify-write whole file |
+
+* **85% of sidecars (24,811 of 29,138) carry exactly one event**, and `hash` and
+  `fingerprint` are `null` on **29,138 of 29,138** — so today a sidecar is a 4 KiB inode
+  holding a path, a size, two timestamps and one `observed` line.
+* `charlie-kirk`'s 11,423 decision events fold to **2,189 distinct paths** — 5.2× write
+  amplification on a log re-parsed and re-folded in memory on *every* read, once per repo
+  while composing the Repos list (`units.service.ts:970`) and again per decision request
+  (`repos.router.ts:831`).
+* Live in `error.err` today: `storage.reconcile.yielding (yielded) 9139ms/105 calls,
+  worst 2143ms` and `storage.mirror 3639ms/101 calls, worst 1567ms`.
+
+**Fix:** Postgres becomes the storage engine for machine-local state. A decision is a
+row; a pin claim is a row; a candidate is a row. The fold that cost 96 ms per unit
+becomes a trigger-maintained table and a 0.23 ms lookup.
+
+**What this pass does NOT claim.** Roughly **half** of `storage.mirror` survives, because
+`reconcileGen` still parses arriving SDL YAML and merges the sidecar tree per entry —
+and that stays YAML by the sync fence (database.mdx §2.2). A pass that claimed the whole
+number would be claiming we had moved the travelling half, which we must never do.
+
+### Targets
+
+| Surface | Target |
+|---|---|
+| Repos list — `GET /api/repos`, 105 rows | 3 ms |
+| One-Repo files, tab All, page 1 of 500 | 2 ms |
+| Decision provenance for every visible row | 1 ms |
+| Cross-repo "Not backed up anywhere" / "Pull down" | 8 ms |
+| Charter category rollup, unit level | 1 ms |
+| SDL mirror change gate | 20 ms |
+
+Full table with the query and expected plan for each: database.mdx §5.
+
+### The three things this pass found that were not performance problems at all
+
+Worth recording, because the analysis that produced P-50 was adversarially reviewed and
+the review overturned four of its nine area recommendations:
+
+1. **Four documents travel today as last-writer-wins copies** —
+   `decisions_policy.yaml`, both `*.conflicted.yaml`, and `files.yaml`. `LOCAL_ONLY` and
+   `MERGED_NEVER_COPIED` are applied by `copyTreeGen` **only at `rel === ''`**
+   (`tracking-sync.service.ts:196`); everything deeper falls through to
+   `fs.copyFileSync`. These are live data-loss bugs, fixed first and independently of
+   any database work.
+2. **A proposed `FOR UPDATE SKIP LOCKED` job queue provably oversubscribes.** Run against
+   this server with `cap=4` in two concurrent transactions, it yielded **8 rows running**
+   — a snapshot `COUNT` cap cannot see another transaction's uncommitted claim under
+   READ COMMITTED. The job queue therefore **stays on disk** (database.mdx §6.7).
+3. **`GET /api/repos` measures 0 ms of synchronous handler time**, and the warm
+   `listDirectory` path is already 3-6 ms. The 726,503-row filesystem rollup is
+   consequently **gated behind a re-measurement** and will be deleted from the schema
+   rather than shipped if the watcher fix alone hits target (database.mdx §8.1).
+
+### What is still open after this pass
+
+* The `git check-ignore` axis costs **2.3 s per 1,875 paths** and **survives the
+  migration in full** — it is git's own evaluation, not process startup. This is now the
+  largest unaddressed cost on the One-Repo page, and it is not a database problem.
+* Sub-3-character table search has no index (`pg_trgm` cannot serve it; verified 5.6 ms
+  vs 0.41 ms at 5 chars).
+* `GET /api/ipfs` still returns 1.69 MB; `GET /api/ipfs/node` still takes ~2.2 s. Both
+  predate this pass and are untouched by it.
+* The reconcile still runs 2–4× per repo per pass. Coalescing per (repo, pass) remains
+  the obvious next win.

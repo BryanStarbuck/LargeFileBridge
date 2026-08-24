@@ -1,0 +1,341 @@
+---
+title: Database migration — the engine, the ledger, and the YAML→Postgres backfill
+status: in-progress
+owner: engineering
+scope: code/packages/backend/src/shared/persistence, code/packages/backend/src/config
+---
+
+# Database migration
+
+Two layers, deliberately kept apart:
+
+1. **Schema migrations** — forward-only numbered SQL applied to Postgres, with a
+   checksummed ledger *in* Postgres and an advisory lock.
+2. **Data migrations** — the resumable, idempotent YAML→Postgres backfill, whose
+   authority is a **local YAML file**, not a database table.
+
+Read [database.mdx](./database.mdx) first for the schema and the boundary this work
+must not cross.
+
+---
+
+## 1. Why the data ledger is a YAML file and not a table
+
+`main.ts:341-380` runs seven boot migrations, and **four of them are pure on-disk
+repairs** (`migrate-sync-to-pin`, `migrate-sync-repo-default`,
+`repairEmptySyncRepoBlocks`, `migrate-posix-paths`) that must latch correctly on a
+machine where Postgres was never installed. They all run *before* `bootstrapState()`
+at `:382`.
+
+> A ledger that lives in the database those migrations do not use cannot be their
+> authority.
+
+So the authority is:
+
+**`~/T/_large_files_bridge/migration_state.yaml`** — machine-local, beside
+`config.yaml`, and **never** placed in, mirrored to, or committed from an SDL. A
+peer's migration progress is meaningless here and would fight on every pull.
+
+`lfb.backfill_mirror` is a **write-only copy** for SQL joins and `/api/health`. It is
+never read to decide whether anything ran.
+
+### 1.1 The existing sentinels are adopted and KEPT
+
+The five state-root sentinels (`.posix-paths-repaired`, `.repo-dir-names-migrated`,
+`.sync-repo-default-migrated`, `.sync-repo-empty-block-repaired`,
+`.sync-to-pin-migrated`) and the 105 `pin/r/<repo>/.decisions_migrated` files are
+**adopted into the ledger and left in place**, re-stamped on each `done` transition.
+
+They cost 110 inodes and ~2.7 KB. Deleting them would make `migration_state.yaml` the
+only thing standing between a user's mirror opt-out and **105 repos silently
+re-enabling** — `migrate-sync-repo-default.ts:11-15` makes the once-only run its entire
+safety argument, and its gate is a bare `fs.existsSync`. A rollback to any build
+predating the ledger would re-run all of them.
+
+`.sync-repo-default-migrated` is **permanently exempt from deletion**.
+
+---
+
+## 2. `migration_state.yaml`
+
+### 2.1 The field the whole exercise is for
+
+A 24-byte timestamp sentinel cannot say **which version of the logic ran**. So bumping
+a migration's logic has no way to re-arm it.
+
+```yaml
+version: <int>              # version of the LOGIC in code
+applied_version: <int|null> # the version whose run produced finished_at
+                            # applied_version < version  =>  RE-RUN
+```
+
+### 2.2 Epoch gating
+
+```yaml
+engine:
+  pg_epoch: "<system_identifier>:<datoid>"
+```
+
+From `SELECT system_identifier FROM pg_control_system()` plus the database OID. A
+`backfill` entry whose `pg_epoch` differs from the live cluster's is treated as **NOT
+APPLIED**, whatever its status says.
+
+This check lives **inside `loadMigrationState()`**, never at a call site, so a
+dropped-and-recreated database cannot look full.
+
+### 2.3 The three kinds
+
+| `kind` | Meaning | Latches? |
+|---|---|---|
+| `local` | on-disk repair, no Postgres involved | yes |
+| `backfill` | YAML → Postgres, epoch-gated | yes |
+| `sweep` | never latches; records the last clean pass | **no** |
+
+`sweep` exists because `repairEmptySyncRepoBlocks` and `migrateSdlLfbridge` **wanted a
+latch and could not express one**, so they abandoned latching entirely and pay full
+cost on every boot. A peer can push the legacy layout back at any time, so "done" is
+never true — but "last swept, and last time it actually found something" is:
+
+```yaml
+last_swept_at: <ISO|null>
+last_found_at: <ISO|null>   # the last pass that CHANGED something
+```
+
+### 2.4 Per-scope outcomes
+
+```yaml
+scopes:
+  <scope>:
+    status: done | skipped | failed
+    finished_at: <ISO|null>
+    rows_migrated: <int|null>
+    reason: <string|null>
+```
+
+This replaces the 105 `.decisions_migrated` files with one map, and makes **partial
+completion representable** — which fixes three latent bugs at once:
+
+* `posix-paths` latches over unmounted repos.
+* `repo-dir-names` discards `tally.unknown`.
+* `decisions-to-ledger` conflates *"consent off"* with *"never ran"*.
+
+### 2.5 Full schema
+
+```yaml
+schema_version: 1
+updated_at: <ISO-8601 UTC>          # re-stamped on every write
+
+engine:
+  pg_epoch: "<system_identifier>:<datoid>"
+  schema_ledger_head: <int>          # max(lfb.schema_migration.id) at last boot
+  lease_owner: "<pid>@<host>"        # data-migration cross-process mutex
+  lease_expires_at: <ISO>
+
+migrations:
+  <name>:                            # THE KEY IS THE NAME — stable forever, never
+                                     # renumbered, exactly as the schema ledger keys
+                                     # on name and not on id
+    kind: local | backfill | sweep
+    status: pending | running | done | failed | skipped | superseded
+    version: <int>
+    applied_version: <int|null>
+    started_at: <ISO|null>
+    finished_at: <ISO|null>
+    last_swept_at: <ISO|null>        # kind:sweep only
+    last_found_at: <ISO|null>        # kind:sweep only
+    rows_migrated: <int>
+    rows_expected: <int|null>
+    source_fingerprint: "sha256:<hex>"  # over sorted (relpath,size,mtime_ms,ino) of
+                                        # every source file — re-arms a backfill when
+                                        # its SOURCE moves, with no version bump
+    pg_epoch: "<string|null>"        # null for kind:local
+    batch_size: <int|null>
+    cursor: {}                       # opaque to the engine; shaped per area
+    attempts: <int>
+    last_error: <string|null>
+    scopes: {}                       # §2.4
+    verification:
+      checked_at: <ISO|null>
+      yaml_rows: <int|null>
+      pg_rows: <int|null>
+      spot_checks: <int|null>
+      mismatches: []                 # source paths that failed the sample compare
+    rejects: <int>                   # skip-and-record count (unparseable sources)
+```
+
+Implemented in `code/packages/backend/src/config/migration-state.ts`:
+`loadMigrationState` / `recordStart` / `recordProgress` / `recordDone` / `recordScope`
+/ `recordReject`.
+
+### 2.6 The one new entry this work adds
+
+`sweep_legacy_repo_tracking` — `kind: sweep`. `tracking.service.ts:389-429` `rm -rf`s
+Category-B state out of a working repo's **git-tracked** `.lfbridge/` with **zero
+persisted state**; `charlie-kirk` alone has 5,545 tracked files under `.lfbridge/`.
+
+While there: fix `:407`, where `removed++` fires after a `force: true` `rmSync` that
+never throws on ENOENT, so the tally is unconditionally truthy.
+
+---
+
+## 3. The schema migration runner
+
+`code/packages/backend/src/shared/persistence/migrate.ts`. Forward-only, one
+`BEGIN..COMMIT` per migration, under `pg_advisory_lock(2306411)` so two starts cannot
+both apply migration N.
+
+**The checksum is `sha256(name || ':' || sql)` and deliberately NOT over the id.**
+
+This is a direct inheritance of the sister app's 2026-08-18 incident: two branches each
+authored a migration as id 11; the merge renumbered one. Because the hash included the
+id, every install that had already applied the migration reported *"migration 11 was
+edited after it was applied"* — and nothing had been edited. **A migration's identity is
+its name; its id is only where it sits in the order.**
+
+A checksum mismatch on an already-applied migration is a **hard failure**: the schema is
+not what the code believes it is.
+
+---
+
+## 4. The backfill
+
+### 4.1 Three mechanics, shared by every area
+
+**(a) A watermark per `(area, scope)`** holding the source file's `ino + size +
+mtime_ms` plus a cursor. An interrupted run resumes from the cursor; a source that moved
+under the run is re-done from zero **for that scope only**. This is the identity triple
+`yaml-store.ts:63-97` already trusts.
+
+**(b) Every insert is `ON CONFLICT … DO UPDATE`/`DO NOTHING` against a real
+constraint.** Where the dedupe key spans a nullable column the constraint is declared
+**`UNIQUE NULLS NOT DISTINCT`** (verified on 16.15). Without it, `decided_by`
+(`.nullable().default(null)`) and `file_event.by` (**18 nulls measured on disk**)
+re-insert on every re-run and the backfill is not idempotent.
+
+**(c) A reject table, not an abort.** **2 of the 29,138 sidecars fail `YAML.parse`
+today** — a Windows-separator `path:` value raising `BLOCK_AS_IMPLICIT_KEY` — and
+`readSidecar` swallows the error. The backfill records `(area, source_path, reason)`,
+continues, and surfaces the reject count.
+
+### 4.2 The backfill must NOT go through `readYaml()`
+
+`yaml-store`'s `rawCache` is 4,096 entries with FIFO eviction (`yaml-store.ts:31,
+93-96`). Walking 29,138 sidecars through it **overwrites the live working set ~7 times**
+and evicts every hot unit config — degrading the exact request this whole exercise
+exists to speed up.
+
+Backfill readers use raw `fs.readFileSync` + `YAML.parse` + the zod schema directly,
+which is what every existing boot migration already does
+(`migrate-sync-to-pin.ts:271-275`).
+
+### 4.3 The areas, in order
+
+| # | State key | Source | Records | Cursor |
+|---|---|---|---|---|
+| 1 | `adopt_devices` | 12 `pinned_by` labels ∪ 18 history filenames ∪ `<sdl>/devices/*.yaml` | ~20 | none (bounded) |
+| 2 | `adopt_units` | 105 pin configs + 105 `repo_storage.yaml` + 105 `.sync-repo` | 105 | pin folder, alphabetical |
+| 3 | `backfill_candidates` | 105 × `pin/r/<f>/status.yaml`, 5.17 MB | **30,762** | (pin folder, last rel_path) |
+| 4 | `backfill_decisions` | 105 × `decisions.yaml`, 4.97 MB + both SDL mirrors | **18,234** | (unit, event index) |
+| 5 | `backfill_manifests` | 105 × `manifest.yaml` + `pin/r/<f>/manifest.yaml` | 4,184 | (unit, path) |
+| 6 | `backfill_foreign_pins` | `foreign-pin-cache.json` + `foreign-pins.json` | 38,870 | offset |
+| 7 | `backfill_sidecars` | 29,138 × `files/**/*.yaml`, 23.1 MB | 29,138 | (unit, rel_posix) |
+| 8 | `backfill_history` | 18 × `history/<device>.txt` | line-addressed | line_no |
+| 9 | `backfill_compression` | 74 `analysis/**/compression.yaml` records | ~110 samples | none |
+
+### 4.4 The transforms that are easy to get backwards
+
+**Devices — one computer must not become two rows.** History filenames are
+`repoFolderKey`-**sanitized**; `pinned_by` labels are **not**. The same computer appears
+under two spellings. Resolve both through the SDL device registry **before** assigning
+`device_id`s, or one computer gets two rows and `pinned_here` is wrong for it forever.
+
+**Units — match by `repoUid` suffix, never by exact directory name**
+(`keyed-dir.ts` `isDirForKey`). Every subtree written before the `<slug>-<uid>` rename
+would otherwise go unmatched.
+
+**Units — the tri-state opt-out.** `sync_repo.enabled` maps to `mirror_optout`:
+absent → `NULL` (default ON), `false` → `true`, `true` → `false`.
+**Getting that backwards opts every repo out.**
+
+**Units — hashes are computed in TypeScript and inserted as literals.** `repo_key`,
+`repo_id`, `storage_sid` and `repo_uid` come from the existing functions. Postgres never
+recomputes a TS hash.
+
+**Candidates — do NOT persist `nudgeOnly`.** `scanner.service.ts:52-55` states it is
+in-memory on purpose (*"its only job is to keep the auto-decide policy off these rows in
+the SAME scan pass"*), it is recomputed inline by every walk, and **zero of 105 status
+files contain it**. A stored copy goes stale the instant a threshold changes.
+
+**Candidates — `ON CONFLICT DO UPDATE`, never `DO NOTHING`.** The PK collapses
+`a\b.mp4` and `a/b.mp4` into one row. That is desired, and it means the second one must
+update the first.
+
+**Decisions — render through `serializeLedger`, do not hand-write the sort.** The ledger
+on disk is **already post-compaction**; `serializeLedger` (`ledger-merge.ts:141-143`) is
+the one spelling shared by `writeLedger`, the mirror and the reconcile.
+
+**Decisions — ingest both SDL mirrors with `origin='wire'`.** The union that
+`copyTreeGen` performs on every pass is then done **once**, by the UNIQUE constraint.
+
+**Decisions — do not populate `file_decision` by hand.** The trigger folds it.
+
+### 4.5 Verification, per area
+
+Every area records into `verification:`:
+
+* `yaml_rows` vs `pg_rows` — a count equality, per scope.
+* `spot_checks` — a random sample re-read from YAML and compared field-by-field.
+* `mismatches` — the source paths that failed. **Non-empty blocks the cutover.**
+
+Named per-area assertions:
+
+* **Devices** — exactly one row with `is_self` (enforced by `device_one_self`).
+* **Units** — 105 rows of `kind='repo'`; every `repo_key` matches its Local-Storage
+  directory suffix; every unit with a `.sync-repo` marker has `sync_repo_id` and
+  `repo_uid` NOT NULL. A marker without a uid is a **legacy one-line marker** and is
+  recorded in the reject table, **not silently accepted**.
+* **Candidates** — `sum(is_candidate) = 30,762 ± rejects`; per unit, equal to
+  `len(status.candidates)`.
+* **Decisions** — for every unit, `file_decision` equals
+  `foldLedger(readLedger(root))` computed by the existing TypeScript function. This runs
+  in CI **and after every mirror-in**.
+
+---
+
+## 5. Rollback
+
+`DB_MODE=auto` means rollback is the default behaviour, not a procedure: if Postgres is
+unreachable the app uses the YAML path and logs a loud WARN.
+
+That works because **dual-write is the cutover discipline** — every YAML writer stays
+live for the whole migration, so the files on disk are never stale. Rolling back is
+reverting the read path.
+
+Three hard rules:
+
+1. **Slice 3 (the fence) is not rollback-gated** — it is a pure bug fix and ships
+   regardless.
+2. **No read cuts over before its area's `verification.mismatches` is empty.**
+3. **The render equality gate blocks the cutover** (database.mdx §2.3). Rendering every
+   Category-B document from Postgres must reproduce the bytes on disk exactly — zero
+   diffs across all 29,745 documents — or Postgres does not get the write path.
+
+---
+
+## 6. Where this runs
+
+`main.ts` already has the right shape: a boot block of `blocking()`-timed migrations at
+`:341-380`. The Postgres work extends it, in this order:
+
+```
+blocking("boot.migrate.*", …)        ← the seven existing on-disk migrations, unchanged
+bootstrapState()                     ← :382
+connectPool()                        ← DB_MODE=auto: may return null
+runSchemaMigrations()                ← advisory-locked, forward-only
+runDataMigrations()                  ← lease-held, resumable, epoch-gated
+```
+
+Every stage is best-effort under `DB_MODE=auto` and **never blocks boot** — the same
+contract every existing migration already honours (*"any failure is logged and swallowed
+so a broken migration can never crash boot"*). Under `DB_MODE=required` a failure is a
+hard boot failure, by design.
