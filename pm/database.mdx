@@ -263,7 +263,12 @@ in the migration files, one file per migration, and is not duplicated here:
 | 0012 | `sync_fence` | `doc_render`, `sdl_ingest` — the fence's evidence table |
 | 0013 | `derived_projections` | `batch_manifest`, `batch_item`, `backfill_mirror` |
 | 0014 | `autovacuum_policy` | per-table autovacuum tuning for `file`, `manifest_entry`, `pin_claim` |
-| 0015 | `fs_dir_rollup` | `fs_dir` — **GATED**, see §7 |
+| 0015 | `fs_dir_rollup` | `fs_dir` — **GATED and NOT APPLIED**; held in `migrations/gated/`, see §8.1 |
+
+**Verified against PostgreSQL 16.15 on this machine:** the 14 applied migrations
+produce **33 tables and 89 indexes** in schema `lfb`, plus the `schema_migration`
+ledger the runner creates itself (34 tables). Applying them twice applies nothing the
+second time and no checksum drifts.
 
 ### 4.1 The decisions that are not obvious
 
@@ -443,6 +448,19 @@ Verified on this machine today: `listen_addresses=localhost`, `ssl=off`, bound o
 sister app's regex searched the whole string and returned a false positive on a remote
 URL whose *password* contained `@localhost`.
 
+The boot stage that connects the pool, runs the compliance probe, applies the schema
+migrations, reads the epoch and adopts the five legacy sentinels — best-effort under
+`auto`, a hard boot failure under `required` — is
+`code/packages/backend/src/shared/persistence/boot.ts`, `bootDatabase()`, called from
+`code/packages/backend/src/main.ts` immediately after `bootstrapState()`. The pool is
+handed back on a clean stop by `closePool()`, from `main.ts`'s own `shutdown()`.
+
+The database section of `GET /api/health` (and `GET /api/health/database`, which
+`just db-status` reads) reports mode, reachability, server version, `listen_addresses`,
+the §7.1 loopback verdict, the schema ledger head and the data-migration ledger's
+done/pending/failed counts — in
+`code/packages/backend/src/shared/persistence/boot.ts`, `databaseHealth()`.
+
 ### 7.2 First run types nothing
 
 `just db-up` provisions role, database and extensions. `DB_MODE=auto` means a user who
@@ -451,6 +469,22 @@ has never heard of Postgres gets the YAML path and a WARN, not an error. Recipes
 
 `just db-status` reports three distinct states: nothing on `:5432` / listening but
 unprovisioned / provisioned with N migrations applied.
+
+All six recipes are one portable `node` line each, per the justfile's own rules; the
+provisioning, the three-state probe and the scoped disconnect live in
+`scripts/dev/db.mjs`. `db-migrate` applies the schema through the runner rather than
+`psql -f`, so the ledger, the checksum and the advisory lock all apply —
+`code/packages/backend/src/shared/persistence/migrate-cli.ts`.
+
+**`db-down` never stops the server and never drops anything.** The cluster on `:5432`
+is shared — this machine has fifteen other databases on it — so `db-down` terminates
+only the backends attached to `largefilebridge`. That scoping is not free: the obvious
+`… WHERE datname = 'largefilebridge' AND pid <> pg_backend_pid() AND pg_terminate_backend(pid)`
+puts a volatile, side-effecting function beside the predicates meant to restrict it,
+and SQL guarantees no evaluation order between them. Measured on 16.15 against a
+database with **zero** connections, it killed this session and both idle pool
+connections of an unrelated app. The filter is therefore fenced behind an `OFFSET 0`
+subquery — `scripts/dev/db.mjs`, `terminateSql()`.
 
 > **Housekeeping:** a leftover `lfb_bench` database exists on this machine from the
 > benchmark run behind this spec, and should be dropped.
@@ -469,6 +503,17 @@ is worse than deciding it late.
    **Decide by measuring** `listDirectory('~')` cold and warm *after* the slice-12
    watcher fix. If warm is already 3-6 ms, **delete `lfb.fs_dir` from the schema**
    rather than ship a 726,503-row table for a page that is not slow.
+
+   **The gate is a mechanism, not a comment.** It first shipped as a `DO NOT APPLY`
+   banner inside `0015_fs_dir_rollup.sql`, and the runner applied the file anyway —
+   a gate that does not gate is worse than none, because it reads as a decision that
+   was enforced. The file now lives in
+   `shared/persistence/migrations/gated/`, which `loadMigrations()` cannot reach
+   (it reads files at the top level only). Ungating is one `git mv` up a level;
+   deleting it — the expected outcome — is one `rm`. Both are deliberate acts.
+   `loadMigrations` logs the held set on every boot so a parked migration cannot be
+   forgotten. Verified: the applied set is **14**, and `to_regclass('lfb.fs_dir')`
+   is NULL on the provisioned database.
 
 2. **Sub-3-character search has no index.** `pg_trgm` cannot serve a term shorter than
    3 characters (verified: 2-char ILIKE fell back to a bitmap scan + filter at 5.6 ms

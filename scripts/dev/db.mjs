@@ -126,6 +126,33 @@ async function sql(url, statement, { quiet = true } = {}) {
 const ident = (name) => `"${String(name).replace(/"/g, '""')}"`;
 const literal = (value) => `'${String(value).replace(/'/g, "''")}'`;
 
+/**
+ * Terminate every backend attached to ONE database, and return how many.
+ *
+ * THE `OFFSET 0` IS LOAD-BEARING AND IT IS NOT A STYLE CHOICE. The obvious spelling —
+ *
+ *     SELECT count(*) FROM pg_stat_activity
+ *      WHERE datname = 'largefilebridge' AND pid <> pg_backend_pid() AND pg_terminate_backend(pid)
+ *
+ * — puts a VOLATILE, side-effecting function in a WHERE clause beside the predicates that are supposed to
+ * restrict it, and SQL guarantees no evaluation order between them. Measured here on 16.15, against a
+ * database with ZERO connections: it killed this session's own psql AND both idle pool connections
+ * belonging to an unrelated app (`wethecitizens`) on the same shared server. The predicate that was meant
+ * to scope the blast radius ran after the thing it was scoping.
+ *
+ * Wrapping the filter in a subquery with `OFFSET 0` is Postgres's documented optimization fence: it blocks
+ * subquery pull-up, so the row set is fully restricted to this one database BEFORE `pg_terminate_backend`
+ * ever sees a pid. This machine runs fifteen databases on the one server; `just db-down` is not allowed to
+ * reach past its own.
+ */
+function terminateSql(database) {
+  return (
+    `SELECT count(pg_terminate_backend(pid)) FROM (` +
+    `SELECT pid FROM pg_stat_activity WHERE datname = ${literal(database)} AND pid <> pg_backend_pid() OFFSET 0` +
+    `) victims`
+  );
+}
+
 // ── up ──────────────────────────────────────────────────────────────────────────────────────────────
 
 /**
@@ -225,11 +252,7 @@ async function cmdDown() {
     out(`Nothing listening on ${p.host}:${p.port} — nothing to disconnect.`);
     return;
   }
-  const r = await sql(
-    adminUrl(),
-    `SELECT count(*) FROM pg_stat_activity WHERE datname = ${literal(p.database)} AND pid <> pg_backend_pid() ` +
-      `AND pg_terminate_backend(pid)`,
-  );
+  const r = await sql(adminUrl(), terminateSql(p.database));
   if (!r.ok) {
     err(`Could not disconnect: ${r.text || "(no output)"}`);
     process.exit(1);
@@ -260,10 +283,7 @@ async function cmdReset(args) {
   const url = appUrl();
   const p = parts(url);
   if (!(await ensureServer(p))) process.exit(1);
-  await sql(
-    adminUrl(),
-    `SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = ${literal(p.database)} AND pid <> pg_backend_pid()`,
-  );
+  await sql(adminUrl(), terminateSql(p.database));
   const dropped = await sql(adminUrl(), `DROP DATABASE IF EXISTS ${ident(p.database)}`, { quiet: false });
   if (!dropped.ok) process.exit(1);
   out(`database ${p.database}: DROPPED`);

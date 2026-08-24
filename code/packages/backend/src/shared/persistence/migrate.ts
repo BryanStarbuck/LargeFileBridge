@@ -41,6 +41,41 @@ function render(sql: string): string {
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 /**
+ * THE GATE, AND WHY IT IS A DIRECTORY RATHER THAN A COMMENT.
+ *
+ * `0015_fs_dir_rollup.sql` is gated on a measurement that has not been taken (database.mdx §8.1): the warm
+ * `listDirectory` path is already 3-6 ms, so a 726,503-row table may buy nothing at all. It shipped with a
+ * prominent "DO NOT APPLY" banner in the SQL — and the runner applied it anyway, because a comment is not a
+ * mechanism. A gate that does not gate is worse than no gate: it reads as a decision that was enforced.
+ *
+ * So a gated migration lives in `migrations/gated/`, where `loadMigrations` cannot reach it. Ungating is one
+ * `git mv` back up a level; deleting it (the expected outcome) is one `rm`. Both are deliberate acts, which
+ * is exactly what the open question asks for.
+ */
+const GATED_DIR = "gated";
+
+let gatedReported = false;
+
+function reportGated(gatedPath: string): void {
+  if (gatedReported) return;
+  gatedReported = true;
+  let held: string[];
+  try {
+    held = fs.readdirSync(gatedPath).filter((f) => f.endsWith(".sql"));
+  } catch {
+    return; // no gated dir is the normal case
+  }
+  if (held.length === 0) return;
+  // Say it out loud on every boot. A migration parked indefinitely with nobody noticing is the other way
+  // this goes wrong.
+  log.info(
+    "db",
+    `${held.length} migration(s) held behind the gate and NOT applied: ${held.join(", ")}. ` +
+      `Move a file up one level to apply it, or delete it. See database.mdx §8.`,
+  );
+}
+
+/**
  * Load `NNNN_name.sql` from ./migrations, ordered by the numeric prefix.
  *
  * Files on disk rather than a TypeScript array so the SQL stays reviewable as SQL, and so `just db-psql` can
@@ -49,11 +84,17 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 export function loadMigrations(dir = path.join(HERE, "migrations")): Migration[] {
   let names: string[];
   try {
-    names = fs.readdirSync(dir).filter((f) => f.endsWith(".sql"));
+    // Files only, and only at the TOP level. `migrations/gated/` is deliberately not read — see the note on
+    // GATED_DIR below. `withFileTypes` so a subdirectory can never be mistaken for a migration.
+    names = fs
+      .readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isFile() && e.name.endsWith(".sql"))
+      .map((e) => e.name);
   } catch (e) {
     log.error("db", `no migrations directory at ${dir}: ${(e as Error).message}`);
     return [];
   }
+  reportGated(path.join(dir, GATED_DIR));
   const out: Migration[] = [];
   for (const f of names) {
     const m = /^(\d{4})_(.+)\.sql$/.exec(f);

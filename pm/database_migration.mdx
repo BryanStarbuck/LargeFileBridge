@@ -335,6 +335,23 @@ runSchemaMigrations()                ← advisory-locked, forward-only
 runDataMigrations()                  ← lease-held, resumable, epoch-gated
 ```
 
+The first four of those, plus reading the epoch and adopting the five sentinels of §1.1
+into the ledger, are implemented in
+`code/packages/backend/src/shared/persistence/boot.ts`, `bootDatabase()` — one call from
+`code/packages/backend/src/main.ts` directly after `bootstrapState()`.
+
+The sentinel adoption itself runs OUTSIDE the Postgres try-block, deliberately: four of
+the five are `kind: local` and never needed a database, so a machine that has never
+installed Postgres must still finish with a correct ledger. Same file, `adoptLedger()`.
+
+Timing follows the neighbouring boot migrations so the boot window stays fully
+attributed, with one distinction: the awaited Postgres stages are recorded through
+`recordCooperative` (ranked in the stall report, never warns — an `await` on a loopback
+round trip does not hold the event loop), while the synchronous ledger read/adopt/write
+goes through `blocking()`, where a WARN would be true. Both appear by name in
+loop-watch's ranking as `boot.db.connect (yielded)`, `boot.db.schema-migrate (yielded)`
+and `boot.db.ledger` — `code/packages/backend/src/shared/persistence/boot.ts`.
+
 Every stage is best-effort under `DB_MODE=auto` and **never blocks boot** — the same
 contract every existing migration already honours (*"any failure is logged and swallowed
 so a broken migration can never crash boot"*). Under `DB_MODE=required` a failure is a
