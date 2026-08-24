@@ -86,6 +86,12 @@ export interface TranscribeConcurrencyInputs {
    * tests can pin a pool and assert the clamp deterministically.
    */
   totalRamBytes?: number;
+  /**
+   * How many transcribe jobs are ALREADY admitted and running. Their RAM is charged against the pool
+   * before the clamp divides it — see {@link transcribeConcurrency} for why leaving this out let the
+   * clamp admit a whole batch against memory the previous admissions had already spoken for.
+   */
+  inFlight?: number;
 }
 
 /**
@@ -94,11 +100,28 @@ export interface TranscribeConcurrencyInputs {
  */
 export function transcribeConcurrency(inp: TranscribeConcurrencyInputs): number {
   const poolRam = inp.totalRamBytes ?? availableRamBytes();
-  const usableRam = Math.max(0, poolRam - RAM_HEADROOM_BYTES);
   const modelRamPerJob = MODEL_RAM_PER_JOB_BYTES[inp.model] ?? MODEL_RAM_PER_JOB_BYTES.base;
 
+  // THE ADMISSION RACE (the reason error.err still carries MEMORY PRESSURE after §6.1 switched this clamp
+  // from totalmem() to freemem()). `os.freemem()` reports memory that is free RIGHT NOW, and a whisper job
+  // does not become resident at admission — it spends tens of seconds loading its model before its RSS
+  // shows up. So a batch admitted against one reading of `freemem()` was still paging in when the NEXT
+  // admission read `freemem()` again, saw memory the running jobs had already spoken for but not yet
+  // touched, and admitted another wave against it. The log shows exactly that shape: a swap warning at
+  // `free=116567MB` — a clamp that computed (116 GB − 2 GB) / 2 GB = 57 concurrent jobs on a box that then
+  // went to swap.
+  //
+  // Charging the in-flight jobs against the pool closes it. Each admitted job reserves its full model
+  // footprint from the moment it is admitted, whether or not the OS has handed it those pages yet, so the
+  // clamp converges instead of oscillating — the same reserve-at-admission discipline the heap budget uses
+  // for `describe` (memory.mdx §2.3), applied to the layer that budget cannot see.
+  const committed = Math.max(0, inp.inFlight ?? 0) * modelRamPerJob;
+  const usableRam = Math.max(0, poolRam - RAM_HEADROOM_BYTES - committed);
+
   const cpuTerm = Math.floor(inp.budget / Math.max(1, inp.whisperThreads));
-  const ramTerm = Math.floor(usableRam / modelRamPerJob);
+  // `ramTerm` is now a count of ADDITIONAL jobs the pool can hold, so the already-running ones are added
+  // back to keep this a TOTAL cap — the caller compares it against `running[bucket]`.
+  const ramTerm = Math.floor(usableRam / modelRamPerJob) + Math.max(0, inp.inFlight ?? 0);
   const gpuTerm = inp.gpuStreams && inp.gpuStreams > 0 ? inp.gpuStreams : Number.POSITIVE_INFINITY;
 
   // The floor of 1 matters more under freemem() than it did under totalmem(): a genuinely loaded box can

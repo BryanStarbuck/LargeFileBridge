@@ -17,7 +17,7 @@ vi.mock("../store-model/config.service.js", () => ({
 }));
 vi.mock("../events/state-events.service.js", () => ({ bumpTopicThrottled: () => {}, IPFS_TOPIC: "ipfs" }));
 
-const { isPinned } = await import("./ipfs.service.js");
+const { isPinned, invalidatePinsetCache } = await import("./ipfs.service.js");
 
 // The SAME block in both encodings — a CIDv0 dag-pb pin and the CIDv1 base32 spelling of its multihash.
 const V0 = "QmbWqxBEKC3P8tqsKc98xmWNzrzDtRLMiMPL8wBuTGsMnR";
@@ -39,6 +39,10 @@ const fullEnumerations = (): string[] =>
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
+  // `listPins` memoizes the pinset for a minute (it is a minutes-long RPC in production). Module state
+  // outlives a test file, so a leftover result would answer the NEXT test's enumeration and hide a real
+  // regression behind a stale success.
+  invalidatePinsetCache();
 });
 afterEach(() => vi.unstubAllGlobals());
 

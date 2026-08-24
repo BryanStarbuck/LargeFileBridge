@@ -110,7 +110,7 @@ function bucketOf(t: QueueTask): Bucket {
 /** The concurrency cap for a bucket, given a Core Budget snapshot (parallelization.mdx §1). The budget is
  *  passed in — NOT read here — so the admission scan can snapshot it ONCE per pass instead of re-reading
  *  (and re-parsing) config.yaml for every pending task, which would block the event loop on a big backlog. */
-function capFor(bucket: Bucket, budget: number): number {
+function capFor(bucket: Bucket, budget: number, runningInBucket = 0): number {
   switch (bucket) {
     case "compress:image":
       return budget; // WIDE — one single-threaded job per core
@@ -123,6 +123,10 @@ function capFor(bucket: Bucket, budget: number): number {
         budget,
         whisperThreads: WHISPER_THREADS,
         model: activeTranscribeModelKey(),
+        // The jobs already admitted. Their multi-GB model footprints are NOT yet resident when the next
+        // admission reads free memory, so without this the clamp re-spends the same RAM every pass and the
+        // box goes to swap (to_fix.mdx §6.1; see transcribeConcurrency for the measured case).
+        inFlight: runningInBucket,
       });
     case "describe":
       return DESCRIBE_CONCURRENCY; // network-parallel, not core-bound
@@ -712,7 +716,7 @@ function takeRunnable(): QueueTask | undefined {
     const t = pending[i];
     const b = bucketOf(t);
     if (memBlocked.has(b)) continue;
-    if (running[b] >= capFor(b, budget)) continue; // count cap — the upper bound
+    if (running[b] >= capFor(b, budget, running[b])) continue; // count cap — the upper bound
     const est = estimatedBytes(t);
     if (!memoryFits(est, memBudget)) {
       memBlocked.add(b); // head-of-line: nothing behind it in this bucket jumps the queue

@@ -17,7 +17,7 @@ vi.mock("../store-model/config.service.js", () => ({
 }));
 vi.mock("../events/state-events.service.js", () => ({ bumpTopicThrottled: () => {}, IPFS_TOPIC: "ipfs" }));
 
-const { pinAdd, listPins } = await import("./ipfs.service.js");
+const { pinAdd, listPins, invalidatePinsetCache } = await import("./ipfs.service.js");
 
 const CID = "bafybeig2h7dvxz6eq7af2p4ope57dqh4j5ulfvninyyou5xkx46s4hyqsi";
 
@@ -42,6 +42,8 @@ let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
+  // See is-pinned.spec.ts — `listPins` memoizes, and that state is per-module, not per-test.
+  invalidatePinsetCache();
 });
 afterEach(() => {
   vi.unstubAllGlobals();

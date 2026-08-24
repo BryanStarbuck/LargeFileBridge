@@ -599,6 +599,7 @@ export async function pinAdd(
   for (let attempt = 1; ; attempt++) {
     try {
       await pinAddOnce(cid, stallMs, discoveryMs, opts.onNodes);
+      patchPinsetCache(cid, true); // our own write — fold it in rather than discard the enumeration
       bumpTopicThrottled(IPFS_TOPIC); // throttled — a pin pass adds per-file in bursts
       return;
     } catch (e) {
@@ -694,6 +695,7 @@ export async function swarmConnect(peerId: string, timeoutMs = 20_000): Promise<
 export async function pinRm(cid: string): Promise<void> {
   try {
     await rpc("pin/rm", { args: [cid], query: { recursive: "true" } });
+    patchPinsetCache(cid, false); // our own write — fold it in rather than discard the enumeration
     bumpTopicThrottled(IPFS_TOPIC);
   } catch (e) {
     log.warn("ipfs", `pin rm failed for ${cid}: ${(e as Error).message}`);
@@ -985,6 +987,64 @@ async function listPinsOfType(type: "recursive" | "direct"): Promise<Map<string,
   return out;
 }
 
+// ── ONE enumeration at a time, and not more than one every PINSET_TTL_MS ─────────────────────────────
+//
+// THE HANG THIS CLOSES. `pin/ls` enumerates the ENTIRE pinset in one RPC, so on this product's pinsets it
+// is a MINUTES-to-HOURS call, not a control call — `log.log` has real enumerations at 1,234,025 ms,
+// 3,172,380 ms and 7,269,167 ms (over two hours). Eight call sites reached it with no coalescing at all
+// (pin.service ×3, ipfs-page.service ×2, scanner.service, and `keptCidSet`/`contentPinnedCid` inside this
+// module), so a pin pass, a scan and a single load of the IPFS page each STARTED THEIR OWN two-hour
+// enumeration against the same daemon. The proof is in the log: the stall lines arrive in pairs and
+// triples sharing one millisecond — three concurrent enumerations aborting together.
+//
+// The cost was not just IPFS. Concurrent enumerations pile onto the same daemon and the same event loop,
+// which is what produced the visible symptoms: `run-worker` getting "no acknowledgement from the app
+// within 15s" while port 8787 still accepts connections, and the `"exp" claim timestamp check failed`
+// storm — a Bearer attached with 11 s of life left (TOKEN_HARD_FLOOR_S) lapses in the queue when the
+// backend needs longer than that to reach the verify.
+//
+// Coalescing is CORRECT, not just cheap: every caller wants the same answer to the same question about
+// the same daemon, and the answer takes long enough that overlapping askers are guaranteed. The TTL bounds
+// how stale a peer's pin can look, and `patchPinsetCache()` makes OUR OWN writes exact — `pinAdd`/`pinRm`
+// fold their CID straight into the memo, so a read that FOLLOWS one of our writes never sees the pre-write
+// pinset and we do not throw away a minutes-long enumeration on every pin of a pass.
+//
+// FAILURES ARE NEVER CACHED. `listPins()` throws on a failed enumeration by contract (a partial list read
+// as "these are all the pins" is the pin-lost bug), so only a fulfilled result is stored; a rejection
+// clears the in-flight promise and the next caller retries for real.
+const PINSET_TTL_MS = 60_000;
+let pinsetCache: { pins: Pin[]; at: number } | null = null;
+let pinsetInFlight: Promise<Pin[]> | null = null;
+
+/** Drop the memoized pinset entirely. The conservative fallback, and the hook specs use between tests. */
+export function invalidatePinsetCache(): void {
+  pinsetCache = null;
+}
+
+/**
+ * Apply OUR OWN pin/unpin to the memo instead of discarding it.
+ *
+ * Dropping the memo would be correct but wasteful in the exact case that matters: a pin pass calls `pinAdd`
+ * hundreds of times in a row, and an enumeration that cost minutes-to-hours would be thrown away on the
+ * first one — so the next reader pays for it all over again, mid-pass. We know precisely what changed, so
+ * we patch it: `pin/add --recursive` establishes a recursive ROOT pin for that CID (which is exactly what
+ * `pin ls` reports), and `pin/rm --recursive` removes that root. Both match the roots-only contract
+ * `listPins()` states.
+ *
+ * Comparison is CANONICAL (ipfs.mdx §5.1): the daemon may have listed the same block under a different
+ * base than the one we pinned it under, and a raw string compare would leave a duplicate behind.
+ */
+function patchPinsetCache(cid: string, present: boolean): void {
+  if (!pinsetCache) return;
+  const target = canonicalCid(cid);
+  const without = pinsetCache.pins.filter((p) => canonicalCid(p.cid) !== target);
+  // Keep the memo's own age: patching tells us what changed, it does not re-verify everything else.
+  pinsetCache = {
+    at: pinsetCache.at,
+    pins: present ? [...without, { cid, type: "recursive" as IpfsPinType }] : without,
+  };
+}
+
 /**
  * The local pinset as ground truth (`ipfs pin ls`). Lists only ROOT pins — recursive + direct —
  * and never the indirect blocks kept under a recursive root (ipfs.mdx §1). Metadata only: it names
@@ -995,6 +1055,28 @@ async function listPinsOfType(type: "recursive" | "direct"): Promise<Map<string,
  * scanner, pull prompt) treat everything as pin-lost. Callers degrade to "pinset UNKNOWN", not empty.
  */
 export async function listPins(): Promise<Pin[]> {
+  // SINGLE-FLIGHT + SHORT TTL. See `pinsetInFlight` above for why this is the difference between a
+  // responsive app and a wedged one.
+  // Every return hands back a COPY. Callers today only read (`.map`, `.filter`, `.some`), but a cache that
+  // hands out its own array is one `.sort()` away from being silently rewritten by a consumer — and this
+  // one is shared by every pin-truth surface in the app. A shallow copy of a few thousand small objects is
+  // nothing against the enumeration it stands in for.
+  const now = Date.now();
+  if (pinsetCache && now - pinsetCache.at < PINSET_TTL_MS) return [...pinsetCache.pins];
+  if (pinsetInFlight) return pinsetInFlight.then((pins) => [...pins]);
+  pinsetInFlight = enumeratePins()
+    .then((pins) => {
+      pinsetCache = { pins, at: Date.now() };
+      return [...pins];
+    })
+    .finally(() => {
+      pinsetInFlight = null;
+    });
+  return pinsetInFlight;
+}
+
+/** The uncoalesced enumeration. Never call this directly — go through {@link listPins}. */
+async function enumeratePins(): Promise<Pin[]> {
   const out = new Map<string, IpfsPinType>();
   for (const type of ["recursive", "direct"] as const) {
     const started = Date.now();

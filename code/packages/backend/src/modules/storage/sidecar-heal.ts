@@ -49,6 +49,21 @@ export function caseIndex(dir: string): Map<string, string> {
   return index;
 }
 
+// SAY IT ONCE. The heal is CONTINUOUS by design (see the header): while any peer still runs the old build
+// it re-sends the second spelling every cycle, and this line fired for every colliding name on every
+// mirror AND every reconcile. Measured on one log generation: 3,219 of ~5,700 lines — more than half of
+// log.log — were this one sentence repeating ~80 times per name about a condition that had not changed.
+// That is not reporting, it is burying: the pin, scan and git lines a reader actually needs are pushed out
+// of the retained generations by it. The FIRST heal of a name is news and is logged; the identical heal on
+// the next cycle is not. Cleared on nothing — a per-process set is exactly the right lifetime, since a
+// restart is precisely when the condition is worth re-stating.
+const healAnnounced = new Set<string>();
+
+/** Test hook: forget what has been announced, so a spec can assert the first-time line again. */
+export function resetCaseHealLog(): void {
+  healAnnounced.clear();
+}
+
 /**
  * The name to write as: an existing case-variant in the destination beats the incoming spelling.
  * Returns `name` unchanged when there is no collision (the overwhelmingly common case).
@@ -56,7 +71,11 @@ export function caseIndex(dir: string): Map<string, string> {
 export function resolveCasing(index: Map<string, string>, name: string): string {
   const existing = index.get(name.toLowerCase());
   if (!existing || existing === name) return name;
-  log.info("storage", `case heal: ${name} -> ${existing}`);
+  const pair = `${name} -> ${existing}`;
+  if (!healAnnounced.has(pair)) {
+    healAnnounced.add(pair);
+    log.info("storage", `case heal: ${pair} (a peer keeps sending both spellings; healed on arrival every cycle from here on, logged once)`);
+  }
   return existing;
 }
 

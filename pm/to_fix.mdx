@@ -303,16 +303,36 @@ heap-watch measures *ours* but not theirs. **Neither can see the other, and they
 simultaneously.**
 
 ### §6.1 — Fixes
-* Track child-process RSS (`ps -o rss= -p <pid>`), attributed to the spawning job.
+* Track child-process RSS (`ps -o rss= -p <pid>`), attributed to the spawning job. ✅
 * Sample OS pressure (`vm_stat` / `memory_pressure`). **Swap is the signal concurrency is too high
-  even when nothing OOMs.**
-* Use **available**, not installed, memory in `transcribeConcurrency()`.
+  even when nothing OOMs.** ✅
+* Use **available**, not installed, memory in `transcribeConcurrency()`. ✅
 * A **global** memory budget above the buckets — describe (24) and transcribe (RAM-clamped) are
-  independent today and can each be "within budget" while together over.
+  independent today and can each be "within budget" while together over. 🟠 **partly, 2026-08-23** —
+  see below.
+
+**AMENDED 2026-08-23 — `freemem()` was necessary and not sufficient.** `MEMORY PRESSURE` kept firing
+after this section landed, including one at **`free=116567MB`**: a clamp that computed
+(116 GB − 2 GB) / 2 GB = **57 concurrent whisper jobs** and then drove a 192 GB box into swap. The
+remaining fault was not the pool but an **admission race**. `os.freemem()` reports memory free RIGHT NOW,
+and a whisper job holds nothing until its multi-GB model has loaded — so a wave admitted against one
+reading was still paging in when the next admission read `freemem()` again, saw memory the running jobs
+had already spoken for but not yet touched, and admitted another wave against it.
+
+The fix is this bullet's fourth item in its narrow form: charge the already-admitted jobs against the pool
+(`inFlight × modelRamPerJob`), adding the running count back so the answer stays a TOTAL cap. That is the
+same reserve-at-admission discipline `memory.mdx` §2.3 uses for `describe`, applied to the layer the heap
+budget cannot see. A budget that spans **all** buckets at once is still unwritten.
+
+Charging the in-flight jobs and the caller that supplies the running count are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `takeRunnable()`
+(guard: `transcribe-concurrency.spec.ts`; see also performance.mdx P-42)
 
 ### §6.2 — Two known defects found while auditing
-1. **The RAM table under-counts Whisper 2×** on the Mac path: `activeTranscribeModelKey()` returns
-   `"base"` (1 GiB in the table) but `runWhisper` actually runs `--model small` (2 GiB).
+1. ✅ **The RAM table under-counts Whisper 2×** on the Mac path: `activeTranscribeModelKey()` returned
+   `"base"` (1 GiB in the table) while `runWhisper` ran `--model small` (2 GiB). Both sites now read the
+   one `whisperModel()` constant, so they cannot drift again.
 2. **`spawnAsync` in `audio-prep.ts` accumulates stdout/stderr unbounded** — a multi-hour Whisper run
    holds its entire segment log in one string. `fit-media.ts` already caps this (memory.mdx P-30);
    **transcribe is the inconsistent one.** P-30's fix should be applied there too.

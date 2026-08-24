@@ -31,6 +31,7 @@ import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar-heal.js";
+import { statOrNull } from "../../shared/fs-probe.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
 // logs. Both directions route through it, so neither leg can stamp over the other side's events.
 import { copyTrackedFile } from "./tracked-file-merge.js";
@@ -391,6 +392,61 @@ function writeIfDifferent(file: string, content: string): boolean {
   return true;
 }
 
+// ── the ledger union, run at most ONCE per (unchanged src, unchanged dst) pair ────────────────────────
+//
+// `writeIfDifferent` stops the WRITE when nothing changed; it cannot stop the work in front of it. The
+// union parses BOTH ledgers, and on this machine `charlie-kirk/decisions.yaml` is 3.1 MB and `all` is
+// 1.9 MB — so every mirror and every reconcile paid two multi-megabyte YAML parses plus a `serializeLedger`
+// to re-derive a file it then declined to write. A CPU profile of the live backend attributed 1.38 s to
+// `parseLedgerBestEffort` and 0.25 s to `serializeLedger`, on a loop that was already blocking for seconds.
+//
+// The union is a pure function of the two files' CONTENTS, so if neither file has changed since the last
+// time we ran it, the destination already holds the answer. Identity is (ino, size, mtime) — the same
+// revalidation `foreign-pin.service.ts` uses — and the DESTINATION's identity is recorded AFTER the write,
+// so a pass that did write is memoized against what it actually left on disk.
+//
+// This is a cache of OUR OWN completed work, not of the data: any edit to either file on any path (a local
+// decision, a git merge, a peer's push landing in the mirror) changes its mtime and the union runs again.
+interface LedgerSyncId {
+  ino: number;
+  size: number;
+  mtimeMs: number;
+}
+const ledgerSyncMemo = new Map<string, { dst: LedgerSyncId | null; src: LedgerSyncId | null }>();
+
+function ledgerId(file: string): LedgerSyncId | null {
+  const st = statOrNull(file);
+  return st && { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+}
+const sameLedgerId = (a: LedgerSyncId | null, b: LedgerSyncId | null): boolean =>
+  a != null && b != null && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+
+/**
+ * Union `srcFile`'s events into `dstFile`, writing only when the bytes change. Returns whether `dstFile`
+ * changed. Skips the whole parse/union/serialize when neither file has moved since this pair last ran.
+ */
+function syncLedgerInto(dstFile: string, srcFile: string): boolean {
+  const key = `${dstFile}\u0000${srcFile}`;
+  const dstBefore = ledgerId(dstFile);
+  const srcNow = ledgerId(srcFile);
+  const seen = ledgerSyncMemo.get(key);
+  if (seen && sameLedgerId(seen.dst, dstBefore) && sameLedgerId(seen.src, srcNow)) return false;
+
+  const merged = unionLedgerEvents(
+    parseLedgerBestEffort(readFileOrNull(dstFile)),
+    parseLedgerBestEffort(readFileOrNull(srcFile)),
+  );
+  const changed = writeIfDifferent(dstFile, serializeLedger(merged));
+  // AFTER the write — the memo must describe the bytes now on disk, not the ones we started from.
+  ledgerSyncMemo.set(key, { dst: ledgerId(dstFile), src: srcNow });
+  return changed;
+}
+
+/** TEST-ONLY: forget every memoized ledger union. */
+export function resetLedgerSyncMemo(): void {
+  ledgerSyncMemo.clear();
+}
+
 export function reconcileFromSyncRepo(repoRoot: string): boolean {
   const src = resolveStateSyncRepo(repoRoot);
   if (!src) return false;
@@ -423,12 +479,7 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
     // sides; foldLedger resolves any conflict deterministically on read.
     const incomingLedger = path.join(src, "decisions.yaml");
     if (fs.existsSync(incomingLedger)) {
-      const localLedger = path.join(dst, "decisions.yaml");
-      const merged = unionLedgerEvents(
-        parseLedgerBestEffort(readFileOrNull(localLedger)),
-        parseLedgerBestEffort(readFileOrNull(incomingLedger)),
-      );
-      changed = writeIfDifferent(localLedger, serializeLedger(merged)) || changed;
+      changed = syncLedgerInto(path.join(dst, "decisions.yaml"), incomingLedger) || changed;
     }
     // 2b. repo_storage.yaml — a MERGE that PRESERVES this computer's own {@link MACHINE_LOCAL_REPO_STORAGE}
     // fields. The mirror's copy is scrubbed of them on purpose (see mirrorToSyncRepo); a wholesale copy
@@ -551,16 +602,7 @@ function mergeSubtree(src: string, dst: string): void {
   }
   const incomingLedger = path.join(src, "decisions.yaml");
   if (fs.existsSync(incomingLedger)) {
-    const dstLedger = path.join(dst, "decisions.yaml");
-    writeIfDifferent(
-      dstLedger,
-      serializeLedger(
-        unionLedgerEvents(
-          parseLedgerBestEffort(readFileOrNull(dstLedger)),
-          parseLedgerBestEffort(readFileOrNull(incomingLedger)),
-        ),
-      ),
-    );
+    syncLedgerInto(path.join(dst, "decisions.yaml"), incomingLedger);
   }
   // `repo_storage.yaml` needs no special case here: both copies are scrubbed mirrors, so whichever the
   // canonical already has stands, and copyTreeExcept below leaves it alone.

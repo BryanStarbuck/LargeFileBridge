@@ -5,7 +5,7 @@
 // Authorization header — SSE would bypass the allow-list gate. fetch lets us attach the same token
 // (and the session cookie via credentials:"include") AND read the body incrementally. Backpressure
 // and cancellation come free from the reader + the caller's AbortSignal.
-import { getFreshToken } from "../api/authCore.js";
+import { getFreshToken, refreshTokenOnce } from "../api/authCore.js";
 import { clientLog } from "./clientLog.js";
 
 export interface NdjsonStreamOptions {
@@ -26,18 +26,36 @@ export async function streamNdjson(
   // we surface that below) — but a swallowed token error is worth a breadcrumb, so log and continue.
   // getFreshToken (not raw getToken): a stream (re)connect after a laptop wakes from sleep is exactly
   // the moment the cached Bearer has silently lapsed — refresh-before-use, never attach a stale token.
-  const token = await getFreshToken().catch((e) => {
-    clientLog.warn("streamNdjson.getToken", e);
-    return null;
-  });
-  const headers: Record<string, string> = { Accept: "application/x-ndjson" };
-  if (token) headers.Authorization = `Bearer ${token}`;
+  const open = async (token: string | null): Promise<Response> => {
+    const headers: Record<string, string> = { Accept: "application/x-ndjson" };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    return fetch(`/api${pathAndQuery}`, { headers, credentials: "include", signal });
+  };
 
-  const res = await fetch(`/api${pathAndQuery}`, {
-    headers,
-    credentials: "include",
-    signal,
-  });
+  let res = await open(
+    await getFreshToken().catch((e) => {
+      clientLog.warn("streamNdjson.getToken", e);
+      return null;
+    }),
+  );
+
+  // THE 401 BACKSTOP THE STREAM PATH WAS MISSING. Every axios call already recovers from a 401 by forcing
+  // one shared re-mint and retrying (api/axios.ts `registerAuthBridge`); streams did not, and they are the
+  // requests MOST exposed to it — `getFreshToken()` hands over a Bearer it believes is good, and the token
+  // can still be rejected because it lapsed between attach and verify (the backend needed longer than
+  // TOKEN_HARD_FLOOR_S to reach the check — see backend `loop-watch.ts`) or because the clocks disagree.
+  //
+  // Without a retry the caller backed off and reconnected with the SAME cached token, which fails
+  // identically, so the tab sat in a reconnect loop writing `stream failed: HTTP 401` into the fault trail
+  // until the token finally expired outright and the SDK re-minted on its own. Forcing the re-mint HERE
+  // makes the second attempt carry a genuinely new Bearer, which is the difference between recovering in
+  // one round trip and recovering in fifteen minutes. Exactly one retry — a 401 that survives a fresh mint
+  // is a real authorization answer (signed out, off the allow-list) and must surface, not spin.
+  if (res.status === 401) {
+    const minted = await refreshTokenOnce();
+    if (minted) res = await open(minted);
+  }
+
   if (!res.ok || !res.body) {
     throw new Error(`stream failed: HTTP ${res.status}`);
   }

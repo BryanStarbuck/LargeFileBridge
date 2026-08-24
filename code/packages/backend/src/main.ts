@@ -60,6 +60,9 @@ import { log, flushLogs, logError } from "./shared/logging.js";
 import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
 import { recordSessionStart } from "./shared/session.js";
 import { startHeapWatch, stopHeapWatch } from "./shared/heap-watch.js";
+// The OTHER half of "why is the app slow?": heap-watch explains why the machine crawls, loop-watch
+// explains why nothing gets ANSWERED (loop-watch.ts).
+import { startLoopWatch, stopLoopWatch } from "./shared/loop-watch.js";
 import { restoreQueueOnBoot } from "./modules/jobqueue/queue-restore.js";
 import { admitRestored, recordQuarantined } from "./modules/jobqueue/jobqueue.service.js";
 import { readDescription } from "./modules/describe/describe.service.js";
@@ -261,6 +264,7 @@ async function main(): Promise<void> {
     txnShutdown({ signal: sig });
     stopHeartbeat();
     stopHeapWatch();
+    stopLoopWatch();
     stopWatcher(); // idempotent — a no-op when the watcher never started (signal during boot)
     flushLogs();
     if (!server) process.exit(0); // still booting — nothing listening, nothing to drain
@@ -307,6 +311,10 @@ async function main(): Promise<void> {
   // Watch the heap climb toward that ceiling and WARN before V8 aborts (memory.mdx P-32). Started before
   // any work is admitted; the timer is unref()'d, so it can never hold the process open.
   startHeapWatch();
+
+  // …and watch the EVENT LOOP, which is the thing the user actually experiences as "it hangs". Same
+  // contract: unref'd, best-effort, and it never throws into the boot path (loop-watch.ts).
+  startLoopWatch();
 
   // One-time, idempotent compat migration (sync → pin): rewrite legacy on-disk state (the `sync/` unit
   // dirs, `sync_process`/`synced`/`sync:`/`last_sync_at` keys, and the old `com.largefilebridge.sync`

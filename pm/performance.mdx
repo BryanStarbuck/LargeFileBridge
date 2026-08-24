@@ -1262,6 +1262,213 @@ ScansPage's former constant 10s `["jobs"]` poll is **deleted** — its lifecycle
 | P-37 | **The two repo screens go async + progressive** — row composition is async, yields every 200 rows and uses the non-blocking `check-ignore`, so the whole app stops freezing while a repo is composed (and every background consumer of the same composer inherits it); two NDJSON routes stream `head`/`files`/`totals`/`enrich`/`pins`/`extras` and `meta`/`batch`. **Nothing expensive gates a row**: the freshness triggers fire behind the `head`, and the ledger fold, the `git check-ignore` axis and the `ipfs pin ls` enumeration are all patched in afterwards — `head` 1,177 ms → 1 ms, first row 3,331 ms → 9 ms on a 1,875-candidate repo. The list's single-flight promise became a multicast feed; sticky flags snapshotted once per repo. Partial states are marked `partial`, deferred fields stay UNDETERMINED rather than defaulting (which fixed a live ⊘ bug — see the entry), and the UI withholds every claim it has not finished counting | `backend/store-model/units.service.ts`, `backend/repos/repos.router.ts`, `backend/git/git.service.ts`, `backend/store-model/config.service.ts`, `shared/src/types.ts`, `frontend/src/api/streamQueries.ts`, `frontend/src/pages/repos/{ReposPage,OneRepoPage,MetricsStrip}.tsx`; guards: `backend/store-model/repo-row-stats.spec.ts`, `backend/repos/repos-stream.spec.ts`, `frontend/src/api/streamQueries.spec.ts` |
 | P-38 | **Say that work is still running, and stop the UI stating results as if it were not** — metric tiles + the Repos list go provisional (spinner + a sentence naming the pass) while ANY census-moving job runs or is queued, not just while the page's own fetch streams, which is what let `Pull down` read **0 in all-clear green** until the backbone pull landed minutes later; the windowed-table scroll height is now MEASURED from a real row instead of assumed from a constant, killing the clamp/re-window feedback loop that made a long list jitter at the bottom; `simple-git` no longer receives a binary path it refuses, which had broken **every** git pull/commit/push/device-registration on Windows on every cycle; and the pin pass's own writes stop waking the watcher into a full discovery rescan per fetched file | `frontend/src/lib/useCensusPending.ts`, `frontend/src/pages/repos/{MetricsStrip,ReposPage}.tsx`, `frontend/src/components/table/useWindowedRows.ts` + `DataTable.tsx`, `frontend/vite.config.ts`; `backend/modules/git/git-bin.ts` + `git.service.ts`, `backend/modules/watcher/self-writes.ts` + `watcher.service.ts`, `backend/modules/ipfs/ipfs.service.ts`; guards: `backend/modules/git/git-bin-windows.spec.ts`, `backend/modules/watcher/self-writes.spec.ts`, `frontend/src/components/table/useWindowedRows.spec.ts`, `frontend/src/lib/useCensusPending.spec.ts` |
 
+## Seventh pass (P-39…P-44) — the app that "hangs" · T3/T5/T6
+
+Opened 2026-08-23 from a five-day read of `error.err` plus the first CPU profile ever taken of the live
+backend. The report was two sentences — *"the webapp appears to hang and appears to be very slow"* — and the
+fault trail could not confirm or deny it, which is itself the first finding.
+
+### 🔴 P-39 — Nothing measured the EVENT LOOP, so the one symptom users report had no signal · T6
+
+- **Where:** nowhere. `heap-watch.ts` samples three memory layers well and explains why the machine gets
+  *slower*; nothing explained why the app stops *answering*, because that is not a memory fact.
+- **Symptom.** Three subsystems were each reporting the same underlying event in a different vocabulary,
+  and no line anywhere said *"the loop was blocked for N ms"*:
+  * `[run-worker] no acknowledgement from the app within 15s over 3 attempts — but 127.0.0.1:8787 IS
+    accepting connections`. That sentence **is** a blocked event loop described from outside: the kernel
+    completes the handshake from the listen backlog with no help from us, so the port looks alive while the
+    thread that would answer has not run for 15 seconds. 47 of these since 2026-07-28.
+  * `[auth] Token verification failed: "exp" claim timestamp check failed` on ordinary endpoints. The
+    browser refuses to attach a Bearer with under `TOKEN_HARD_FLOOR_S` (10 s) of life, so a token that
+    verifies as EXPIRED spent longer than that between attach and verify — queued in front of a stalled loop.
+  * `[client:useLiveRefresh.stream] TypeError: network error` — a long-lived NDJSON stream the browser gave
+    up on because no chunk arrived.
+- **Fix (done).** `monitorEventLoopDelay()` — a libuv-level histogram maintained in C++, so it keeps running
+  *while JS is blocked*, which a JS timer by construction cannot. Percentiles per 60 s window, WARN above
+  1 s of blockage. It found the problem on its first window.
+
+The event-loop delay histogram, its window and its WARN are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/loop-watch.ts` — `startLoopWatch()` / `closeWindow()`, armed from `main.ts`
+
+### 🔴 P-40 — The sidecar mirror re-merged 20,059 unchanged files every pass (the hang) · T3
+
+- **Where:**
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` —
+  `copyTrackedFile()`.
+- **Symptom.** `loop-watch` reported **up to 13,858 ms of blockage per 60 s window**, reproducibly, with
+  `p50=21 ms` — one long freeze, not general slowness. A CPU profile of the running backend attributed
+  **7.9 s of 17 s of non-idle time to `readYamlDoc` alone**, plus 1.65 s to `serialize` and 1.36 s to
+  `parseLedgerBestEffort`.
+- **Root cause.** `copyTrackedFile` dispatched on SHAPE before it checked whether there was anything to do:
+
+  ```ts
+  if (isSidecarPath(rel)) return mergeSidecarInto(src, dst);   // two parses + a stringify
+  if (isHistoryPath(rel)) return mergeHistoryInto(src, dst);
+  if (sameBytes(src, dst)) return false;                        // …the cheap check, last
+  ```
+
+  The identical-bytes guard existed — it just protected the **plain copy**, the one path that was already
+  cheap, and not the two that cost ~100× more per file. And the mirror is a **reconciliation to current
+  state, not a queue of changes**, so an unchanged repo re-mirrors its unchanged sidecars every pass.
+  Measured on this machine: **20,059 of 20,062 sidecars (99.98%) are byte-identical** between Local Storage
+  and the mirror at any moment; 29,287 YAML files / 30 MB take **4.8 s just to parse**.
+- **Fix (done).** Move the guard ABOVE the dispatch. Merging two byte-identical documents is provably a
+  no-op — every rule in the module is idempotent on equal inputs (events union a set with itself,
+  `first_seen` takes the earliest of two equal timestamps, the identity block's total order over two
+  identical blocks returns that block) — so the merge was paying two reads, two parses and a stringify to
+  arrive back at the bytes already on disk. `false` is the correct return: the destination did not change.
+
+The identical-bytes short-circuit and the merge rules it guards are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `copyTrackedFile()` / `sameBytes()` / `mergeSidecarInto()`; guard: `tracked-file-noop.spec.ts`
+
+### 🔴 P-41 — Eight call sites each started their own hours-long `pin/ls` · T3
+
+- **Where:** `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `listPins()`.
+- **Symptom.** `pin/ls` enumerates the whole pinset in one RPC, so on this product's pinsets it is a
+  **minutes-to-hours** call, not a control call. `log.log` carries real enumerations at 1,234,025 ms,
+  3,172,380 ms and **7,269,167 ms (over two hours)** — and the stall lines arrive in **pairs and triples
+  sharing one millisecond**, which is three concurrent enumerations aborting together.
+- **Root cause.** No coalescing anywhere. A pin pass, a scan and one load of the IPFS page each began their
+  own two-hour enumeration against the same daemon (`pin.service` ×3, `ipfs-page.service` ×2,
+  `scanner.service`, and `keptCidSet`/`contentPinnedCid` inside the module). A stalled enumeration then
+  RETRIES from zero, three times.
+- **Fix (done).** Single-flight + a 60 s memo. Every caller wants the same answer to the same question about
+  the same daemon, and the answer takes long enough that overlapping askers are guaranteed. A FAILURE is
+  never cached (`listPins()` throws by contract — a partial list read as "these are all the pins" is the
+  pin-lost bug), and `invalidatePinsetCache()` fires on `pinAdd`/`pinRm` so a read after one of our own
+  writes is never stale.
+
+The coalescing memo, its invalidation and the uncoalesced enumeration behind it are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `listPins()` / `enumeratePins()` / `invalidatePinsetCache()`; guard: `pinset-coalescing.spec.ts`
+
+### 🟠 P-44 — What the profile found UNDER P-40 · T3/T5
+
+Fixing P-40 dropped non-idle CPU time over a comparable 4-minute run from **17.0 s to 9.3 s**, and the
+worst stall per window from 10.6–14.8 s to ~4.1–4.4 s. Re-profiling then named the next two, both the same
+shape — *work re-done over inputs that had not moved*. Their effect is visible in the profile (the work is
+gone) but sits inside run-to-run variance in the stall numbers; see the table at the end of this pass:
+
+1. **The 3.1 MB ledger was parsed twice per pass, per repo.** `writeIfDifferent` stopped the WRITE; it
+   could not stop the work in front of it. The union parses BOTH `decisions.yaml` files and re-serializes —
+   1.38 s in `parseLedgerBestEffort` plus 0.25 s in `serializeLedger` — to re-derive a file it then declined
+   to write. The union is a pure function of the two files' contents, so it now runs at most once per
+   (unchanged src, unchanged dst) pair, keyed on `(ino, size, mtime)` — the same revalidation
+   `foreign-pin.service.ts` uses. The destination's identity is recorded **after** the write, so a pass that
+   did write is memoized against what it actually left on disk. **It caches our own completed work, not the
+   data:** any edit on any path — a local decision, a git merge, a peer's push into the mirror — moves an
+   mtime and the union runs again.
+2. **`sameBytes` allocated 2 MiB of scratch per FILE.** Two `Buffer.allocUnsafe(1 MiB)` per call, ~20,000
+   files per pass, to compare files that average about a kilobyte — ~40 GB of allocation churn per pass.
+   That is the same rate failure as the 4 GB RSS incident (memory.mdx): V8 grows and the OS keeps the pages
+   needed to absorb the churn, so RSS ratchets while `heapUsed` — sampled between GCs — looks healthy. The
+   profile agreed: the garbage collector was the third-largest consumer. The buffers are now allocated once
+   at module scope, which is safe because `sameBytes` is synchronous and can never be re-entered.
+
+The memoized ledger union and the reused comparison buffers are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `syncLedgerInto()` / `ledgerId()` / `sameLedgerId()` (guard: `ledger-sync-memo.spec.ts`);
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracked-file-merge.ts` — `sameBytes()` and its module-scope `sameBytesBufA`/`sameBytesBufB`
+
+### 🟠 P-42 — The RAM clamp re-spent the same memory every admission · T5
+
+- **Where:** `~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts`
+  — `transcribeConcurrency()`.
+- **Symptom.** `[heap-watch] MEMORY PRESSURE` kept firing *after* [to_fix.mdx](./to_fix.mdx) §6.1 moved this
+  clamp from `os.totalmem()` to `os.freemem()` — including one at **`free=116567MB`**, i.e. a clamp that
+  computed (116 GB − 2 GB) / 2 GB = **57 concurrent whisper jobs** and then drove a 192 GB box into swap.
+- **Root cause — an admission race, not a wrong pool.** `os.freemem()` reports memory free RIGHT NOW, and a
+  whisper job holds nothing until its multi-GB model has finished loading. So a wave admitted against one
+  reading was still paging in when the next admission read `freemem()` again, saw memory the running jobs
+  had already spoken for but not yet touched, and admitted another wave against it. §6.1 asked for a global
+  budget above the buckets; this is that idea in its narrow, correct form.
+- **Fix (done).** Charge the already-admitted jobs against the pool: `inFlight × modelRamPerJob` comes off
+  before the division, and the running count is added back so the answer stays a TOTAL cap the caller can
+  compare against `running[bucket]`. The floor of 1 still holds — a loaded box narrows to serial, never to a
+  stall (transcribe_engine.mdx §5.1).
+
+The in-flight charge and the caller that supplies the running count are in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/transcribe/transcribe-concurrency.ts` — `transcribeConcurrency()`; `~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/jobqueue.service.ts` — `capFor()` / `takeRunnable()`; guard: `transcribe-concurrency.spec.ts`
+
+### 🟠 P-43 — Two argv ceilings and one log that buried the others
+
+Three smaller faults found in the same read, each with a real consequence:
+
+1. **`spawn E2BIG` stalled a whole backbone** (5× on 2026-08-20). `checkpointOwnWrites()` spread thousands
+   of dirty sidecar paths into argv, which the kernel caps at 1 MiB. Past the cap `spawn` fails before git
+   starts; the catch treated that as "the checkpoint didn't land", so the tree stayed dirty and the merge
+   that follows was refused for *"local changes would be overwritten"* — which is why the SAME repo's
+   merge-conflict and push-rejected warnings sit right beside it. **One root cause wearing three names.**
+   Fixed with `--pathspec-from-file` + `--pathspec-file-nul` (no ceiling, and NUL delimiting means no path
+   can be split on whitespace); the third call site dropped its pathspec entirely, since it intersected the
+   result in JS anyway.
+2. **A stream had no 401 backstop.** Every axios call recovers from a 401 by forcing one shared re-mint and
+   retrying; streams did not, so a reconnect re-sent the SAME cached token and the tab looped —
+   `"exp" claim timestamp check failed` on the server, `stream failed: HTTP 401` on the client — until the
+   token expired outright and the SDK re-minted on its own. Now: force the re-mint, retry exactly once (a
+   401 that survives a fresh mint is a real authorization answer and must surface, not spin).
+3. **`case heal` was 3,219 of ~5,700 lines in one `log.log` generation** — one sentence repeating ~80 times
+   per name about a condition that had not changed. The heal is continuous BY DESIGN (a peer on an old build
+   re-sends the second spelling every cycle), so the line fired every pass forever. That is not reporting,
+   it is burying: it pushes the pin, scan and git lines a reader actually needs out of the retained
+   generations. Now said once per name per process — and a restart is exactly when it is worth re-stating.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` — `withPathspecFile()` / `checkpointOwnWrites()` / `stagedOwnPaths()` (guard: `checkpoint-e2big.spec.ts`);
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/streamNdjson.ts` — `streamNdjson()`'s 401 retry (guard: `streamNdjson.spec.ts`);
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/sidecar-heal.ts` — `resolveCasing()`'s `healAnnounced` set
+
+| P-39 | **Measure the event loop** — a libuv-level `monitorEventLoopDelay()` histogram (it keeps running while JS is blocked, which a JS timer cannot), percentiles per 60 s window, WARN above 1 s of blockage. The one symptom users report had no signal until this | `backend/shared/loop-watch.ts`, `backend/src/main.ts` |
+| P-40 | **Identical bytes cost nothing** — the `sameBytes` guard moved ABOVE the shape dispatch in `copyTrackedFile`, where it had been protecting only the already-cheap plain copy. 20,059 of 20,062 sidecars (99.98%) are byte-identical on any pass and were each paying two reads, two YAML parses and a stringify to arrive back at the bytes on disk: 7.9 s of 17 s non-idle, and the 13,858 ms freeze | `backend/modules/storage/tracked-file-merge.ts`; guard: `tracked-file-noop.spec.ts` |
+| P-41 | **One `pin/ls`, however many askers** — single-flight + 60 s memo over an RPC that measured 7,269,167 ms (2 h) on this pinset, reached by eight uncoalesced call sites. Failures never cached (a partial list read as complete is the pin-lost bug); `invalidatePinsetCache()` on every local pin/unpin | `backend/modules/ipfs/ipfs.service.ts`; guard: `pinset-coalescing.spec.ts` |
+| P-42 | **Charge admitted jobs against the RAM pool** — `os.freemem()` is a reading of right now, and a whisper job is not resident until its model loads, so each admission re-spent memory the last one had already committed (a swap warning at `free=116567MB` = a computed cap of 57 jobs). `inFlight × modelRamPerJob` now comes off the pool; the answer stays a TOTAL cap, and the floor of 1 still holds | `backend/modules/transcribe/transcribe-concurrency.ts`, `backend/modules/jobqueue/jobqueue.service.ts`; guard: `transcribe-concurrency.spec.ts` |
+| P-43 | **Three smaller faults from the same read** — `spawn E2BIG` on a >1 MiB pathspec silently un-landed the pre-merge checkpoint, so the merge that follows was refused and the storage's backbone stalled (the merge-conflict and push-rejected warnings beside it were the SAME fault); the stream path had no 401 re-mint backstop, so a reconnect re-sent the dead token in a loop; and `case heal` was 3,219 of ~5,700 lines in one log generation, burying every other diagnostic | `backend/modules/git/git.service.ts`, `frontend/src/lib/streamNdjson.ts`, `backend/modules/storage/sidecar-heal.ts`; guards: `checkpoint-e2big.spec.ts`, `streamNdjson.spec.ts` |
+| P-44 | **What the profile found under P-40** — the ledger union now runs at most once per (unchanged src, unchanged dst) pair, keyed on `(ino, size, mtime)`, instead of parsing a 3.1 MB `decisions.yaml` twice per repo per pass to re-derive a file `writeIfDifferent` then declined to write; and `sameBytes` stopped allocating 2 MiB of scratch per file (~40 GB of churn per pass over ~20,000 files that average a kilobyte) | `backend/modules/storage/tracking-sync.service.ts`, `backend/modules/storage/tracked-file-merge.ts`; guard: `ledger-sync-memo.spec.ts` |
+
+### 🔴 STILL OPEN after this pass — the mirror walk is one uninterrupted synchronous stretch
+
+P-40 and P-44 removed the *per-file work*; they did not change the *shape of the walk*. `copyTree` /
+`reconcileFromSyncRepo` are **synchronous** and traverse ~29,000 files across 105 repos with no yield
+point anywhere, so even at a tenth of a millisecond per file the pass owns the loop for seconds.
+
+Measured on this machine, worst stall per 60 s window, in the order the builds ran (`loop-watch`, so these
+are comparable numbers rather than impressions):
+
+| build | windows observed | worst stall |
+|---|---|---|
+| before any fix | 5 of 5 warned | **10,612 – 14,756 ms** |
+| P-40 only | 4 of 4 warned | 4,092 – 4,412 ms |
+| P-40 + P-44 | 6 of 17 warned; **11 windows clean** | 2,770 – 6,824 ms |
+
+**The remaining stalls are a WARM-UP cost, not a steady-state one.** One uninterrupted 12-minute run makes
+the shape unmistakable — every stall is in the first four minutes, and then it stops:
+
+| minute | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8 | 9 | 10 | 11 | 12 |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| worst stall | 6,824 ms | 5,457 ms | clean | 4,205 ms | clean | clean | clean | clean | clean | clean | clean | clean |
+
+Every memo in this pass is per-process, and the mirror genuinely does have to compare all 29,000 files
+once before it knows which ones have not moved. So a fresh boot pays for that — and then the app goes
+**quiet**, which is exactly what it never did before: previously every single window warned, indefinitely,
+at 10–15 s.
+
+Read the attribution honestly too: **P-40 is what moved the peak.** P-44's two fixes are real (the profile
+shows the work gone) but their effect on the peak sits inside run-to-run variance, because how long a
+window stalls depends on which passes land in it. What P-44 plausibly bought is the quiet tail.
+
+So: nothing now approaches the 15 s at which `run-worker` gives up, and a settled app stops freezing at
+all — but the first few minutes after a restart still stall for seconds, and that cost grows with the
+number of tracked files.
+
+Two things make this harder than P-37's fix, and both need deciding before anyone starts:
+* `copyTree` is reached from **synchronous** callers (`writeRepoStorage` → `mirrorToSyncRepo`), so it
+  cannot simply become `async` — the call chain above it has to move first.
+* Yielding **between repos** is easy (`reconcileMirroredRepos` is already `async`) but would barely move
+  the number: one repo, `charlie-kirk`, holds 20,062 of the 29,287 sidecars. The yield has to go **inside**
+  the per-repo walk to matter.
+
+`loop-watch` (P-39) is what makes this measurable now, and it should stay the acceptance test: the pass is
+done when no 60 s window reports a stall above ~1 s on this machine's state.
+
+
 Follow-ups (not blocking the hang fix): move the walk into a **worker thread**
 (`backend/modules/fsindex/walker.worker.ts`) so even CPU cost leaves the HTTP loop
 (P-22 ships the in-thread streaming walk first); off-main-thread filter/sort Web

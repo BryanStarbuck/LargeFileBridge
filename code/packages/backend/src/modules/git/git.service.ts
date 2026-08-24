@@ -45,6 +45,10 @@ export { HEARTBEAT_MAX_AGE_MS, heartbeatIsStale } from "../../shared/heartbeat.j
 // deliberately NOT written into the durable fault trail (net-transient.ts, bug #15).
 import { isTransientNetworkError } from "../../shared/net-transient.js";
 
+/** Monotonic suffix for the pathspec scratch files, so two calls inside the same millisecond (the checkpoint
+ *  does `add` then `commit` back-to-back) can never collide on one filename. */
+let pathspecSeq = 0;
+
 /** The shared, append-mostly SDL lists that must union-merge instead of conflicting (git_backbone.mdx §4.2).
  *  Both SHAPES are listed: the SDL root (current — an SDL has no `.lfbridge/`, artifact_placement_policy.mdx
  *  §0) and the legacy `.lfbridge/` (an SDL not yet migrated by migrate-sdl-lfbridge.ts). A pattern for a
@@ -974,7 +978,7 @@ export class GitBackbone {
     const ours = [...dirty].filter((p) => isLfbOwnedSdlPath(p));
     if (ours.length === 0) return [];
     try {
-      await this.git.add(["--", ...ours]);
+      await this.withPathspecFile(ours, (spec) => this.git.raw(["add", ...spec]));
       await this.dropVolatileOnlyChanges(); // §6.6 — a heartbeat must never become a commit, on EITHER path
       // Re-read: the gate may have reverted every path we staged, and a checkpoint of nothing must not
       // become an empty commit (nor claim it cleared the way for the merge — there was nothing in the way).
@@ -983,9 +987,13 @@ export class GitBackbone {
         log.debug("git", `${this.dir}: pre-merge checkpoint had nothing but volatile-only churn — no commit`);
         return [];
       }
-      await this.git.commit(
-        `LFB: checkpoint ${stillStaged.length} generated file(s) before merge`,
-        stillStaged,
+      await this.withPathspecFile(stillStaged, (spec) =>
+        this.git.raw([
+          "commit",
+          "-m",
+          `LFB: checkpoint ${stillStaged.length} generated file(s) before merge`,
+          ...spec,
+        ]),
       );
       log.info("git", `${this.dir}: checkpointed ${stillStaged.length} LFB-generated file(s) before the merge`);
       return stillStaged;
@@ -995,11 +1003,45 @@ export class GitBackbone {
     }
   }
 
+  /**
+   * Run one git subcommand against a pathspec of ANY size, by handing git the paths in a NUL-delimited
+   * FILE instead of on the command line.
+   *
+   * WHY. argv is capped by the kernel (`ARG_MAX` — 1 MiB on macOS, and the process environment is charged
+   * against the same budget). A pre-merge checkpoint on the act3 backbone stages a few thousand sidecar
+   * YAMLs whose relative paths run ~80–100 bytes each, so the spread `["--", ...ours]` crossed the cap and
+   * `spawn` failed with **E2BIG** before git ever started (observed 5× on 2026-08-20). The catch treated
+   * that as "the checkpoint didn't land", so the tree stayed dirty, the merge that follows was refused for
+   * "local changes would be overwritten", and the storage's whole backbone cycle stalled — the E2BIG is the
+   * ROOT of the merge-conflict and push-rejected warnings logged alongside it, not a separate fault.
+   *
+   * `--pathspec-from-file` + `--pathspec-file-nul` (git ≥ 2.25) removes the ceiling entirely and is exact:
+   * NUL delimiting means no path can be split on whitespace or mangled by quoting. The scratch file lives
+   * under the state root's `tmp/`, never inside the repo, so it can never be seen by `git status`.
+   */
+  private async withPathspecFile<T>(paths: string[], run: (spec: string[]) => Promise<T>): Promise<T> {
+    const dir = path.join(resolveStateDir(), "tmp");
+    fs.mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, `pathspec.${process.pid}.${Date.now()}.${pathspecSeq++}.lst`);
+    fs.writeFileSync(file, paths.join("\0"));
+    try {
+      return await run([`--pathspec-from-file=${file}`, "--pathspec-file-nul"]);
+    } finally {
+      try {
+        fs.unlinkSync(file);
+      } catch {
+        // Best effort — a leftover scratch file is harmless and the next boot's tmp sweep takes it.
+      }
+    }
+  }
+
   /** Which of `candidates` are still staged against HEAD after the quiet gate ran. On any error we assume
    *  they all are — a redundant commit is always safer than a silently skipped one. */
   private async stagedOwnPaths(candidates: string[]): Promise<string[]> {
     try {
-      const out = await this.git.raw(["diff", "--cached", "--name-only", "--", ...candidates]);
+      // NO PATHSPEC. The result is intersected with `candidates` below anyway, so passing them to git
+      // buys nothing and is the third way this method could blow `ARG_MAX` (see `withPathspecFile`).
+      const out = await this.git.raw(["diff", "--cached", "--name-only"]);
       const staged = new Set(out.split("\n").map((s) => s.trim()).filter(Boolean));
       return candidates.filter((p) => staged.has(p));
     } catch (e) {

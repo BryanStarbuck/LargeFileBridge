@@ -69,11 +69,28 @@ export function copyTrackedFile(src: string, dst: string, rel: string): boolean 
     fs.copyFileSync(src, dst);
     return true;
   }
+  // IDENTICAL BYTES ⇒ NOTHING TO MERGE. This check used to sit BELOW the shape dispatch, guarding only the
+  // plain copy — so it protected the one path that was already cheap and skipped the two that are not.
+  //
+  // Merging two byte-identical documents is provably a no-op: every rule below is idempotent on equal
+  // inputs (events union a set with itself, `first_seen` takes the earliest of two equal timestamps, and
+  // the identity block's total order over two identical blocks returns that block). The merge therefore
+  // costs two `readFileSync`s, two full YAML parses and a `YAML.stringify` to arrive back at the bytes
+  // already on disk.
+  //
+  // At this product's scale that is the whole hang. Measured on this machine: 20,059 of 20,062 sidecars
+  // (99.98%) are byte-identical between Local Storage and the mirror on any given pass — because the
+  // mirror is a RECONCILIATION to current state, not a queue of changes, so an unchanged repo re-mirrors
+  // its unchanged sidecars every time. A CPU profile of the live backend attributed 7.9 s of 17 s of
+  // non-idle time to `readYamlDoc` alone, plus 1.65 s to `serialize` — all of it spent recomputing files
+  // that did not change. That is what `loop-watch` reports as `EVENT LOOP BLOCKED … up to 13858ms`, and
+  // what `run-worker` sees from the outside as "no acknowledgement from the app within 15s".
+  //
+  // Returning `false` is exactly right: the destination's bytes did not change, which is the question the
+  // reconcile leg asks to decide whether a peer's state really arrived.
+  if (sameBytes(src, dst)) return false;
   if (isSidecarPath(rel)) return mergeSidecarInto(src, dst);
   if (isHistoryPath(rel)) return mergeHistoryInto(src, dst);
-  // The plain-copy fallback compares first. `copyFileSync` on identical bytes is not free — this path runs
-  // for every tracked file of every mirrored repo on every backbone pass.
-  if (sameBytes(src, dst)) return false;
   fs.copyFileSync(src, dst);
   return true;
 }
@@ -92,6 +109,21 @@ export function copyTrackedFile(src: string, dst: string, rel: string): boolean 
  *  differing chunk instead of reading both files to the end. */
 const SAME_BYTES_CHUNK = 1024 * 1024; // 1 MiB per side; the whole comparison is bounded at ~2 MiB
 
+// ONE pair of scratch buffers for the whole process, not one pair per call.
+//
+// `Buffer.allocUnsafe(1 MiB)` twice per comparison was 2 MiB of garbage per FILE — and this now runs for
+// every tracked file of every mirrored repo on every pass, which on this machine is ~20,000 files, i.e.
+// ~40 GB of allocation churn per pass to compare files that average about a kilobyte. That rate is the
+// same failure `foreign-pin.service.ts`'s write-back store was built to stop (memory.mdx — the 4 GB RSS
+// incident): V8 grows and the OS keeps the pages needed to absorb the churn, so RSS ratchets up while
+// `heapUsed`, sampled between GCs, looks fine. The profile agreed — the garbage collector was the third
+// largest consumer in the run that found this.
+//
+// Reuse is safe because `sameBytes` is SYNCHRONOUS and never re-entered: it does no `await` and calls
+// nothing that could call back into it, so no second comparison can be in flight over the same buffers.
+const sameBytesBufA = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
+const sameBytesBufB = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
+
 function sameBytes(a: string, b: string): boolean {
   let fdA: number | null = null;
   let fdB: number | null = null;
@@ -104,8 +136,8 @@ function sameBytes(a: string, b: string): boolean {
 
     fdA = fs.openSync(a, "r");
     fdB = fs.openSync(b, "r");
-    const bufA = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
-    const bufB = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
+    const bufA = sameBytesBufA;
+    const bufB = sameBytesBufB;
     let offset = 0;
     while (offset < sa.size) {
       const want = Math.min(SAME_BYTES_CHUNK, sa.size - offset);
