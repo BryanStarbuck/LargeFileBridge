@@ -10,6 +10,7 @@
 // under `repos/<repoKey>/`, so they are never mirrored (artifact_placement_policy.mdx §8).
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import YAML from "yaml";
 import { RepoStorageDocSchema, type Manifest, type ManifestFile } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
@@ -26,7 +27,7 @@ export { mergeManifests } from "./manifest-merge.js";
 // The decision-ledger union merge is a LEAF for the same reason — the ledger, like the manifest, is
 // SHARED state that must union, never last-writer-copy (decisions.mdx §5; the 2026-07-20 "not backed up:
 // 22 here / 0 there" defect where wholesale ledger copies erased events the copy source didn't know).
-import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
+import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger, ledgerIsUnreadable } from "./ledger-merge.js";
 import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
@@ -39,9 +40,32 @@ import { copyTrackedFile } from "./tracked-file-merge.js";
 import { deferWhileBusy } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
+// Name this section in the event-loop stall report. Both legs of the mirror are SYNCHRONOUS walks over
+// ~29,000 tracked files, which is what `loop-watch` used to report as an anonymous multi-second freeze
+// (performance.mdx P-45/P-46).
+import { blocking, recordCooperative } from "../../shared/blocking.js";
 
 // Machine-local files under `repos/<repoKey>/` that must NOT travel to the sync repo.
 const LOCAL_ONLY = new Set([".sync-repo", ".durable-artifact"]);
+
+/**
+ * The SHARED documents that are MERGED in both directions and therefore never plain-copied in either.
+ * Both legs of the mirror hold them out of the tree walk and hand them to `mergeManifestInto` /
+ * `syncLedgerInto` instead — which is what lets the (expensive, multi-megabyte) merges be skipped
+ * independently of the (cheap) tree copy when nothing has moved (performance.mdx P-45).
+ *
+ * `repo_storage.yaml` is the third merged-on-the-way-IN document and is listed in `reconcileFromSyncRepo`'s
+ * own skip set; on the way OUT it is copied and then scrubbed of machine-local fields, so it stays here.
+ */
+const MERGED_NEVER_COPIED: ReadonlySet<string> = new Set(["manifest.yaml", "decisions.yaml"]);
+
+/** The same set on the way IN, plus `repo_storage.yaml` — which the reconcile leg merges FIELD-WISE (it
+ *  must preserve this computer's own machine-local fields) while the mirror leg copies and then scrubs it. */
+const RECONCILE_MERGED_NEVER_COPIED: ReadonlySet<string> = new Set([
+  "manifest.yaml",
+  "decisions.yaml",
+  "repo_storage.yaml",
+]);
 
 /** Turn the per-repo sync-repo mirror ON (write the marker) or OFF (remove it). The marker is THREE lines —
  *  the owning storage's sync-repo absolute path, then this repo's `repoUid` (its machine-independent
@@ -125,14 +149,29 @@ export function ensureSyncRepoMarker(
 }
 
 /**
- * Recursively copy `src` → `dst`, skipping the machine-local files at the top level. Best-effort.
+ * ONE walk, driven two ways — the fix for "the mirror is one uninterrupted synchronous stretch".
+ *
+ * The walk itself is unavoidable: the mirror is a RECONCILIATION to current state, not a queue of changes,
+ * so it has to look at all ~29,000 tracked files across 105 repos to know which ones have not moved. The
+ * memos (P-45) made each look cheap; they could not make the STRETCH interruptible, and an uninterrupted
+ * stretch is precisely what the event loop cannot tolerate — while it runs, no HTTP response, no stream
+ * chunk and no timer is served, which is what the user reports as "the pages are spinning".
+ *
+ * A generator solves it without forking the code. `copyTreeGen` yields once per entry; the SYNCHRONOUS
+ * driver drains it in a tight loop (byte-for-byte the old behaviour, for the write-path callers that
+ * cannot await), and the ASYNCHRONOUS driver drains it in time-boxed slices, handing the loop back between
+ * them. Both drive the SAME code, so the two can never drift — which is the failure mode a hand-written
+ * async copy of this function would have had.
  *
  * `rel` is the path SO FAR from the per-repo state-dir root, and it is the whole reason this signature is
  * not just `(src, dst)`: it is what lets `copyTrackedFile` recognise a `files/<rel>.yaml` sidecar or a
  * `history/<device>.txt` log and MERGE it instead of stamping over it (tracked-file-merge.ts). Every other
  * shape still gets the plain copy it always got.
+ *
+ * `skip` applies at the TOP level only — the shared documents that are merged rather than copied
+ * (`MERGED_NEVER_COPIED`, and the reconcile leg's own set). Nested paths are never named in it.
  */
-function copyTree(src: string, dst: string, rel = ""): boolean {
+function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<string>): Generator<void, boolean, void> {
   let entries: fs.Dirent[];
   let changed = false;
   try {
@@ -146,7 +185,7 @@ function copyTree(src: string, dst: string, rel = ""): boolean {
   // no Mac or Windows clone can hold apart from the first (sidecar-heal.ts, "case collisions").
   const dstCasing = caseIndex(dst);
   for (const e of entries) {
-    if (rel === "" && LOCAL_ONLY.has(e.name)) continue;
+    if (rel === "" && (LOCAL_ONLY.has(e.name) || skip.has(e.name))) continue;
     const name = resolveCasing(dstCasing, e.name);
     const s = path.join(src, e.name);
     const d = path.join(dst, name);
@@ -155,11 +194,15 @@ function copyTree(src: string, dst: string, rel = ""): boolean {
       // A `\` in the NAME is a whole relative path that lost its separators (§6.1b). Copying it verbatim
       // is what makes the bad spelling travel — and a `\` filename cannot be checked out on Windows at
       // all, so mirroring it breaks the clone for the machine that produced it. Heal it here instead.
+      // The INGRESS direction matters just as much: this is the leg that put the strays back on this disk
+      // two minutes after they were deleted, because a peer on an older build kept re-adding them.
+      // Normalizing on arrival makes the bounce one-way — the peer can keep sending it, it stops here.
       if (e.isFile() && isStrayPathName(e.name)) {
         changed = copyHealed(s, dst, e.name) || changed;
+        yield;
         continue;
       }
-      if (e.isDirectory()) changed = copyTree(s, d, childRel) || changed;
+      if (e.isDirectory()) changed = (yield* copyTreeGen(s, d, childRel, NO_SKIP)) || changed;
       else if (e.isFile()) changed = copyTrackedFile(s, d, childRel) || changed;
     } catch (err) {
       // Skip an unreadable/unwritable leaf; never fail the whole mirror — BUT make it observable. A file
@@ -167,8 +210,70 @@ function copyTree(src: string, dst: string, rel = ""): boolean {
       // prevent, so a per-leaf copy failure must reach error.err (the top-level caller still returns true).
       log.warn("storage", `copyTree: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
     }
+    // ONE yield point per entry. The synchronous driver ignores it; the asynchronous one uses it to hand
+    // the event loop back. Per-ENTRY rather than per-DIRECTORY on purpose: one repo here holds 20,062 of
+    // the 29,287 sidecars, and most of them live under a single `files/` subtree — a per-directory yield
+    // would leave that whole subtree as one unbroken stretch and buy nothing.
+    yield;
   }
   return changed;
+}
+
+const NO_SKIP: ReadonlySet<string> = new Set<string>();
+
+/** Drain the walk synchronously — identical behaviour to the recursive function this replaced. Used by the
+ *  write-path callers (`writeRepoStorage` → `mirrorToSyncRepo`), which are synchronous top to bottom and
+ *  cannot await anything (worktree-gate.ts's header explains why that call chain is shaped that way). */
+function drainSync(gen: Generator<void, boolean, void>): boolean {
+  let step = gen.next();
+  while (!step.done) step = gen.next();
+  return step.value;
+}
+
+/** How long one slice of an interruptible walk may hold the loop before handing it back. 8 ms is about
+ *  half a 60 Hz frame: short enough that a request queued behind it is answered promptly, long enough that
+ *  the `setImmediate` round-trips are a rounding error against ~59,000 entries. */
+const SLICE_MS = Math.max(1, Number(process.env.LFB_WALK_SLICE_MS) || 8);
+
+/** Hand the event loop back: run every already-queued I/O callback, timer and pending HTTP response, then
+ *  resume. `setImmediate` (the check phase) rather than a promise microtask, which would NOT yield —
+ *  microtasks drain before the loop ever advances, so `await Promise.resolve()` in a tight loop blocks
+ *  exactly as hard as no await at all. This is the difference between an interruptible walk and a
+ *  decorative one. */
+const handBackTheLoop = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
+
+/**
+ * Drain the walk in time-boxed slices, giving the event loop a turn between them. Used by every
+ * ASYNCHRONOUS caller — the pin pass and the backbone's `reconcileMirroredRepos`, which is where the
+ * multi-second stretches were actually being spent.
+ *
+ * The accumulated SYNCHRONOUS time is reported to the window tally through `recordCooperative`, which
+ * never warns: 1.4 s taken in 8 ms slices is real CPU and belongs in the ranking, but it did not block
+ * anything, and treating it like a stall would devalue the warnings that are one.
+ */
+async function drainYielding<T>(label: string, detail: string, gen: Generator<void, T, void>): Promise<T> {
+  const began = performance.now();
+  let handedBack = 0;
+  let sliceStarted = performance.now();
+  let step = gen.next();
+  while (!step.done) {
+    if (performance.now() - sliceStarted >= SLICE_MS) {
+      const pausedAt = performance.now();
+      await handBackTheLoop();
+      handedBack += performance.now() - pausedAt;
+      sliceStarted = performance.now();
+    }
+    step = gen.next();
+  }
+  recordCooperative(label, performance.now() - began - handedBack, detail);
+  return step.value;
+}
+
+/** Recursively copy `src` → `dst`, skipping named top-level entries and the machine-local files.
+ *  Best-effort. Both legs of the mirror reach the walk through this — the shared documents are MERGED and
+ *  are named in `skip` (see `MERGED_NEVER_COPIED`), never copied. */
+function copyTreeExcept(src: string, dst: string, skip: ReadonlySet<string>): boolean {
+  return drainSync(copyTreeGen(src, dst, "", skip));
 }
 
 /**
@@ -179,6 +284,19 @@ function copyTree(src: string, dst: string, rel = ""): boolean {
  * Category-B write (e.g. from `writeRepoStorage`) and on demand.
  */
 export function mirrorToSyncRepo(repoRoot: string): boolean {
+  return blocking("storage.mirror", () => drainSync(mirrorGen(repoRoot)), repoRoot);
+}
+
+/**
+ * The mirror, INTERRUPTIBLE — same generator, drained in {@link SLICE_MS} slices with the event loop
+ * handed back between them. Every ASYNCHRONOUS caller should prefer this: the walk is the same work either
+ * way, but this version cannot be the reason a page spins (performance.mdx P-47).
+ */
+export async function mirrorToSyncRepoYielding(repoRoot: string): Promise<boolean> {
+  return drainYielding("storage.mirror.yielding", repoRoot, mirrorGen(repoRoot));
+}
+
+function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
   const dst = resolveStateSyncRepo(repoRoot);
   if (!dst) return false;
   // NEVER write into a working copy that git is mid-cycle in (worktree-gate.ts). This copy runs on the SCAN
@@ -193,62 +311,50 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
     return false;
   }
   try {
-    // The mirror's ledger may hold events THIS machine has not reconciled yet — a peer's push, or (two
-    // clones of one remote share ONE `repos/<repoUid>/` subtree) the other clone's decisions. Capture them
-    // BEFORE the tree copy overwrites the file, then write the UNION back (decisions.mdx §5). Without this
-    // the copy is last-writer-wins and silently erases the other writer's events.
+    const localStateDir = repoStateDir(repoRoot);
     const mirrorLedgerFile = path.join(dst, "decisions.yaml");
-    const priorLedgerRaw = readFileOrNull(mirrorLedgerFile);
-    const priorMirrorEvents = parseLedgerBestEffort(priorLedgerRaw);
-    // THE MANIFEST NEEDS THE SAME PROTECTION, AND DID NOT HAVE IT. The two files are the same kind of thing —
-    // SHARED state whose entries arrive from several computers — yet only the ledger was captured here, so
-    // `copyTree` below stamped this machine's whole view of the manifest over every peer's. Measured on the
-    // live `all` repo: commit a6cf284e6 deleted 6 entries and 13 pin claims one commit after the peer that
-    // owned them pushed them, and 8 commits in that file's history dropped entries this way. `mergeManifests`
-    // has always documented "absence is NEVER a delete"; the mirror simply never called it.
+    const localLedgerFile = path.join(localStateDir, "decisions.yaml");
     const mirrorManifestFile = path.join(dst, "manifest.yaml");
-    const priorManifestRaw = readFileOrNull(mirrorManifestFile);
-    const priorMirrorManifest = readManifestBestEffort(mirrorManifestFile, "repo");
-    copyTree(repoStateDir(repoRoot), dst);
-    // BOTH captures above are BEST-EFFORT READS, and both hand back "nothing" for a file that EXISTS but
-    // will not parse — conflict markers, a truncated write, a schema that moved. `copyTree` has already
-    // stamped our copy over it by then, and the guards below skip the merge precisely in that case, so an
-    // unreadable mirror was silently REPLACED: the wholesale overwrite this whole block exists to prevent,
-    // reached through the one door left open. Put the bytes back instead and say so loudly. A conflicted
-    // mirror is a problem for a human or the next git merge to settle; it is not ours to discard, and the
-    // readers already refuse to parse one as truth rather than trusting a half-merged file.
-    restoreUnparseableMirror(mirrorManifestFile, priorManifestRaw, priorMirrorManifest.files.length > 0, repoRoot);
-    restoreUnparseableMirror(mirrorLedgerFile, priorLedgerRaw, priorMirrorEvents.length > 0, repoRoot);
-    if (priorMirrorManifest.files.length > 0) {
-      try {
-        const localManifest = readManifestBestEffort(path.join(repoStateDir(repoRoot), "manifest.yaml"), "repo");
-        // The PRIOR MIRROR IS THE WIRE, so our own label is stripped from it here too. Without this the
-        // union hands us back the very self-claim we may have just dropped locally, and no correction to
-        // this computer's own claim could ever be published — it would be re-adopted on the way out.
-        // `incomingIsWire` is the other half of that: every OTHER computer's claim passes through from the
-        // mirror rather than being re-unioned from our copy, so this machine can never re-publish a peer's
-        // withdrawn claim (manifest-merge.ts).
-        fs.writeFileSync(
-          mirrorManifestFile,
-          serializeManifest(
-            mergeManifests(localManifest, priorMirrorManifest, computerLabel(), {
-              incomingIsWire: true,
-              supersededCid, // a wrapper CID we disproved must not ride back in from the mirror
-            }),
-          ),
-          "utf8",
-        );
-      } catch (e) {
-        log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
-      }
+    const localManifestFile = path.join(localStateDir, "manifest.yaml");
+
+    // THE TWO SHARED DOCUMENTS ARE MERGED, NEVER COPIED — so they are held OUT of the tree copy entirely.
+    //
+    // They used to go through it: `copyTree` stamped this computer's copy over the mirror's, and the merge
+    // legs below then put the union back. That worked, but it made the copy and the merge INSEPARABLE —
+    // skipping the (expensive) merge would have left the plain overwrite standing, i.e. the wholesale
+    // last-writer-wins erase this block exists to prevent. Excluding them here is what makes the merge legs
+    // independently skippable, which is what the memo needs (performance.mdx P-45), and it is also simply
+    // the truthful shape: `reconcileFromSyncRepo` has always excluded the same three names on the way in.
+    //
+    // The mirror's ledger may hold events THIS machine has not reconciled yet — a peer's push, or (two
+    // clones of one remote share ONE `repos/<repoUid>/` subtree) the other clone's decisions — and the
+    // manifest is the same kind of thing: SHARED state whose entries arrive from several computers.
+    // Measured on the live `all` repo, back when the manifest WAS copied: commit a6cf284e6 deleted 6
+    // entries and 13 pin claims one commit after the peer that owned them pushed them, and 8 commits in
+    // that file's history dropped entries that way. `mergeManifests` has always documented "absence is
+    // NEVER a delete"; the mirror simply never called it.
+    yield* copyTreeGen(localStateDir, dst, "", MERGED_NEVER_COPIED);
+    // Between the walk and the two merges: each merge is ATOMIC (a multi-megabyte YAML parse cannot be
+    // sliced), so the yields have to sit at the seams between them.
+    yield;
+
+    // Both legs pass `repoRoot` as the mirror guard: a destination that exists but will not parse is
+    // REFUSED (and loudly reported) rather than replaced — see `refuseUnparseableMirror`.
+    try {
+      // THE MIRROR IS THE WIRE, so our own label is stripped from it here too. Without that the union
+      // hands us back the very self-claim we may have just dropped locally, and no correction to this
+      // computer's own claim could ever be published — it would be re-adopted on the way out.
+      // `incomingIsWire` is the other half: every OTHER computer's claim passes through FROM the mirror
+      // rather than being re-unioned from our copy, so this machine can never re-publish a peer's
+      // withdrawn claim (manifest-merge.ts).
+      mergeManifestInto(JOB_MIRROR_MANIFEST, mirrorManifestFile, localManifestFile, mirrorManifestFile, repoRoot);
+    } catch (e) {
+      log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
     }
-    if (priorMirrorEvents.length > 0) {
-      try {
-        const localEvents = parseLedgerBestEffort(readFileOrNull(path.join(repoStateDir(repoRoot), "decisions.yaml")));
-        fs.writeFileSync(mirrorLedgerFile, serializeLedger(unionLedgerEvents(localEvents, priorMirrorEvents)), "utf8");
-      } catch (e) {
-        log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
-      }
+    try {
+      syncLedgerInto(mirrorLedgerFile, localLedgerFile, JOB_MIRROR_LEDGER, repoRoot);
+    } catch (e) {
+      log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
     }
     // Announce the write so the owning SDL's git backbone commits + pushes it (storage_company.mdx §8.7).
     // Without this the mirrored text sits in the SDL's working tree until the 10-minute device worker
@@ -275,30 +381,29 @@ export function mirrorToSyncRepo(repoRoot: string): boolean {
 }
 
 /**
- * Undo `copyTree`'s overwrite of ONE shared mirror file that existed but could not be parsed, so the merge
- * that would have preserved it never ran. Called with the bytes read BEFORE the copy: a file that was
- * absent (`null`), empty, or parsed fine (`parsedOk`) is left exactly as the copy left it — this only ever
- * fires for the case where we know we destroyed something we could not read.
+ * Is this SHARED mirror document one we must refuse to touch? `unreadable` comes from the caller's OWN
+ * parse (`readManifestChecked` / `ledgerIsUnreadable`), so this guard costs no extra read and — the point —
+ * no extra `YAML.parse`.
+ *
+ * "Unreadable" means conflict markers, a truncated write, or text that is not the document at all. It does
+ * NOT mean EMPTY: a valid `files: []` / `events: []` is the shape every freshly-created mirror subtree
+ * starts in, and refusing to write into one would mean a new mirror could never be seeded.
+ *
+ * A file that really is unreadable is not ours to discard. It used to be discarded and then put back —
+ * `copyTree` stamped our copy over it and a repair step restored the bytes — which worked but meant the
+ * destroying copy and the merge could never be skipped independently. Now the merged documents are held
+ * out of the tree copy entirely (see `MERGED_NEVER_COPIED`), so refusing here means the bytes were never
+ * touched at all, and a human or the next git merge can settle it.
  */
-function restoreUnparseableMirror(
-  file: string,
-  priorRaw: string | null,
-  parsedOk: boolean,
-  repoRoot: string,
-): void {
-  if (parsedOk || !priorRaw?.trim()) return;
-  try {
-    if (fs.readFileSync(file, "utf8") === priorRaw) return; // copy was a no-op — nothing was lost
-    fs.writeFileSync(file, priorRaw, "utf8");
-    log.error(
-      "storage",
-      `mirrorToSyncRepo(${repoRoot}): ${file} exists but could not be parsed (conflict markers or corrupt) — ` +
-        `restored the mirror's own bytes rather than overwriting it with this computer's copy. ` +
-        `Resolve it in the sync repo; nothing from this machine was merged into it this pass.`,
-    );
-  } catch (e) {
-    log.warn("storage", `mirrorToSyncRepo(${repoRoot}): could not restore ${file}: ${(e as Error).message}`);
-  }
+function refuseUnparseableMirror(file: string, unreadable: boolean, repoRoot: string): boolean {
+  if (!unreadable) return false;
+  log.error(
+    "storage",
+    `mirrorToSyncRepo(${repoRoot}): ${file} exists but could not be parsed (conflict markers or corrupt) — ` +
+      `left the mirror's own bytes untouched rather than overwriting them with this computer's copy. ` +
+      `Resolve it in the sync repo; nothing from this machine was merged into it this pass.`,
+  );
+  return true;
 }
 
 /**
@@ -314,13 +419,19 @@ const MACHINE_LOCAL_REPO_STORAGE = ["last_scan", "counts"] as const;
  *  otherwise-unchanged doc is byte-stable across mirrors. Best-effort: an unparseable file is left as copied. */
 function scrubVolatileRepoStorage(file: string): void {
   try {
-    const parsed = RepoStorageDocSchema.safeParse(YAML.parse(fs.readFileSync(file, "utf8")) ?? {});
+    const raw = fs.readFileSync(file, "utf8");
+    const parsed = RepoStorageDocSchema.safeParse(YAML.parse(raw) ?? {});
     if (!parsed.success) return;
     const defaults = RepoStorageDocSchema.parse({ repo_storage: {} }).repo_storage;
     for (const key of MACHINE_LOCAL_REPO_STORAGE) {
       (parsed.data.repo_storage as Record<string, unknown>)[key] = (defaults as Record<string, unknown>)[key];
     }
-    fs.writeFileSync(file, YAML.stringify(parsed.data, { sortMapEntries: true }), "utf8");
+    // writeIfDifferent, not writeFileSync: the scrub is a RECONCILIATION, so on the overwhelming majority
+    // of passes it re-derives the bytes already on disk. Writing them anyway re-stamps the mtime, which is
+    // the identity every memo in this module is keyed on — an unconditional write here would invalidate the
+    // very caches that stop the multi-megabyte merges from re-running (performance.mdx P-45), and would
+    // re-touch a file in the sync repo's working tree on every pass for nothing.
+    writeIfDifferent(file, YAML.stringify(parsed.data, { sortMapEntries: true }));
   } catch {
     /* missing/unreadable mirror copy — nothing to scrub */
   }
@@ -338,21 +449,44 @@ function readFileOrNull(file: string): string | null {
 /** Read a manifest YAML best-effort; a missing/corrupt/half-merged file yields an empty manifest rather than
  *  throwing, so one bad copy never blocks the whole reconcile. */
 function readManifestBestEffort(file: string, unit: Manifest["unit"]): Manifest {
+  return readManifestChecked(file, unit).manifest;
+}
+
+/**
+ * Did this manifest FAIL to parse, as opposed to parsing fine and holding no entries?
+ *
+ * `readManifestBestEffort` answers an EMPTY manifest to both questions, and the mirror's "refuse to
+ * overwrite what we could not read" guard has to tell them apart: a valid `files: []` is the shape every
+ * freshly-created mirror subtree starts in, and reading it as corrupt refuses to seed that mirror forever
+ * while reporting a data-loss ERROR for a file that is perfectly fine (performance.mdx P-45).
+ *
+ * Absent or blank is NOT unreadable — there is nothing there to protect.
+ */
+function readManifestChecked(file: string, unit: Manifest["unit"]): { manifest: Manifest; unreadable: boolean } {
   const empty: Manifest = { schema_version: 1, unit, files: [] };
+  let raw: string;
   try {
-    const raw = fs.readFileSync(file, "utf8");
-    if (raw.includes("<<<<<<<")) return empty; // conflict markers — treat as nothing to merge
+    raw = fs.readFileSync(file, "utf8");
+  } catch {
+    return { manifest: empty, unreadable: false }; // absent — nothing to protect, nothing to merge
+  }
+  if (!raw.trim()) return { manifest: empty, unreadable: false };
+  try {
+    if (raw.includes("<<<<<<<")) return { manifest: empty, unreadable: true }; // conflict markers — half-merged
     const parsed = YAML.parse(raw) as Partial<Manifest> | null;
-    if (!parsed || !Array.isArray(parsed.files)) return empty;
+    if (!parsed || !Array.isArray(parsed.files)) return { manifest: empty, unreadable: true };
     // Same POSIX-separator heal as the primary reader (manifest.service.ts): a Windows peer's mirrored
     // copy carries `\` paths, and merging those unnormalized would re-introduce duplicate spellings of
     // the same file into Local Storage on every reconcile.
-    return normalizeManifestPaths(
-      { schema_version: parsed.schema_version ?? 1, unit: parsed.unit ?? unit, files: parsed.files as ManifestFile[] },
-      file,
-    );
+    return {
+      manifest: normalizeManifestPaths(
+        { schema_version: parsed.schema_version ?? 1, unit: parsed.unit ?? unit, files: parsed.files as ManifestFile[] },
+        file,
+      ),
+      unreadable: false,
+    };
   } catch {
-    return empty;
+    return { manifest: empty, unreadable: true }; // not YAML at all
   }
 }
 
@@ -407,47 +541,135 @@ function writeIfDifferent(file: string, content: string): boolean {
 //
 // This is a cache of OUR OWN completed work, not of the data: any edit to either file on any path (a local
 // decision, a git merge, a peer's push landing in the mirror) changes its mtime and the union runs again.
-interface LedgerSyncId {
+interface FileId {
   ino: number;
   size: number;
   mtimeMs: number;
 }
-const ledgerSyncMemo = new Map<string, { dst: LedgerSyncId | null; src: LedgerSyncId | null }>();
+/** `job|dstFile|srcFile` -> the identities BOTH files had when that job last COMPLETED. */
+const workMemo = new Map<string, { dst: FileId | null; src: FileId | null }>();
 
-function ledgerId(file: string): LedgerSyncId | null {
+function fileId(file: string): FileId | null {
   const st = statOrNull(file);
   return st && { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
 }
-const sameLedgerId = (a: LedgerSyncId | null, b: LedgerSyncId | null): boolean =>
+const sameFileId = (a: FileId | null, b: FileId | null): boolean =>
   a != null && b != null && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+
+/** Job names — one per (kind of merge, direction), so two directions can never share a memo entry. */
+const JOB_LEDGER = "ledger-union";
+const JOB_MIRROR_LEDGER = "mirror-ledger";
+const JOB_MIRROR_MANIFEST = "mirror-manifest";
+const JOB_RECONCILE_MANIFEST = "reconcile-manifest";
+
+const memoKey = (job: string, dstFile: string, srcFile: string): string => `${job}|${dstFile}|${srcFile}`;
+
+/**
+ * True when this (job, dst, src) triple ran to completion before and NEITHER file has moved since — i.e.
+ * re-running it is provably a no-op. A file that is ABSENT on either side is never "settled": it has no
+ * identity to compare, and absence is exactly the case that still needs the work done.
+ */
+function pairSettled(job: string, dstFile: string, srcFile: string): boolean {
+  const seen = workMemo.get(memoKey(job, dstFile, srcFile));
+  return !!seen && sameFileId(seen.dst, fileId(dstFile)) && sameFileId(seen.src, fileId(srcFile));
+}
+
+/** Record that this job just completed, against the bytes NOW on disk. Call AFTER the write. */
+function markPairSettled(job: string, dstFile: string, srcFile: string): void {
+  workMemo.set(memoKey(job, dstFile, srcFile), { dst: fileId(dstFile), src: fileId(srcFile) });
+}
+
+/** Forget a job's memo so the next pass re-tries it. Used when a leg REFUSED to run (an unparseable
+ *  mirror): a refusal is not a completion, and it must keep re-announcing itself until a human fixes it. */
+function forgetPair(job: string, dstFile: string, srcFile: string): void {
+  workMemo.delete(memoKey(job, dstFile, srcFile));
+}
 
 /**
  * Union `srcFile`'s events into `dstFile`, writing only when the bytes change. Returns whether `dstFile`
  * changed. Skips the whole parse/union/serialize when neither file has moved since this pair last ran.
+ *
+ * `guardDstFor` names the repo when `dstFile` is the MIRROR copy: an unreadable mirror is refused rather
+ * than replaced (see `refuseUnparseableMirror`). The reconcile direction writes to LOCAL Storage and passes
+ * nothing, keeping its long-standing self-heal — an unreadable local copy IS repaired from the mirror.
  */
-function syncLedgerInto(dstFile: string, srcFile: string): boolean {
-  const key = `${dstFile}\u0000${srcFile}`;
-  const dstBefore = ledgerId(dstFile);
-  const srcNow = ledgerId(srcFile);
-  const seen = ledgerSyncMemo.get(key);
-  if (seen && sameLedgerId(seen.dst, dstBefore) && sameLedgerId(seen.src, srcNow)) return false;
-
-  const merged = unionLedgerEvents(
-    parseLedgerBestEffort(readFileOrNull(dstFile)),
-    parseLedgerBestEffort(readFileOrNull(srcFile)),
-  );
+function syncLedgerInto(dstFile: string, srcFile: string, job: string = JOB_LEDGER, guardDstFor?: string): boolean {
+  if (pairSettled(job, dstFile, srcFile)) return false;
+  const dstRaw = readFileOrNull(dstFile);
+  if (guardDstFor !== undefined && refuseUnparseableMirror(dstFile, ledgerIsUnreadable(dstRaw), guardDstFor)) {
+    forgetPair(job, dstFile, srcFile); // a refusal is not a completion — re-announce it every pass
+    return false;
+  }
+  const merged = unionLedgerEvents(parseLedgerBestEffort(dstRaw), parseLedgerBestEffort(readFileOrNull(srcFile)));
   const changed = writeIfDifferent(dstFile, serializeLedger(merged));
   // AFTER the write — the memo must describe the bytes now on disk, not the ones we started from.
-  ledgerSyncMemo.set(key, { dst: ledgerId(dstFile), src: srcNow });
+  markPairSettled(job, dstFile, srcFile);
   return changed;
 }
 
-/** TEST-ONLY: forget every memoized ledger union. */
+/**
+ * Merge the local and mirror manifests and write the result to `dstFile`, at most once per (unchanged dst,
+ * unchanged other side) pair. `mergeManifests` is ASYMMETRIC — `mine` keeps this computer's own `pinned_by`
+ * claims while `incoming` is read as the WIRE — so BOTH legs pass (local, mirror) in that order no matter
+ * which side they write; the legs differ only in their destination, and the merged document is the same one.
+ *
+ * The manifest is the other multi-megabyte document in this module (0.9 MB on `charlie-kirk`, 110 ms per
+ * `YAML.parse`) and it was the one merge with no memo at all: `writeIfDifferent` declined the WRITE while
+ * both parses and the serialize in front of it ran in full, on every mirror AND every reconcile, for every
+ * repo, forever (performance.mdx P-45).
+ *
+ * `guardDstFor` carries the same "refuse, never replace" rule as the ledger above, and for the same reason.
+ */
+function mergeManifestInto(
+  job: string,
+  dstFile: string,
+  localFile: string,
+  mirrorFile: string,
+  guardDstFor?: string,
+): boolean {
+  // The destination is always one of the two inputs, so "neither input moved" is exactly "this (dst, the
+  // OTHER one) pair has not moved" — one memo entry covers both.
+  const other = dstFile === localFile ? mirrorFile : localFile;
+  if (pairSettled(job, dstFile, other)) return false;
+  const localRead = readManifestChecked(localFile, "repo");
+  const mirrorRead = readManifestChecked(mirrorFile, "repo");
+  const local = localRead.manifest;
+  const mirror = mirrorRead.manifest;
+  if (guardDstFor !== undefined) {
+    const dstRead = dstFile === localFile ? localRead : mirrorRead;
+    if (refuseUnparseableMirror(dstFile, dstRead.unreadable, guardDstFor)) {
+      forgetPair(job, dstFile, other);
+      return false;
+    }
+  }
+  const merged = mergeManifests(local, mirror, computerLabel(), {
+    incomingIsWire: true, // the mirror is the SHARED copy — a peer's claim is ITS statement, not ours
+    supersededCid, // …but a wrapper CID we PROVED wrong must never ride back in from either side
+  });
+  const changed = writeIfDifferent(dstFile, serializeManifest(merged));
+  markPairSettled(job, dstFile, other);
+  return changed;
+}
+
+/** TEST-ONLY: forget every memoized merge, in every direction. */
 export function resetLedgerSyncMemo(): void {
-  ledgerSyncMemo.clear();
+  workMemo.clear();
 }
 
 export function reconcileFromSyncRepo(repoRoot: string): boolean {
+  return blocking("storage.reconcile", () => drainSync(reconcileGen(repoRoot)), repoRoot);
+}
+
+/**
+ * The reconcile, INTERRUPTIBLE — same generator, drained in {@link SLICE_MS} slices. This is the leg the
+ * backbone runs for all 105 repos on every pull, and the one `loop-watch` named as the multi-second stall:
+ * `storage.reconcile 3776ms/105 calls, worst 1466ms on charlie-kirk` (performance.mdx P-47).
+ */
+export async function reconcileFromSyncRepoYielding(repoRoot: string): Promise<boolean> {
+  return drainYielding("storage.reconcile.yielding", repoRoot, reconcileGen(repoRoot));
+}
+
+function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
   const src = resolveStateSyncRepo(repoRoot);
   if (!src) return false;
   const dst = repoStateDir(repoRoot);
@@ -458,19 +680,13 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
     // 1. the manifest — a MERGE, never a copy (§8.4.3)
     const incomingManifest = path.join(src, "manifest.yaml");
     if (fs.existsSync(incomingManifest)) {
-      const localPath = path.join(dst, "manifest.yaml");
-      const merged = mergeManifests(
-        readManifestBestEffort(localPath, "repo"),
-        readManifestBestEffort(incomingManifest, "repo"),
-        computerLabel(),
-        {
-          incomingIsWire: true, // the mirror is the shared copy — peer claims are ITS statement, not ours
-          supersededCid, // …but a CID we PROVED wrong is not a peer's statement to make (§5.1 Layer 0)
-        },
-      );
-      // The CANONICAL serializer, not a bare stringify: this file is also written by manifest.service, and
-      // two spellings of one document make each writer re-dirty what the other just wrote (§6).
-      changed = writeIfDifferent(localPath, serializeManifest(merged)) || changed;
+      // Memoized on (local, incoming) identity, and written through the CANONICAL serializer — this file is
+      // also written by manifest.service, and two spellings of one document make each writer re-dirty what
+      // the other just wrote (§6). No `guardDstFor`: the destination here is LOCAL Storage, and an
+      // unreadable local copy is exactly the one that SHOULD be repaired from the mirror.
+      changed =
+        mergeManifestInto(JOB_RECONCILE_MANIFEST, path.join(dst, "manifest.yaml"), path.join(dst, "manifest.yaml"), incomingManifest) ||
+        changed;
     }
     // 2. the decision ledger — ALSO a merge, never a copy (decisions.mdx §5). A copy replaces the local
     // log with whatever the mirror last held; events recorded here but not yet mirrored (or erased from
@@ -508,7 +724,7 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
     }
     // 3. everything else — the per-file sidecars and per-device history logs are MERGED inside
     //    `copyTrackedFile`; only shapes with nothing shared to lose are still copied outright.
-    changed = copyTreeExcept(src, dst, new Set(["manifest.yaml", "decisions.yaml", "repo_storage.yaml"])) || changed;
+    changed = (yield* copyTreeGen(src, dst, "", RECONCILE_MERGED_NEVER_COPIED)) || changed;
     return changed;
   } catch (e) {
     log.warn("storage", `reconcileFromSyncRepo(${repoRoot}) failed: ${(e as Error).message}`);
@@ -642,7 +858,12 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
         // Make sure this repo points at THIS sync repo before folding, so a repo whose marker was never
         // written (the default-ON case on a fresh computer) still receives its peer's state.
         ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
-        if (!reconcileFromSyncRepo(repoPath)) continue;
+        // YIELDING, not the synchronous driver. This loop runs the reconcile for all 105 repos on
+        // every backbone pull, and `loop-watch` named exactly this as the multi-second stall:
+        // `storage.reconcile 3776ms/105 calls, worst 1466ms on charlie-kirk`. Same work, same
+        // generator — handed back to the event loop every few milliseconds so a page load queued
+        // behind it is answered instead of spinning (performance.mdx P-47).
+        if (!(await reconcileFromSyncRepoYielding(repoPath))) continue;
         folded++;
         // A fold is THE moment a peer's file becomes visible here (storage_company.mdx §8.9). Bump the
         // repo's topic explicitly rather than relying on the `writeRepoManifest` below to do it: that call
@@ -689,40 +910,4 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
   return folded;
 }
 
-/** copyTree, skipping named top-level entries (the manifest, which is merged instead of copied). */
-function copyTreeExcept(src: string, dst: string, skip: Set<string>): boolean {
-  let entries: fs.Dirent[];
-  let changed = false;
-  try {
-    entries = fs.readdirSync(src, { withFileTypes: true });
-  } catch {
-    return false;
-  }
-  fs.mkdirSync(dst, { recursive: true });
-  // Ingress side of the same case heal — this is the direction that materializes a peer's second spelling
-  // on THIS disk. Normalizing here is what makes the bounce one-way.
-  const dstCasing = caseIndex(dst);
-  for (const e of entries) {
-    if (skip.has(e.name) || LOCAL_ONLY.has(e.name)) continue;
-    const name = resolveCasing(dstCasing, e.name);
-    const s = path.join(src, e.name);
-    const d = path.join(dst, name);
-    try {
-      // THE INGRESS HEAL (§6.1b). This is the direction that put the strays back on this disk 2 minutes
-      // after they were deleted: a peer on an older build re-added `files/jfk\training\clip.mp4.yaml` to
-      // the shared sync repo, and this copy materialized it locally again. Normalize on arrival, and the
-      // bounce becomes one-way — the peer can keep sending it, it stops here.
-      if (e.isFile() && isStrayPathName(e.name)) {
-        changed = copyHealed(s, dst, e.name) || changed;
-        continue;
-      }
-      // `name` IS the state-dir-relative path at this level, so the sidecar/history merge sees the
-      // `files/` and `history/` prefixes it keys on.
-      if (e.isDirectory()) changed = copyTree(s, d, name) || changed;
-      else if (e.isFile()) changed = copyTrackedFile(s, d, name) || changed;
-    } catch (err) {
-      log.warn("storage", `reconcile: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
-    }
-  }
-  return changed;
-}
+

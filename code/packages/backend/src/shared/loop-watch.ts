@@ -31,6 +31,13 @@
 // heap-watch: instrumentation must never be the thing that takes the server down.
 import { monitorEventLoopDelay, type IntervalHistogram } from "node:perf_hooks";
 import { log } from "./logging.js";
+// WHO blocked it. The histogram measures delay; it cannot name a culprit, which is why every stall
+// investigation used to start with attaching a CPU profiler to a live backend. `blocking.ts` accumulates
+// per-section totals for exactly this window, and the two are printed together (performance.mdx P-46).
+import { takeBlockingTally } from "./blocking.js";
+// WHO WAS WAITING. A stall is only a user-visible hang if a request was queued behind it — and the
+// requests that were in flight ACROSS the stall are the pages the user watched spin.
+import { inFlightSummary } from "./request-watch.js";
 
 const NS_PER_MS = 1e6;
 
@@ -94,6 +101,11 @@ function closeWindow(): void {
   if (!Number.isFinite(sample.meanMs) || !Number.isFinite(sample.maxMs)) return;
   last = sample;
 
+  // Take the tally EVERY window, warned or not — it is per-window state, and leaving it to accumulate
+  // across a quiet window would attribute that window's work to the next stall.
+  const culprits = takeBlockingTally();
+  const waiting = inFlightSummary();
+
   if (sample.maxMs >= WARN_MAX_MS) {
     log.warn(
       "loop-watch",
@@ -101,9 +113,15 @@ function closeWindow(): void {
         `stopped for up to ${sample.maxMs}ms in the last ${Math.round(WINDOW_MS / 1000)}s ` +
         `(p99=${sample.p99Ms}ms, p50=${sample.p50Ms}ms, mean=${sample.meanMs}ms). This is what "the app ` +
         `hangs" means from the inside: the port keeps accepting connections because the kernel does that ` +
-        `for us, while nothing gets answered. Look for synchronous work on a hot path — a whole-store ` +
-        `JSON.parse/stringify, a readFileSync over a multi-megabyte file, or an unbounded loop over a ` +
-        `pinset. See performance.mdx T3.`,
+        `for us, while nothing gets answered.` +
+        // The two lines that turn this from a symptom into a diagnosis.
+        (culprits
+          ? `\n    BLOCKED BY (synchronous time this window, by section): ${culprits}`
+          : `\n    BLOCKED BY: nothing measured — the stall came from code no blocking() section wraps yet. ` +
+            `Wrap the suspect path (shared/blocking.ts) rather than guessing.`) +
+        (waiting ? `\n    STILL WAITING (requests open across the stall — these are the spinning pages): ${waiting}` : "") +
+        `\n    Look for synchronous work on a hot path — a whole-store JSON.parse/stringify, a readFileSync ` +
+        `over a multi-megabyte file, or an unbounded loop over a pinset. See performance.mdx T3.`,
     );
     return;
   }
@@ -111,7 +129,8 @@ function closeWindow(): void {
     log.info(
       "loop-watch",
       `event loop: p99=${sample.p99Ms}ms p50=${sample.p50Ms}ms max=${sample.maxMs}ms ` +
-        `mean=${sample.meanMs}ms over ${Math.round(WINDOW_MS / 1000)}s`,
+        `mean=${sample.meanMs}ms over ${Math.round(WINDOW_MS / 1000)}s` +
+        (culprits ? ` — busiest sections: ${culprits}` : ""),
     );
   }
 }

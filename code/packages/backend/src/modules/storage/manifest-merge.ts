@@ -44,7 +44,14 @@ export function foldManifestFiles(files: ManifestFile[], unit: Manifest["unit"])
       ...(incWins ? f : prev),
       path: p,
       sha256: prev.sha256 ?? f.sha256,
-      pinned_by: [...new Set([...prev.pinned_by, ...f.pinned_by])],
+      // `?? []` on BOTH sides, not decoration. `readManifestBestEffort` casts a parsed YAML `files:`
+      // list straight to `ManifestFile[]` with no validation, so an entry that reaches here from a
+      // PEER — an older build, a hand-edit, a half-merged file — can legitimately have no
+      // `pinned_by` at all. Spreading `undefined` throws "not iterable", every caller of this module
+      // wraps the merge in a try/catch that WARNs, and the visible consequence is that the manifest
+      // silently stops travelling between the user's computers: the exact silent-loss failure this
+      // module exists to prevent, reached through a missing optional field.
+      pinned_by: [...new Set([...(prev.pinned_by ?? []), ...(f.pinned_by ?? [])])],
     });
   }
   return [...byPath.values()];
@@ -192,7 +199,7 @@ export function serializeManifest(manifest: Manifest): string {
         size: f.size,
         sha256: f.sha256,
         modified_at: f.modified_at,
-        pinned_by: [...f.pinned_by].sort((a, b) => a.localeCompare(b)),
+        pinned_by: [...(f.pinned_by ?? [])].sort((a, b) => a.localeCompare(b)), // see foldManifestFiles
       }))
       .sort((a, b) => a.path.localeCompare(b.path)),
   });

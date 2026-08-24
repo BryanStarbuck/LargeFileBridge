@@ -3,6 +3,7 @@
 // downloads the AppShell + the landing route's JS — not every table and the media viewer up front.
 import { createRootRoute, createRoute, createRouter, lazyRouteComponent, Outlet, redirect } from "@tanstack/react-router";
 import { AppShell } from "./pages/app/AppShell.js";
+import { noteRouteChange } from "./lib/perfWatch.js";
 
 // The File System browser and both entity pages take an optional absolute `path` search param
 // (menus.mdx §2 cell navigation → files.mdx / directories.mdx / directory.mdx).
@@ -249,6 +250,14 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 export const router = createRouter({ routeTree });
+
+// Tell the browser-side performance watch when a navigation STARTS, so "this page has been spinning for
+// 12 s" is measured from the router's own answer rather than guessed from a component's mount effect
+// (lib/perfWatch.ts, performance.mdx P-46). Subscribing here — not inside a component — means the timer
+// starts on the navigation that begins a lazy chunk download, which is part of what the user is waiting for.
+router.subscribe("onBeforeNavigate", ({ toLocation }) => {
+  noteRouteChange(toLocation.pathname);
+});
 
 declare module "@tanstack/react-router" {
   interface Register {

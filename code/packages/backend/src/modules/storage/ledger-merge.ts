@@ -112,6 +112,26 @@ export function parseLedgerBestEffort(raw: string | null): DecisionEvent[] {
   }
 }
 
+/**
+ * Did this text FAIL to parse, as opposed to parsing fine and holding nothing?
+ *
+ * `parseLedgerBestEffort` answers `[]` to both questions, and a caller that reads that as "corrupt" gets a
+ * VALID, EMPTY ledger — the shape every freshly-created mirror subtree starts life in — wrong. The mirror's
+ * "refuse to overwrite what we could not read" guard has to tell those two apart or it refuses to seed a
+ * brand-new mirror, forever, and reports a data-loss ERROR while doing it (performance.mdx P-45).
+ *
+ * Blank/absent text is NOT unreadable: there is nothing there to protect.
+ */
+export function ledgerIsUnreadable(raw: string | null): boolean {
+  if (!raw?.trim()) return false;
+  if (/^(<{7}|={7}|>{7})(\s|$)/m.test(raw)) return true; // conflict markers — a half-merged file
+  try {
+    return !DecisionsLedgerSchema.safeParse(YAML.parse(raw) ?? {}).success;
+  } catch {
+    return true; // not YAML at all
+  }
+}
+
 /** The ONE serialization of this document, shared by `writeLedger`, the mirror and the reconcile:
  *  DETERMINISTIC (stable order, no volatile fields, so an unchanged log re-serializes byte-identically and
  *  never churns git) and COMPACTED. Compaction belongs HERE rather than at any single writer for the same

@@ -63,6 +63,10 @@ import { startHeapWatch, stopHeapWatch } from "./shared/heap-watch.js";
 // The OTHER half of "why is the app slow?": heap-watch explains why the machine crawls, loop-watch
 // explains why nothing gets ANSWERED (loop-watch.ts).
 import { startLoopWatch, stopLoopWatch } from "./shared/loop-watch.js";
+// …and the THIRD half of the same question: WHICH request was the user waiting on. loop-watch says the
+// loop stopped, blocking.ts says what stopped it, request-watch.ts says who was left spinning while it did
+// (performance.mdx P-46).
+import { requestWatch, startRequestWatch, stopRequestWatch } from "./shared/request-watch.js";
 import { restoreQueueOnBoot } from "./modules/jobqueue/queue-restore.js";
 import { admitRestored, recordQuarantined } from "./modules/jobqueue/jobqueue.service.js";
 import { readDescription } from "./modules/describe/describe.service.js";
@@ -265,6 +269,7 @@ async function main(): Promise<void> {
     stopHeartbeat();
     stopHeapWatch();
     stopLoopWatch();
+    stopRequestWatch();
     stopWatcher(); // idempotent — a no-op when the watcher never started (signal during boot)
     flushLogs();
     if (!server) process.exit(0); // still booting — nothing listening, nothing to drain
@@ -316,6 +321,10 @@ async function main(): Promise<void> {
   // contract: unref'd, best-effort, and it never throws into the boot path (loop-watch.ts).
   startLoopWatch();
 
+  // …and watch the REQUESTS, which is where the loop stall becomes a spinning page. Armed here, next to
+  // its two siblings; the middleware itself is mounted first in the express chain below.
+  startRequestWatch();
+
   // One-time, idempotent compat migration (sync → pin): rewrite legacy on-disk state (the `sync/` unit
   // dirs, `sync_process`/`synced`/`sync:`/`last_sync_at` keys, and the old `com.largefilebridge.sync`
   // LaunchAgent) into the new `pin` shape BEFORE any config is read/written below. Best-effort; never
@@ -360,6 +369,11 @@ async function main(): Promise<void> {
 
   const app = express();
   app.set("trust proxy", "loopback");
+  // FIRST in the chain, before helmet/cors/body-parsing and every router. The duration this reports is the
+  // one the BROWSER sees: a request that spent four seconds queued behind a blocked event loop before
+  // express ever reached the handler is a four-second request to the person watching the spinner, and a
+  // timer started any lower in the stack would report it as fast (request-watch.ts).
+  app.use(requestWatch);
   const isLocal = cfg.server.mode === "local";
   // HSTS must NOT be sent over plain-http localhost dev: the browser caches the policy for the
   // `localhost` host (includeSubDomains, ~2 years) and then force-upgrades every http://localhost

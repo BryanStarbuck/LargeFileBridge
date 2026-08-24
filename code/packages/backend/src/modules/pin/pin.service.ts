@@ -57,7 +57,7 @@ import { withUnitLock, unitLockBusy } from "./unit-lock.js";
 // per-entry merge that keeps a peer's pin claim alive (storage_company.mdx §8.4.2/§8.4.3/§8.6).
 import {
   ensureSyncRepoMarker,
-  reconcileFromSyncRepo,
+  reconcileFromSyncRepoYielding,
   reconcileMirroredRepos,
   mergeManifests,
 } from "../storage/tracking-sync.service.js";
@@ -726,7 +726,7 @@ async function pinRepoFolderInner(
       // hid teammates' pinned files. Marker + reconcile only; no bytes move, no manifest is published.
       const repoPath = expandHome(cfg.repo.path);
       ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
-      reconcileFromSyncRepo(repoPath);
+      await reconcileFromSyncRepoYielding(repoPath);
       // The receive half runs every pass; `runUnitPin` — the ONLY writer that re-derives this computer's own
       // `pinned_by` from the real pinset — runs never. So this is the one unit shape where a self-claim can
       // outlive the pin that justified it, and the mirror publishes it to the user's other computers on
@@ -755,7 +755,7 @@ async function pinRepoFolderInner(
   opts.report?.({ note: "reading what your other computers changed" });
   await yieldToLoop();
   ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
-  reconcileFromSyncRepo(repoPath);
+  await reconcileFromSyncRepoYielding(repoPath);
   // §8.6 — the two manifests must not disagree. The reconcile lands in Local Storage; the One-Repo file rows
   // read the UNIT manifest, so fold the peer's entries across before the pass rather than leaving a
   // Pull-down count that no row can explain.

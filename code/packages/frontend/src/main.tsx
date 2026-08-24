@@ -23,6 +23,10 @@ import { HotkeyProvider } from "./lib/hotkeys.js";
 import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { leftBar } from "./config/left_bar.js";
 import { clientLog, errMessage } from "./lib/clientLog.js";
+// The BROWSER half of the hang story: long tasks on the main thread and routes that never finish
+// loading, written into the same error.err as the server-side loop/blocking/request watches
+// (lib/perfWatch.ts, performance.mdx P-46).
+import { startPerfWatch } from "./lib/perfWatch.js";
 import { isTransientNetworkError } from "./lib/transientError.js";
 import { tryStaleModuleReload } from "./lib/staleModuleReload.js";
 import "./styles.css";
@@ -250,6 +254,10 @@ const isSsoCallback = window.location.pathname === "/sso-callback";
 // watchdog re-derives the answer every minute (and on wake / tab-visible / back-online), so a token can
 // never lapse under an open page and surface as a failed fetch. Started once, at mount.
 startSessionKeepAlive();
+
+// Arm the browser-side performance fault trail before the first render, so the long tasks that BOOT
+// produces — historically the worst ones — are inside the observer's buffered window.
+startPerfWatch();
 
 // Wrap the initial mount: a failure here (missing #root, a throw during the first render) would leave
 // a blank page with nothing in the fault trail — log it (fatal: the app never came up) then rethrow.

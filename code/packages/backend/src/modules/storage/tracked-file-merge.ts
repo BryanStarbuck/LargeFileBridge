@@ -124,23 +124,103 @@ const SAME_BYTES_CHUNK = 1024 * 1024; // 1 MiB per side; the whole comparison is
 const sameBytesBufA = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
 const sameBytesBufB = Buffer.allocUnsafe(SAME_BYTES_CHUNK);
 
+// ── the equality memo: "we already PROVED these two identical, and neither has moved since" ────────────
+//
+// The size check settles files of different lengths for two stats. It cannot settle the case this module
+// actually spends its life in: 20,059 of 20,062 sidecars on this machine are byte-IDENTICAL to their
+// mirror on any given pass, so the size check passes and both files are then opened and read in full —
+// every file, every repo, every pass, in BOTH directions. Measured 2026-08-24 after the multi-megabyte
+// merges were memoized (performance.mdx P-45), that walk was the whole of the remaining 2,709 ms of
+// synchronous blocking per pass: ~59,000 comparisons at ~46 µs each, essentially all of it open/read/close.
+//
+// A proof of equality stays true for exactly as long as neither file changes, and (ino, size, mtimeNs)
+// answers "did it change?" for a fraction of the cost of reading it. So we record the pair's identity at
+// the moment we proved it equal, and a later comparison whose identities still match is answered from
+// the memo — 2 stats instead of 2 stats + 2 opens + 2 reads + 2 closes.
+//
+// WHY NANOSECONDS, not `mtimeMs`. This is a correctness boundary, not a tuning knob: a false "identical"
+// means a real change never travels to the user's other computer, which is the one failure this whole
+// module exists to prevent. `statSync(..., { bigint: true })` reports APFS/ext4's native nanosecond
+// timestamp, so a rewrite that lands in the same MILLISECOND at the same size still moves the identity.
+// (It is also measurably FASTER than a plain stat here — 16 ms vs 73 ms over 3×3,266 files — because it
+// allocates no `Date` objects.)
+//
+// The key is a HASH of the two paths, not the paths themselves: at ~30,000 files × two 120-character
+// absolute paths, storing the strings would cost ~20 MB of long-lived heap to save 2 s of CPU. A hash
+// collision cannot manufacture a false positive on its own — the VALUE still carries both inodes, both
+// sizes and both nanosecond mtimes, so a colliding entry would have to describe the same two inodes in
+// the same state to be believed.
+interface ByteId {
+  ino: bigint;
+  size: bigint;
+  mtimeNs: bigint;
+}
+
+/** How many proven-equal pairs to remember. ~30,000 tracked files here; the cap is the backstop against a
+ *  process that runs for months across many storages, and dropping the memo only costs a re-read. */
+const EQUAL_MEMO_MAX = 200_000;
+const equalMemo = new Map<string, string>();
+
+function byteId(file: string): ByteId | null {
+  try {
+    const s = fs.statSync(file, { bigint: true });
+    return { ino: s.ino, size: s.size, mtimeNs: s.mtimeNs };
+  } catch {
+    return null;
+  }
+}
+
+/** FNV-1a over both paths, in a stable order, as two 32-bit halves. Cheap (no allocation beyond the key
+ *  string) and stable across passes, which is all a memo key has to be. */
+function pairKey(a: string, b: string): string {
+  const [x, y] = a < b ? [a, b] : [b, a];
+  let h1 = 0x811c9dc5;
+  let h2 = 0x01000193;
+  const s = `${x} ${y}`;
+  for (let i = 0; i < s.length; i++) {
+    const c = s.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 0x01000193) >>> 0;
+    h2 = Math.imul(h2 + c, 0x85ebca6b) >>> 0;
+  }
+  return `${h1.toString(36)}.${h2.toString(36)}`;
+}
+
+/** The identity of a proven-equal pair, in the same stable order as {@link pairKey}. */
+function pairId(a: string, b: string, ia: ByteId, ib: ByteId): string {
+  const [p, q] = a < b ? [ia, ib] : [ib, ia];
+  return `${p.ino},${p.size},${p.mtimeNs};${q.ino},${q.size},${q.mtimeNs}`;
+}
+
+/** TEST-ONLY: forget every proven-equal pair. */
+export function resetSameBytesMemo(): void {
+  equalMemo.clear();
+}
+
 function sameBytes(a: string, b: string): boolean {
   let fdA: number | null = null;
   let fdB: number | null = null;
   try {
-    const sa = fs.statSync(a);
-    const sb = fs.statSync(b);
+    const ia = byteId(a);
+    const ib = byteId(b);
+    // A file we cannot stat cannot be proven equal; answering "no" copies, which is the safe side.
+    if (!ia || !ib) return false;
     // Different lengths cannot be equal — the overwhelmingly common answer, and it costs two stats.
-    if (sa.size !== sb.size) return false;
-    if (sa.size === 0) return true;
+    if (ia.size !== ib.size) return false;
+    if (ia.size === 0n) return true;
 
+    // Proven equal before, and neither file has moved a nanosecond since. Nothing to read.
+    const key = pairKey(a, b);
+    const id = pairId(a, b, ia, ib);
+    if (equalMemo.get(key) === id) return true;
+
+    const size = Number(ia.size);
     fdA = fs.openSync(a, "r");
     fdB = fs.openSync(b, "r");
     const bufA = sameBytesBufA;
     const bufB = sameBytesBufB;
     let offset = 0;
-    while (offset < sa.size) {
-      const want = Math.min(SAME_BYTES_CHUNK, sa.size - offset);
+    while (offset < size) {
+      const want = Math.min(SAME_BYTES_CHUNK, size - offset);
       const readA = fs.readSync(fdA, bufA, 0, want, offset);
       const readB = fs.readSync(fdB, bufB, 0, want, offset);
       // A short/failed read means we cannot PROVE equality; answering "no" copies, which is the safe side.
@@ -148,6 +228,12 @@ function sameBytes(a: string, b: string): boolean {
       if (Buffer.compare(bufA.subarray(0, want), bufB.subarray(0, want)) !== 0) return false;
       offset += want;
     }
+    // Proven identical, right now, for these exact two inodes in these exact states. Remember it so the
+    // next pass over an unchanged tree costs two stats per file instead of two full reads. A pair that is
+    // NOT equal is deliberately not recorded: the memo only ever answers "yes", so it can never be the
+    // reason a real change fails to travel.
+    if (equalMemo.size >= EQUAL_MEMO_MAX) equalMemo.clear();
+    equalMemo.set(key, id);
     return true;
   } catch {
     return false;
