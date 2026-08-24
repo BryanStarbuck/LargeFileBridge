@@ -88,8 +88,18 @@ export function isLoopbackDatabaseUrl(url: string): boolean {
   } catch {
     return false; // fail CLOSED
   }
-  // URL.hostname strips the brackets from an IPv6 literal, so `[::1]` arrives here as `::1`.
-  return host === "localhost" || host === "127.0.0.1" || host === "::1" || host === "0:0:0:0:0:0:0:1";
+  // URL.hostname KEEPS the brackets on an IPv6 literal — WHATWG serializes the host as `[::1]`, and the
+  // `hostname` getter is that serialization minus the port (verified on node v26.7.0: `new
+  // URL("postgresql://u:p@[::1]:5432/x").hostname === "[::1]"`). An earlier comment here claimed the
+  // opposite and the comparison was written against the unbracketed form, so a genuine IPv6 loopback URL
+  // answered FALSE and got `ssl: {rejectUnauthorized:true}` — which a local `ssl=off` server refuses, so the
+  // app fell to the YAML path on a machine whose database was running fine. Wrong in the SAFE direction, but
+  // still wrong. Strip the brackets, then compare.
+  //
+  // Note the parser also NORMALIZES `[0:0:0:0:0:0:0:1]` to `[::1]`; the long form is kept below only so that
+  // a caller passing an already-unbracketed host string (not a URL) still gets the right answer.
+  const bare = host.startsWith("[") && host.endsWith("]") ? host.slice(1, -1) : host;
+  return bare === "localhost" || bare === "127.0.0.1" || bare === "::1" || bare === "0:0:0:0:0:0:0:1";
 }
 
 function num(name: string, fallback: number): number {

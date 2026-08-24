@@ -56,6 +56,8 @@ import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
 import { migrateSyncRepoDefault, repairEmptySyncRepoBlocks } from "./config/migrate-sync-repo-default.js";
 import { migratePosixPaths } from "./config/migrate-posix-paths.js";
 import { migrateRepoDirNames } from "./config/migrate-repo-dir-names.js";
+import { bootDatabase } from "./shared/persistence/boot.js";
+import { closePool } from "./shared/persistence/pool.js";
 import { log, flushLogs, logError } from "./shared/logging.js";
 import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
 import { recordSessionStart } from "./shared/session.js";
@@ -279,6 +281,14 @@ async function main(): Promise<void> {
     // The memo is what stops the next boot re-deriving ~7.5s of documents that never moved — losing the
     // last pass's entries would make every restart pay for it again (tracking-sync.service.ts `flushMemo`).
     flushMirrorMemo();
+    // Hand the pooled connections back so the server does not keep up to eight idle backends waiting for
+    // their 30s idle timeout to notice we left. FIRE-AND-FORGET on purpose: `shutdown()` is synchronous —
+    // it must be, because it is also an `exit` listener's last chance — and `pool.end()` is a promise, so
+    // awaiting it here is not available and blocking on it would risk the bounded exit this whole function
+    // is written to guarantee. If the process exits first the kernel closes the sockets and Postgres reaps
+    // the backends; closing them politely is a courtesy, never a correctness requirement (pool.ts
+    // `closePool` is idempotent and swallows its own failure).
+    void closePool();
     stopWatcher(); // idempotent — a no-op when the watcher never started (signal during boot)
     flushLogs();
     if (!server) process.exit(0); // still booting — nothing listening, nothing to drain
@@ -380,6 +390,21 @@ async function main(): Promise<void> {
   blocking("boot.migrate.sdl-lfbridge", () => migrateSdlLfbridge());
 
   await bootstrapState();
+
+  // THE DATABASE STAGE (database_migration.mdx §6): connect → probe (which is also the §7.1 loopback
+  // compliance assertion) → schema migrations → epoch → adopt the five legacy sentinels into the ledger.
+  //
+  // It goes HERE, after `bootstrapState()`, because that is where the app first has a config to read a URL
+  // from — and BELOW the seven on-disk migrations above, which must keep latching correctly on a machine
+  // where Postgres was never installed and therefore cannot depend on anything below this line.
+  //
+  // `bootDatabase()` keeps the same contract as every migration above it: under the default
+  // `LFB_DB_MODE=auto` any failure is logged and swallowed, so a machine with no Postgres still serves every
+  // page on the YAML path. Under `LFB_DB_MODE=required` it throws, and that IS the intended hard boot
+  // failure (database.mdx §7). It records its own `boot.db.*` sections in the blocking tally, so the boot
+  // window stays fully attributed (blocking.ts).
+  await bootDatabase();
+
   const cfg = getAppConfig();
   const port = Number(process.env.PORT) || cfg.server.backend_port;
 

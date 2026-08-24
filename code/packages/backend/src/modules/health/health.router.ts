@@ -3,6 +3,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { authConfig } from "../auth/auth.router.js";
 import { isLoopback } from "../../shared/loopback.js";
 import { buildState, runningStaleCode } from "../schedule/self-update.service.js";
+import { databaseHealth } from "../../shared/persistence/boot.js";
 import { log } from "../../shared/logging.js";
 
 export const healthRouter = Router();
@@ -21,6 +22,12 @@ healthRouter.get("/", async (_req, res) => {
       data: {
         status: "ok",
         ipfs: await ipfs.health(),
+        // WHICH STORAGE ENGINE IS ACTUALLY SERVING THIS MACHINE (database.mdx §7.2). Under the default
+        // LFB_DB_MODE=auto an unreachable Postgres is a silent, correct fallback to the YAML path — which
+        // is exactly why it needs a surface: "the app is fine but slow" and "the app is fine and on
+        // Postgres" are indistinguishable from the outside otherwise. `reachable:false` here is the
+        // one-line answer to why the ninth-pass performance work appears not to have landed.
+        database: await databaseHealth(),
         build: {
           number: build.build,
           label: build.label,
@@ -32,6 +39,20 @@ healthRouter.get("/", async (_req, res) => {
   } catch (e) {
     log.error("health", `health check failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: "health check failed" });
+  }
+});
+
+// The database section on its own, so `just db-status` can ask the LIVE process what it sees instead of
+// assembling a second opinion out of psql. It reports mode, reachability, the server's version and
+// `listen_addresses`, the §7.1 loopback verdict, the schema ledger head, and the data-migration ledger's
+// done/pending/failed counts. It NEVER reports a connection string that has not been through `safeUrl` —
+// the URL carries the database password (pool.ts).
+healthRouter.get("/database", async (_req, res) => {
+  try {
+    res.json({ ok: true, data: await databaseHealth() });
+  } catch (e) {
+    log.error("health", `database health read failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: "database health unavailable" });
   }
 });
 

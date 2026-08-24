@@ -25,6 +25,7 @@ set windows-shell := ["cmd.exe", "/d", "/c"]
 code := justfile_directory() / "code"
 cli := justfile_directory() / "cli"
 dev := justfile_directory() / "scripts/dev/dev.mjs"
+db := justfile_directory() / "scripts/dev/db.mjs"
 
 default:
     @just --list
@@ -148,6 +149,41 @@ install-agents: setup
 uninstall-agents:
     pnpm -C "{{code}}/packages/backend" cli uninstall-agent scan
     pnpm -C "{{code}}/packages/backend" cli uninstall-agent pin
+
+# ── the database (database.mdx §7.2) ────────────────────────────────────────────────────────────────
+#
+# FIRST RUN TYPES NOTHING. The app's default is LFB_DB_MODE=auto: if Postgres is not there it uses the
+# YAML path and logs a WARN, so a user who has never heard of Postgres gets a working app and none of
+# these recipes is ever required. They exist for the machine that wants the fast path.
+#
+# `db-down` does NOT stop the server and no recipe but `db-reset` drops anything — see scripts/dev/db.mjs.
+
+# Create the role, the database and the extensions. Idempotent; prints the URL it provisioned.
+db-up:
+    @node "{{db}}" up
+
+# Disconnect our connections. Leaves the shared server running and does NOT touch data.
+db-down:
+    @node "{{db}}" down
+
+# DESTRUCTIVE. Drops the database and rebuilds it empty; the backfill would have to run again.
+#
+# Drop + recreate + migrate. Refuses without the confirmation: `just db-reset CONFIRM=yes`.
+db-reset confirm="":
+    @node "{{db}}" reset {{confirm}}
+    @just db-migrate
+
+# Interactive psql against the app database, with the app's own search_path.
+db-psql *args:
+    @node "{{db}}" psql {{args}}
+
+# Report the three states: nothing on :5432 / listening but unprovisioned / provisioned with N applied.
+db-status:
+    @node "{{db}}" status
+
+# Apply the schema migrations (forward-only, checksummed, advisory-locked — migrate.ts).
+db-migrate: setup
+    pnpm -C "{{code}}/packages/backend" db-migrate
 
 # Re-run `just setup` after. Leaves the app's own log.log / error.err in the state dir intact.
 #
