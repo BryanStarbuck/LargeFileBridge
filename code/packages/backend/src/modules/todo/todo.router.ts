@@ -38,25 +38,36 @@ function toSummary(doc: TodoBatchDoc): TodoBatchSummary {
   return rest as unknown as TodoBatchSummary;
 }
 
-// Throttle the recalc-on-read so a burst of To Do page loads doesn't re-walk every repo repeatedly. The
-// scan recalc is the primary writer; this just keeps a freshly-opened page from showing nothing on a
-// machine that hasn't scanned yet.
+// KICK the recalc; never WAIT for it (performance.mdx P-48, Aspect 6a).
+//
+// This used to be `await recalcAll()` in front of the read, throttled to once per 30 s. `recalcAll` walks
+// every repo and every storage, so the endpoint took **11,985 ms** on this machine — measured live, by the
+// `request-watch` line it produced — and the browser-side watch caught the other end of the same event:
+// `PAGE STILL SPINNING after 10319ms: /repos/… is still waiting on ["todo","batches"]`.
+//
+// And it is not the To Do page's problem. The SIDEBAR issues this exact query for its badge count, and the
+// sidebar is on every screen — so once every 30 s, whichever page the user happened to open sat on a
+// spinner for twelve seconds waiting for a filesystem walk it never asked for. That is the single most
+// literal instance of the report this whole pass came from.
+//
+// A READ MUST NOT WAIT FOR A WRITE. The batches on disk are the answer; the recalc only makes them fresher,
+// and it announces itself when it lands — `writeBatch` bumps `TODO_TOPIC`, the live event stream tells the
+// page, and the page refetches. So: answer now from disk, start the recalc behind it, and let the bus close
+// the loop. `recalcAll` is already single-flighted, so a burst of page loads still produces one pass.
 let lastRecalc = 0;
-async function maybeRecalc(): Promise<void> {
+function kickRecalc(): void {
   const now = Date.now();
   if (now - lastRecalc < 30_000) return;
   lastRecalc = now;
-  try {
-    await recalcAll();
-  } catch (e) {
-    log.warn("todo", `recalc-on-read failed: ${(e as Error).message}`);
-  }
+  // Deliberately NOT awaited. The `void` and the `.catch` are both load-bearing: an unhandled rejection
+  // from a background promise is a process-fatal in this app (main.ts registers `unhandledRejection`).
+  void recalcAll().catch((e) => log.warn("todo", `background recalc failed: ${(e as Error).message}`));
 }
 
 // GET /api/todo/batches — every batch WITH work that isn't dismissed, as slug summaries, most-important
-// first (to_do.mdx §4/§4.1).
-todoRouter.get("/batches", async (_req, res) => {
-  await maybeRecalc();
+// first (to_do.mdx §4/§4.1). Answers from disk immediately; see `kickRecalc` for why it does not wait.
+todoRouter.get("/batches", (_req, res) => {
+  kickRecalc();
   const summaries = readAllBatches()
     .map((b) => b.doc)
     .filter((d) => !d.dismissed && Object.keys(d.totals).length > 0)

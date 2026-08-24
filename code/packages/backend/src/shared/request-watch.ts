@@ -28,7 +28,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { performance } from "node:perf_hooks";
 import { log } from "./logging.js";
-import { recordBlocking } from "./blocking.js";
+import { blocking, recordBlocking } from "./blocking.js";
 
 /** A finished request slower than this is worth a line. One second is the threshold at which a person
  *  stops reading the page and starts looking at the spinner. */
@@ -123,7 +123,28 @@ export function requestWatch(req: Request, res: Response, next: NextFunction): v
   };
   res.on("finish", () => finish("finish"));
   res.on("close", () => finish("close"));
-  next();
+  // `next()` runs the WHOLE downstream chain — every middleware and the handler itself — synchronously up
+  // to its first `await`. Wrapping it therefore measures exactly the part of a request that holds the event
+  // loop, and attributes it to a route, which is what turns "something blocked for 4s" into "GET /api/repos
+  // blocked for 4s". An async handler's later work is not counted here; that is correct, because after the
+  // first await it is no longer holding the thread.
+  blocking(`http ${method} ${routeLabel(path)}`, () => next());
+}
+
+/**
+ * Collapse a URL to a ROUTE so the tally groups. `/api/repos/a1b2/files` and `/api/repos/c3d4/files` are one
+ * route with two ids; keeping them apart would make every id its own row and rank none of them. Ids are
+ * recognised structurally (hex/uuid/digits/anything path-like), which needs no route table to stay correct.
+ */
+function routeLabel(path: string): string {
+  return path
+    .split("/")
+    .map((seg) =>
+      seg.length > 0 && (/^[0-9a-f]{6,}$/i.test(seg) || /^\d+$/.test(seg) || seg.includes("%2F") || seg.includes("."))
+        ? ":id"
+        : seg,
+    )
+    .join("/");
 }
 
 /** Start the stuck-request sweep. Idempotent; the timer is unref'd. */

@@ -32,7 +32,8 @@ import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar-heal.js";
-import { statOrNull } from "../../shared/fs-probe.js";
+
+import { resolveStateDir } from "../../config/state-dir.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
 // logs. Both directions route through it, so neither leg can stamp over the other side's events.
 import { copyTrackedFile } from "./tracked-file-merge.js";
@@ -57,15 +58,22 @@ const LOCAL_ONLY = new Set([".sync-repo", ".durable-artifact"]);
  * `repo_storage.yaml` is the third merged-on-the-way-IN document and is listed in `reconcileFromSyncRepo`'s
  * own skip set; on the way OUT it is copied and then scrubbed of machine-local fields, so it stays here.
  */
-const MERGED_NEVER_COPIED: ReadonlySet<string> = new Set(["manifest.yaml", "decisions.yaml"]);
-
-/** The same set on the way IN, plus `repo_storage.yaml` — which the reconcile leg merges FIELD-WISE (it
- *  must preserve this computer's own machine-local fields) while the mirror leg copies and then scrubs it. */
-const RECONCILE_MERGED_NEVER_COPIED: ReadonlySet<string> = new Set([
+const MERGED_NEVER_COPIED: ReadonlySet<string> = new Set([
   "manifest.yaml",
   "decisions.yaml",
+  // `repo_storage.yaml` belongs here too, and did not use to. The mirror leg COPIED it and then rewrote it
+  // in place to reset the machine-local fields — so the mirror's copy, which by construction can never
+  // equal the local one (that is the entire point of the scrub), was stamped over and rewritten on EVERY
+  // pass, forever. The bytes came out the same, so git never committed it and nothing was ever visibly
+  // wrong; what it cost was two writes per repo per pass and a moved mtime, which is the identity every
+  // memo in this module is keyed on. Projecting straight from the local file instead is one write, and it
+  // converges (performance.mdx P-45).
   "repo_storage.yaml",
 ]);
+
+/** The same set on the way IN — the reconcile leg merges `repo_storage.yaml` FIELD-WISE, because it must
+ *  preserve THIS computer's own machine-local fields against the scrubbed copy arriving from the mirror. */
+const RECONCILE_MERGED_NEVER_COPIED: ReadonlySet<string> = MERGED_NEVER_COPIED;
 
 /** Turn the per-repo sync-repo mirror ON (write the marker) or OFF (remove it). The marker is THREE lines —
  *  the owning storage's sync-repo absolute path, then this repo's `repoUid` (its machine-independent
@@ -371,7 +379,7 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
     // other's number on every cycle — a commit per repo per cycle, forever, from a value that was never
     // shared state to begin with. With both held at their schema defaults here, the mirror's bytes change
     // only when genuinely shared state (name, policy, enlist provenance) does.
-    scrubVolatileRepoStorage(path.join(dst, "repo_storage.yaml"));
+    projectRepoStorageToMirror(path.join(localStateDir, "repo_storage.yaml"), path.join(dst, "repo_storage.yaml"));
     noteArtifactWritten(dst, "tracking-state");
     return true;
   } catch (e) {
@@ -414,26 +422,30 @@ function refuseUnparseableMirror(file: string, unreadable: boolean, repoRoot: st
  */
 const MACHINE_LOCAL_REPO_STORAGE = ["last_scan", "counts"] as const;
 
-/** Rewrite a MIRROR copy of repo_storage.yaml with every {@link MACHINE_LOCAL_REPO_STORAGE} field reset to
- *  its schema default, serialized exactly like writeRepoStorage (deterministic key order) so an
- *  otherwise-unchanged doc is byte-stable across mirrors. Best-effort: an unparseable file is left as copied. */
-function scrubVolatileRepoStorage(file: string): void {
+/**
+ * PROJECT the local `repo_storage.yaml` into the mirror with every {@link MACHINE_LOCAL_REPO_STORAGE} field
+ * reset to its schema default, serialized exactly like `writeRepoStorage` (deterministic key order) so an
+ * otherwise-unchanged doc is byte-stable across mirrors. Best-effort: an unparseable local file leaves the
+ * mirror's copy alone.
+ *
+ * It reads the LOCAL file and writes the MIRROR one. It used to do both to the mirror's own copy — the tree
+ * walk copied the file across and this rewrote it in place — and that arrangement could not converge by
+ * construction: the mirror's copy is the scrubbed one, the local copy carries a live `last_scan`, so they
+ * always differ, so the copy fired and this rewrote it, twice per repo per pass, forever. The bytes came
+ * out identical either way (so git never committed anything and nothing looked wrong), but the mtime moved
+ * every time — and the mtime is the identity every memo in this module is keyed on (performance.mdx P-45).
+ */
+function projectRepoStorageToMirror(localFile: string, mirrorFile: string): void {
   try {
-    const raw = fs.readFileSync(file, "utf8");
-    const parsed = RepoStorageDocSchema.safeParse(YAML.parse(raw) ?? {});
+    const parsed = RepoStorageDocSchema.safeParse(YAML.parse(fs.readFileSync(localFile, "utf8")) ?? {});
     if (!parsed.success) return;
     const defaults = RepoStorageDocSchema.parse({ repo_storage: {} }).repo_storage;
     for (const key of MACHINE_LOCAL_REPO_STORAGE) {
       (parsed.data.repo_storage as Record<string, unknown>)[key] = (defaults as Record<string, unknown>)[key];
     }
-    // writeIfDifferent, not writeFileSync: the scrub is a RECONCILIATION, so on the overwhelming majority
-    // of passes it re-derives the bytes already on disk. Writing them anyway re-stamps the mtime, which is
-    // the identity every memo in this module is keyed on — an unconditional write here would invalidate the
-    // very caches that stop the multi-megabyte merges from re-running (performance.mdx P-45), and would
-    // re-touch a file in the sync repo's working tree on every pass for nothing.
-    writeIfDifferent(file, YAML.stringify(parsed.data, { sortMapEntries: true }));
+    writeIfDifferent(mirrorFile, YAML.stringify(parsed.data, { sortMapEntries: true }));
   } catch {
-    /* missing/unreadable mirror copy — nothing to scrub */
+    /* missing/unreadable local copy — nothing to project */
   }
 }
 
@@ -542,19 +554,30 @@ function writeIfDifferent(file: string, content: string): boolean {
 // This is a cache of OUR OWN completed work, not of the data: any edit to either file on any path (a local
 // decision, a git merge, a peer's push landing in the mirror) changes its mtime and the union runs again.
 interface FileId {
-  ino: number;
-  size: number;
-  mtimeMs: number;
+  ino: string;
+  size: string;
+  mtimeNs: string;
 }
 /** `job|dstFile|srcFile` -> the identities BOTH files had when that job last COMPLETED. */
 const workMemo = new Map<string, { dst: FileId | null; src: FileId | null }>();
 
+/**
+ * Identity at NANOSECOND resolution, and as strings so the whole memo is JSON — see `loadMemo` for why it
+ * has to survive a restart. `bigint: true` reports the filesystem's native nanosecond timestamp (and is
+ * measurably FASTER than a plain stat, because it allocates no `Date`); millisecond resolution would let a
+ * rewrite that lands in the same millisecond at the same size read as "unchanged", and a memo that answers
+ * "unchanged" about a file that changed is silent data loss between the user's computers.
+ */
 function fileId(file: string): FileId | null {
-  const st = statOrNull(file);
-  return st && { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs };
+  try {
+    const st = fs.statSync(file, { bigint: true });
+    return { ino: st.ino.toString(), size: st.size.toString(), mtimeNs: st.mtimeNs.toString() };
+  } catch {
+    return null;
+  }
 }
 const sameFileId = (a: FileId | null, b: FileId | null): boolean =>
-  a != null && b != null && a.ino === b.ino && a.size === b.size && a.mtimeMs === b.mtimeMs;
+  a != null && b != null && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs;
 
 /** Job names — one per (kind of merge, direction), so two directions can never share a memo entry. */
 const JOB_LEDGER = "ledger-union";
@@ -564,25 +587,96 @@ const JOB_RECONCILE_MANIFEST = "reconcile-manifest";
 
 const memoKey = (job: string, dstFile: string, srcFile: string): string => `${job}|${dstFile}|${srcFile}`;
 
+// ── the memo OUTLIVES THE PROCESS ────────────────────────────────────────────────────────────────────
+//
+// An in-memory memo makes a SETTLED app quiet and leaves a RESTARTED one paying the full price: measured
+// on this machine, the first reconcile pass after a boot costs 7.5 s of CPU across 105 repos, and every
+// millisecond of it re-derives documents that are already correct on disk. The app restarts constantly —
+// `just run`, a `tsx watch` reload, a launchd boot, a crash — so "quiet after the first minute" is a
+// promise the user rarely gets to collect on. Both halves of the report this pass came from were during
+// exactly that window.
+//
+// The memo describes FILES, not process state: "this job ran to completion while these two files had these
+// identities". That statement stays true across a restart, so it should be written down. Nanosecond
+// (ino, size, mtimeNs) is what makes it safe — any edit by anyone (a local decision, a git merge, a peer's
+// push into the mirror) moves an mtime, the identity stops matching, and the work runs again.
+//
+// It is a CACHE, so every failure mode degrades to "do the work": a missing file, corrupt JSON, a schema
+// bump, a path that moved. Nothing here is ever authoritative and nothing is ever waited on.
+const MEMO_SCHEMA = 2;
+const memoFile = (): string => path.join(resolveStateDir(), "mirror-memo.json");
+let memoLoaded = false;
+let memoDirty = false;
+let memoSaveTimer: NodeJS.Timeout | null = null;
+
+/** Load once, lazily — never at import time, so a test that points `LFB_STATE_DIR` somewhere new still
+ *  gets that directory's memo rather than the one the first import happened to see. */
+function loadMemo(): void {
+  if (memoLoaded) return;
+  memoLoaded = true;
+  try {
+    const raw = JSON.parse(fs.readFileSync(memoFile(), "utf8")) as {
+      schema?: number;
+      entries?: Record<string, { dst: FileId | null; src: FileId | null }>;
+    };
+    if (raw.schema !== MEMO_SCHEMA || !raw.entries) return;
+    for (const [k, v] of Object.entries(raw.entries)) workMemo.set(k, v);
+    log.info("storage", `mirror memo: ${workMemo.size} settled merge(s) restored — a restart re-derives nothing that has not moved`);
+  } catch {
+    /* absent/corrupt — an empty memo simply means the first pass does the work, which is always correct */
+  }
+}
+
+/** Persist, DEBOUNCED. The pass marks hundreds of pairs settled in a burst; one write at the end of it is
+ *  the whole point. Unref'd, so it can never hold the process open, and best-effort throughout. */
+function saveMemoSoon(): void {
+  memoDirty = true;
+  if (memoSaveTimer) return;
+  memoSaveTimer = setTimeout(() => {
+    memoSaveTimer = null;
+    flushMemo();
+  }, 5_000);
+  memoSaveTimer.unref?.();
+}
+
+/** Write the memo now, if it has changed. Called by the debounce and available for an orderly shutdown. */
+export function flushMemo(): void {
+  if (!memoDirty) return;
+  memoDirty = false;
+  try {
+    const file = memoFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify({ schema: MEMO_SCHEMA, entries: Object.fromEntries(workMemo) }));
+    fs.renameSync(tmp, file); // atomic — a half-written cache read as whole would be the one unsafe shape
+  } catch (e) {
+    log.warn("storage", `mirror memo save failed (harmless — the next pass just re-derives): ${(e as Error).message}`);
+  }
+}
+
 /**
  * True when this (job, dst, src) triple ran to completion before and NEITHER file has moved since — i.e.
  * re-running it is provably a no-op. A file that is ABSENT on either side is never "settled": it has no
  * identity to compare, and absence is exactly the case that still needs the work done.
  */
 function pairSettled(job: string, dstFile: string, srcFile: string): boolean {
+  loadMemo();
   const seen = workMemo.get(memoKey(job, dstFile, srcFile));
   return !!seen && sameFileId(seen.dst, fileId(dstFile)) && sameFileId(seen.src, fileId(srcFile));
 }
 
 /** Record that this job just completed, against the bytes NOW on disk. Call AFTER the write. */
 function markPairSettled(job: string, dstFile: string, srcFile: string): void {
+  loadMemo();
   workMemo.set(memoKey(job, dstFile, srcFile), { dst: fileId(dstFile), src: fileId(srcFile) });
+  saveMemoSoon();
 }
 
 /** Forget a job's memo so the next pass re-tries it. Used when a leg REFUSED to run (an unparseable
  *  mirror): a refusal is not a completion, and it must keep re-announcing itself until a human fixes it. */
 function forgetPair(job: string, dstFile: string, srcFile: string): void {
-  workMemo.delete(memoKey(job, dstFile, srcFile));
+  loadMemo();
+  if (workMemo.delete(memoKey(job, dstFile, srcFile))) saveMemoSoon();
 }
 
 /**
@@ -651,9 +745,14 @@ function mergeManifestInto(
   return changed;
 }
 
-/** TEST-ONLY: forget every memoized merge, in every direction. */
+/** TEST-ONLY: forget every memoized merge, in every direction — including the copy on disk, so a test that
+ *  points `LFB_STATE_DIR` at a fresh directory starts genuinely cold. */
 export function resetLedgerSyncMemo(): void {
   workMemo.clear();
+  memoLoaded = false;
+  memoDirty = false;
+  if (memoSaveTimer) clearTimeout(memoSaveTimer);
+  memoSaveTimer = null;
 }
 
 export function reconcileFromSyncRepo(repoRoot: string): boolean {

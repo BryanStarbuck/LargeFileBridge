@@ -23,6 +23,7 @@ import path from "node:path";
 import { describe, it, expect, beforeEach, afterAll } from "vitest";
 import YAML from "yaml";
 import {
+  flushMemo,
   mirrorToSyncRepo,
   mirrorToSyncRepoYielding,
   reconcileFromSyncRepo,
@@ -222,6 +223,55 @@ describe("a mirror pass that changes nothing costs nothing", () => {
     mirrorToSyncRepo(repoRoot);
     // Left exactly as it was for a human or the next git merge to settle.
     expect(fs.readFileSync(path.join(mirrorDir(), "manifest.yaml"), "utf8")).toBe(conflicted);
+  });
+});
+
+describe("the memo outlives the process", () => {
+  it("a RESTART re-derives nothing that has not moved", () => {
+    mirrorToSyncRepo(repoRoot);
+    reconcileFromSyncRepo(repoRoot);
+    flushMemo(); // what the shutdown hook does — the debounce would otherwise lose this session's tail
+
+    const mirrorBefore = stamps(mirrorDir());
+    const localBefore = stamps(repoStateDir(repoRoot));
+
+    // Simulate the restart: every in-memory memo is gone, the state root (and its `mirror-memo.json`) is
+    // not. Without persistence this is the 7.5 s cold pass that made the first minute after every `just
+    // run`, `tsx watch` reload and launchd boot the slowest minute the user ever sees.
+    resetLedgerSyncMemo();
+
+    mirrorToSyncRepo(repoRoot);
+    reconcileFromSyncRepo(repoRoot);
+
+    expect(stamps(mirrorDir())).toEqual(mirrorBefore);
+    expect(stamps(repoStateDir(repoRoot))).toEqual(localBefore);
+  });
+
+  it("a restored memo still yields to a change made while the process was down", () => {
+    mirrorToSyncRepo(repoRoot);
+    reconcileFromSyncRepo(repoRoot);
+    flushMemo();
+    resetLedgerSyncMemo();
+
+    // A peer's push landed in the mirror while this computer was not running. The persisted identity must
+    // not survive that — this is the case where a wrong answer is silent data loss, not merely slowness.
+    const mirrorLedger = path.join(mirrorDir(), "decisions.yaml");
+    const doc = YAML.parse(fs.readFileSync(mirrorLedger, "utf8")) as { schema_version: number; events: unknown[] };
+    doc.events.push({
+      sid: "s9",
+      path: "videos/while-you-were-out.mp4",
+      asked: true,
+      ipfs: true,
+      gitignore: false,
+      decided_by: "laptop",
+      decided_at: "2026-08-03T00:00:00.000Z",
+    });
+    fs.writeFileSync(mirrorLedger, YAML.stringify(doc));
+
+    reconcileFromSyncRepo(repoRoot);
+    expect(fs.readFileSync(path.join(repoStateDir(repoRoot), "decisions.yaml"), "utf8")).toContain(
+      "while-you-were-out.mp4",
+    );
   });
 });
 

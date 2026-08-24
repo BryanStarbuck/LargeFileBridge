@@ -67,6 +67,7 @@ import { startLoopWatch, stopLoopWatch } from "./shared/loop-watch.js";
 // loop stopped, blocking.ts says what stopped it, request-watch.ts says who was left spinning while it did
 // (performance.mdx P-46).
 import { requestWatch, startRequestWatch, stopRequestWatch } from "./shared/request-watch.js";
+import { flushMemo as flushMirrorMemo } from "./modules/storage/tracking-sync.service.js";
 import { restoreQueueOnBoot } from "./modules/jobqueue/queue-restore.js";
 import { admitRestored, recordQuarantined } from "./modules/jobqueue/jobqueue.service.js";
 import { readDescription } from "./modules/describe/describe.service.js";
@@ -270,6 +271,10 @@ async function main(): Promise<void> {
     stopHeapWatch();
     stopLoopWatch();
     stopRequestWatch();
+    // Write the mirror memo NOW rather than letting its 5s debounce lose the tail of this session's work.
+    // The memo is what stops the next boot re-deriving ~7.5s of documents that never moved — losing the
+    // last pass's entries would make every restart pay for it again (tracking-sync.service.ts `flushMemo`).
+    flushMirrorMemo();
     stopWatcher(); // idempotent — a no-op when the watcher never started (signal during boot)
     flushLogs();
     if (!server) process.exit(0); // still booting — nothing listening, nothing to drain

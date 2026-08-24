@@ -10,6 +10,7 @@ import { leftBar } from "../../config/left_bar.js";
 import { api } from "../../api/client.js";
 import { http, unwrap } from "../../api/axios.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { useProgress } from "../../progress/progress-context.js";
 import { NavIcon } from "./NavIcon.js";
 import { HoverInfoPanel } from "../hoverinfo/HoverInfoPanel.js";
@@ -102,6 +103,12 @@ export function Sidebar({ user }: { user: CurrentUser }) {
     queryFn: api.todoBatches,
     staleTime: 60_000,
   });
+  // LIVE, because the endpoint behind this stopped waiting for its own recalc (performance.mdx P-48). The
+  // handler now answers from disk and starts the walk behind the response, so the FIRST answer after a
+  // change is the stale one — and this badge sits on every screen, where a number that only updates on the
+  // next navigation reads as a wrong number. The topic bump `writeBatch` already emits closes that loop:
+  // the recalc lands, the bus fires, the badge re-reads. Same subscription the To Do page itself uses.
+  useLiveRefresh(["todo"], [["todo", "batches"]]);
   const todoCount = todoBatches?.length ?? 0;
 
   // Pending company repo→ownership mappings awaiting this member's consent (repo_owner_propagation.mdx §4):

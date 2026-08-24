@@ -212,6 +212,11 @@ export function recalcStorage(id: string): TodoBatchDoc | null {
 
 let recalcInFlight: Promise<number> | null = null;
 
+/** Hand the event loop back between repos. `setImmediate` (the check phase), NOT a resolved promise: a
+ *  microtask drains before the loop ever advances, so `await Promise.resolve()` in a loop blocks exactly as
+ *  hard as no await at all — the difference between a background pass and a background freeze. */
+const handBackTheLoop = (): Promise<void> => new Promise<void>((resolve) => setImmediate(resolve));
+
 /** The recalc stage of a scan (to_do_batch_calc_engine.mdx §1): rebuild every storage's TODO batch and
  *  recalculate-and-replace its file. Single-flighted so overlapping scans/watcher events coalesce.
  *  Returns how many batches have work. Best-effort — never throws. */
@@ -223,6 +228,13 @@ export function recalcAll(): Promise<number> {
     try {
       for (const folder of listRepoFolders()) {
         try {
+          // ONE REPO AT A TIME, WITH THE LOOP HANDED BACK BETWEEN THEM. `recalcRepo` is synchronous
+          // filesystem work inside an async signature — `await`ing it yields nothing, because a promise
+          // that is already resolved resumes in the same turn. Over ~105 repos that added up to the
+          // 11,985 ms this pass measured (performance.mdx P-48). Moving the pass off the request path
+          // (todo.router.ts `kickRecalc`) stopped it blocking a PAGE; this is what stops it blocking
+          // everything else while it runs in the background.
+          await handBackTheLoop();
           const doc = await recalcRepo(folder);
           if (doc) {
             const file = batchFileName(doc.scope, doc.storageName, "todo");
@@ -236,6 +248,7 @@ export function recalcAll(): Promise<number> {
       }
       for (const id of listStorageIds()) {
         try {
+          await handBackTheLoop();
           const doc = recalcStorage(id);
           if (doc) {
             const file = batchFileName(doc.scope, doc.storageName, "todo");
