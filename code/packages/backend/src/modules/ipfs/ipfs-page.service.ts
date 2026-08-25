@@ -23,7 +23,7 @@ import {
 import { getAppConfig } from "../store-model/config.service.js";
 import { analysisOutputs } from "../storage/tracking.service.js";
 import * as ipfs from "./ipfs.service.js";
-import { foreignPinByCanonicalCid } from "./foreign-pin.service.js";
+import { foreignPinsByCanonicalCids } from "./foreign-pin.service.js";
 import { log } from "../../shared/logging.js";
 
 // What we know about a CID that appears in some manifest (i.e. a Tracked pin).
@@ -177,6 +177,12 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
   const statted = await pool(capped, 8, (cid) => ipfs.objectSize(cid));
   capped.forEach((cid, i) => sizes.set(cid, statted[i]));
 
+  // REVERSE RESOLUTION, RESOLVED ONCE (foreign_pin_discovery.mdx §4, database.mdx §9 slice 8). The lookup
+  // below used to be `foreignPinByCanonicalCid(p.cid)` per untracked pin — a linear scan of all 2,825
+  // discoveries each time, from inside a synchronous `map`. One batched read keys them by canonical CID up
+  // front, which keeps the map synchronous AND makes it one query instead of one per row.
+  const foreignByCanon = await foreignPinsByCanonicalCids(untrackedCids);
+
   const rows: IpfsPinRow[] = pins.map((p) => {
     const info = index.get(ipfs.canonicalCid(p.cid));
     if (info) {
@@ -198,7 +204,7 @@ export async function computeIpfsPage(): Promise<IpfsPageData> {
     // REVERSE RESOLUTION (foreign_pin_discovery.mdx §4): an untracked pin may be a file we DO hold on disk,
     // pinned OUTSIDE us under a foreign CID that a background pass already discovered + recorded. Resolve it
     // to the filename + repo so this row is NAMED and importable, not an anonymous CID. Cheap recorded read.
-    const foreign = foreignPinByCanonicalCid(p.cid);
+    const foreign = foreignByCanon.get(ipfs.canonicalCid(p.cid));
     if (foreign) {
       return {
         cid: p.cid,

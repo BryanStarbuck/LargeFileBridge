@@ -43,14 +43,26 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 /**
  * THE GATE, AND WHY IT IS A DIRECTORY RATHER THAN A COMMENT.
  *
- * `0015_fs_dir_rollup.sql` is gated on a measurement that has not been taken (database.mdx §8.1): the warm
- * `listDirectory` path is already 3-6 ms, so a 726,503-row table may buy nothing at all. It shipped with a
- * prominent "DO NOT APPLY" banner in the SQL — and the runner applied it anyway, because a comment is not a
- * mechanism. A gate that does not gate is worse than no gate: it reads as a decision that was enforced.
+ * The mechanism exists because of `0015_fs_dir_rollup.sql`, which shipped with a prominent "DO NOT APPLY"
+ * banner in the SQL — and the runner applied it anyway, because a comment is not a mechanism. A gate that
+ * does not gate is worse than no gate: it reads as a decision that was enforced. So a gated migration lives
+ * in `migrations/gated/`, where `loadMigrations` cannot reach it. Ungating is one `git mv` back up a level;
+ * deleting it is one `rm`. Both are deliberate acts.
  *
- * So a gated migration lives in `migrations/gated/`, where `loadMigrations` cannot reach it. Ungating is one
- * `git mv` back up a level; deleting it (the expected outcome) is one `rm`. Both are deliberate acts, which
- * is exactly what the open question asks for.
+ * 0015 IS GONE, AND THE GATE IS WHY IT COULD BE. Slice 12 took the measurement the open question asked for
+ * (database.mdx §8.1), and it came back against the table on both counts:
+ *
+ *   * warm `listDirectory('~')` is 2.6-3.0 ms (median of 12, across three runs), inside the 3-6 ms band the
+ *     question named as the delete threshold;
+ *   * and on a full recompute, the subtree-interest walk — the ONLY one of listDirectory's four costs that
+ *     `fs_dir` could have removed — is 0.8 ms of 147.8 ms (0.5%), measured by alternating the same listing
+ *     with the interest cache cleared and warm. `readdir`, the per-entry `statSync` and `git check-ignore`
+ *     are the other 147 ms, and Postgres removes none of the three.
+ *
+ * The DIRECTORY is now gone with the file — it held nothing else, and git does not track empty directories.
+ * The MECHANISM stays: `reportGated` treats a missing `gated/` as the normal case and returns quietly, so
+ * the next migration that needs deciding rather than applying is gated by one `mkdir` and one `git mv`, and
+ * is announced on every boot from then on. Nothing can be parked and forgotten.
  */
 const GATED_DIR = "gated";
 

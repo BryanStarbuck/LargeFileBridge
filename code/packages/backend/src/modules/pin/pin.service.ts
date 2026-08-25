@@ -363,7 +363,7 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
         // `pinset` is the authority on whether that discovery is still true: if another tool has since
         // `pin rm`'d the bytes the record is stale, we fall through and add normally (§5.1).
         if (!existing?.cid) {
-          const discovered = foreignPinByAbsPath(abs);
+          const discovered = await foreignPinByAbsPath(abs);
           const discoveredCanon = discovered ? ipfs.canonicalCid(discovered.cid) : null;
           if (discovered && discovered.size === st.size && discoveredCanon && pinset.has(discoveredCanon)) {
             byPath.set(rel, {

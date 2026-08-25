@@ -22,6 +22,20 @@ import { readStorageSettings } from "./storage-settings.service.js";
 import { selfDeviceName } from "./devices.service.js";
 import { joinRel, healWindowsPath } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
+import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
+import {
+  deviceIdsByLabel,
+  ensureDeviceLabels,
+  ensureFileRows,
+  ensurePeopleForTokens,
+  insertFileEvents,
+  personIdsByToken,
+  relPosixKey,
+  unitIdForRootSync,
+  upsertFileFingerprints,
+  upsertFileVariants,
+  upsertSidecarFiles,
+} from "../store-model/file-detail.repo.js";
 
 /** The sentinel `by` value for an action LFBridge did NOT do — a scan merely observed it (§3.3). */
 export const NOT_LFBRIDGE = "not-lfbridge";
@@ -86,9 +100,213 @@ export function sidecarPath(repoRoot: string, relPath: string): string {
   return `${joinRel(path.join(trackingDir(repoRoot), "files"), healWindowsPath(relPath))}.yaml`;
 }
 
+// ── the Postgres mirror (dual-write, database.mdx §6.2 / R1) ───────────────────
+//
+// EVERY YAML WRITE BELOW STAYS EXACTLY AS IT WAS AND KEEPS RUNNING. Postgres is added BEHIND it, never in
+// front of it and never instead of it. That is not a transitional courtesy — `mirrorToSyncRepo` copies THE
+// FILE, byte for byte, into the SDL that the user's other computers reconcile from (database.mdx §6.2). The
+// sync protocol IS the file. A query result cannot be copied, so the sidecar's designated serializer stays
+// the authority and this mirror is a read index built alongside it.
+//
+// THREE PROPERTIES MAKE THE MIRROR SAFE TO RUN FROM A SYNCHRONOUS SCAN WALK:
+//
+//   1. FIRE AND FORGET. `writeSidecar` / `appendFileEvent` are synchronous — `scanner.service.ts:748` and
+//      `pin.service.ts:1649` call them from inside walks that have no `await` to give — so the mirror is
+//      started, not awaited. `tryDb` swallows and throttles every failure, so no promise can reject into a
+//      request handler (R2).
+//   2. ORDER-INDEPENDENT. `file_event_union` is the merge (0009), so two appends racing to the same file
+//      cannot produce a duplicate or a lost row whichever order they land in. There is nothing to serialize.
+//   3. IT MAY SILENTLY DO NOTHING. With no `unit_id` for this repo (never enlisted, or enlisted since the
+//      last cache refresh) the mirror skips. Nothing is lost: the YAML was already written, and backfill
+//      area 6 adopts the row on its next pass.
+
+/** Short-lived join maps. A scan appends thousands of events; re-reading two dimension tables per event
+ *  would turn a ~2 µs Map hit into a socket round trip and make the scan slower than the YAML-only path. */
+const JOIN_TTL_MS = 30_000;
+let joinMaps: { at: number; devices: Map<string, number>; people: Map<string, number> } | null = null;
+
+async function joins(): Promise<{ devices: Map<string, number>; people: Map<string, number> }> {
+  if (joinMaps && Date.now() - joinMaps.at < JOIN_TTL_MS) return joinMaps;
+  const [devices, people] = await Promise.all([deviceIdsByLabel(), personIdsByToken()]);
+  joinMaps = { at: Date.now(), devices, people };
+  return joinMaps;
+}
+
+/**
+ * Resolve a device label and an actor token to ids, INSERTING only what is genuinely new.
+ *
+ * CACHE-FIRST IS THE WHOLE POINT. A scan appends thousands of events, and there are nine distinct device
+ * labels and eleven distinct actor tokens in the entire 56,946-event corpus on this machine. Calling
+ * `ensureDeviceLabels` / `ensurePeopleForTokens` unconditionally would be two extra statements per event for
+ * rows that already exist — turning a ~2 µs Map hit into two socket round trips and making the scan slower
+ * than it was before the mirror existed.
+ */
+async function idsFor(
+  label: string,
+  by: string,
+): Promise<{ deviceId: number | null; actorId: number | null }> {
+  let maps = await joins();
+  const known = (m: Map<string, number>, k: string): number | null => m.get(k) ?? m.get(k.toLowerCase()) ?? null;
+  const missingDevice = label !== "" && known(maps.devices, label) === null;
+  const missingPerson = by !== "" && known(maps.people, by) === null;
+  if (missingDevice || missingPerson) {
+    if (missingDevice) await ensureDeviceLabels([label]);
+    if (missingPerson) await ensurePeopleForTokens([by]);
+    joinMaps = null; // the rows we just inserted are, by definition, not in the cached maps
+    maps = await joins();
+  }
+  return {
+    deviceId: label === "" ? null : known(maps.devices, label),
+    actorId: by === "" ? null : known(maps.people, by),
+  };
+}
+
+/** Tests only — the join maps are module state. */
+export function resetSidecarMirrorCache(): void {
+  joinMaps = null;
+}
+
+function isoOrNull(v: string | undefined | null): Date | null {
+  if (!v) return null;
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/**
+ * Mirror the sidecar's IDENTITY block — the `lfb.file` row plus the two hash tables hanging off it.
+ *
+ * Called from `writeSidecar`, which is the single funnel every sidecar mutation passes through
+ * (`ensureSidecar` seeds and writes; `appendFileEvent` appends and writes), so one call site covers all of
+ * them and there is no third place to keep in step.
+ */
+function mirrorIdentity(repoRoot: string, relPath: string, doc: FileSidecar): void {
+  if (!dbEnabled()) return;
+  const unitId = unitIdForRootSync(repoRoot);
+  if (unitId === null) return;
+  const rel = relPosixKey(relPath);
+  const f = doc.file;
+  void tryDb(
+    async () => {
+      const deviceLabel = f.first_seen.on_device?.trim() ?? "";
+      const { deviceId } = await idsFor(deviceLabel, "");
+      await upsertSidecarFiles([
+        {
+          unitId,
+          relPath,
+          sizeBytes: f.size ?? 0,
+          // VERBATIM, null included — the render has to reproduce `size: null` (migration 0017).
+          sidecarSizeBytes: f.size ?? null,
+          createdAt: isoOrNull(f.created),
+          modifiedAt: isoOrNull(f.modified),
+          categories: f.categories,
+          firstSeenAt: isoOrNull(f.first_seen.at),
+          firstSeenDevice: deviceId,
+        },
+      ]);
+      // The charter's two-hashes rule and the perceptual index. Both are NEAR-EMPTY in practice — 2 of
+      // 29,138 sidecars carry a hash and 2 carry a fingerprint (measured 2026-08-24) — so these are almost
+      // always no-ops. They are written anyway because the day something starts filling `file.hash` is the
+      // day this has to already work.
+      if (f.hash) {
+        await upsertFileVariants([
+          { unitId, relPosix: rel, variant: "uncompressed", hash: f.hash, sizeBytes: f.size ?? null },
+        ]);
+      }
+      if (f.fingerprint && f.hash) {
+        await upsertFileFingerprints([
+          {
+            contentHash: f.hash,
+            algo: f.fingerprint.algo,
+            hex: f.fingerprint.value,
+            quality: f.fingerprint.quality,
+          },
+        ]);
+      }
+      return 0;
+    },
+    0,
+    "sidecar.mirrorIdentity",
+  );
+}
+
+/**
+ * Mirror ONE appended event.
+ *
+ * Deliberately not the whole `events[]` array: `writeSidecar` rewrites the entire document every time, and
+ * mirroring all of it per append would re-offer every prior event on every append — 40 statements' worth of
+ * work for one new row on a file with 40 events, and this runs inside a scan. `appendFileEvent` is the only
+ * caller that knows which event is new, so it is the only one that mirrors an event.
+ */
+function mirrorEvent(repoRoot: string, relPath: string, event: FileEvent): void {
+  if (!dbEnabled()) return;
+  const unitId = unitIdForRootSync(repoRoot);
+  if (unitId === null) return;
+  const rel = relPosixKey(relPath);
+  void tryDb(
+    async () => {
+      const at = isoOrNull(event.at);
+      if (!at) return 0; // `at` is NOT NULL in the schema; an unparseable stamp is not an event we can file
+      const { deviceId, actorId } = await idsFor(event.on_device?.trim() ?? "", event.by?.trim() ?? "");
+      // THE PARENT ROW FIRST, AND UNCONDITIONALLY.
+      //
+      // MEASURED FAILURE (2026-08-24): without this line the event mirror wrote NOTHING at all. `file_event`
+      // carries `FOREIGN KEY (unit_id, rel_posix) REFERENCES lfb.file` (0009), and `appendFileEvent` starts
+      // TWO fire-and-forget mirrors — `writeSidecar`'s identity upsert and this one — which race. When the
+      // event insert won, every row failed the FK, and `tryDb` swallowed it exactly as designed: the sidecar
+      // was on disk, the `lfb.file` row appeared, and the events silently were not there.
+      //
+      // `ensureFileRows` is a `DO NOTHING` presence claim over the PK, so it is a no-op on the (normal) path
+      // where the identity mirror already won. One extra ~200 µs statement in a background task, against a
+      // write that has already done a full YAML `fsync`, in exchange for an ordering guarantee that does not
+      // depend on which promise the event loop happened to schedule first.
+      await ensureFileRows([{ unitId, relPath: relPath }]);
+      await insertFileEvents([
+        {
+          unitId,
+          relPosix: rel,
+          at,
+          kind: event.kind,
+          deviceId,
+          actorId,
+          detail: detailOf(event),
+          origin: "local",
+        },
+      ]);
+      return 0;
+    },
+    0,
+    "sidecar.mirrorEvent",
+  );
+}
+
+/**
+ * The event MINUS the four columns 0009 normalizes out of it.
+ *
+ * `FileEventSchema` is `.passthrough()`, so an event carries arbitrary kind-specific fields (`cid`,
+ * `before`/`after`, `codec`, `note`, `compressed`, …) and `detail` is where they go. `kind` / `at` /
+ * `on_device` / `by` are dropped because they became columns, and leaving them in `detail` as well would put
+ * them TWICE inside `file_event_union` — which is over `detail` too, so a stale duplicate spelling would
+ * quietly stop the merge from recognising a repeat.
+ */
+function detailOf(event: FileEvent): Record<string, unknown> {
+  const { kind: _k, at: _a, on_device: _d, by: _b, ...rest } = event as Record<string, unknown> & FileEvent;
+  return rest;
+}
+
 // ── read / write ───────────────────────────────────────────────────────────────
 
-/** Read a file's sidecar (missing/corrupt → null). */
+/**
+ * Read a file's sidecar (missing/corrupt → null).
+ *
+ * THIS READ DOES NOT CUT OVER TO POSTGRES (R3 / database_migration.mdx §4.5), and that is deliberate rather
+ * than unfinished. Two reasons, both structural:
+ *
+ *   * It returns a `FileSidecar` — the exact document `mirrorToSyncRepo` copies and `reconcileFromSyncRepo`
+ *     merges. Rendering that from rows would make Postgres a YAML emitter, which the sync fence forbids
+ *     (R4 / database.mdx §2.2); the render gate that is allowed to do it is its own slice.
+ *   * It is the VERIFICATION ORACLE. Area 6's whole claim is "the rows say what the sidecars say", and an
+ *     oracle that consulted the thing it is checking would assert nothing.
+ */
 export function readSidecar(repoRoot: string, relPath: string): FileSidecar | null {
   const file = sidecarPath(repoRoot, relPath);
   let parsed: unknown;
@@ -134,6 +352,10 @@ function writeSidecar(repoRoot: string, relPath: string, doc: FileSidecar): void
     log.error("storage", `sidecar write failed: ${file}: ${(e as Error).message}`);
     throw e;
   }
+  // DUAL-WRITE, and strictly AFTER the rename. The YAML is the authority and the thing that travels; the
+  // mirror describes what is already durably on disk. Mirroring first would let a failed rename leave a row
+  // asserting a sidecar that does not exist.
+  mirrorIdentity(repoRoot, relPath, normalized);
 }
 
 /**
@@ -221,5 +443,8 @@ export function appendFileEvent(
     by: event.by ?? null,
   });
   doc.file.events.push(stamped);
-  writeSidecar(repoRoot, relPath, doc);
+  writeSidecar(repoRoot, relPath, doc); // mirrors the IDENTITY (the `lfb.file` row) as a side effect
+  // …and the one NEW event. Split from the identity mirror on purpose — see `mirrorEvent`: this is the only
+  // caller that knows which of the events in the document did not exist a moment ago.
+  mirrorEvent(repoRoot, relPath, stamped);
 }

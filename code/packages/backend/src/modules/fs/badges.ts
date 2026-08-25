@@ -225,7 +225,24 @@ function fileIsPinned(fileAbs: string, ctx: FsBadgeContext): boolean {
 }
 
 // ── compress ──────────────────────────────────────────────────────────────────
-// First-cut heuristic (directory.mdx §3.3). Seam to the learned size-baseline model (code_plan §13).
+// THE EXTENSION HEURISTIC (directory.mdx §3.3) — and, as of the learned baseline, the DELIBERATE fallback
+// rather than the only answer.
+//
+// `modules/compress/baseline.service.ts` now implements the charter's learned model: mean, 1σ and 2σ of
+// ln(bits-per-pixel-per-second), fitted per (media, pixel bucket, duration bucket), abstaining below 12
+// samples per cell. It is NOT consulted here, and the reason is a real constraint rather than an oversight:
+//
+//   * THE MODEL NEEDS A SHAPE THIS FUNCTION DOES NOT HAVE. bpps is size ÷ (width × height × duration).
+//     `_sizeBytes` and `_threshold` — the two parameters the old comment called the seam — are not enough;
+//     without dimensions there is no bpps and the classifier correctly returns `unknown` for every row.
+//     Getting dimensions means one ffprobe or one image decode PER FILE, inside the column browser's
+//     per-row loop. That is exactly the shape performance.mdx keeps taking out of hot paths.
+//   * IT IS ASYNC AND THIS IS NOT. The fit is a SQL aggregate.
+//
+// WHERE THE VERDICT BELONGS INSTEAD: `lfb.file.looks_compressed` (0004, "learned baseline verdict; NULL =
+// unknown"), computed once by whoever already holds the file's shape and read from the row. Until a writer
+// for that column exists, this heuristic IS the answer — which is what the baseline's abstention rule says
+// should happen anyway, since zero cells on this machine have reached the sample floor.
 function compressBadge(name: string, _sizeBytes: number | null, _threshold: number): FsBadge | null {
   const ext = path.extname(name).toLowerCase();
   if (IMAGE_COMPRESSED_EXT.has(ext)) return "compressed"; // c
@@ -439,6 +456,30 @@ function cacheInterest(dirAbs: string, mtimeMs: number, interest: FolderInterest
     if (oldest) interestCache.delete(oldest);
   }
   interestCache.set(dirAbs, { mtimeMs, at: Date.now(), interest });
+}
+
+/**
+ * Forget ONE directory's cached interest. Returns true when there was something to forget.
+ *
+ * WHY THIS EXISTS, and why it is not just "let the TTL handle it". `computeDirInterest` answers a question
+ * about a whole SUBTREE, but its cache guard is the directory's OWN mtime — and adding `~/x/y/z/clip.mp4`
+ * bumps the mtime of `z` and of nothing above it. So `~/x` keeps serving a stale "not interesting" glyph for
+ * up to INTEREST_TTL_MS (20 s) after a video lands three levels down. That staleness is exactly what the
+ * live watcher is in a position to fix, because it is the one component that knows a qualifying file just
+ * appeared and where (watcher.service.ts `flushPending`).
+ *
+ * Deliberately NOT exported as a bulk "clear everything": dropping all 5,000 entries because one file
+ * changed would re-arm a 120,000-stat walk for every open column, which is the same write amplification in
+ * a different coat. The caller invalidates the ANCESTOR CHAIN of the changed path and nothing else
+ * (fsindex.service.ts `invalidateFsCachesForPath`).
+ */
+export function invalidateInterest(dirAbs: string): boolean {
+  return interestCache.delete(dirAbs);
+}
+
+/** Tests only — the interest cache is module state and a spec that warms it must be able to reset it. */
+export function clearInterestCache(): void {
+  interestCache.clear();
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────

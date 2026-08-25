@@ -189,6 +189,28 @@ db-status:
 db-migrate: setup
     pnpm -C "{{code}}/packages/backend" db-migrate
 
+# Safe to run while the app is up: the migration_state.yaml lease means the two processes cannot both
+# write, and whichever arrives second reports `lease-held` and does nothing. Resumable and idempotent —
+# an interrupted run picks up at its cursor and a finished one is a no-op.
+#
+# Deliberately takes NO arguments, for the reason `db-psql` explains. For one area:
+# `pnpm -C code/packages/backend db-backfill --only adopt_units`.
+#
+# Copy the YAML state root into Postgres (backfill.ts). Never runs on a request path.
+db-backfill: setup
+    pnpm -C "{{code}}/packages/backend" db-backfill
+
+# THE RENDER EQUALITY GATE (database.mdx §2.3). For every Category-B document on this machine, render it
+# from Postgres THROUGH ITS DESIGNATED SERIALIZER and compare sha256 against the bytes on disk. Zero diffs,
+# or the Postgres-fed write does not get armed. Exits non-zero when the gate fails, so CI can block on it.
+#
+# Deliberately takes NO arguments, for the reason `db-psql` explains. For the full 29,138-document sidecar
+# scope: `pnpm -C code/packages/backend db-render-gate --sidecars`.
+#
+# Prove Postgres renders byte-identical YAML before letting it feed a serializer (doc-render.service.ts).
+db-render-gate: setup
+    pnpm -C "{{code}}/packages/backend" db-render-gate
+
 # Re-run `just setup` after. Leaves the app's own log.log / error.err in the state dir intact.
 #
 # Remove installed deps and background run state (node_modules + pid/port scratch + launcher log).

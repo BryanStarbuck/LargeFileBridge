@@ -178,18 +178,186 @@ no new YAML writer:
   with plain `<`, never `localeCompare` — two computers must not disagree because of
   collation.
 
+### 2.2b The column that two writers wanted to mean two things
+
+The render equality gate (§2.3) came back **red at full corpus scope** on its first real run —
+15,868 of 29,447 sidecar documents did not render byte-identical — and the cause was not the
+renderer. `lfb.file.modified_at` and `lfb.file.size_bytes` had **two writers with two different
+meanings, and both were right**:
+
+* the **scan census** writes the **live stat**, because `size_bytes` drives `is_big`, the compression
+  rollups and every "large files only" tab, and a stale size there is a wrong answer on a
+  user-visible surface;
+* the **sidecar** stores the size and mtime **as of the last time Large File Bridge touched the
+  file** — not a staler measurement but a **different fact**, and the one the document is required to
+  state when it is re-serialized.
+
+One column cannot hold both. Migration **0017** gives the sidecar its own `sidecar_size_bytes` and
+`sidecar_modified_at`, written only by the sidecar plane and read only by `renderSidecar`. Both are
+**nullable with no `>= 0` CHECK**, because `FileSidecarSchema` declares `size: z.number().nullable()`
+and `modified: iso.optional()` — a document that says `size: null` must render as `size: null`, and
+NULL here means "the document said so", never "we do not know yet".
+
+Result: **15,868 → 0** differing documents.
+
+Two things this cost, both worth remembering:
+
+* Adding the columns to the INSERT list but **not** to the `ON CONFLICT DO UPDATE SET` clause made it
+  **worse** (15,868 → 28,451): every row already existed, so the update fired and left both NULL. A
+  sidecar-owned column is assigned **outright** — "preserve what is there" is only correct for a
+  column another writer also owns.
+* The re-run was armed by bumping the area's **logic version**, not by clearing state. This is
+  exactly what `applied_version < version` is for: the watermark alone would have declared every
+  scope up-to-date and migrated nothing.
+
 ### 2.3 How we detect a violation
 
 **The render equality gate.** For every `(unit, doc)` row in `lfb.doc_render`, render
 the document from Postgres through its designated serializer and compare `sha256`
-against the bytes on disk. **Zero diffs, or the cutover does not happen.** Scope: all
-29,745 documents in the two SDL trees plus the local copies.
+against the bytes on disk. **Zero diffs, or the cutover does not happen.**
+
+**Scope is the LOCAL Category-B copies — 29,447 documents — and that is a correction to
+this paragraph's first draft**, which said "the two SDL trees plus the local copies".
+`doc_render`'s primary key is `(unit_id, doc, doc_key)` with no SDL dimension, and there is
+a reason it cannot have one: an SDL copy is not the same document as the local one. The
+SDL's `manifest.yaml` is the MERGE of ours with every peer's claims, and its
+`repo_storage.yaml` is deliberately scrubbed of `last_scan`/`counts`. Rendering either from
+our rows and calling a difference a defect would fail the gate on documents that are
+correct. The SDL side is covered by `ingested_sha256` instead — what last came in — which is
+the honest question to ask of a copy we do not author.
 
 This is the right test because `tracking-sync.service.ts:225-234` records that 58 of
 the last 60 device commits were a lone `updated_at` line. A renderer that is one byte
 off turns every mirror pass into a commit, and two computers into a re-render loop.
 
 The gate runs in CI, blocks the cutover, and then runs nightly.
+
+**Current result** (2026-08-24, real corpus): **29,447 documents examined, 29,339 byte-identical,
+0 different — the gate PASSES.**
+
+**Three are classified `healed`, and counted apart from failures.** Their sidecars sit at a healed
+location on disk while their own `path:` field still carries the pre-heal Windows spelling —
+`sidecar-heal.ts` fixed where the file lives and did not rewrite what it says. Postgres files them
+under the POSIX spelling because `rel_posix` is the generated primary key, which is precisely what
+makes the stray-path fork *structurally impossible instead of healed by hand* (§3). **Postgres is
+right and the document is stale**, so no renderer change can or should reproduce it.
+
+Counting those as failures would leave the gate permanently red for something nobody intends to fix
+— which is how a gate stops being read, the same failure the 0015 "DO NOT APPLY" comment had. Counting
+them as matches would hide them. So they get their own bucket, are printed by name, and the
+classifier (`isStrayPathHeal`) is pinned **narrow** by eight tests: a different path, a different key,
+a truncated delta, or backslashes on the *Postgres* side are all real diffs.
+
+Rendering each Category-B document from Postgres through its designated serializer,
+comparing `sha256` against the bytes on disk and writing **only on a change** is done in
+code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/doc-render.service.ts`
+→ `runRenderGate` (the gate) and `syncFenceBeforeMirror` (the pre-mirror pass), with one
+renderer per document class (`renderDecisions`, `renderManifest`, `renderRepoStorage`,
+`renderSidecar`, `renderDecisionPolicy`). It is the **only** module in the app that imports
+both the pool and a serializer; that exclusivity is itself a test —
+`modules/storage/doc-render.import-guard.spec.ts`. Running the gate from a terminal is
+`just db-render-gate` (`shared/persistence/render-gate-cli.ts`); running it as a test is
+`modules/storage/render-gate.spec.ts`, which needs `LFB_GATE_STATE_DIR` and
+`LFB_GATE_DATABASE_URL` for the same reason `decision-fold-gate.spec.ts` does.
+
+### 2.3.1 The first full run — measured 2026-08-24, and it does NOT pass
+
+29,447 documents examined against a fully backfilled database — 309 whole-unit documents
+(3 per repo) plus 29,138 sidecars. **13,474 byte-identical, 15,868 different, 105 not
+covered.** The Postgres-fed write is therefore **OFF**
+(`renderWritesArmed()`, `LFB_DOC_RENDER_WRITE`), which is what §2.3's "zero diffs, or the
+cutover does not happen" means in practice.
+
+| Document class | On disk | Identical | Different |
+|---|---|---|---|
+| `decisions.yaml` (18,234 events) → `serializeLedger` | 103 | **103** | 0 |
+| `manifest.yaml` (4,184 entries) → `serializeManifest` | 103 | **103** | 0 |
+| `files/<rel>.yaml` → `YAML.stringify {sortMapEntries:true}` | 29,136 | 13,268 | **15,868** |
+| `repo_storage.yaml`, **scrubbed mirror projection** | 103 | **103** | 0 |
+| `repo_storage.yaml`, local copy (live `counts:`) | 103 | — | not covered |
+| `history/<device>.txt` · `analysis/**/compression.yaml` · `decisions_policy.yaml` | 18 · 37 · 0 | — | outside the target list |
+
+**All 309 whole-unit documents render byte-for-byte, for every repo.** That is the result
+this slice exists to establish: `serializeLedger`'s compaction, its total order,
+`serializeManifest`'s `pinned_by` sort, `MACHINE_LOCAL_REPO_STORAGE`'s scrub and the
+`to_char` spelling of every timestamp all survive the round trip through rows.
+
+**The 15,868 sidecar failures are ONE finding, not 15,868.** Classified structurally, every
+one of them is `modified` and/or `size`: 15,171 `modified`, 412 `modified`+`size`, 282
+`size`, 3 `modified`+`path`. `lfb.file.size_bytes` and `lfb.file.modified_at` hold the
+**live scan census** — area 3 writes them from a fresh `stat` — while a sidecar's `size:`
+and `modified:` are **historical**, the values as of the last time the sidecar itself was
+written. Verified on one row end to end: the file's real mtime, `pin/r/<folder>/status.yaml`
+and `lfb.file.modified_at` all read `2026-04-29T01:16:20.558Z`, and the sidecar reads
+`2026-04-28T00:26:13.508Z`. `upsertSidecarFiles` (R5,
+`modules/store-model/file-detail.repo.ts`) correctly declines to overwrite the census, so
+the column holds the census's fact and the render says so. **One column, two facts, two
+owners** — a schema question, not a renderer bug. Resolving it needs either a second pair
+of columns for the sidecar's as-recorded values, or a decision that the sidecar's identity
+block is derived from the census on write.
+
+The 3 `modified`+`path` failures are the same shape one level up: `lfb.file.rel_path` is
+documented as "byte-exact as the sidecar recorded it", but four areas write `lfb.file` and
+`rel_path` belongs to whichever inserted first — so a Windows peer's `_mix\rotten\27k.csv`
+is lost when the census created the row with the healed spelling.
+
+**`repo_storage.yaml` splits in two, and the half that TRAVELS is the half that renders.**
+`RepoStorageCountsSchema` is nine counters — special / large / ipfs_pinned / videos / images
+/ audio / compressible / transcribable / transcribed — and `lfb.unit_rollup` (0003) names
+the UI's nine, which overlap in one; so the LOCAL file, which carries this computer's live
+counts and `last_scan`, is not renderable. The MIRROR copy is, and 103 of 103 render
+byte-identical, because `projectRepoStorageToMirror` resets exactly `counts` and `last_scan`
+to their schema defaults on the way out — **the two blocks Postgres cannot source are
+precisely the two the wire does not carry** (`renderRepoStorage(unitId, { scrub: true })`).
+That is not a coincidence; it is `MACHINE_LOCAL_REPO_STORAGE` and this schema agreeing about
+which fields are about a computer rather than about a repo.
+
+`history/<device>.txt` is **structurally** outside the gate: its designated serializer,
+`appendHistory`, is append-only and stamps `new Date()` at call time, so there is no
+argument that reproduces a file. Re-rendering one would require a second writer, which §2.2
+forbids. `history_entry` (0010) therefore stays a read index over a file this work never
+writes.
+
+**One defect found in the specs while doing this:** `decisions_policy.yaml` has TWO
+spellings today — `writeDecisionPolicy` (decisions.service.ts) uses a plain
+`YAML.stringify(doc)`, and `mergePolicyInto` (tracking-sync.service.ts) uses
+`YAML.stringify(winner, { sortMapEntries: true })`. §2.2 names the former as the designated
+serializer. It is latent — there are zero `decisions_policy.yaml` files on this machine —
+but it is precisely the churn shape §6 describes, and it should be reconciled before any
+policy document exists.
+
+### 2.3.2 What the fence costs, and what it does not yet save
+
+`syncFenceBeforeMirror` runs before `mirrorToSyncRepo`'s tree walk
+(`tracking-sync.service.ts` `mirrorGen`) and records `doc_render`; the reconcile leg records
+`doc_render.ingested_sha256` and `lfb.sdl_ingest` (`recordSdlIngestForRepo`). Both are
+fire-and-forget, because that call chain is synchronous top to bottom.
+
+**The skip is the mechanic.** A document whose on-disk `sha256` already equals
+`rendered_sha256` is not re-rendered at all. Measured on this machine, per unit per pass:
+
+| Repo | Cold (renders both documents) | Warm (1 SELECT + 4 `statSync`) |
+|---|---|---|
+| `charlie-kirk` (3.1 MB ledger, 894 KB manifest) | **239.9 ms** | **0.8 ms** |
+| `all` | 173.1 ms | 0.5 ms |
+| `act3_Marketing_NextGen` | 4.8 ms | 0.5 ms |
+
+Without that skip the fence re-rendered every pass and cost 233 ms per unit — more than the
+mirror it precedes. `storage.mirror` runs ~101 times a minute here, so an unconditional
+render would have put a minute of CPU into every minute of wall clock.
+
+**`storage.mirror` itself is UNCHANGED, and no more should be claimed.** Measured over 15
+mirror passes across three repos: **1161 ms with the fence off, 1112 ms with it on** —
+noise. That is the correct outcome while the gate is non-zero: the fence records and
+reports, and writes nothing. The mirror's cost falls only when `renderWritesArmed()` is on,
+and that waits on the two column-ownership questions above.
+
+`doc_render_dirty` works end to end and is already useful: after one mirror plus one
+reconcile of a repo, three rows exist and **one** is dirty — `repo_storage.yaml`, whose
+mirror copy is scrubbed of `last_scan`/`counts` and therefore legitimately differs from the
+local copy forever. The other two converge to identical, which is what a settled document
+looks like.
 
 ---
 
@@ -263,12 +431,15 @@ in the migration files, one file per migration, and is not duplicated here:
 | 0012 | `sync_fence` | `doc_render`, `sdl_ingest` — the fence's evidence table |
 | 0013 | `derived_projections` | `batch_manifest`, `batch_item`, `backfill_mirror` |
 | 0014 | `autovacuum_policy` | per-table autovacuum tuning for `file`, `manifest_entry`, `pin_claim` |
-| 0015 | `fs_dir_rollup` | `fs_dir` — **GATED and NOT APPLIED**; held in `migrations/gated/`, see §8.1 |
+| 0015 | `fs_dir_rollup` | **DELETED, never applied.** The slice-12 measurement went against it — see §8.1. The number 0015 is retired rather than reused, so the applied set stays legible. |
+| 0016 | `backfill_reject` | `backfill_reject` — the harness's mechanic (c) table |
+| 0017 | `sidecar_owned_columns` | `file.sidecar_size_bytes` / `file.sidecar_modified_at` — the column split that took the render gate from 15,868 diffs to 0; see §2.2b |
 
-**Verified against PostgreSQL 16.15 on this machine:** the 14 applied migrations
-produce **33 tables and 89 indexes** in schema `lfb`, plus the `schema_migration`
-ledger the runner creates itself (34 tables). Applying them twice applies nothing the
-second time and no checksum drifts.
+**Verified against PostgreSQL 16.15 on this machine (re-measured after 0017 landed):**
+the **16** applied migrations produce **34 tables and 92 indexes** in schema `lfb`, plus
+the `schema_migration` ledger the runner creates itself (**35 tables**). `to_regclass('lfb.fs_dir')` is NULL and stays NULL — the file is
+gone, not parked. Applying them twice applies nothing the second time and no checksum
+drifts.
 
 ### 4.1 The decisions that are not obvious
 
@@ -278,6 +449,28 @@ append-only truth; a trigger (`lfb.fold_decision`) maintains one current-state r
 lookup. `readLedger`/`foldLedger` keep working unchanged and become the **verification
 oracle** — CI asserts `file_decision` equals `foldLedger(readLedger(root))` for every
 unit, after every mirror-in.
+
+Appending an event beside the unchanged `decisions.yaml` write, and letting the trigger
+fold, is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts`
+→ `mirrorEventsToPostgres` (called from `recordDecision`, `reconcile` and
+`seedMigratedLedger`); the INSERT itself is `decision.repo.ts` → `insertDecisionEvents`.
+Reading the maintained fold in place of `foldLedger(readLedger(root))` is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts`
+→ `foldLedgerForRepo`, whose fallback `foldLedgerForRepoByRead` is the surviving oracle.
+Migrating the 18,234 events on disk, plus the SDL mirrors with `origin='wire'`, and
+running the per-unit equality gate is done in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decision-backfill.ts`
+→ `BACKFILL_DECISIONS.run` / `gateEveryUnit`.
+
+Measured on this machine after the migration ran (105 units, 18,234 events, 4,242 folded
+paths, zero mismatches): the TypeScript fold of the largest ledger — charlie-kirk,
+3.1 MB, 11,423 events → 2,189 paths — takes **458–481 ms**, and reading the maintained
+fold for the same unit takes **7.3–8.5 ms end to end** (2.7 ms server-side). A SQL
+`DISTINCT ON` over the raw log for that unit measures **77–87 ms**, which is what the
+0.23 ms figure above is being compared against — it is the *view* this table replaces,
+not the TypeScript path. Whole-computer: **749 ms** of TypeScript folds versus **1.2 ms**
+for one `count(*)` over `file_decision`.
 
 **`pin_claim.origin` encodes the merge asymmetry.** `manifest-merge.ts:123-128` strips
 our own claim from arriving entries and passes peers' through. An `origin` enum
@@ -414,6 +607,14 @@ worse, and each reason is a mechanism.
     its meaning lives in the **absence** of a terminal record. Postgres indexes
     `_batches` read-only; it never writes it.
 
+    Re-reading a manifest only when its `(size, mtime_ms)` no longer matches the stored
+    token — and stamping that token from the stat taken **before** the read, so a
+    manifest that grew mid-parse re-ingests next pass rather than claiming freshness for
+    bytes nobody saw — happens in code:
+    `code/packages/backend/src/modules/jobqueue/batch-index.service.ts` —
+    `manifestIsIndexed()` / `syncBatchIndex()`. Measured: 5 manifests / 1,834 items
+    ingest in **288 ms**; a second pass with no source change skips every scope.
+
 ---
 
 ## 7. Runtime
@@ -496,24 +697,43 @@ subquery — `scripts/dev/db.mjs`, `terminateSql()`.
 These are decisions, not gaps. Each is written down because getting it wrong quietly
 is worse than deciding it late.
 
-1. **The filesystem rollup (`fs_dir`, migration 0015) is unjustified until re-measured.**
-   Two of the three numbers used to argue for it do not survive the code as written:
-   `GET /api/repos` measures **0 ms** of synchronous handler time in the loop-watch
-   breakdown, and the Full Paths walk truncates on `FLAT_ITER_BUDGET` alone.
-   **Decide by measuring** `listDirectory('~')` cold and warm *after* the slice-12
-   watcher fix. If warm is already 3-6 ms, **delete `lfb.fs_dir` from the schema**
-   rather than ship a 726,503-row table for a page that is not slow.
+1. **RESOLVED (slice 12): the filesystem rollup (`fs_dir`, migration 0015) is
+   DELETED.** The measurement the question asked for was taken, and it went against
+   the table on both counts.
 
-   **The gate is a mechanism, not a comment.** It first shipped as a `DO NOT APPLY`
-   banner inside `0015_fs_dir_rollup.sql`, and the runner applied the file anyway —
-   a gate that does not gate is worse than none, because it reads as a decision that
-   was enforced. The file now lives in
-   `shared/persistence/migrations/gated/`, which `loadMigrations()` cannot reach
-   (it reads files at the top level only). Ungating is one `git mv` up a level;
-   deleting it — the expected outcome — is one `rm`. Both are deliberate acts.
-   `loadMigrations` logs the held set on every boot so a parked migration cannot be
-   forgotten. Verified: the applied set is **14**, and `to_regclass('lfb.fs_dir')`
-   is NULL on the provisioned database.
+   **Warm `listDirectory('~')` is 2.6-3.0 ms** — median of 12 calls, reproduced across
+   three separate processes (3.0 / 3.0 / 2.8 / 2.6 ms). That is inside the 3-6 ms band
+   this question named as the delete threshold, so the rule as written decides it.
+
+   **And the one cost `fs_dir` could have removed is 0.5% of the page.** On a full
+   recompute (listing cache expired) the call is **147.8 ms**; running the identical
+   listing with the subtree-interest answers already cached gives **146.9 ms**. The
+   interest walk — the only one of `listDirectory`'s four costs a directory rollup
+   could serve — is **0.8 ms of 147.8 ms**. The other 147 ms is `readdir`, the
+   per-entry `statSync`, `computeBadges`, and the one `git check-ignore --stdin`, and
+   **Postgres removes none of those**. A 726,503-row table with per-file write
+   amplification, bought for 0.8 ms, is not a trade this app makes. Measured by
+   alternating the two arms in one process with the OS page cache pre-warmed
+   (`clearListingCache()` / `clearInterestCache()`).
+
+   The two numbers that had already failed still fail: `GET /api/repos` measures 0 ms
+   of synchronous handler time, and the Full Paths walk truncates on
+   `FLAT_ITER_BUDGET` alone.
+
+   **The gate is a mechanism, not a comment — and this is what it was for.** 0015
+   first shipped as a `DO NOT APPLY` banner inside the SQL, and the runner applied the
+   file anyway; a gate that does not gate is worse than none, because it reads as a
+   decision that was enforced. Moving it to `shared/persistence/migrations/gated/` —
+   which `loadMigrations()` cannot reach, since it reads the top level only — is what
+   made "decide by measuring" a real option instead of a comment nobody could act on.
+   The `gated/` directory went with the file (it held nothing else), but the
+   **mechanism** stays: `reportGated` treats a missing `gated/` as the normal case, so
+   the next migration that needs deciding rather than applying is gated by one `mkdir`
+   and one `git mv`, and is logged on every boot from then on — nothing can be parked
+   and forgotten. Implemented in
+   `code/packages/backend/src/shared/persistence/migrate.ts`, `loadMigrations()` /
+   `reportGated()`. Verified: the applied set is **15**, and
+   `to_regclass('lfb.fs_dir')` is NULL.
 
 2. **Sub-3-character search has no index.** `pg_trgm` cannot serve a term shorter than
    3 characters (verified: 2-char ILIKE fell back to a bitmap scan + filter at 5.6 ms
@@ -549,12 +769,43 @@ is worse than deciding it late.
    `rollChain` renames the file underneath it, and a fast 5 MiB burst inside one poll
    interval can still lose lines — **which must be recorded as a gap, not papered over**.
 
-7. **The compression baseline starts below its own confidence floor.** Seeding from the 74
-   existing records yields ~110 samples, under the n≥12-per-cell threshold in most
-   (media, pixel_bucket, duration_bucket) cells. The classifier will correctly answer
-   "unknown" and the extension heuristic stays in charge for months. Decide whether that
-   is acceptable, or bootstrap by ffprobing a sample of the 30,762 known candidates and
-   labelling by in-file codec markers (more samples, weaker labels).
+7. **The compression baseline starts below its own confidence floor — MEASURED, and worse
+   than the estimate.** Seeding was expected to yield "~110 samples" from "37 local + 37
+   in the act3 SDL". Those are the **same 37 records**: the act3 SDL's
+   `repos/charlie-kirk-83e62afc2c80/analysis/**` is the byte-for-byte mirror of the local
+   `repos/charlie-kirk-dbd9c2c05564/analysis/**`, so both legs resolve to the same media
+   and the same content hashes and the UNIQUE collapses them — which is the constraint
+   doing its job. **The real number is 49 samples across 29 cells, the largest holding 4,
+   and ZERO cells reach n≥12** (one record's media has been deleted; two further sample
+   pairs collapse because two records describe byte-identical images). The classifier
+   therefore abstains everywhere and the extension heuristic stays in charge, exactly as
+   designed. Decide whether that is acceptable, or bootstrap by ffprobing a sample of the
+   30,732 known candidates and labelling by in-file codec markers (more samples, weaker
+   labels).
+   The classifier — log-normal fit on bits-per-pixel-per-second, ±1-bucket widening, the
+   n≥12 abstention rule and the 2σ "off the end of everything we have seen" rule — is in
+   code: `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/baseline.service.ts`,
+   `classifyCompression` / `fitCell`.
+   Seeding the samples from the compression records (one ffprobe per file, measured 27 ms
+   each; sha256 of 450 MB in 0.19 s) is in code:
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/baseline-backfill.ts`,
+   `BACKFILL_COMPRESSION_BASELINE.run`.
+
+7a. **The charter's category rollup is now exact, and its `compress` input is not yet.**
+   The four-row table (CLAUDE.md "Category rollup table") is one SQL aggregate at unit
+   level and a `text_pattern_ops` prefix scan at directory level, with no cap and no
+   truncation — measured 13.2 ms for a 2,741-row repo, 6.3 ms directory-scoped, 0.4 ms
+   fleet-wide from `unit_rollup`. Implemented in
+   `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/rollup.service.ts`,
+   `categoryCounts` / `categoryRollupRows`.
+   **Two honest gaps.** (i) Row 1 reads `lfb.file.compress`, which today holds slice 5's
+   NAME-ONLY floor; measured on charlie-kirk it counts 123 compressible videos where the
+   shipped One-Repo tile counts 104, and the difference is exactly the 19 video candidates
+   carrying a compression record. Area 7 owns the artifact-aware upgrade of that column.
+   (ii) Rows 3 and 4 read `file_gitignore`, which is written **only** by
+   `units.service.ts composeFileRows` — so both read 0 until a repo's One-Repo page has
+   been opened at least once. Neither is a defect in the rollup; both are inputs that no
+   backfill fills yet.
 
 8. **Resolved: the CLI does not bypass Postgres.** `cli/code/src/client.ts:12` shows the
    CLI is a **loopback API client** (`http://127.0.0.1:<port>/api`); its only direct file
@@ -579,8 +830,8 @@ write, because it is the fence.
 | 8 | Foreign pins | retires 8.47 MB resident JSON + the 40,000-entry eviction cap |
 | 9 | Sidecars, artifacts, git-ignore | deletes 29,138 inodes of read amplification |
 | 10 | The sync fence + the render gate | attacks `storage.mirror`, the genuinely blocking section |
-| 11 | Rollups, history, compression baseline | first time the charter's learned baseline exists at all |
-| 12 | Derived projections + the **gated** filesystem rollup | must not be taken on faith — see §8.1 |
+| 11 | Rollups, history, compression baseline | first time the charter's learned baseline exists at all; **Repos list 1,076 ms → 34 ms measured** (105 rows, 105/105 identical to the oracle) |
+| 12 | Derived projections; the watcher's write amplification | `_batches` indexed read-only; one dropped video costs **0.068 ms** instead of a **53.9 s** scan; `fs_dir` deleted on the measurement |
 
 Cutover discipline, applied to every data slice:
 

@@ -44,6 +44,8 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { healWindowsPath, joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
+import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
+import { insertDecisionEvents, unitIdForAbsPath } from "./decision.repo.js";
 
 /** The two axes the user decides on, per file (decisions.mdx §1). Either may be undefined = "leave as-is". */
 export interface DecisionAxes {
@@ -283,6 +285,50 @@ export function axesToRecord(
 }
 
 /**
+ * THE DUAL WRITE (R1 / database.mdx §4.1): the same events that were just appended to `decisions.yaml`, also
+ * appended to `lfb.decision_event`. The YAML writer above is unchanged and still the authority; this is a
+ * pure ADD behind it, and the `lfb_decision_fold` trigger maintains `file_decision` from these rows.
+ *
+ * WHY IT IS CALLED FROM ALL THREE LEDGER WRITERS AND NOT JUST `recordDecision`. `reconcile`'s standing §13
+ * guard and `seedMigratedLedger` both append events of their own, and `reconcile` runs immediately after
+ * every `recordDecision`. An event that reaches `decisions.yaml` and not Postgres puts `file_decision` out
+ * of step with `foldLedger(readLedger(root))` — which is precisely the equality the read cutover is gated
+ * on (database_migration.mdx §4.5). Mirroring at each append keeps that equality an invariant rather than a
+ * property that holds until the next reconcile.
+ *
+ * IT CANNOT THROW AND IT CANNOT BLOCK A DECISION. The click is already durable on disk by the time this
+ * runs; a database that is down, absent, or that has never heard of this repo (`unit_id` null — a repo
+ * enlisted since the last `adopt_units` pass) is the documented `auto` posture, not a failure (R2).
+ */
+async function mirrorEventsToPostgres(repoRoot: string, events: DecisionEvent[]): Promise<void> {
+  if (events.length === 0 || !dbEnabled()) return;
+  await tryDb(
+    async () => {
+      const unitId = await unitIdForAbsPath(repoRoot);
+      if (unitId === null) return 0; // not adopted yet — the ledger is still the authority for this repo
+      return insertDecisionEvents(
+        events.map((e) => ({
+          unitId,
+          sid: e.sid,
+          // BYTE-EXACT. `rel_posix` is generated from this; normalizing here would change event identity
+          // and re-insert the same event beside itself forever (ledger-merge.ts:24-26).
+          relPath: e.path,
+          fingerprint: e.fingerprint,
+          asked: e.asked,
+          ipfs: e.ipfs,
+          gitignore: e.gitignore,
+          decidedBy: e.decided_by,
+          decidedAt: e.decided_at,
+          origin: "local" as const,
+        })),
+      );
+    },
+    0,
+    "decisions.mirrorEvents",
+  );
+}
+
+/**
  * Record a two-axis decision for one or many repo-RELATIVE paths (decisions.mdx §3/§8). Stamps
  * asked/ipfs/gitignore + decided_by + decided_at + the Storage ID, writes the SHARED ledger when this
  * computer keeps `.lfbridge/` (else local-only, decisions.mdx §6), applies the git-ignore axis through
@@ -370,6 +416,15 @@ export async function recordDecision(
       log.error("decisions", `${repoRoot}: shared ledger append failed: ${(e as Error).message}`);
       throw e;
     }
+    // THE DUAL WRITE (R1 / database.mdx §4.1). The YAML append above is untouched and remains the
+    // authority; this only ADDS the same events to `lfb.decision_event`, and the `lfb_decision_fold`
+    // TRIGGER maintains `file_decision` from them — nothing here writes the fold by hand, because two
+    // implementations of `foldLedger`'s tie-break would eventually disagree (decision.repo.ts header).
+    //
+    // It is deliberately AFTER the ledger write and outside its try/catch: a Postgres fault must never
+    // fail a decision the user just made and that is already durable on disk (R2). `mirrorEvents` swallows
+    // everything, so this line cannot throw.
+    await mirrorEventsToPostgres(repoRoot, events);
     await reconcile(folder);
   }
 
@@ -465,6 +520,10 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
         decided_at: decidedAt,
       }));
       appendEvents(repoRoot, events);
+      // Same dual write as `recordDecision` — see `mirrorEventsToPostgres`. Without it this guard's
+      // "migrated" events would exist only in the YAML and the fold would drift from it on the very next
+      // reconcile of a repo that still has cache-only decisions.
+      await mirrorEventsToPostgres(repoRoot, events);
       for (const e of events) {
         folded.set(e.path, {
           sid: e.sid,
@@ -916,6 +975,7 @@ export async function seedMigratedLedger(
   }
   if (events.length === 0) return 0;
   writeLedger(repoRoot, [...existing, ...events]);
+  await mirrorEventsToPostgres(repoRoot, events); // the same dual write — see `mirrorEventsToPostgres`
   await reconcile(folder);
   return events.length;
 }

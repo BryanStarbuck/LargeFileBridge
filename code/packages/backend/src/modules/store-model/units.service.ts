@@ -35,7 +35,7 @@ import { getStorageRow, listStorageIds } from "../storage/storage.service.js";
 // Peer device LABELS for a remote-only row (devices.mdx §6.9) — the id/name → nice-name index. Same
 // function-body-only usage as getStorageRow above, so the storage.service cycle stays safe.
 import { deviceLabelIndex, resolveDeviceLabel } from "../storage/devices.service.js";
-import { foreignPinPathSet } from "../ipfs/foreign-pin.service.js";
+import { foreignPinPathSetFor } from "../ipfs/foreign-pin.service.js";
 import { analysisOutputs, storageIndexDroppedFiles } from "../storage/tracking.service.js";
 import { resolveStorageType } from "../storage/storage-type.service.js";
 // Leaf modules only — the read path must not pull tracking-sync.service (and its storage.service edge) in.
@@ -43,7 +43,7 @@ import { repoStateDir } from "../storage/tracking-root.service.js";
 import { mergeManifests } from "../storage/manifest-merge.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { pinsetHasContent } from "../pin/cid-equivalence.service.js";
-import { joinRel, healPathKeyedMap } from "../../shared/rel-path.js";
+import { joinRel, healPathKeyedMap, healWindowsPath } from "../../shared/rel-path.js";
 import { readYaml, updateYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { bumpTopics, repoTopic, REPOS_TOPIC } from "../events/state-events.service.js";
 import {
@@ -58,6 +58,7 @@ import {
 import { ensureDir } from "../../config/state-dir.js";
 import { getPeers } from "./peers.service.js";
 import { readLedger, foldLedger, type FoldedDecision } from "../storage/decisions.service.js";
+import { foldedDecisionsForUnitPath } from "../storage/decision.repo.js";
 import { flagsResolver, getAppConfig, computerLabel } from "./config.service.js";
 import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { log } from "../../shared/logging.js";
@@ -69,6 +70,32 @@ import { expandHome } from "../../shared/home-path.js";
 // helpers, `unit.repo.ts` is SQL only — neither reaches back into this file, so no cycle.
 import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
 import { pinFolderForRepoId } from "./unit.repo.js";
+// The Postgres half of the UNIT manifest write (database.mdx §9 slice 7, migration 0007). `manifest.repo.ts`
+// is SQL-only and imports nothing from this file, so the same no-cycle argument as `unit.repo.ts` applies.
+import { projectManifest } from "../pin/manifest.repo.js";
+import { canonicalCid } from "../ipfs/ipfs.service.js";
+// The Postgres half of the SCAN CENSUS (database.mdx §9 slice 5) — the row set `composeFileRows` iterates.
+// Same leaf-module reasoning as above: `file.repo.ts` is SQL only and never reaches back into this file.
+import { readCandidateCensus, unitIdForPinFolder } from "./file.repo.js";
+// The git-ignore axis cache (database.mdx §9 slice 9, migration 0009). `file-detail.repo.ts` is SQL only
+// and imports nothing from this file, so the same no-cycle argument as `unit.repo.ts` applies.
+import {
+  ensureFileRows,
+  unitIdForRoot,
+  upsertFileGitignore,
+  type FileGitignoreRow,
+} from "./file-detail.repo.js";
+// The maintained rollup (database.mdx §9 slice 11, migration 0003/0011). `rollup.service.ts` is SQL plus
+// the freshness policy and imports nothing from this file — deliberately, because the arithmetic it stores
+// is `repoRowStats` BELOW and there must be exactly one implementation of it. The dependency therefore runs
+// one way only, and the same no-cycle argument as `unit.repo.ts` applies.
+import {
+  markUnitRollupPartial,
+  publishUnitRollup,
+  readFreshRollupForPinFolder,
+  refreshRollupCategoryCounts,
+  type RollupStats,
+} from "./rollup.service.js";
 
 export function repoIdFromPath(absPath: string): string {
   return crypto.createHash("sha1").update(path.resolve(absPath)).digest("hex").slice(0, 16);
@@ -108,6 +135,12 @@ export function getRepoConfig(folder: string): RepoUnitConfig {
  * stayed there forever: `mergeManifests` keys by exact path, so the `\` and `/` spellings never folded, and
  * `remoteOnlyRows` then emitted a SECOND red pull-down row for the same file — a `\` path can never match the
  * working tree, so `fs.existsSync` said "not here" every time. That is the duplicate-row defect.
+ *
+ * THIS READ HAS NOT CUT OVER (R3 / database.mdx §9 slice 7). `lfb.manifest_entry` is a projection written
+ * behind `writeRepoManifest` below; the state file is still the truth. It matters more here than for the
+ * tracking copy: this reader is one of the two operands `mergeManifests` folds (pin.service.ts:770,
+ * reconciler.service.ts:401), and swapping ONE operand for a Postgres read while the other still came from
+ * disk would make the merge's two inputs answer from two different clocks.
  */
 export function getRepoManifest(folder: string): Manifest {
   const file = unitManifestPath(repoUnitDir(folder));
@@ -120,7 +153,42 @@ export async function updateRepoConfig(
   folder: string,
   mutate: (c: RepoUnitConfig) => RepoUnitConfig,
 ): Promise<RepoUnitConfig> {
-  return updateYaml(unitConfigPath(repoUnitDir(folder)), RepoUnitConfigSchema, mutate);
+  const out = await updateYaml(unitConfigPath(repoUnitDir(folder)), RepoUnitConfigSchema, mutate);
+  // Every decision this product records lands here (decisions.service.ts:546 is the single writer of the
+  // `decisions:` map), and a decision moves `n_pinned` / `n_undecided` / `n_ignored`. See
+  // {@link invalidateRollup} for why the invalidation lives at the YAML writers rather than at each caller.
+  invalidateRollup(folder);
+  return out;
+}
+
+/**
+ * MARK THIS REPO'S ROLLUP PROVISIONAL — mechanism 1 of the freshness contract (rollup.service.ts header).
+ *
+ * WHY HERE AND NOT AT EACH CALL SITE. Three functions in this file are the funnel every mutation that can
+ * move a rollup number passes through: `updateRepoConfig` (decisions, pins, bookmarks, settings),
+ * `writeRepoStatus` (the scan census and the pin pass's status) and `writeRepoManifest` (pin claims and
+ * CIDs). They are already the place this file bumps the repo's live-refresh topics, on the stated grounds
+ * that "a change here is exactly the moment an open page has gone stale" — the rollup goes stale at the
+ * same instant and for the same reason, so it is invalidated at the same seam. A per-caller invalidation
+ * would be one `await` somebody forgets, and a forgotten one shows the user a confidently wrong number.
+ *
+ * FIRE-AND-FORGET, AND IT CANNOT THROW. All three callers are synchronous (`writeManifest:` at
+ * pin.service.ts:789 is a lambda inside a spec object), and R2 forbids a Postgres fault reaching a write
+ * path that worked before Postgres existed. A failed invalidation costs a stale rollup for one repo until
+ * the timestamp guard in `readFreshRollupForPinFolder` catches it — which is exactly what that backstop is
+ * for.
+ */
+function invalidateRollup(folder: string): void {
+  if (!dbEnabled()) return;
+  void tryDb(
+    async () => {
+      const unitId = await unitIdForPinFolder(folder);
+      if (unitId === null) return 0; // area 2 has not adopted this unit — there is no rollup to invalidate
+      return markUnitRollupPartial(unitId);
+    },
+    0,
+    "units.invalidateRollup",
+  );
 }
 /**
  * The topics a write to `folder` invalidates (storage_company.mdx §8.9).
@@ -152,13 +220,27 @@ function repoTopicsFor(folder: string): string[] {
 export function writeRepoStatus(folder: string, status: UnitStatus): void {
   writeYaml(unitStatusPath(repoUnitDir(folder)), { ...status });
   bumpTopics(repoTopicsFor(folder));
+  invalidateRollup(folder); // the census moved → every count derived from it is provisional
 }
 export function writeRepoManifest(folder: string, manifest: Manifest): void {
   const file = unitManifestPath(repoUnitDir(folder));
   // Heal on the way OUT as well, so the state file itself stops carrying `\` rather than being re-healed on
   // every read forever. Idempotent: a clean manifest is returned untouched.
-  writeYaml(file, { ...normalizeManifestPaths(manifest, file) });
+  const healed = normalizeManifestPaths(manifest, file);
+  writeYaml(file, { ...healed });
   bumpTopics(repoTopicsFor(folder));
+  // R1 DUAL-WRITE — stage='unit'. The YAML write above is untouched and still authoritative; this is a pure
+  // ADD behind it, fire-and-forget because every caller is synchronous (`writeManifest:` at
+  // pin.service.ts:789 is a lambda inside a spec object) and `projectManifest` cannot throw (R2).
+  //
+  // THE HEALED DOCUMENT, not the caller's: the file on disk carries POSIX keys after the line above, and
+  // `manifest_entry.rel_posix` is generated by the same `\`→`/` replacement — projecting the unhealed copy
+  // would put a `\` spelling in `rel_path` that no reader of the file would ever produce again.
+  projectManifest({ stage: "unit", label: `unit:${folder}`, unitId: () => unitIdForPinFolder(folder) }, healed, {
+    canonicalCid,
+    selfLabel: computerLabel(),
+  });
+  invalidateRollup(folder); // pin claims and CIDs moved → pinned/pending/peers/notBackedUp are provisional
 }
 /** Exported so other write paths (the reconcile fold) publish the SAME topic set — one repo, one answer. */
 export function repoBumpTopics(folder: string): string[] {
@@ -375,6 +457,89 @@ export interface RowStreamOpts {
   onEnrich?: (patch: Record<string, FileRowPatch>) => void;
   /** Abort (client disconnected / page navigated away) — the walk stops at the next batch boundary. */
   signal?: AbortSignal;
+  /**
+   * WHICH One-Repo TAB IS ASKING — the id the census read cutover is scoped behind (R3 / database.mdx §9:
+   * "reads cut over one surface at a time, behind the tab or endpoint id, so a regression is scoped to one
+   * tab").
+   *
+   * Only `"all"` takes the Postgres census today. Every other tab id — and the ABSENT value, which is what
+   * every caller in the app passes right now — keeps composing from `status.candidates` exactly as before.
+   * That is the point of naming the tab rather than flipping a global switch: a regression in the new
+   * source cannot reach a caller that did not ask for it.
+   */
+  censusTab?: CensusTabId;
+}
+
+/**
+ * The One-Repo task tabs, by id — mirrors `taskTabs.config.ts TaskTabId`, which is a frontend module the
+ * backend must not import. Kept as a union rather than a bare string so a typo is a compile error and the
+ * set of tabs that could be cut over next is visible from here.
+ */
+export type CensusTabId = "all" | "ipfs" | "compress" | "transcribe" | "ai-descriptions" | "ocr";
+
+/** The four facts `composeFileRows` needs about a candidate — the same shape `status.candidates` carries. */
+interface CensusCandidate {
+  path: string;
+  size: number;
+  modified_at?: string;
+  analysisOnly?: boolean;
+}
+
+/**
+ * THE READ THIS SLICE CUTS OVER — the source of the One-Repo row set (database.mdx §9 slice 5).
+ *
+ * `status.candidates` is a document that has to be parsed in full to be read at all; the largest one on
+ * this machine is 820,891 bytes. `lfb.file` answers the same question from `file_tab_all` (0004), whose
+ * INCLUDE list makes it an index-only scan.
+ *
+ * WHAT IS AND IS NOT CUT OVER, precisely. Only the CENSUS moves: which paths are in this unit's row set,
+ * their size, their mtime and the analysis-only flag. Every other fact on a `FileRow` — the decision, the
+ * manifest CID, the pin reality, the four task verdicts, the git-ignore axis, the provenance — is still
+ * composed in TypeScript from exactly the sources it was composed from before. Narrowing the cutover to
+ * the row set is what makes it verifiable by a single comparison instead of six.
+ *
+ * THE OLD PATH IS THE ORACLE (R3), and it is consulted on EVERY call rather than in CI alone: the YAML
+ * census is already in hand (`computeRepoDetail` reads `status.yaml` for a dozen other fields and
+ * `yaml-store` caches it), so comparing the two counts is free. They must agree — the primary key
+ * `(unit_id, rel_posix)` collapses separator variants, and measured on this machine no candidate path
+ * contains a backslash, so equality is the correct expectation. A disagreement means the census is stale
+ * (a scan since the last publish, a backfill that has not run) and we take the YAML answer, which is never
+ * stale by construction.
+ *
+ * Falls back silently for: a tab other than "All", no database, no `unit` row yet, a query error, and a
+ * count that does not match. All five are ordinary states of this app, not faults (R2).
+ */
+async function censusForTab(
+  folder: string,
+  status: UnitStatus,
+  tab: CensusTabId | undefined,
+): Promise<CensusCandidate[]> {
+  if (tab !== "all" || !folder || !dbEnabled()) return status.candidates;
+  return tryDb(
+    async () => {
+      const unitId = await unitIdForPinFolder(folder);
+      if (unitId === null) return status.candidates;
+      const rows = await readCandidateCensus(unitId);
+      if (rows.length !== status.candidates.length) {
+        log.debug(
+          "units",
+          `${folder}: Postgres census has ${rows.length} row(s), status.yaml has ${status.candidates.length} — ` +
+            `using status.yaml (the oracle) for this read`,
+        );
+        return status.candidates;
+      }
+      // `changed_at DESC` is the "All" tab's own default sort (taskTabs.config.ts `all.defaultSort`), so
+      // the rows arrive already in the order the tab wants rather than in walk order.
+      return rows.map((r) => ({
+        path: r.rel_path,
+        size: Number(r.size_bytes),
+        modified_at: r.modified_at ? r.modified_at.toISOString() : undefined,
+        analysisOnly: r.analysis_only,
+      }));
+    },
+    () => status.candidates,
+    "units.composeFileRows.census",
+  );
 }
 
 /** Rows per streamed chunk — the same order of magnitude as the flat listing's FLAT_BATCH (250). */
@@ -384,7 +549,8 @@ export async function computeRepoRow(folder: string): Promise<RepoRow> {
   const cfg = getRepoConfig(folder);
   const status = getRepoStatus(folder);
   const manifest = getRepoManifest(folder);
-  const { counts, peerCount, transferring, notBackedUp, missingHere, bytes } = await repoRowStats(
+  const { counts, peerCount, transferring, notBackedUp, missingHere, bytes } = await repoRowStatsCached(
+    folder,
     cfg,
     status,
     manifest,
@@ -521,6 +687,10 @@ export async function computeRepoDetail(
         return {
           signal: opts.signal,
           onEnrich: opts.onEnrich,
+          // Forwarded explicitly: this object is REBUILT rather than spread, so a field added to
+          // RowStreamOpts and not listed here is silently dropped on the streaming path only — which would
+          // make the buffered route and the stream compose from two different censuses.
+          censusTab: opts.censusTab,
           onFileBatch: (batch: FileRow[]) => {
             for (const r of batch) seen.push(r);
             opts.onFileBatch?.(batch);
@@ -539,13 +709,18 @@ export async function computeRepoDetail(
 
 // One FileRow per discovered big-file candidate, joined with its decision + manifest CID.
 async function composeFileRows(
-  _folder: string,
+  folder: string,
   cfg: RepoUnitConfig,
   status: UnitStatus,
   manifest: Manifest,
   pinset?: Set<string>,
   opts?: RowStreamOpts,
 ): Promise<FileRow[]> {
+  // THE CENSUS, resolved before anything else consumes it — `ignoreP` below hands git the candidate paths,
+  // so the row set has to be settled first or the git-ignore axis would be computed for a different set of
+  // files than the rows it is patched onto. Only the "All" tab reads this from Postgres (see
+  // `censusForTab`); every other tab, and every caller that names no tab, gets `status.candidates`.
+  const census = await censusForTab(folder, status, opts?.censusTab);
   const manifestByPath = new Map(manifest.files.map((f) => [f.path, f]));
   const repoRootAbs = cfg.repo.path
     ? path.resolve(expandHome(cfg.repo.path))
@@ -568,7 +743,7 @@ async function composeFileRows(
   const ignoreP: Promise<{ rules: Map<string, IgnoreRule>; unknown: Set<string> }> = repoRootAbs
     ? checkIgnoreVerboseAsyncDetailed(
         repoRootAbs,
-        status.candidates.map((c) => joinRel(repoRootAbs, c.path)),
+        census.map((c) => joinRel(repoRootAbs, c.path)),
       )
     : Promise.resolve({ rules: new Map<string, IgnoreRule>(), unknown: new Set<string>() });
   // Resolve the storage KIND ONCE per repo (it's memoized, but this also lets us hand the known type to
@@ -581,12 +756,14 @@ async function composeFileRows(
   // (config.service `flagsResolver`) — the per-row form was O(rows × flags) of repeated work.
   const flagsFor = flagsResolver();
   // Foreign-pin discoveries as a SET, built ONCE per repo — the per-row `foreignPinByAbsPath` it replaces
-  // was a linear scan of the whole global index for every candidate (foreign-pin.service foreignPinPathSet).
-  const foreignPins = foreignPinPathSet();
+  // was a linear scan of the whole global index for every candidate (foreign-pin.service). Scoped to THIS
+  // repo's root since slice 8: on Postgres that is one indexed read of the rows this walk can actually ask
+  // about, instead of rebuilding a 2,825-entry Set of every discovery on the computer, once per repo.
+  const foreignPins = await foreignPinPathSetFor(repoRootAbs);
   const local: FileRow[] = [];
   let batch: FileRow[] = [];
   let sinceYield = 0;
-  for (const cand of status.candidates) {
+  for (const cand of census) {
     if (opts?.signal?.aborted) break;
     const decision: Decision = cfg.decisions[cand.path] ?? "undecided";
     const m = manifestByPath.get(cand.path);
@@ -684,7 +861,7 @@ async function composeFileRows(
   // Fold the shared decision ledger for provenance (decisions.mdx §10; one_repo.mdx §4.8): who decided each
   // file and when. Wrapped so a bad/locked/conflicted ledger never breaks row composition — rows simply
   // keep the null provenance they were built with.
-  const foldedByPath = foldLedgerForRepo(cfg);
+  const foldedByPath = await foldLedgerForRepo(cfg);
   if (foldedByPath.size > 0) {
     for (const r of local) {
       const prov = foldedByPath.get(r.path);
@@ -696,6 +873,7 @@ async function composeFileRows(
   }
 
   const { rules: ignoreRules, unknown: ignoreUnknown } = await ignoreP;
+  const gitignoreRows: FileGitignoreRow[] = [];
   for (const r of local) {
     // The SAME derivation the rows used to be built with — one function, so the patched row and a
     // buffered row cannot disagree about what git said.
@@ -703,6 +881,40 @@ async function composeFileRows(
     if (Object.keys(axis).length === 0) continue; // git could not answer → leave it undetermined
     Object.assign(r, axis);
     patch[r.path] = { ...patch[r.path], ...axis };
+    // DUAL-WRITE of the git-ignore axis (database.mdx §9 slice 9, migration 0009). The verdict we just
+    // spent a subprocess on is cached WITH its own `checked_at`, because the source is `git check-ignore`
+    // — measured at 2.3 s for 1,875 paths, which is git's own evaluation and survives the migration in
+    // full (database.mdx §8.3). Only rows git actually ANSWERED for get written: the `continue` above
+    // already dropped the undetermined ones, and the ABSENCE of a row is what "undetermined" means in this
+    // table (performance.mdx P-37 fix 4) — writing `ignored = false` for a path git could not evaluate
+    // would mis-file it into the big-files-to-ignore nudge on nothing but a spawn failure.
+    gitignoreRows.push({
+      unitId: 0, // filled below, once — `unitIdForRoot` is one lookup per page, not one per row
+      relPosix: healWindowsPath(r.path),
+      ignored: axis.gitignore === true,
+      locked: axis.gitignoreLocked === true,
+      ruleSource: axis.gitignoreRule?.source ?? null,
+      ruleLine: axis.gitignoreRule?.line ?? null,
+      rulePattern: axis.gitignoreRule?.pattern ?? null,
+    });
+  }
+  if (repoRootAbs && gitignoreRows.length && dbEnabled()) {
+    // Started, not awaited: the rows are already assembled and the caller is waiting to render them. A
+    // cache of a subprocess verdict is worth exactly nothing if writing it delays the page it belongs to.
+    void tryDb(
+      async () => {
+        const unitId = await unitIdForRoot(repoRootAbs);
+        if (unitId === null) return 0;
+        for (const row of gitignoreRows) row.unitId = unitId;
+        // The FK (0009): `file_gitignore` references `lfb.file`, so the parent rows land first. This is the
+        // FOURTH writer of `lfb.file` (R5) and it claims NO column on it — a git-ignore verdict proves a
+        // path exists and says nothing about the file's size, media kind or decision.
+        await ensureFileRows(gitignoreRows.map((g) => ({ unitId, relPath: g.relPosix })));
+        return upsertFileGitignore(gitignoreRows);
+      },
+      0,
+      "units.composeFileRows.gitignore",
+    );
   }
 
   if (Object.keys(patch).length > 0) opts?.onEnrich?.(patch);
@@ -1005,16 +1217,40 @@ function computeTaskMetrics(files: FileRow[]): TaskMetrics {
 // Read + fold the repo's shared decision ledger ONCE, keyed by repo-relative path. The repo root is the
 // same value decisions.service.ts derives (getRepoConfig().repo.path resolved with `~` expansion). Any
 // failure (no repo path, missing/locked/merge-conflicted ledger) yields an empty map so provenance is null.
-function foldLedgerForRepo(cfg: RepoUnitConfig): Map<string, FoldedDecision> {
-  const p = cfg.repo.path;
-  if (!p) return new Map();
+//
+// THIS IS THE ORACLE, AND IT STAYS (R3 / database_migration.mdx §4.5). `foldLedgerForRepo` below prefers the
+// maintained `lfb.file_decision` table, but this function is unchanged, is still what runs with no database,
+// and is what the equality gate compares Postgres against for every unit.
+function foldLedgerForRepoByRead(repoRoot: string): Map<string, FoldedDecision> {
   try {
-    const repoRoot = path.resolve(expandHome(p));
     return foldLedger(readLedger(repoRoot));
   } catch (e) {
     log.warn("units", `decision provenance unavailable (using null): ${(e as Error).message}`);
     return new Map();
   }
+}
+
+/**
+ * THE READ THIS SLICE CUTS OVER (R3, and the headline measurement of the whole workstream).
+ *
+ * Folding the raw ledger is a DISTINCT-ON-by-hand over an append log with 5.2× write amplification, and it
+ * runs on every composition of the One-Repo table. 0006's header records what that costs on the largest unit
+ * here — 11,423 events, 3.1 MB of YAML, 96.0 ms — against 0.23 ms to read the maintained fold.
+ *
+ * `null` from the repo layer means "Postgres does not know this repo", which is NOT the same as "this repo
+ * has no decisions": a repo enlisted since the last `adopt_units` / `backfill_decisions` pass has a full
+ * ledger and no rows. Both cases fall back to the oracle, so a repo the migration has not reached yet keeps
+ * exactly the behaviour it had before Postgres existed — which is the whole of R2 at one call site.
+ */
+async function foldLedgerForRepo(cfg: RepoUnitConfig): Promise<Map<string, FoldedDecision>> {
+  const p = cfg.repo.path;
+  if (!p) return new Map();
+  const repoRoot = path.resolve(expandHome(p));
+  if (dbEnabled()) {
+    const folded = await tryDb(() => foldedDecisionsForUnitPath(repoRoot), null, "units.foldLedgerForRepo");
+    if (folded) return folded;
+  }
+  return foldLedgerForRepoByRead(repoRoot);
 }
 
 /** "Pinned" means pinned on THIS computer (ipfs.mdx §1.1): only OUR OWN `pinned_by` claim — the one the
@@ -1161,7 +1397,7 @@ async function repoRowStats(
   const selfLabel = computerLabel();
   // Built ONCE per repo — the `foreignPinByAbsPath` this replaces was a linear scan of the whole global
   // discovery index, run per candidate, on the very path this function exists to keep cheap.
-  const foreignPins = foreignPinPathSet();
+  const foreignPins = await foreignPinPathSetFor(repoRootAbs);
 
   const counts: RepoCounts = { pinned: 0, pending: 0, undecided: 0, ignored: 0, pinnedForeign: 0 };
   const peerSet = new Set<string>();
@@ -1233,6 +1469,127 @@ async function repoRowStats(
   }
 
   return { counts, peerCount: peerSet.size, transferring, notBackedUp, missingHere, bytes };
+}
+
+/**
+ * THE READ THIS SLICE CUTS OVER (R3, database.mdx §9 slice 11) — the Repos list's per-repo aggregates.
+ *
+ * `repoRowStats` above is unchanged, still runs with no database, and remains the ORACLE: it is the one
+ * implementation of the arithmetic, and it is also what PRODUCES the numbers this cache stores. Nothing is
+ * computed twice and nothing is computed two ways.
+ *
+ * THE PATH, and why each branch is where it is:
+ *
+ *   * A fresh, non-partial `unit_rollup` row → use it. That is one indexed lookup instead of parsing this
+ *     repo's status + manifest + config, building its foreign-pin path set and walking every candidate.
+ *     `readFreshRollupForPinFolder` refuses anything provisional or older than the last scan / pin pass /
+ *     settings change, so "fresh" is a claim the query itself checks rather than one this function assumes.
+ *   * Anything else — no database, no unit row, no rollup row yet, a partial row, a stale row, a query
+ *     error — composes exactly as before and PUBLISHES the result on the way past, so the next read is the
+ *     cheap one. Every one of those is an ordinary state of this app, not a fault (R2).
+ *
+ * `transferring` IS NOT STORED, and this is a measured statement rather than an omission: `unit_rollup` has
+ * no column for it, and nothing in this codebase ever produces `transfer === 'fetching' | 'pushing'` —
+ * `transferFor` returns only `na` / `pending` / `pinned`, and `remoteOnlyRows` hard-codes `pending`. So the
+ * composed value is `false` for every repo on every machine today, and reading `false` from the cache
+ * cannot differ from computing it. The day a live-transfer state does land, it will need a column here and
+ * this comment is the reason to add one rather than to quietly keep answering `false`.
+ */
+async function repoRowStatsCached(
+  folder: string,
+  cfg: RepoUnitConfig,
+  status: UnitStatus,
+  manifest: Manifest,
+): Promise<RepoRowStats> {
+  if (dbEnabled()) {
+    const cached = await tryDb(() => readFreshRollupForPinFolder(folder), null, "units.repoRowStats.read");
+    if (cached) {
+      return {
+        counts: { ...cached.counts },
+        peerCount: cached.peerCount,
+        transferring: false, // see the note above — never composed as anything else on this code
+        notBackedUp: cached.notBackedUp,
+        missingHere: cached.missingHere,
+        bytes: { ...cached.bytes },
+      };
+    }
+  }
+  const stats = await repoRowStats(cfg, status, manifest);
+  // NOT awaited on the read path: the caller already has its answer, and making 105 Repos-list rows each
+  // wait on a write would trade the latency this cutover exists to remove for a write nobody is reading yet.
+  void publishRepoRowStats(folder, status, stats);
+  return stats;
+}
+
+/**
+ * Store what `repoRowStats` just computed, so the next reader does not have to compute it again.
+ *
+ * `fileCount` is the census size the tally actually ran over — `status.candidates` — not `big_file_count`,
+ * because the counts beside it were derived from exactly these rows and a row count that disagrees with
+ * them would be a third number nobody can reconcile.
+ *
+ * BOTH PLANES, ALWAYS, AND IN THIS ORDER. `unit_rollup` holds two independent groups of columns — the
+ * decision/byte/peer plane composed above, and the charter's category plane computed by one SQL aggregate
+ * (rollup.service.ts `refreshRollupCategoryCounts`). `publishUnitRollup` is the ONLY thing that clears
+ * `partial`, so it must never run on a row whose category half has not been computed: a `partial = false`
+ * row with four zeroes in it does not read as "not computed yet", it reads as "this repo has nothing to
+ * compress", which is a number the UI would render. Categories first, publish second.
+ *
+ * THE ONE RACE, AND WHY IT CANNOT PRODUCE THE FAILURE THIS SLICE IS ABOUT. A Repos-list read can land
+ * while a scan is mid-way through re-stating that unit's census, and this function would then clear
+ * `partial` on a category count taken from a half-written `lfb.file`. That is real, and it is bounded in
+ * the one direction that matters: during the upsert loop the previous generation's rows STILL carry
+ * `is_candidate`, and the generation sweep that retires them is the LAST thing `publishCensus` does before
+ * calling `refreshRepoRollup`. So the mid-scan census is always a SUPERSET of the settled one — a category
+ * count can briefly read HIGH and then settle, and can never read low. "A count that is merely incomplete
+ * getting read as a count that went DOWN" is structurally excluded, and the scan's own final publish
+ * restates the true numbers within the same pass. The decision plane is unaffected either way: it is
+ * composed from status/manifest/config, all of which are written atomically.
+ *
+ * Unable to throw, for the same reason `invalidateRollup` cannot: this is a read path, it worked before
+ * Postgres existed, and it must keep working when Postgres is down (R2). It returns its promise so the
+ * scan-end caller can ORDER itself after the invalidation `writeRepoStatus` just fired; the read path
+ * deliberately does not wait, so the extra aggregate costs the reader nothing — MEASURED at 11-18 ms for
+ * the largest repo on this machine (2,741 census rows), behind a response that has already been sent.
+ */
+async function publishRepoRowStats(folder: string, status: UnitStatus, stats: RepoRowStats): Promise<void> {
+  if (!dbEnabled()) return;
+  const payload: RollupStats = {
+    fileCount: status.candidates.length,
+    counts: stats.counts,
+    peerCount: stats.peerCount,
+    notBackedUp: stats.notBackedUp,
+    missingHere: stats.missingHere,
+    bytes: stats.bytes,
+  };
+  await tryDb(
+    async () => {
+      const unitId = await unitIdForPinFolder(folder);
+      if (unitId === null) return 0;
+      // The CHECKED-IN threshold, not the 100 MB payload one — the same value `computeTaskMetrics` counts
+      // the git-ignore nudge at, so the rollup and the One-Repo tile can never disagree.
+      await refreshRollupCategoryCounts(unitId, checkedInThresholdBytes());
+      return publishUnitRollup(unitId, payload);
+    },
+    0,
+    "units.repoRowStats.publish",
+  );
+}
+
+/**
+ * Compose this repo's aggregates from YAML and publish them — the scan-end entry point.
+ *
+ * The scanner calls this AFTER its pass over the unit has completed and its census is on disk, which is the
+ * only moment `partial = false` is a true statement about the numbers. Exported rather than inlined into
+ * the scanner because the arithmetic lives here and must not be re-implemented there.
+ */
+export async function refreshRepoRollup(folder: string): Promise<void> {
+  if (!dbEnabled()) return;
+  const cfg = getRepoConfig(folder);
+  const status = getRepoStatus(folder);
+  const manifest = getRepoManifest(folder);
+  const stats = await repoRowStats(cfg, status, manifest);
+  await publishRepoRowStats(folder, status, stats);
 }
 
 /**

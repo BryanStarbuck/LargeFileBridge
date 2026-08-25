@@ -13,15 +13,16 @@
 //   * A change is QUALIFYING only when the path is a video/image/audio file (isMediaFile) OR an added
 //     file at/over the big threshold. Non-media, non-big noise is dropped.
 //   * Metadata-only: at most one `stat` on an added path; never open file contents; no IPFS, no network.
-//   * Debounce bursts, then on ≥1 qualifying add/delete kick the SAME single-flight, coalesced discovery
-//     worker the Rescan button drives (startScan) — so status.yaml tracking, interesting-directory
-//     coloring, and the File System tree refresh in seconds instead of waiting for the 4-hour scan.
+//   * Debounce bursts, then on each qualifying add/delete invalidate exactly what that path could have
+//     made stale — the parent's cached listing and the interest tint of every directory above it — so the
+//     File System tree and its folder colouring are correct within the debounce window. It does NOT kick a
+//     discovery scan any more; see `flushPending` for the measurement that removed it (database.mdx §8.1).
 import fs from "node:fs";
 import path from "node:path";
 import type { WatcherState } from "@lfb/shared";
 import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
 import { isDatabaseWorkingFile, isMediaFile, isTransientDownloadFile } from "../../shared/scan-filters.js";
-import { startScan } from "../scanner/scan-job.js";
+import { invalidateFsCachesForPath } from "../fsindex/fsindex.service.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
 import { isDirAt } from "../../shared/fs-probe.js";
@@ -169,9 +170,37 @@ function onChange(abs: string, filter: WatchFilter): void {
 }
 
 /**
- * A burst has settled. Decide whether ANY pending path is a qualifying add/delete of a big/media file,
- * and if so kick one coalesced discovery scan. `startScan` is single-flight + coalescing, so a storm of
- * drops yields at most one in-flight walk plus one queued follow-up — never a walk per file (§2.2/§10).
+ * A burst has settled. For every qualifying add/delete, forget the cached filesystem answers that path
+ * could have invalidated — its parent listing and the interest tint of every directory above it — and
+ * nothing else.
+ *
+ * WHY THIS IS NO LONGER `startScan("manual")` (the slice-12 change; database.mdx §8.1).
+ *
+ * It used to be. One qualifying add/delete escalated to a FULL DISCOVERY WALK of every registered repo,
+ * and that is the write amplification underneath the "pages are spinning" complaint. The escalation was
+ * nearly six orders of magnitude larger than the thing it was reacting to:
+ *
+ *   * one dropped video ⇒ a scan across 105 registered repos, measured from this app's own `[scan]` log
+ *     lines at 40.9-66.9 s, median 53.9 s over the last 12 runs — against 0.068 ms for the invalidation
+ *     below, and 0.6 ms for a 200-file burst;
+ *   * `loop-watch` recorded that scan blocking the event loop for 3,299 ms across one 30 s window (worst
+ *     single call 440 ms), while `["scanStatus"]` was named in live "PAGE STILL SPINNING" reports;
+ *   * what had actually gone stale was 0-6 in-memory Map entries (the number `dropped` reports below);
+ *   * and `startScan` coalesces but does not cancel — a folder of files dropped one per second kept a
+ *     rerun permanently queued, so the scan bar never came down and every page polling scan-status stayed
+ *     in its loading state. That is the same shape as the two incidents already recorded in
+ *     `isQualifying` (the yt-dlp fragment, the Badger working file); this is the third and the largest.
+ *
+ * WHAT WE GIVE UP, said plainly: `status.yaml` tracking, the candidate lists and the TO DO rollups are no
+ * longer refreshed within seconds of a file landing. They are refreshed by the scheduled 4-hour discovery
+ * scan and by `maybeTriggerStaleScan` on page load (scan-job.ts), which is the reconciliation path the
+ * product already relies on for every non-media change and for every machine whose watcher is off. The
+ * File System browser — the surface a user is actually looking at when they drop a file into a folder —
+ * is correct IMMEDIATELY, which it was not before: the stale tint above the parent directory survived the
+ * old rescan too, because the rescan never touched these caches.
+ *
+ * If a future product decision wants the scan back on this path, it belongs behind a rate limiter and a
+ * "the tree changed a lot" threshold, not on every qualifying file.
  */
 function flushPending(): void {
   debounceTimer = null;
@@ -180,19 +209,24 @@ function flushPending(): void {
   const threshold = getAppConfig().big_file.threshold_bytes;
 
   let qualifying: string | null = null;
+  let count = 0;
+  let dropped = 0;
   for (const abs of batch) {
-    if (isQualifying(abs, threshold)) {
-      qualifying = abs;
-      break;
-    }
+    if (!isQualifying(abs, threshold)) continue;
+    qualifying ??= abs;
+    count += 1;
+    // Per PATH, not once for the burst: two files landing in unrelated trees invalidate two chains, and
+    // collapsing them onto the first path's chain would leave the second tree's tints stale until its TTL.
+    dropped += invalidateFsCachesForPath(abs);
   }
   if (!qualifying) return;
 
   log.info(
     "watcher",
-    `Detected add/delete of a big/media file (e.g. ${qualifying}) — kicking a discovery rescan.`,
+    `Detected add/delete of ${count} big/media file(s) (e.g. ${qualifying}) — refreshed the File System ` +
+      `browser's folder colouring for the affected folders (${dropped} cached answer(s) dropped). ` +
+      `Large File Bridge will pick up tracking changes on its next scan.`,
   );
-  startScan("manual");
 }
 
 /**

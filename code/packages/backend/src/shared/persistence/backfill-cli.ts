@@ -9,7 +9,7 @@
 // processes cannot both hold it, so whichever gets there second reports `lease-held` and does nothing
 // (config/migration-state.ts `acquireLease`).
 import { runAllBackfills, rejectCount } from "./backfill.js";
-import { registerUnitBackfills } from "../../modules/store-model/unit-backfill.js";
+import { registerAllBackfills } from "./register-backfills.js";
 import { activeUrlSafe, closePool, probeDatabase, resolveDbMode } from "./pool.js";
 
 async function main(): Promise<void> {
@@ -24,7 +24,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
-  registerUnitBackfills();
+  registerAllBackfills();
   // Everything after `--only` is an area name; with none, every registered area runs in registration order.
   const args = process.argv.slice(2);
   const onlyAt = args.indexOf("--only");

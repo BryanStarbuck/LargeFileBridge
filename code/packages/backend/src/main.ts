@@ -405,6 +405,39 @@ async function main(): Promise<void> {
   // window stays fully attributed (blocking.ts).
   await bootDatabase();
 
+  // POPULATE THE TABLES, IN THE BACKGROUND, WITHOUT BEING ASKED.
+  //
+  // Every read this programme added falls back to YAML correctly and SILENTLY when its table is empty, which
+  // is the right behaviour and also a trap: on a machine where nobody has typed `just db-backfill`, the
+  // decision fold, the census read and the rollup cache all quietly stay on the slow path and none of the
+  // measured wins ever appear. Nothing would look broken — it would just never get faster. So the app does
+  // it itself.
+  //
+  // NOT AWAITED, and after `bootDatabase()` so the schema is in its final shape. The cold run is ~60 s over
+  // this machine's corpus; a warm one is ~370 ms because every area short-circuits on its source
+  // fingerprint. Neither may sit in front of the first request, which is why this follows the same shape as
+  // the watcher bind below: fire it, log a failure, never let a rejection reach the process. `runBackfill`
+  // is written not to throw and `runAllBackfills` catches anyway; the `.catch` here is the third layer,
+  // because this line runs BEFORE the unhandledRejection handler is registered at the end of this function.
+  //
+  // It also re-checks `backgroundShouldDefer()` between areas, so a sign-in arriving mid-run cannot be made
+  // to wait behind the backfill for a pooled connection (pool.ts INTERACTIVE_RESERVE, and the sister app's
+  // 2026-08-15 incident where batch work logged nineteen admins out).
+  void (async () => {
+    const { registerAllBackfills } = await import("./shared/persistence/register-backfills.js");
+    const { runAllBackfills } = await import("./shared/persistence/backfill.js");
+    registerAllBackfills();
+    const out = await runAllBackfills();
+    const ran = out.filter((o) => o.ran);
+    if (ran.length) {
+      log.info(
+        "migrate",
+        `backfill: ${ran.length} area(s) ran, ${ran.reduce((n, o) => n + o.rows, 0)} row(s) — ` +
+          ran.map((o) => `${o.name}=${o.rows}`).join(" "),
+      );
+    }
+  })().catch((e) => log.warn("migrate", `background backfill did not complete: ${(e as Error).message}`));
+
   const cfg = getAppConfig();
   const port = Number(process.env.PORT) || cfg.server.backend_port;
 

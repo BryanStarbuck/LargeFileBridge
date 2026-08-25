@@ -21,6 +21,10 @@ import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { cidEquivalencePath } from "../../shared/store/scopes.js";
 import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
+// R1 DUAL-WRITE into `lfb.cid_alias` (migration 0007, database.mdx §9 slice 7). The YAML file above stays
+// the truth and stays MACHINE-LOCAL (`scopes.ts:12-20`); Postgres holds the local index only, and no reader
+// has cut over to it. `manifest.repo.ts` is SQL-only and imports nothing from here, so no cycle.
+import { projectCidAlias, projectCidAliasRemoval } from "./manifest.repo.js";
 
 const FILE = () => cidEquivalencePath();
 
@@ -52,6 +56,10 @@ export function noteCidEquivalence(recordedCid: string, localCid: string): void 
     // Losing the cache costs a re-hash next pass — never a failure worth aborting the pin pass for.
     log.warn("pin", `could not persist cid equivalence: ${(e as Error).message}`);
   }
+  // `proof: 'rehash'` because that is literally how this pair was established: the pin pass re-hashed the
+  // bytes and found the local pin (foreign-profile adoption). Fire-and-forget and unable to throw — this
+  // function is called from inside the pin pass and must stay as unfailable as it was before (R2).
+  projectCidAlias({ aliasCanon: key, targetCanon: val, kind: "equivalent", proof: "rehash" });
 }
 
 /** The locally-pinned equivalent of a recorded CID, if we have ever established one. */
@@ -81,6 +89,10 @@ export function dropCidEquivalence(recordedCid: string): boolean {
   } catch (e) {
     log.warn("pin", `could not persist cid equivalence removal: ${(e as Error).message}`);
   }
+  // The removal travels too. A pair the audit dropped because its key is not a file at all is worse than no
+  // pair — `pinsetHasContent` answers true through it forever — so leaving the row behind in Postgres would
+  // preserve exactly the state this function exists to undo.
+  projectCidAliasRemoval(key);
   return true;
 }
 

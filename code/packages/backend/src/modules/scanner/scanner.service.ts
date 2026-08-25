@@ -16,6 +16,7 @@ import {
   writeRepoStatus,
   registerRepo,
   isGitWorkingTree,
+  refreshRepoRollup,
 } from "../store-model/units.service.js";
 import { reconcile as reconcileDecisions, applyDefaultPolicy } from "../storage/decisions.service.js";
 import { refreshCounts } from "../storage/repo-storage.service.js";
@@ -30,6 +31,8 @@ import { listPins, canonicalCid } from "../ipfs/ipfs.service.js";
 import {
   buildDiscoveryCtx,
   discoverForeignPin,
+  ForeignPinBatch,
+  pruneForeignPinProbes,
   recordForeignPin,
   verifyForeignPins,
   flushForeignPinStores,
@@ -44,6 +47,20 @@ import { isDirAt, statOrNull } from "../../shared/fs-probe.js";
 import { relPosix, joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
+// The Postgres half of the scan census (database.mdx §9 slice 5). Leaf modules: `db.ts` is the pool +
+// helpers, `pool.ts` the pool itself, `file.repo.ts` SQL only — none of them reaches back into the scanner,
+// so no cycle. Every one of them is a no-op without a database (R2).
+import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
+import { backgroundShouldDefer } from "../../shared/persistence/pool.js";
+import {
+  bumpCandidateGen,
+  setUnitPresent,
+  sweepStaleCandidates,
+  unitIdForPinFolder,
+  upsertCensusRows,
+  upsertUnitScanScalars,
+  type CensusRow,
+} from "../store-model/file.repo.js";
 
 interface Candidate {
   path: string; // relative to unit root
@@ -141,7 +158,7 @@ export async function scanAll(
   if (pinset.size > 0) {
     discovery = await buildDiscoveryCtx();
     try {
-      verifyForeignPins(discovery.keptSet); // drop discoveries another tool has since unpinned (§5.1)
+      await verifyForeignPins(discovery.keptSet); // drop discoveries another tool has since unpinned (§5.1)
     } catch (e) {
       log.debug("scan", `verifyForeignPins skipped: ${(e as Error).message}`);
     }
@@ -169,7 +186,7 @@ export async function scanAll(
       // `threshold` below the global 50 MB would otherwise nudge on files it also treats as payload.
       checkedInThreshold: Math.min(cfg.big_file.checked_in_threshold_bytes, threshold),
     });
-    const status = writeStatus(folder, "repo", candidates, threshold, source, dropped);
+    const status = await writeStatus(folder, "repo", candidates, threshold, source, dropped);
 
     // Map each candidate's repo-relative path to the CID the committed manifest recorded for it, so we can
     // tell — cheaply, reusing the ONE pinset fetched for this whole scan — which candidates are already
@@ -202,12 +219,31 @@ export async function scanAll(
     // (2) Record external state a scan OBSERVED but LFB did not create — files already IPFS-pinned or
     // already-compressed OUTSIDE us — as a once-per-file `observed`/not-lfbridge sidecar event
     // (repo_tracking_scheme.mdx §3.3). Reuses the single pinset + the manifest CID map; idempotent per file.
+    //
+    // ONE FOREIGN-PIN BATCH PER UNIT (database.mdx §9 slice 8). The fingerprint cache used to be an
+    // in-process object, so a lookup cost ~0.05 ms; on Postgres a lookup is a ~0.15-0.3 ms loopback round
+    // trip. Asking per file would therefore make this loop SLOWER than the JSON store it replaces — on this
+    // repo's 2,188 candidates, by roughly half a second — and a cache that costs more than the work it
+    // avoids is not a cache. `ForeignPinBatch.open` preloads every probe row these candidates could hit in
+    // ONE query, the loop reads it in memory exactly as it read the JSON object, and `flush()` writes the
+    // pass's new verdicts and discoveries in one go. With no database the batch is inert and every call
+    // falls through to the write-back stores unchanged (R2).
+    const fpBatch = await ForeignPinBatch.open(
+      discovery
+        ? candidates.map((c) => ({
+            absPath: joinRel(repoPath, c.path),
+            size: c.size,
+            mtimeMs: c.modified_at ? Date.parse(c.modified_at) : 0,
+          }))
+        : [],
+    );
     try {
       const extCtx: ExternalStateCtx = {
         pinset,
         cidForPath: (rel) => cidByPath.get(rel) ?? null,
         repoRoot: repoPath,
         discovery,
+        foreignPins: fpBatch,
       };
       for (const c of candidates) {
         await reconcileExternalState(
@@ -218,6 +254,10 @@ export async function scanAll(
       }
     } catch (e) {
       log.debug("scan", `reconcileExternalState(${repoPath}) skipped: ${(e as Error).message}`);
+    } finally {
+      // In a `finally` because a unit that threw half way through still probed real files, and throwing
+      // away verdicts we already paid for means re-hashing them on the next pass.
+      await fpBatch.flush();
     }
 
     // Project the SHARED decision ledger (any teammate/other-computer decisions a git pull delivered)
@@ -279,6 +319,10 @@ export async function scanAll(
   // what drove RSS to 4 GB on 2026-07-20. A scan is the natural commit point — write them through here so
   // this pass's discoveries are durable the moment it reports complete, not two seconds later.
   flushForeignPinStores();
+  // …and bound the Postgres probe cache the same way, once per scan. This is what replaces
+  // `CACHE_MAX_ENTRIES = 40,000` plus a sort of every key on every flush: one indexed DELETE, and a cap
+  // five times higher because the rows are no longer the heap's problem (foreign-pin.repo.ts pruneProbes).
+  await pruneForeignPinProbes();
 
   progress.setPhase("done");
   log.info("scan", `Scan (${source}) complete.`);
@@ -554,20 +598,108 @@ async function walkUnit(
   return { candidates: out, dropped };
 }
 
-function writeStatus(
+async function writeStatus(
   folder: string,
   _unit: "repo" | "computer",
   candidates: Candidate[],
   threshold: number,
   source: "scheduled" | "manual",
   dropped = 0,
-): UnitStatus {
+): Promise<UnitStatus> {
   const prev = getRepoStatus(folder);
   const next = diffStatus(prev, candidates, threshold, source, "repo", dropped);
   next.folder_name = folder;
+  // R1 — THE YAML WRITE IS UNTOUCHED AND STILL FIRST. status.yaml remains the authority every read path,
+  // every mirror and every other computer relies on; the Postgres write below is added BEHIND it, and a
+  // Postgres failure can no more affect this line than the absence of Postgres can (database.mdx §9).
   writeRepoStatus(folder, next);
+  await publishCensus(folder, next, source);
   return next; // the caller reads changes_since_last_scan.added to drive the default-decision policy pass
 }
+
+/**
+ * THE DUAL-WRITE (database.mdx §9 slice 5): re-state this unit's census into `lfb.file`, bump the unit's
+ * candidate generation, and sweep whatever still carries an older one.
+ *
+ * WHAT THE SWEEP IS FOR. A file that was deleted, renamed, shrank under the threshold or became git-ignored
+ * is simply not re-stated by the walk. Rather than diffing to find what left — which is what the
+ * whole-document status.yaml rewrite does, at 820,891 bytes for the largest unit on this machine — every
+ * row this pass writes is stamped with a fresh generation and `is_candidate` is cleared on everything
+ * older. The row itself survives, because it carries the file's decision, CID, pin claims and provenance:
+ * "no longer in the census" is a true statement about a file, "this file never existed" is not.
+ *
+ * R2 — EVERY EXIT HERE IS SILENT AND HARMLESS. No database, no `unit` row yet (a repo registered since the
+ * last backfill), a query failure, a deferred pool: all of them leave the scan exactly as it was before
+ * this function existed. `tryDb` logs one throttled WARN per minute per context, and the scan continues.
+ *
+ * NOT ONE TRANSACTION, ON PURPOSE. The scan walks repos at `responsiveBudget()` concurrency and the pool
+ * is 8 connections with a 3-connection interactive reserve (pool.ts); holding one open transaction per
+ * repo for the length of an 11,000-row insert is precisely the shape that ate the sister app's pool on
+ * 2026-08-15 and logged nineteen admins out. The three steps are individually safe to interrupt: a crash
+ * between the bump and the upsert leaves rows at an older generation, and a crash before the sweep leaves
+ * stale rows flagged — both are a SUPERSET of the true census, both are corrected by the next scan's
+ * sweep, and neither can lose a row.
+ */
+async function publishCensus(folder: string, status: UnitStatus, source: "scheduled" | "manual"): Promise<void> {
+  if (!dbEnabled() || backgroundShouldDefer()) return;
+  await tryDb(
+    async () => {
+      const unitId = await unitIdForPinFolder(folder);
+      if (unitId === null) return; // area 2 has not adopted this unit yet — YAML remains the only census
+      const gen = await bumpCandidateGen(unitId);
+      const fallbackChangedAt = status.last_scan_at ? new Date(status.last_scan_at) : new Date();
+      const rows: CensusRow[] = status.candidates.map((c) => ({
+        relPath: c.path,
+        sizeBytes: c.size,
+        modifiedAt: c.modified_at ? new Date(c.modified_at) : null,
+        analysisOnly: c.analysisOnly === true,
+      }));
+      // Batched so no single statement approaches Postgres's 65,535 bind-parameter ceiling and so the
+      // event loop gets a turn between round trips — the scan is a background pass and must not become the
+      // thing that makes the app unresponsive (performance.mdx P-40).
+      for (let i = 0; i < rows.length; i += CENSUS_BATCH_ROWS) {
+        await upsertCensusRows(unitId, gen, rows.slice(i, i + CENSUS_BATCH_ROWS), fallbackChangedAt);
+      }
+      await upsertUnitScanScalars([
+        {
+          unitId,
+          scanSource: source,
+          lastPinAt: status.last_pin_at ? new Date(status.last_pin_at) : null,
+          effectiveThresholdBytes: status.effective_threshold_bytes,
+          bigFileCount: status.big_file_count,
+          bigFileBytes: status.big_file_bytes,
+          scanDroppedCandidates: status.scan_dropped_candidates ?? 0,
+          lastError: status.last_error,
+        },
+      ]);
+      await setUnitPresent(unitId, status.repo_state === "present");
+      const retired = await sweepStaleCandidates(unitId, gen);
+      log.debug("scan", `${folder}: census published (${rows.length} candidate(s), gen ${gen}, ${retired} retired)`);
+
+      /**
+       * THE ROLLUP, RECOMPUTED WITH `partial = false` — and ONLY HERE (database.mdx §9 slice 11).
+       *
+       * `writeRepoStatus` above already marked this unit's rollup provisional, and every intermediate
+       * state of this function is a census that is partly the old pass and partly the new one. Publishing
+       * a final-looking rollup at any of those moments is how a count that is merely INCOMPLETE gets read
+       * as a count that went DOWN — the user sees a repo apparently losing files. So the publish waits
+       * until the upserts AND the sweep are both done, which is the first instant the numbers are true.
+       *
+       * ONE CALL, BOTH PLANES. `refreshRepoRollup` recomputes the charter's category counts from the census
+       * this pass just wrote AND re-composes the decision/byte/peer counts through `repoRowStats` — the one
+       * implementation of that arithmetic — before clearing `partial`. The scanner deliberately does not
+       * assemble either half itself: a second spelling of those rules here is how the Repos list and the
+       * One-Repo tiles start disagreeing.
+       */
+      await refreshRepoRollup(folder);
+    },
+    undefined,
+    "scanner.publishCensus",
+  );
+}
+
+/** Rows per INSERT statement. 1,000 × 17 columns = 17,000 binds, well inside the 65,535 ceiling. */
+const CENSUS_BATCH_ROWS = 1_000;
 
 // ── external-state reconciliation (repo_tracking_scheme.mdx §3.3) ─────────────
 
@@ -578,6 +710,8 @@ export interface ExternalStateCtx {
   cidForPath: (relPath: string) => string | null; // repo-relative path → its committed-manifest CID (or null)
   repoRoot?: string; // absolute repo root — for foreign-pin discovery's abs path (foreign_pin_discovery.mdx §3)
   discovery?: DiscoveryCtx; // the kept-set + size-prune index; present only when the node is reachable (§3)
+  /** The per-unit probe/discovery batch (slice 8). Absent ⇒ each call talks to the store on its own. */
+  foreignPins?: ForeignPinBatch;
 }
 
 /**
@@ -608,13 +742,16 @@ export async function reconcileExternalState(
     const abs = joinRel(ctx.repoRoot, file.path);
     const mtimeMs = file.modified ? Date.parse(file.modified) : 0;
     try {
-      const hit = await discoverForeignPin(abs, file.size, mtimeMs, ctx.discovery);
+      const hit = await discoverForeignPin(abs, file.size, mtimeMs, ctx.discovery, ctx.foreignPins);
       if (hit) {
         pinnedCid = hit.cid;
         pinProfile = hit.profile;
         // Global index (tier-1 fast UI lookup — §5/§6): record so the repo row (pinnedForeign) and the IPFS
         // page (reverse resolution) surface it cheaply without re-hashing. Idempotent upsert keyed by path.
-        recordForeignPin({ cid: hit.cid, profile: hit.profile, absPath: abs, size: file.size, repoRoot });
+        await recordForeignPin(
+          { cid: hit.cid, profile: hit.profile, absPath: abs, size: file.size, repoRoot },
+          ctx.foreignPins,
+        );
       }
     } catch (e) {
       log.debug("scan", `foreign-pin discovery skipped for ${abs}: ${(e as Error).message}`);
@@ -633,13 +770,16 @@ export async function reconcileExternalState(
   if (prior) {
     const priorCid = (prior as { ipfs?: { cid?: string } }).ipfs?.cid;
     if (priorCid && ctx.repoRoot && ctx.discovery?.keptSet.has(canonicalCid(priorCid))) {
-      recordForeignPin({
-        cid: priorCid,
-        profile: (prior as { ipfs?: { profile?: string } }).ipfs?.profile ?? "recorded",
-        absPath: joinRel(ctx.repoRoot, file.path),
-        size: file.size,
-        repoRoot,
-      });
+      await recordForeignPin(
+        {
+          cid: priorCid,
+          profile: (prior as { ipfs?: { profile?: string } }).ipfs?.profile ?? "recorded",
+          absPath: joinRel(ctx.repoRoot, file.path),
+          size: file.size,
+          repoRoot,
+        },
+        ctx.foreignPins,
+      );
     }
     return;
   }

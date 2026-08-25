@@ -13,6 +13,8 @@ import { isFileAt, statOrNull } from "../../shared/fs-probe.js";
 import { relPosix, healWindowsPath, hasWindowsSeparator, joinRel } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 import { repoStateDir, resolveStateSyncRepo } from "./tracking-root.service.js";
+import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
+import { readArtifactsForFiles, unitIdForRoot } from "../store-model/file-detail.repo.js";
 import {
   resolveStorageType,
   tracksIndexInLocalStorage,
@@ -112,33 +114,38 @@ function filesYamlPath(root: string, type?: StorageType): string {
  *  legitimately be in — the tracking base, beside the media, and (for a not-yet-migrated SDL) the legacy
  *  `.lfbridge/` base (§0.3). */
 export function analysisOutputs(root: string, rel: string, type?: StorageType): string[] {
+  const primed = primedOutputs(root, rel);
+  if (primed) return primed;
+  return analysisOutputsFromDisk(root, rel, type);
+}
+
+/**
+ * THE FILESYSTEM PROBE — the original `analysisOutputs`, unchanged, kept under its own name.
+ *
+ * It stays for two jobs beyond being the fallback: it is the VERIFICATION ORACLE area 7 is checked against
+ * (R3 / database_migration.mdx §4.5 — the old function survives a cutover and is what proves the new one),
+ * and it is what answers for every file the index has never heard of.
+ */
+export function analysisOutputsFromDisk(root: string, rel: string, type?: StorageType): string[] {
   const out: string[] = [];
   // isFileAt comes from shared/fs-probe (non-throwing statSync). This function fires ~12 probes per
   // file across every artifact placement and nearly all of them MISS, so the old
   // `try { statSync(p).isFile() } catch { false }` idiom paid a full V8 Error + stack capture per miss
   // — profiling showed that single pattern owning ~64% of the backend's CPU. Same semantics, 6–9×
   // cheaper per miss. See shared/fs-probe.ts.
-  const t = type ?? resolveStorageType(root);
+  const layout = artifactLayoutFor(root, type);
   // Detect the artifact in EVERY placement (placement_radios.mdx): under the tracking base (the default) OR
   // beside the media (the opt-in beside-media layout) OR, for an SDL awaiting migration, the legacy
   // `.lfbridge/` base — so a file's "done" status is correct whichever layout it is actually in. (The
   // sync-repo placement is detected via its own path when that seam lands.)
-  const legacy = legacyTrackingBaseDir(root, t);
-  const bases = [
-    path.join(trackingBaseDir(root, t), rel), // full filename kept; ext appended below
-    joinRel(root, rel), // beside the media
-    ...(legacy ? [joinRel(legacy, rel)] : []), // legacy pre-migration SDL layout
-  ];
+  const bases = layout.bodyBases.map((b) => joinRel(b.dir, rel)); // full filename kept; ext appended below
   if (bases.some((b) => isFileAt(b + TRANSCRIPTION_EXT))) out.push("transcript");
   if (bases.some((b) => isFileAt(b + AI_DESCRIPTION_EXT))) out.push("description");
   // OCR text (ocr.mdx §5.2) — the third artifact, detected in the same three layouts. Existence IS the
   // signal: an artifact whose text is empty still counts as done, because most images have no text and a
   // text-free file must never be re-offered forever (ocr.mdx §2.3).
   if (bases.some((b) => isFileAt(b + OCR_EXT))) out.push("ocr");
-  const analysisDirs = [
-    path.join(trackingBaseDir(root, t), ANALYSIS_DIR, rel),
-    ...(legacy ? [path.join(legacy, ANALYSIS_DIR, rel)] : []),
-  ];
+  const analysisDirs = layout.analysisBases.map((b) => joinRel(b.dir, rel));
   for (const [key, file] of Object.entries(ANALYSIS_FILES)) {
     if (analysisDirs.some((d) => isFileAt(path.join(d, file)))) out.push(key);
   }
@@ -153,14 +160,8 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
   // counted ONLY while FRESH: the record carries the compressed size, so replacing the media with new
   // bytes of a different size invalidates it and the file is offered again.
   if (compressInfo(path.basename(rel)).compressState === "should") {
-    const syncSub = cachedStateSyncRepo(root);
-    const recordDirs = [
-      path.join(repoStateDir(root), ANALYSIS_DIR, rel),
-      ...(syncSub ? [path.join(syncSub, ANALYSIS_DIR, rel)] : []),
-      ...analysisDirs,
-    ];
-    for (const d of recordDirs) {
-      const f = path.join(d, COMPRESSION_RECORD_FILE);
+    for (const b of layout.recordBases(root)) {
+      const f = path.join(joinRel(b.dir, rel), COMPRESSION_RECORD_FILE);
       if (!isFileAt(f)) continue;
       if (compressionRecordFresh(f, joinRel(root, rel))) out.push("compression");
       break; // first record found decides — a stale record never falls through to another copy
@@ -169,7 +170,209 @@ export function analysisOutputs(root: string, rel: string, type?: StorageType): 
   return out;
 }
 
-const COMPRESSION_RECORD_FILE = "compression.yaml";
+export const COMPRESSION_RECORD_FILE = "compression.yaml";
+
+// ── the artifact layout, named ONCE ─────────────────────────────────────────────────────────────────────
+
+/** The five `lfb.placement` enum values (0002), which are exactly the layouts `analysisOutputs` probes. */
+export type ArtifactPlacementKind = "tracking_base" | "beside" | "legacy_lfbridge" | "sync_repo" | "local_state";
+
+export interface ArtifactBase {
+  dir: string;
+  placement: ArtifactPlacementKind;
+}
+
+export interface ArtifactLayout {
+  /** Where an artifact BODY (`<rel><ext>`) can live, in the app's own probe order. */
+  bodyBases: ArtifactBase[];
+  /** Where an `analysis/<rel>/<file>.yaml` can live. */
+  analysisBases: ArtifactBase[];
+  /** Where a travelling `analysis/<rel>/compression.yaml` can live, in the app's own probe order. */
+  recordBases: (root: string) => ArtifactBase[];
+}
+
+/**
+ * THE ONE SPELLING of "where can this root's artifacts be", shared by the probe above and by backfill
+ * area 7.
+ *
+ * Area 7 has to ENUMERATE artifacts (it walks to discover them) where the probe only has to CONFIRM one it
+ * was handed a path for. Those are opposite directions over the same layout, and a second copy of the layout
+ * for the enumerating direction is precisely how a placement gets forgotten — which for the artifact index
+ * means a FALSE MISSING, and for a paid AI description a re-billed regeneration
+ * (database_migration.mdx §4.3, area 7). So the layout is stated here and both directions read it.
+ *
+ * `recordBases` is a function of `root` rather than a plain array because the compression record's first two
+ * placements (the Local-Storage state dir and the sync-repo mirror) are resolved from the root, not from the
+ * tracking base — the record is Category-B tracking state, not a Category-A content artifact.
+ */
+export function artifactLayoutFor(root: string, type?: StorageType): ArtifactLayout {
+  const t = type ?? resolveStorageType(root);
+  const trackingBase = trackingBaseDir(root, t);
+  const legacy = legacyTrackingBaseDir(root, t);
+  const analysisBases: ArtifactBase[] = [
+    { dir: path.join(trackingBase, ANALYSIS_DIR), placement: "tracking_base" },
+    ...(legacy ? [{ dir: path.join(legacy, ANALYSIS_DIR), placement: "legacy_lfbridge" as const }] : []),
+  ];
+  return {
+    bodyBases: [
+      { dir: trackingBase, placement: "tracking_base" },
+      { dir: root, placement: "beside" },
+      ...(legacy ? [{ dir: legacy, placement: "legacy_lfbridge" as const }] : []),
+    ],
+    analysisBases,
+    recordBases: (r: string) => {
+      const syncSub = cachedStateSyncRepo(r);
+      return [
+        { dir: path.join(repoStateDir(r), ANALYSIS_DIR), placement: "local_state" },
+        ...(syncSub ? [{ dir: path.join(syncSub, ANALYSIS_DIR), placement: "sync_repo" as const }] : []),
+        ...analysisBases,
+      ];
+    },
+  };
+}
+
+// ── the batched Postgres read (database.mdx §9 slice 9) ─────────────────────────────────────────────────
+//
+// READ THE MEASUREMENT BEFORE YOU WIRE THIS UP. Taken on this machine, 2026-08-24, against the real corpus
+// (12,720 artifact rows, `charlie-kirk`, warm APFS dentry cache, 5 alternating passes):
+//
+//     500 files THAT HAVE artifacts   disk 6.4 ms   |   prime 12.6 ms + read 2.5 ms = 15.1 ms
+//     500 files with NO artifact      disk 13.2 ms  |   (the index cannot answer these at all — see the
+//                                                   |    fence below — so it would ADD its 12.6 ms)
+//
+// ON A WARM LOCAL FILESYSTEM THE INDEX LOSES. `isFileAt` (shared/fs-probe.ts) already removed the V8
+// Error-plus-stack-capture that made the old miss idiom cost ~64% of backend CPU, and what is left is ~1 µs
+// per cached `statSync`. The batched query is an index scan doing one PK descent per key — `EXPLAIN ANALYZE`
+// measured 12.6 ms for 500 keys / 1,689 buffer hits — and 25 µs per key cannot beat 1 µs per stat.
+//
+// The index therefore wins in exactly the case the filesystem is slow: a COLD cache, or a network / cloud
+// mounted repo, where a single `statSync` blocks for milliseconds and a page pays it ~12 times per row
+// (units.service.ts already names that case: "on a cloud-mounted repo each statSync can block, so a large
+// repo multiplied that into a multi-second load"). It is built, verified against the disk oracle on 302 real
+// files with zero disagreements, and left UNPRIMED BY DEFAULT: no caller in the app calls
+// `primeAnalysisOutputs` today, so `analysisOutputs` behaves exactly as it did before this slice. Whoever
+// wires it into `composeFileRows` should do it behind the storage-kind or a setting, on these numbers.
+//
+// THE FENCE, stated before the code because it is the whole design:
+//
+//     POSTGRES MAY CONFIRM A `DONE`. IT MAY NEVER ASSERT A `MISSING`.
+//
+// `analysisOutputs` is the "is it already done?" check, and its own header states the rule it lives by: it
+// must NEVER report a false MISSING, because that regenerates work and for a paid AI description it re-bills
+// the provider. An index of a filesystem cannot honestly answer "there is no artifact here" unless every
+// writer of an artifact also writes the index — and the artifact writers (transcribe / describe / ocr) are
+// not part of this slice. So a file the index has no row for falls through to the full disk probe, exactly
+// as before. Nothing regresses; the win lands on the ~12,921 files that DO have artifact rows.
+//
+// AND EVEN A HIT IS RE-STATTED. `body_size` / `body_mtime_ms` are "the ONLY validity token: a mismatch on
+// re-stat means UNKNOWN, never done" (0009's own header). One `statSync` on a path we know exists is a hot
+// dentry-cache hit; what it replaces is up to a dozen probes that MISS. A mismatch means the artifact was
+// edited or replaced under us, and the file falls back to the full disk probe rather than trusting a row
+// that no longer describes anything.
+
+const PRIME_TTL_MS = 30_000;
+
+interface PrimedArtifact {
+  kind: string;
+  bodyPath: string;
+  bodySize: number;
+  bodyMtimeMs: number;
+  mediaSizeAtRecord: number | null;
+}
+
+/** `<root>\u0000<relPosix>` → the indexed artifacts for it. Only paths WITH artifacts are ever present. */
+let primeIndex = new Map<string, PrimedArtifact[]>();
+let primeAt = 0;
+
+function primeKey(root: string, rel: string): string {
+  return `${path.resolve(root)}\u0000${healWindowsPath(rel)}`;
+}
+
+/**
+ * Load one PAGE of artifact rows in a single round trip, ahead of the per-row `analysisOutputs` calls.
+ *
+ * BATCHED, never per row. A per-row query would swap a ~1 µs cached `statSync` for a ~150-300 µs socket
+ * round trip and make the page slower than the filesystem it replaced — the same trap the foreign-pin work
+ * had to avoid inside the scanner loop. The caller hands over the page's whole candidate list at once.
+ *
+ * Returns the number of artifact rows primed. Never throws: with no database, no unit row, or a query
+ * failure it primes nothing and every row takes the disk path (R2).
+ */
+export async function primeAnalysisOutputs(root: string, rels: string[]): Promise<number> {
+  if (!dbEnabled() || rels.length === 0) return 0;
+  return tryDb(
+    async () => {
+      const unitId = await unitIdForRoot(root);
+      if (unitId === null) return 0;
+      const keys = [...new Set(rels.map((r) => healWindowsPath(r)))];
+      const rows = await readArtifactsForFiles(unitId, keys);
+      if (Date.now() - primeAt > PRIME_TTL_MS) primeIndex = new Map(); // drop a stale page's entries
+      for (const r of rows) {
+        const key = primeKey(root, r.rel_posix);
+        const list = primeIndex.get(key) ?? [];
+        list.push({
+          kind: r.kind,
+          bodyPath: r.body_path,
+          bodySize: Number(r.body_size),
+          bodyMtimeMs: Number(r.body_mtime_ms),
+          mediaSizeAtRecord: r.media_size_at_record === null ? null : Number(r.media_size_at_record),
+        });
+        primeIndex.set(key, list);
+      }
+      primeAt = Date.now();
+      return rows.length;
+    },
+    0,
+    "tracking.primeAnalysisOutputs",
+  );
+}
+
+/** Tests only — the primed page is module state. */
+export function resetAnalysisOutputsPrime(): void {
+  primeIndex = new Map();
+  primeAt = 0;
+}
+
+/**
+ * The primed answer for one file, or null to fall through to the disk probe.
+ *
+ * Null is returned for THREE distinct situations, and all three are the same thing to the caller — "the
+ * index cannot answer, go and look":
+ *   * no row for this path (the index has never seen it, or it genuinely has no artifacts);
+ *   * a row whose body no longer stats to the size/mtime it was indexed at (0009's validity token);
+ *   * a `compression` row that cannot be re-checked against the media's CURRENT size.
+ */
+function primedOutputs(root: string, rel: string): string[] | null {
+  if (primeIndex.size === 0) return null;
+  if (Date.now() - primeAt > PRIME_TTL_MS) return null;
+  const rows = primeIndex.get(primeKey(root, rel));
+  if (!rows || rows.length === 0) return null;
+
+  const out: string[] = [];
+  for (const r of rows) {
+    const st = statOrNull(r.bodyPath);
+    // The validity token. A body that moved, shrank or was rewritten invalidates its row: we know LESS than
+    // the index claims, so the honest answer is to go and look rather than to report a possibly-stale done.
+    if (!st || st.size !== r.bodySize || Math.round(st.mtimeMs) !== r.bodyMtimeMs) return null;
+    if (r.kind === "compression") {
+      // THE LIVE STAT STAYS (database.mdx §9 slice 9). `compressionRecordFresh()` compares the record's
+      // compressed size against the media's CURRENT size — the verdict is not a static fact. A row that
+      // said "done" without re-checking would be a FALSE DONE that silently never re-offers a file the user
+      // has since re-edited, which is worse than the ~12 probes it saves.
+      if (r.mediaSizeAtRecord === null) return null; // "a record without a size is trusted" has no row form
+      if (compressInfo(path.basename(rel)).compressState !== "should") continue; // the name already says done
+      if (statOrNull(joinRel(root, rel))?.size !== r.mediaSizeAtRecord) continue; // stale → not done
+    }
+    out.push(r.kind);
+  }
+  // The disk probe emits its kinds in a fixed order and callers compare the two lists in the verification
+  // pass, so the primed answer is sorted into the SAME order. Every consumer uses `.includes()`, so this is
+  // about being comparable, not about being correct.
+  return OUTPUT_ORDER.filter((k) => out.includes(k));
+}
+
+/** The order `analysisOutputsFromDisk` pushes its kinds in. */
+const OUTPUT_ORDER = ["transcript", "description", "ocr", "visuals_by_time", "compression"];
 
 // resolveStateSyncRepo reads the `.sync-repo` marker file each call; analysisOutputs runs per ROW on the
 // View-One-Repo hot path, so memoize per root (the marker changes only when the user re-configures the

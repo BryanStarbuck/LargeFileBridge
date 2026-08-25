@@ -51,12 +51,12 @@ import {
 // ── shared path helpers (state-root layout, storage.mdx §2/§15) ─────────────────────────────────────────
 
 const stateRoot = (): string => resolveStateDir();
-const pinReposRoot = (): string => path.join(stateRoot(), "pin", "r");
+export const pinReposRoot = (): string => path.join(stateRoot(), "pin", "r");
 const pinStoragesRoot = (): string => path.join(stateRoot(), "pin", "s");
 const pinComputerDir = (): string => path.join(stateRoot(), "pin", "computer");
-const trackingReposRoot = (): string => path.join(stateRoot(), "repos");
+export const trackingReposRoot = (): string => path.join(stateRoot(), "repos");
 
-function listDirs(dir: string): string[] {
+export function listDirs(dir: string): string[] {
   try {
     return fs
       .readdirSync(dir, { withFileTypes: true })
@@ -88,7 +88,7 @@ function listFiles(dir: string, suffix: string): string[] {
  * `<slug>-<key>` / legacy-bare-`<key>` name by the same suffix rule (`keyed-dir.ts isDirForKey`) and simply
  * returns null when nothing is there.
  */
-function trackingDirFor(repoKey: string): string | null {
+export function trackingDirFor(repoKey: string): string | null {
   for (const name of listDirs(trackingReposRoot())) {
     if (isDirForKey(name, repoKey)) return path.join(trackingReposRoot(), name);
   }
@@ -111,7 +111,7 @@ function selfLabel(): { label: string; peerId: string | null } {
 }
 
 /** The SDL roots whose `devices/` registries and `repos/` mirror subtrees this machine can see. */
-function sdlRoots(): string[] {
+export function sdlRoots(): string[] {
   const roots = new Set<string>();
   for (const dir of listDirs(trackingReposRoot())) {
     const marker = readMarker(path.join(trackingReposRoot(), dir));
@@ -129,7 +129,7 @@ function sdlRoots(): string[] {
   return [...roots].sort();
 }
 
-interface SyncRepoMarker {
+export interface SyncRepoMarker {
   syncRepo: string;
   repoUid: string | null;
   repoSlug: string | null;
@@ -146,7 +146,7 @@ interface SyncRepoMarker {
  * reject table rather than accepting it silently — accepting it would mean writing `sync_repo_id` for a repo
  * whose mirror can never be located.
  */
-function readMarker(trackingDir: string): SyncRepoMarker | null {
+export function readMarker(trackingDir: string): SyncRepoMarker | null {
   const file = path.join(trackingDir, ".sync-repo");
   let raw: string;
   try {

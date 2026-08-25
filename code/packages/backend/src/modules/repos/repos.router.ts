@@ -27,6 +27,7 @@ import {
   setRepoOwnerOverride,
   getRepoStatus,
   getRepoManifest,
+  type CensusTabId,
 } from "../store-model/units.service.js";
 import { startScan, getScanJob, maybeTriggerStaleScan } from "../scanner/scan-job.js";
 import { pinRepoFolder, pinAll, missingPinnedFromPeers, pullMissing, ORPHAN_GRACE_MS } from "../pin/pin.service.js";
@@ -124,9 +125,32 @@ function deletedHereFor(folder: string): DeletedHereFile[] {
  * page), and the icon simply falls back to intent-only. This is the ONE choke point every RepoDetail-returning
  * handler uses, so a pin toggle's response reflects reality the same way the initial GET does.
  */
-async function repoDetailWithPins(folder: string): Promise<RepoDetail> {
+async function repoDetailWithPins(folder: string, censusTab?: CensusTabId): Promise<RepoDetail> {
   const { health, pinset } = await pinReality(folder);
-  return computeRepoDetail(folder, health, pinset);
+  return computeRepoDetail(folder, health, pinset, censusTab ? { censusTab } : undefined);
+}
+
+/**
+ * `?tab=<id>` — WHICH One-Repo tab is asking, and the only thing that opts a request into the Postgres
+ * census (R3 / database.mdx §9 slice 5, `units.service.ts censusForTab`).
+ *
+ * ABSENT IS THE DEFAULT AND ABSENT MEANS "STATUS.YAML". The frontend does not send this parameter yet, so
+ * nothing about the running app changes with this slice — the parameter is how the cutover becomes
+ * reachable and measurable one tab at a time. An unrecognised value is treated as absent rather than
+ * rejected: a query string is not a place to fail a page load over.
+ *
+ * A NOTE FOR WHOEVER WIRES THE FRONTEND NEXT, because it is not obvious from here. OneRepoPage fetches the
+ * row set ONCE, under the query key `["repo", repoId]`, and the six tabs are pure client-side filters over
+ * that one set (taskTabs.config.ts `rowFilter`). So sending `tab=all` from the page would move ALL SIX
+ * tabs onto the Postgres census in one step — which is exactly what "one tab at a time" forbids. Splitting
+ * that properly means giving each tab its own fetch (its own query key, its own `rowFilter` pushed into
+ * SQL, and the tab indexes in 0005 to serve it), and that is the next slice's work, not this one's.
+ */
+const CENSUS_TABS: readonly CensusTabId[] = ["all", "ipfs", "compress", "transcribe", "ai-descriptions", "ocr"];
+function censusTabFrom(raw: unknown): CensusTabId | undefined {
+  return typeof raw === "string" && (CENSUS_TABS as readonly string[]).includes(raw)
+    ? (raw as CensusTabId)
+    : undefined;
 }
 
 /** The node's health + canonical pinset, both best-effort. Split out of {@link repoDetailWithPins} so the
@@ -597,6 +621,7 @@ reposRouter.get("/:repoId/detail/stream", async (req, res) => {
     let headSent = false;
     const detail = await computeRepoDetail(folder, "unreachable", undefined, {
       signal: ac.signal,
+      censusTab: censusTabFrom(req.query.tab),
       onFileBatch: (files: FileRow[]) => write({ t: "files", files }),
       // The git-ignore axis + decision provenance, patched onto rows that are already on screen.
       onEnrich: (rows) => write({ t: "enrich", rows }),
@@ -661,7 +686,7 @@ reposRouter.get("/:repoId", async (req, res) => {
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
     touchRepoFreshness(folder);
-    const detail: RepoDetail = await repoDetailWithPins(folder);
+    const detail: RepoDetail = await repoDetailWithPins(folder, censusTabFrom(req.query.tab));
     // Augment with the peer-pinned-but-missing set so the §10.8.12 "pull them down" warning has data.
     // Best-effort at the router (computeRepoDetail is the shared composer): a down/slow IPFS never blocks
     // the page — the streaming route sends this as its own `extras` event, after the rows.
@@ -684,7 +709,7 @@ reposRouter.get("/:repoId/files", async (req, res) => {
   const folder = await folderForRepoId(req.params.repoId);
   if (!folder) return res.status(404).json({ ok: false, error: "repo not found" });
   try {
-    const detail = await repoDetailWithPins(folder);
+    const detail = await repoDetailWithPins(folder, censusTabFrom(req.query.tab));
     res.json({ ok: true, data: detail.files });
   } catch (e) {
     log.error("repos", `${folder}: files failed: ${(e as Error).message}`);

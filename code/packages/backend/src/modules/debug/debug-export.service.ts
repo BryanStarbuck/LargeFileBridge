@@ -33,7 +33,7 @@ import { readSidecar } from "../storage/file-sidecar.service.js";
 import { readRepoTrackingManifest } from "../pin/manifest.service.js";
 import { missingPinnedFromPeers } from "../pin/pin.service.js";
 import { noteArtifactWritten, flushArtifactSync } from "../pin/sync-trigger.service.js";
-import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
+import { foreignPinPathSetFor } from "../ipfs/foreign-pin.service.js";
 import { compressInfo } from "../fs/badges.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
 import { openRepo } from "../git/git.service.js";
@@ -640,7 +640,12 @@ async function exportOneUnit(
   // ONE git-tracked read + ONE origin-tree read per unit (not per file) so every analysis row can carry
   // its per-op artifact probe (committed / pushed) — see `DebugFileEntry.artifacts`.
   const gitCtx = await safeAsync(() => artifactGitContext(root), null);
-  const enrich = makeEnricher(folder, root, detail.name, deep, gitCtx);
+  // ONE foreign-pin read per unit, not one per file (database.mdx §9 slice 8). The enricher's closure is
+  // synchronous — `bucketMetrics` calls it per row — so the set has to be in hand before it is built. That
+  // is also strictly cheaper than what it replaces: `foreignPinByAbsPath` was a linear scan of every
+  // discovery on the computer, run once per exported file.
+  const foreignPins = await safeAsync(() => foreignPinPathSetFor(root), new Set<string>());
+  const enrich = makeEnricher(folder, root, detail.name, deep, gitCtx, foreignPins);
   bucketMetrics(detail.files, metrics, enrich);
 
   // pull_down is the ONE metric whose files are not on this disk at all — it comes from a peer's manifest.
@@ -808,6 +813,8 @@ function makeEnricher(
   repoName: string,
   deep: boolean,
   gitCtx: ArtifactGitContext | null = null,
+  /** This unit's discovered foreign pins, read once by the caller — see `exportOneUnit`. */
+  foreignPins: ReadonlySet<string> = new Set<string>(),
 ): (f: FileRow) => DebugFileEntry {
   const manifest = manifestIndex(folder, root);
   const index = new Map(safe(() => readStorageIndex(root), [])?.map((r) => [r.path, r]) ?? []);
@@ -844,7 +851,7 @@ function makeEnricher(
       peers: mf?.pinned_by?.length ? mf.pinned_by : f.peers,
       // null means NOT VERIFIED (IPFS was down) and must never be read as false (§7).
       pinned_here: f.pinnedHere ?? null,
-      pinned_foreign: f.pinnedForeign ?? !!safe(() => foreignPinByAbsPath(abs), undefined),
+      pinned_foreign: f.pinnedForeign ?? foreignPins.has(abs),
       presence: f.presence ?? "local",
       added_by_device: f.addedByDevice ?? null,
       analysis_only: f.analysisOnly ?? false,

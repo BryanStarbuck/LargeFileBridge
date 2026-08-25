@@ -38,6 +38,11 @@ import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar-heal.js";
+// THE SYNC FENCE (database.mdx §2.2, migration 0012) — the only module in the app allowed to hold both a
+// Postgres handle and a designated serializer. Importing it here does NOT give this file a database: every
+// entry point is `dbEnabled()`-guarded and `tryDb`-wrapped, so on a machine with no Postgres — the default
+// — both calls below return instantly and this module behaves exactly as it did before (R2).
+import { recordSdlIngestForRepo, syncFenceBeforeMirror } from "./doc-render.service.js";
 
 import { resolveStateDir } from "../../config/state-dir.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
@@ -368,6 +373,25 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
     log.info("storage", `mirrorToSyncRepo(${repoRoot}): ${dst} is mid-git-cycle — deferred until it releases`);
     return false;
   }
+  // THE SYNC FENCE, BEFORE THE WALK (database.mdx §2.2/§2.3, migration 0012).
+  //
+  // This is the ONE place Postgres is allowed anywhere near the mirror, and it is deliberately in FRONT of
+  // it rather than inside it: everything below this line still reads and writes FILES, exactly as before,
+  // because `mirrorToSyncRepo` copies THE FILE and a query result cannot be copied (database.mdx §6.2).
+  // What the fence does is make sure the file it is about to copy is current, and record what we hold — so
+  // the mirror's own `sameBytes` short-circuits and `mirror-memo`'s identity check have something true to
+  // fire against.
+  //
+  // FIRE AND FORGET, and it must be: this generator is drained SYNCHRONOUSLY by `drainSync` on the write
+  // path (`writeRepoStorage` → here), which has no `await` to give — see the header of `drainSync` and
+  // worktree-gate.ts. `syncFenceBeforeMirror` never throws (it is wrapped in `tryDb`) and answers instantly
+  // with `dbEnabled() === false`, which is every machine that has never provisioned Postgres.
+  //
+  // IT DOES NOT WRITE ANYTHING TODAY. The render equality gate is non-zero on this corpus (15,868 of 29,136
+  // sidecars, on `lfb.file.size_bytes` / `modified_at`), so `renderWritesArmed()` is off and the fence
+  // records and reports rather than rendering into the mirror's source. §2.3: zero diffs, or the cutover
+  // does not happen.
+  void syncFenceBeforeMirror(repoRoot);
   try {
     const localStateDir = repoStateDir(repoRoot);
     const mirrorLedgerFile = path.join(dst, "decisions.yaml");
@@ -964,6 +988,17 @@ function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
     // 3. everything else — the per-file sidecars and per-device history logs are MERGED inside
     //    `copyTrackedFile`; only shapes with nothing shared to lose are still copied outright.
     changed = (yield* copyTreeGen(src, dst, "", RECONCILE_MERGED_NEVER_COPIED)) || changed;
+    // 4. RECORD THE INGEST (migration 0012). `doc_render.ingested_sha256` is the bytes of each arriving
+    //    document, and `sdl_ingest` is the per-(SDL, unit) watermark plus the running tally of events and
+    //    pin claims that have reached us. Neither is read by anything on this path: they are the evidence
+    //    half of the fence — the input to `doc_render_dirty`, the mirror's pre-pass work list.
+    //
+    //    AFTER the merges, so the hashes describe the documents this pass actually consumed, and
+    //    fire-and-forget for the same reason as the mirror leg (this generator has a SYNCHRONOUS driver).
+    //    The counts are only computed for a document whose sha MOVED, so a settled fleet — where nothing
+    //    arrives — pays one SELECT and four `statSync` per repo and never re-parses a 3 MB ledger.
+    const marker = readSyncRepoMarker(repoRoot);
+    if (marker) void recordSdlIngestForRepo(repoRoot, marker.syncRepo, src);
     return changed;
   } catch (e) {
     log.warn("storage", `reconcileFromSyncRepo(${repoRoot}) failed: ${(e as Error).message}`);

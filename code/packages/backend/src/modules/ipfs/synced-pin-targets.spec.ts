@@ -39,7 +39,7 @@ vi.mock("../store-model/config.service.js", () => ({
 }));
 vi.mock("../events/state-events.service.js", () => ({ bumpTopicThrottled: () => {}, IPFS_TOPIC: "ipfs" }));
 vi.mock("../storage/tracking.service.js", () => ({ analysisOutputs: () => [] }));
-vi.mock("./foreign-pin.service.js", () => ({ foreignPinByCanonicalCid: () => null }));
+vi.mock("./foreign-pin.service.js", () => ({ foreignPinsByCanonicalCids: async () => new Map() }));
 
 const { syncedPinTargets } = await import("./ipfs-page.service.js");
 

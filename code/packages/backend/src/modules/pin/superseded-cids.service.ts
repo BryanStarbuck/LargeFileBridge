@@ -25,6 +25,11 @@ import { readYaml, writeYaml } from "../../shared/store/yaml-store.js";
 import { supersededCidsPath } from "../../shared/store/scopes.js";
 import { canonicalCid } from "../ipfs/ipfs.service.js";
 import { log } from "../../shared/logging.js";
+// R1 DUAL-WRITE into `lfb.cid_alias` (migration 0007, database.mdx §9 slice 7). BOTH wire legs are
+// UNCHANGED: the export into `<sdl>/devices/<self>.yaml` (`devices.service.ts:174`, via `supersededPairs`)
+// and the adopt from a peer (`:250`, via `adoptSupersededCids`) still read and write this YAML file only.
+// Postgres holds the local index; nothing reads it yet (R3).
+import { projectCidAlias } from "./manifest.repo.js";
 
 const FILE = () => supersededCidsPath();
 
@@ -58,6 +63,11 @@ export function noteSupersededCid(wrongCid: string, fileCid: string): void {
     // Losing this costs another walk next pass — never a failure worth aborting a pull or a pass for.
     log.warn("pin", `could not persist superseded cid: ${(e as Error).message}`);
   }
+  // `proof: 'resolveFileCid'` is the standard this function's doc block holds itself to — a pair is only
+  // ever written from a walk that ACTUALLY RESOLVED. `adoptSupersededCids` routes through here too, so a
+  // pair a PEER proved is recorded under the same proof; the YAML carries no provenance to tell them apart,
+  // and `proved_by` stays NULL rather than naming a prover we would be guessing at.
+  projectCidAlias({ aliasCanon: key, targetCanon: val, kind: "superseded", proof: "resolveFileCid" });
 }
 
 /** The file CID that replaces a recorded CID we have disproved, or null when we know nothing about it. */

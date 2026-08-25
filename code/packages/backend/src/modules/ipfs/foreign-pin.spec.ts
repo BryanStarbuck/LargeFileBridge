@@ -35,37 +35,37 @@ afterEach(() => {
 describe("foreign-pin global index (foreign_pin_discovery §5/§6)", () => {
   it("records a discovery and resolves it by abs path and by canonical CID", async () => {
     const abs = "/repo/videos/movie.mp4";
-    m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: abs, size: 2358647, repoRoot: "/repo" });
+    await m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: abs, size: 2358647, repoRoot: "/repo" });
 
-    const byPath = m.foreignPinByAbsPath(abs);
+    const byPath = await m.foreignPinByAbsPath(abs);
     expect(byPath?.cid).toBe(V0);
     expect(byPath?.canonicalCid).toBe(V0_CANON);
     expect(byPath?.profile).toBe("v0-dag-pb");
 
     // Reverse resolution keys on the CANONICAL cid, so a v1-spelling query still finds a v0 record.
-    expect(m.foreignPinByCanonicalCid(V0)?.absPath).toBe(abs);
-    expect(m.foreignPinByCanonicalCid(V0_CANON)?.absPath).toBe(abs);
+    expect((await m.foreignPinByCanonicalCid(V0))?.absPath).toBe(abs);
+    expect((await m.foreignPinByCanonicalCid(V0_CANON))?.absPath).toBe(abs);
   });
 
   it("upserts by path — a re-discovery replaces, never duplicates", async () => {
     const abs = "/repo/a.mp4";
-    m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: abs, size: 10, repoRoot: "/repo" });
-    m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: abs, size: 20, repoRoot: "/repo" });
-    expect(m.readForeignPins()).toHaveLength(1);
-    expect(m.foreignPinByAbsPath(abs)?.size).toBe(20);
+    await m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: abs, size: 10, repoRoot: "/repo" });
+    await m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: abs, size: 20, repoRoot: "/repo" });
+    expect(await m.readForeignPins()).toHaveLength(1);
+    expect((await m.foreignPinByAbsPath(abs))?.size).toBe(20);
   });
 
   it("verifyForeignPins drops a discovery whose CID the node no longer keeps (§5.1 — they unpinned it)", async () => {
-    m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: "/repo/gone.mp4", size: 1, repoRoot: "/repo" });
+    await m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: "/repo/gone.mp4", size: 1, repoRoot: "/repo" });
     // Kept-set WITHOUT this CID → the discovery must be pruned.
-    m.verifyForeignPins(new Set<string>());
-    expect(m.readForeignPins()).toHaveLength(0);
+    await m.verifyForeignPins(new Set<string>());
+    expect(await m.readForeignPins()).toHaveLength(0);
   });
 
   it("verifyForeignPins keeps a discovery still in the kept-set", async () => {
-    m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: "/repo/keep.mp4", size: 1, repoRoot: "/repo" });
-    m.verifyForeignPins(new Set([V0_CANON]));
-    expect(m.readForeignPins()).toHaveLength(1);
+    await m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: "/repo/keep.mp4", size: 1, repoRoot: "/repo" });
+    await m.verifyForeignPins(new Set([V0_CANON]));
+    expect(await m.readForeignPins()).toHaveLength(1);
   });
 });
 
@@ -114,11 +114,92 @@ describe("foreign-pin cache is write-back, not rewritten per file (memory.mdx)",
   it("keeps the index in memory too — recordForeignPin is also on the per-file path", async () => {
     const indexFile = path.join(tmpDir, "foreign-pins.json");
     for (let i = 0; i < 50; i++) {
-      m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: `/repo/f_${i}.mp4`, size: i, repoRoot: "/repo" });
+      await m.recordForeignPin({ cid: V0, profile: "v0-dag-pb", absPath: `/repo/f_${i}.mp4`, size: i, repoRoot: "/repo" });
     }
     expect(fs.existsSync(indexFile)).toBe(false); // debounced, not 50 rewrites
-    expect(m.readForeignPins()).toHaveLength(50); // …yet readable immediately (memory is authoritative)
+    expect(await m.readForeignPins()).toHaveLength(50); // …yet readable immediately (memory is authoritative)
     m.flushForeignPinStores();
     expect(JSON.parse(fs.readFileSync(indexFile, "utf8"))).toHaveLength(50);
+  });
+});
+
+// ── slice 8: the fpKey split, and R2 with no database ──────────────────────────────────────────────────
+//
+// `fpKey` is `${absPath}::${size}:${mtimeMs}` (line 75). Backfill area 9 has to run it backwards to turn
+// 36,103 cache keys into `(abs_path, size_bytes, mtime_ms)` rows, and getting the split wrong on the paths
+// that DO contain a colon would file those rows under a truncated path — which is not a visible failure,
+// it is a permanently-missing negative-cache entry that costs a re-hash of a large file on every scan.
+describe("parseFpKey — fpKey run backwards (backfill area 9)", () => {
+  const round = (absPath: string, size: number, mtimeMs: number): void => {
+    const parsed = m.parseFpKey(`${absPath}::${size}:${mtimeMs}`);
+    expect(parsed).toEqual({ absPath, size, mtimeMs });
+  };
+
+  it("splits an ordinary key", () => {
+    round("/Users/b/BGit/act3/WebApp/public/5.png", 1902487, 1770591751762);
+  });
+
+  it("splits a path that CONTAINS a colon — `split('::')` gets this wrong", () => {
+    // macOS permits ':' in a filename and downloaded media is full of them. Working in from the left would
+    // stop at the first '::' and hand back a path fragment; the two trailing integers are unambiguous.
+    round("/Users/b/clips/2026-08-24 09:41:07 recording.mp4", 219334642, 1777426901734);
+  });
+
+  it("splits a path that contains a DOUBLE colon", () => {
+    round("/Users/b/weird::name/file.mp4", 42, 1);
+  });
+
+  it("handles a zero size and a zero mtime — a real key shape when `modified` was absent", () => {
+    round("/Users/b/no-mtime.mp4", 0, 0);
+  });
+
+  it("returns null for a key with no fingerprint tail, so the caller can reject it and continue", () => {
+    expect(m.parseFpKey("/Users/b/plain-path.mp4")).toBeNull();
+    expect(m.parseFpKey("/Users/b/f.mp4::notanumber:1")).toBeNull();
+    expect(m.parseFpKey("/Users/b/f.mp4::12:notanumber")).toBeNull();
+    expect(m.parseFpKey("::12:34")).toBeNull();
+    expect(m.parseFpKey("")).toBeNull();
+  });
+});
+
+// R2 (database.mdx §7): `LFB_DB_MODE` is unset for this whole spec file, so every assertion above and below
+// is ALSO a statement that the module behaves exactly as it did before slice 8 on a machine with no
+// Postgres — which is every machine that has not opted in. The batch is the piece most likely to be got
+// wrong, because a scan always opens one.
+describe("ForeignPinBatch with no database (R2)", () => {
+  it("opens inert and leaves every lookup on the write-back store", async () => {
+    const batch = await m.ForeignPinBatch.open([{ absPath: "/fake/x.mp4", size: 1, mtimeMs: 2 }]);
+    expect(batch.enabled).toBe(false);
+
+    const ctx = { keptSet: new Set<string>(), keptSizes: [] as number[] };
+    expect(await m.discoverForeignPin("/fake/x.mp4", 1, 2, ctx, batch)).toBeNull();
+    await batch.flush(); // a no-op that must not throw
+
+    // The verdict went to the JSON cache, not into the batch — so it is durable through a flush.
+    m.flushForeignPinStores();
+    const onDisk = JSON.parse(fs.readFileSync(path.join(tmpDir, "foreign-pin-cache.json"), "utf8"));
+    expect(Object.keys(onDisk)).toEqual(["/fake/x.mp4::1:2"]);
+  });
+
+  it("recordForeignPin through an inert batch still reaches the index", async () => {
+    const batch = await m.ForeignPinBatch.open([]);
+    await m.recordForeignPin(
+      { cid: V0, profile: "v0-dag-pb", absPath: "/repo/via-batch.mp4", size: 7, repoRoot: "/repo" },
+      batch,
+    );
+    expect((await m.foreignPinByAbsPath("/repo/via-batch.mp4"))?.size).toBe(7);
+  });
+
+  it("foreignPinPathSetFor falls back to the whole-index set, a superset of what the caller tests", async () => {
+    await m.recordForeignPin({ cid: V0, profile: "p", absPath: "/repo/a.mp4", size: 1, repoRoot: "/repo" });
+    await m.recordForeignPin({ cid: V0, profile: "p", absPath: "/other/b.mp4", size: 1, repoRoot: "/other" });
+    const set = await m.foreignPinPathSetFor("/repo");
+    expect(set.has("/repo/a.mp4")).toBe(true);
+    // Both call sites only ever ask about paths under their own root, so the superset is indistinguishable.
+    expect(set.size).toBe(2);
+  });
+
+  it("pruneForeignPinProbes is a no-op — the JSON cache bounds itself in compact()", async () => {
+    await expect(m.pruneForeignPinProbes()).resolves.toBe(0);
   });
 });

@@ -29,10 +29,13 @@ Both of those are **polling** jobs on a clock. There is also a **third, event-dr
 **only while the web app process is up** and fires **the moment the OS tells it a file was added or
 deleted**, so a big file dropped into a repo lights up in the UI in seconds rather than after the next
 4-hour walk. The watcher never moves bytes and never opens files; when it sees a **qualifying** add/delete
-(§2.2) it simply **kicks the same discovery worker** (coalesced) so all the existing tracking/output
-machinery (§6) runs. It is a *latency* optimization on top of the 4-hour scan, **never a replacement** —
-the scheduled walk still catches everything that changed **while the app was off** (when no watcher was
-listening).
+(§2.2) it **forgets the cached filesystem answers that path invalidated** — the parent's listing and every
+ancestor's folder-colour tint — which costs **0.068 ms** and makes the File System page correct at once.
+It does **not** kick a discovery scan; slice 12 measured that escalation at **53.9 s of walking for one
+dropped file** and removed it (§2.2, [database.mdx §8.1](./database.mdx)). It is a *latency* optimization
+on top of the 4-hour scan, **never a replacement** — the scheduled walk still catches everything that
+changed **while the app was off** (when no watcher was listening), and it remains the thing that rewrites
+`status.yaml`.
 
 ### Naming — "scheduleTask" internally, "scan" in the UI (LOCKED)
 
@@ -237,30 +240,49 @@ The claim and the watcher's use of it are in code:
 
 **Debounce + coalesce.** Editors and tools emit **bursts** (a save writes a temp file, renames it,
 deletes the temp). The watcher collects raw events into a pending set and **debounces** (default
-~1.5 s of quiet, `watcher.debounce_ms`, §5) before deciding. If, after a burst settles, **at least one**
-qualifying add/delete remains, the watcher **kicks the discovery worker once** — `startScan("manual")`,
-the same single-flight, coalesced, detached background job the Rescan button drives (§10). Because
-`startScan` is single-flight and coalescing, a storm of drops results in **at most one** in-flight walk
-plus **one** queued follow-up — never a walk per file.
+~1.5 s of quiet, `watcher.debounce_ms`, §5) before deciding.
 
-**How the tracking and the tree update.** The kicked discovery pass does exactly what §6 already
-specifies: it re-diffs the affected unit(s) and rewrites each `status.yaml` — the **candidate list**,
-the **big-file counts**, and the added/deleted **change set** (the "importance flags" the user means).
-Because the File System page derives its **interesting-directory folder coloring** and counts from that
-same tracking ([file_system.mdx §1](./file_system.mdx), [directories.mdx](./directories.mdx)), and
-because the FS browser's per-directory listing cache is already **mtime-guarded** and self-invalidates
-when a directory's contents change ([performance.mdx](./performance.mdx) / `fsindex.service.ts`
-`getListingCached`), **adding or deleting a big/media file makes the tree and its coloring refresh on
-their own** — no manual Rescan. That is the whole point: *"if [a file] was added then our file system
-tree will update."*
+**What a qualifying add/delete costs, and what it used to cost.** For each qualifying path the watcher
+**forgets the cached filesystem answers that path could have made stale** — the parent's cached listing
+and the interest tint of every directory **above** it — and does nothing else. Measured: **0.068 ms**
+per file, dropping **6** cache entries for a path seven levels deep; **0.6 ms** for a 200-file burst.
+
+Until slice 12 it instead **kicked the discovery worker** — `startScan("manual")`, the same job the
+Rescan button drives (§10). That was the **write amplification underneath the "pages are spinning"
+complaint**, and the size of the mismatch is the argument: a full discovery walk on this machine
+measures **40.9-66.9 s (median 53.9 s, n=12** from the app's own `[scan]` log lines**)** across 105
+registered repos, and the app's `loop-watch` instrumentation shows it blocking the event loop for
+**3,299 ms across a 30 s window, worst single call 440 ms**, while `["scanStatus"]` was one of the
+queries named in live *PAGE STILL SPINNING* reports. `startScan` coalesces but does not cancel, so a
+folder of files dropped one per second kept a rerun permanently queued and the scan bar never came
+down. **One dropped video now costs 0.068 ms instead of 53.9 s.**
+
+**How the tracking and the tree update.** The **File System browser is correct immediately** — which it
+was **not** before, because the old rescan never touched these caches either. The listing cache is
+mtime-guarded, so the **parent** directory of a new file always self-healed
+([performance.mdx](./performance.mdx) / `fsindex.service.ts` `getListingCached`); but adding
+`~/x/y/z/clip.mp4` bumps the mtime of `z` and of **nothing above it**, so every **ancestor** kept
+serving a stale interest tint for up to the interest cache's 20 s TTL. Invalidating the ancestor chain
+is what fixes that, and it is the only thing that needed fixing on this path.
+
+**What is deliberately deferred to the scan.** `status.yaml` tracking — the **candidate list**, the
+**big-file counts**, the added/deleted **change set** — is **not** refreshed within seconds of a file
+landing any more. It is refreshed by the scheduled 4-hour discovery pass (§6) and by the page-load
+freshness trigger (§10), which is already the reconciliation path for every non-media change and for
+every machine whose watcher is off. If a product decision later wants the scan back on this path, it
+belongs behind a rate limiter and a "the tree changed a lot" threshold, **not** on every qualifying
+file.
 
 **Security posture is unchanged.** The watcher subscribes **only** to our own `scanner.roots`, reads
 **only** filesystem event metadata + one `stat`, opens no file contents, and touches **no** network and
 **no** IPFS. It is fully inside the [only-our-content](../knowledge/ipfs.mdx#6-only-our-content-the-non-negotiable-rule)
 posture.
 
-Registering the OS watcher over the scanner roots, filtering to qualifying add/delete events, debouncing bursts, and kicking the coalesced discovery worker happen in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `bindNative()` / `bindPruned()` → `onChange()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`, then `startScan("manual")`)
+Registering the OS watcher over the scanner roots, filtering to qualifying add/delete events, and debouncing bursts happen in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watcher.service.ts` — `startWatcher()` → `bindNative()` / `bindPruned()` → `onChange()` / `flushPending()` (calls `isMediaFile()` from `shared/scan-filters.ts`)
+
+Forgetting the parent listing and every ancestor's interest tint for one changed path — the reaction that replaced `startScan("manual")` — happens in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fsindex/fsindex.service.ts` — `invalidateFsCachesForPath()` → `invalidateListing()` and `~/repos/LargeFileBridge/code/packages/backend/src/modules/fs/badges.ts` — `invalidateInterest()`
 
 Deciding which directories may hold a kernel watch, and binding the pruned per-directory watch set on the platforms where recursion costs one watch per directory, happen in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/watcher/watch-tree.ts` — `makeWatchFilter()` (the `HARD_SKIP` + macOS-bundle + `scanner.ignore_globs` prune predicate) and `watchTreePruned()` → class `PrunedTreeWatch` (`bindTree()` / `bind()` / `onRaw()` / `releaseSubtree()`)

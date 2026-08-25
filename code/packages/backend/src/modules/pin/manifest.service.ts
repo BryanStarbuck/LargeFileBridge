@@ -17,6 +17,12 @@ import { normalizeManifestPaths } from "./manifest-normalize.js";
 // The canonical byte-stable serializer is a LEAF (manifest-merge.ts) so the sync-repo mirror and the
 // reconcile — neither of which may import this module — write the identical bytes (repo__list_syns.mdx §6).
 import { serializeManifest } from "../storage/manifest-merge.js";
+// The Postgres half of the manifest write (database.mdx §9 slice 7, migration 0007). `manifest.repo.ts` is
+// SQL-only and imports nothing from this module, so no cycle; `canonicalCid` is a pure re-encode and
+// `computerLabel` is one cached config read — the two values R7 says must be computed in TypeScript.
+import { projectManifest, unitIdForAbsPath } from "./manifest.repo.js";
+import { canonicalCid } from "../ipfs/ipfs.service.js";
+import { computerLabel } from "../store-model/config.service.js";
 
 /** The committed manifest for an SDL storage lives at the storage ROOT — `<root>/manifest.yaml` — because an
  *  SDL has NO `.lfbridge/` at all: `.lfbridge/` is a working-repo-only concept and the SDL root IS the
@@ -136,7 +142,14 @@ export function writeCommittedManifest(repoPath: string, manifest: Manifest): vo
 }
 
 /** Read a repo storage's manifest from LOCAL STORAGE (`repos/<repoKey>/manifest.yaml`) — reconciled there
- *  from the sync repo when one is configured (artifact_placement_policy.mdx §1.2/§5). */
+ *  from the sync repo when one is configured (artifact_placement_policy.mdx §1.2/§5).
+ *
+ *  THIS READ HAS NOT CUT OVER, and that is deliberate (R3 / database.mdx §9 slice 7). The YAML file is still
+ *  the truth; `lfb.manifest_entry` is a projection written behind the writer below. Cutting this read over
+ *  would need two things it does not have yet: a Postgres row for every repo (the backfill has not run on a
+ *  fresh machine, and `LFB_DB_MODE=auto` means many machines will never have one), and a `verify()` that
+ *  has passed — `manifest_entry` currently has NO read consumer, which is what makes the projection safe to
+ *  ship on its own. */
 export function readRepoTrackingManifest(repoRoot: string): Manifest {
   return readManifestFile(repoTrackingManifestPath(repoRoot));
 }
@@ -146,5 +159,19 @@ export function readRepoTrackingManifest(repoRoot: string): Manifest {
 export function writeRepoTrackingManifest(repoRoot: string, manifest: Manifest): void {
   writeManifestFile(repoTrackingManifestPath(repoRoot), manifest);
   mirrorToSyncRepo(repoRoot);
+  // R1 DUAL-WRITE — stage='tracking'. The two lines above are untouched and still authoritative; this is a
+  // pure ADD behind them. It is fire-and-forget because every caller of this function is synchronous (the
+  // `publish:` lambda at pin.service.ts:793 among them) and cannot await; `projectManifest` swallows every
+  // failure into one throttled WARN, so a machine with no Postgres — the default — pays nothing and notices
+  // nothing (R2).
+  //
+  // STAGE MATTERS HERE MORE THAN ANYWHERE ELSE IN THE FILE: this is the copy that TRAVELS, and it is written
+  // only when `publish_manifest` is on. Recording it under the same stage as the unit copy would erase the
+  // distinction between "published" and "kept local" inside the database (database.mdx §4.1).
+  projectManifest(
+    { stage: "tracking", label: `tracking:${path.basename(repoRoot)}`, unitId: () => unitIdForAbsPath(repoRoot) },
+    manifest,
+    { canonicalCid, selfLabel: computerLabel() },
+  );
 }
 

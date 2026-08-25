@@ -239,8 +239,9 @@ which is what every existing boot migration already does
 | 5 | `backfill_manifests` | 105 × `manifest.yaml` + `pin/r/<f>/manifest.yaml` | 4,184 | (unit, path) |
 | 6 | `backfill_foreign_pins` | `foreign-pin-cache.json` + `foreign-pins.json` | 38,870 | offset |
 | 7 | `backfill_sidecars` | 29,138 × `files/**/*.yaml`, 23.1 MB | 29,138 | (unit, rel_posix) |
-| 8 | `backfill_history` | 18 × `history/<device>.txt` | line-addressed | line_no |
-| 9 | `backfill_compression` | 74 `analysis/**/compression.yaml` records | ~110 samples | none |
+| 8 | `backfill_history` | 18 × `history/<device>.txt`, 2,466,833 B | **12,599** | line_no |
+| 11 | `seed_compression_baseline` | 74 `analysis/**/compression.yaml` records (37 local + their 37 SDL mirrors) | **49 samples** (not ~110 — see below) | record path |
+| 12 | `backfill_batch_manifests` | 5 × `_batches/*.yaml`, 502,924 B (largest 486,861 B / 1,779 items) | **1,839** (5 headers + 1,834 items) | (manifest file, last rel_path) |
 
 ### 4.4 The transforms that are easy to get backwards
 
@@ -260,6 +261,26 @@ absent → `NULL` (default ON), `false` → `true`, `true` → `false`.
 **Units — hashes are computed in TypeScript and inserted as literals.** `repo_key`,
 `repo_id`, `storage_sid` and `repo_uid` come from the existing functions. Postgres never
 recomputes a TS hash.
+
+**Batch manifests — a manifest with NO terminal record is `terminal_state='crashed'`,
+not NULL.** The **absence is the signal** (`batch-manifest.service.ts:20-21`): it is how
+the format records that a batch was killed, which is the whole reason the format exists.
+Flattening it to NULL would leave row counts looking perfect and the "Retry failed"
+surface quietly refusing the batches that most need it. Related trap, and it is a real
+one rather than a hypothetical: `writeManifest` leaves `outcomes:` as an **open key**, so
+a batch that died before its first file settled parses as `outcomes: null` — and
+`z.array(...).default([])` **rejects null**. That document must project, not reject.
+Deciding the terminal state and tolerating the open key happen in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/batch-index.service.ts` — `parseManifest()` (and the `orEmptyList` / `orEmptyString` helpers above it)
+
+**Batch manifests — item identity is `(batch_id, rel_path)`, and that is the whole
+idempotency story.** Manifest outcome records carry **no task id**, so this plan asked
+for `uuid_v5(batch_id, rel_path)`; migration 0013 made that pair the **primary key**, so
+the determinism is structural and there is no synthetic id to keep in step. A re-run
+presents the same rows and inserts none. Merging the file list with the outcome list —
+last outcome wins, duplicates collapsed **before** the INSERT, because Postgres refuses
+two rows with one conflict key in a single statement — happens in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/jobqueue/batch-index.service.ts` — `parseManifest()` → `writeManifestRows()`
 
 **Candidates — do NOT persist `nudgeOnly`.** `scanner.service.ts:52-55` states it is
 in-memory on purpose (*"its only job is to keep the auto-decide policy off these rows in
@@ -299,6 +320,46 @@ Named per-area assertions:
 * **Decisions** — for every unit, `file_decision` equals
   `foldLedger(readLedger(root))` computed by the existing TypeScript function. This runs
   in CI **and after every mirror-in**.
+
+  Comparing the two folds path-by-path, on the full tuple, is done in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decision-backfill.ts`
+  → `gateEveryUnit` (called from `BACKFILL_DECISIONS.verify` and from
+  `decision-fold-gate.spec.ts`). **Measured, 2026-08-24:** 105 units, 18,234 events,
+  4,242 folded paths, **zero mismatches**; a second full pass with the ledger cleared
+  inserted **0** rows, which is what mechanic (b) claims. The SDL mirrors contributed
+  **0** events the local ledgers did not already hold — every one of the 105 repos has a
+  matched mirror subtree, so on this corpus the `origin='wire'` leg is a pure idempotency
+  exercise and `origin='local'` accounts for all 18,234 rows.
+
+* **History** — per (unit, device), `max(line_no)` equals the last non-comment line of the
+  source file. **Measured, 2026-08-24:** all 18 (unit, device) pairs agree exactly with
+  `wc -l`; 12,599 rows, 0 rejects. A second cold pass inserted **0** rows, because
+  `history/<device>.txt` is append-only and the resume cursor is read from
+  `max(line_no)` in the table rather than from the ledger — so "ingest from N+1" is exact
+  rather than approximate. The parser and that cursor are in code:
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/history-backfill.ts`
+  → `parseHistory` / `runHistoryScope`, and the assertion is `BACKFILL_HISTORY.verify`.
+  **Nothing in the backend reads this file today** — its only consumer is the SDL mirror's
+  per-entry union — so this area is an index that became nearly free once the parser
+  existed, not a bottleneck that was removed.
+
+* **Compression baseline** — `count(*)` after two consecutive full runs is IDENTICAL.
+  **Measured, 2026-08-24:** 49 samples after run 1 and 49 after a true cold run 2 (ledger
+  entries deleted, so every scope re-read and re-inserted all 106 candidate rows); 37
+  `compression_record` rows; 2 rejects, both the same deleted media file reached through
+  its two legs. Implemented in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/compress/baseline-backfill.ts`
+  → `BACKFILL_COMPRESSION_BASELINE.verify`, which also reports how many cells have reached
+  the n≥12 floor (**zero**, which is the abstention rule working).
+
+* **Rollups** — `computeRepoRow` read from `unit_rollup` equals `computeRepoRow` composed
+  from YAML, for every unit. **Measured, 2026-08-24:** 105/105 identical, 1,076 ms → 34 ms.
+  The gate is
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/rollup-drift.spec.ts`,
+  and the freshness contract it pins (a status/manifest/config write makes the rollup
+  provisional and a provisional rollup is refused) is in
+  `~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts`
+  → `invalidateRollup` / `repoRowStatsCached`.
 
 ---
 

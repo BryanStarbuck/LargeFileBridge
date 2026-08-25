@@ -195,7 +195,7 @@ export async function buildEntityView(
       // truth (already in `transfer`), not a backup — "backed up on N other computers" must not count us.
       peers = claims.filter((p) => p !== selfLabel);
       // Foreign-pin reality (foreign_pin_discovery.mdx §6) — cheap read of the recorded index, no hashing.
-      if (decision !== "sync") pinnedForeign = !!foreignPinByAbsPath(e.abs);
+      if (decision !== "sync") pinnedForeign = !!(await foreignPinByAbsPath(e.abs));
     }
   }
 

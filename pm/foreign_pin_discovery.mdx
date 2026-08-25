@@ -219,6 +219,50 @@ Other tools own their pins; we never fight them. Compatibility is **reconcile ev
 * **The file changed on disk** → its fingerprint (size/mtime) changes, the cache entry is invalidated, and
   the next pass re-discovers against the new bytes.
 
+### 5.2 Where tier 1 actually lives — Postgres when there is one, JSON when there is not
+
+Tier 1 is **two** stores, and both of them used to be JSON files held resident for the life of the
+process: the **global index** (one record per discovered pin — 2,825 records / 1,284,193 B measured) and
+the **fingerprint cache** (one verdict per `(path, size, mtime)` — 36,103 entries / 7,198,446 B measured,
+of which **33,157 are negative**). Rewriting those files from inside the scan's per-file loop is what drove
+RSS to 4,103 MB on 2026-07-20 ([memory.mdx](./memory.md), [database.mdx §1.1](./database.mdx)).
+
+Since [database.mdx §9 slice 8](./database.mdx) the two stores are **`lfb.foreign_pin`** and
+**`lfb.fingerprint_probe`** (migration 0008) wherever a database is configured, and the JSON files remain
+the store — unchanged — wherever one is not. Measured on this machine: holding both JSON stores costs
+**+39.4 MB RSS / +11.7 MB heap for the life of the process**; the Postgres path costs **+9.6 MB RSS /
++2.2 MB heap, per unit, released when the unit finishes**.
+
+Two properties are load-bearing and must survive any later change here:
+
+* **The negatives are the cache.** `cid_text IS NULL` means "already hashed, not pinned", and it is 91.8%
+  of the rows. Deleting them looks like a cleanup and costs 33,157 re-hashes of large files on the very
+  next pass.
+* **The scan reads the cache in ONE batch per unit, never one query per file.** An in-process Map hit is
+  ~0.05 ms and a loopback round trip is ~0.15–0.3 ms, so a per-file query would make the scan slower than
+  the JSON store it replaces.
+
+Choosing the store, batching the per-unit probe, and keeping the recorded discovery renderable when a query
+fails is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.service.ts` — `ForeignPinBatch`
+(`open()` / `lookup()` / `flush()`), `discoverForeignPin()`, `recordForeignPin()`, `verifyForeignPins()`,
+`foreignPinPathSetFor()`, over
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin.repo.ts` — `upsertProbes()`,
+`probesForPaths()`, `upsertForeignPins()`, `foreignPinPathsUnder()`, `deleteForeignPinsNotKept()`,
+`pruneProbes()`
+
+Opening one batch per unit and flushing it when the unit finishes is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `runScan()` (the
+per-repo `ForeignPinBatch.open(...)` / `finally { flush() }` pair) and `reconcileExternalState()`
+
+Moving the two JSON stores into those tables once, resumably and idempotently — including splitting the
+`${absPath}::${size}:${mtimeMs}` cache key back apart for paths that themselves contain a colon — is
+handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/foreign-pin-backfill.ts` —
+`ADOPT_FOREIGN_PINS` (`runPinScope()` / `runProbeScope()` / `verify()`), reading through
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/persistence/raw-json.ts` — `streamJsonMembers()`
+and splitting keys with `foreign-pin.service.ts` — `parseFpKey()`
+
 ---
 
 ## 6. Surfacing — the file shows as pinned in the web app (LOCKED)

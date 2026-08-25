@@ -40,6 +40,14 @@ export default defineConfig({
     env: {
       LFB_LOG_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "lfb-vitest-logs-")),
       LFB_STATE_DIR: fs.mkdtempSync(path.join(os.tmpdir(), "lfb-vitest-state-")),
+      // …and OFF THE USER'S LIVE DATABASE, for exactly the same reason one line down. `resolveDbMode()`
+      // defaults to `auto` and `resolveDatabaseUrl()` then falls back to LOCAL_DEV_DATABASE_URL
+      // (pool.ts) — which on a developer machine IS the real `largefilebridge` database. `dbEnabled()`
+      // answers false only until its first background probe lands, so any spec exercising a
+      // Postgres-backed path would start READING AND WRITING production rows part-way through the run.
+      // Every spec that wants a database sets `LFB_DB_MODE` (and its own DATABASE_URL) itself; this is
+      // the baseline they override, not a ceiling.
+      LFB_DB_MODE: "off",
       // And keep the suite off the user's LIVE IPFS daemon. A spec that forgets to mock ipfs.service
       // otherwise issues real `pin/add` calls against the running node (fixture CIDs 500-ing in the
       // production error.err is how this was found). Port 9 is the discard port: refused, instantly.
