@@ -6,27 +6,34 @@
 //   • single-pane (narrow w-[34rem]) — a one-click engine/config/worker fix (Start IPFS, Fix gateway).
 //   • two-pane (WIDE, up to 80vw, overlays the left nav) — a file/directory-scoped warning. The LEFT
 //     column educates + options; the RIGHT column is the SUBJECTS LIST (§4.5): the actual files/dirs,
-//     each with a checkbox, all checked at open. Unchecking excludes; Apply runs Task X over exactly
-//     the CHECKED rows; a LIVE count (§4.6) tracks checked.size in the list header AND the button label.
+//     each with a checkbox, all checked at open. Unchecking excludes. The File types dropdown and the
+//     search box narrow what is VISIBLE, and Apply runs Task X over exactly the VISIBLE ∩ CHECKED rows
+//     (§4.5.4); a LIVE count (§4.6) tracks that set in the list header AND the button label.
 // Footer (both layouts): Cancel HYPERLINK left + blue action button (white text + right chevron) right.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronRight, CircleSlash, Film, Image as ImageIcon, Music, Pin, Search, Shrink } from "lucide-react";
+import { ChevronDown, ChevronRight, CircleSlash, Film, Image as ImageIcon, Music, Pin, Search, Shrink } from "lucide-react";
 import { healthColor, healthIcon } from "./health.js";
 import { Disclosure } from "./Disclosure.js";
 import { useProgress } from "../../progress/progress-context.js";
 import { DecisionToggle, type ToggleState } from "../decision/DecisionToggles.js";
+import { Popover } from "../table/Popover.js";
 import {
   AXIS_ORDER,
+  FILE_TYPE_GROUP_LABEL,
+  FILE_TYPE_GROUP_ORDER,
   axisColumns,
+  fileTypeOptions,
+  filterVisibleTargets,
+  hasFileTypeFilter,
   hasPerRowAxes,
   initialCheckedTargets,
-  initialKindFilters,
+  initialFileTypesOn,
   initialRowAxisChecks,
   initialSelection,
   pluralizeNoun,
   radiosSatisfied,
   resolveActionLabel,
-  visibleTargetIds,
+  summarizeFileTypes,
   type AxisId,
   type PerRowAxes,
   type RowAxisChecks,
@@ -152,9 +159,17 @@ export function WarningPopup({
   const [checked, setChecked] = useState<Set<string>>(() => initialCheckedTargets(popup));
   const [rowChecks, setRowChecks] = useState<RowAxisChecks>(() => initialRowAxisChecks(popup));
   const [touched, setTouched] = useState<Set<string>>(() => new Set()); // "id:axis" the user has flipped
-  // §4.5.4 — the "Filter:" row's per-kind checkboxes (all ON at open). Hiding a kind never unchecks its
-  // rows, so re-showing it restores them exactly as the user left them.
-  const [kindsOn, setKindsOn] = useState<Record<string, boolean>>(() => initialKindFilters(popup));
+  // §4.5.4 — the File types filter: one entry per extension found in the subjects, grouped by kind. Only the
+  // video (and audio) types open checked; every other type is listed but starts unchecked, so its rows start
+  // hidden — and a hidden row is never acted on. Hiding a type never unchecks its rows, so re-showing it
+  // restores them exactly as the user left them.
+  const typeOptions = useMemo(() => fileTypeOptions(targets), [targets]);
+  const showTypeFilter = hasFileTypeFilter(typeOptions);
+  const [typesOn, setTypesOn] = useState<Set<string>>(() => initialFileTypesOn(typeOptions));
+  const [typesOpen, setTypesOpen] = useState(false); // the File types dropdown
+  const typesOpenRef = useRef(false); // read by the once-registered Esc handler below
+  typesOpenRef.current = typesOpen;
+  const [typeQuery, setTypeQuery] = useState(""); // the dropdown's own find-a-type box
   const [query, setQuery] = useState("");
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -170,12 +185,13 @@ export function WarningPopup({
   const actionRef = useRef<HTMLButtonElement>(null);
   const cancelRef = useRef<HTMLButtonElement>(null);
 
-  // §4.5.4 — the rows the kind filter currently SHOWS. This is not cosmetic: it is the apply gate. A row
-  // the user cannot see is never acted on, so every count and the apply set below intersect with it.
-  const visibleIds = useMemo(() => visibleTargetIds(popup, kindsOn), [popup, kindsOn]);
+  // §4.5.4 — the rows the File types filter AND the search box currently SHOW. This is not cosmetic: it is
+  // the apply gate. A row the user cannot see is never acted on, so every count, Select all / Clear, and the
+  // apply set below intersect with it. (The search box used to be a "transient view" Apply ignored:
+  // searching down to 3 rows and pressing Apply acted on every checked row, hidden or not — 2026-09-10.)
   const visibleTargets = useMemo(
-    () => (popup.kindFilters?.length ? targets.filter((t) => visibleIds.has(t.id)) : targets),
-    [targets, visibleIds, popup.kindFilters],
+    () => filterVisibleTargets(targets, showTypeFilter ? typesOn : null, query),
+    [targets, showTypeFilter, typesOn, query],
   );
 
   // Per-row derived state (§4.5.1): a row is "included" when ≥1 of its axes is checked; each axis carries
@@ -195,7 +211,7 @@ export function WarningPopup({
 
   const destructive = popup.destructive?.(sel) ?? false;
   // §5.2 — need ≥1 checked subject to apply (per-row: ≥1 row with an ON axis; single: ≥1 checked box).
-  // Both counts are VISIBLE-only (§4.5.4), so filtering every kind out disables Confirm rather than
+  // Both counts are VISIBLE-only (§4.5.4), so filtering every type out disables Confirm rather than
   // committing rows the user can no longer see.
   const targetsOk = perRowMode ? includedIds.length > 0 : !hasTargets || effectiveChecked.length > 0;
   const canApply =
@@ -206,7 +222,10 @@ export function WarningPopup({
     else if (popup.options?.length) firstFieldRef.current?.focus();
     else actionRef.current?.focus();
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key !== "Escape") return;
+      // Esc closes the File types dropdown first; only a second Esc closes the popup.
+      if (typesOpenRef.current) setTypesOpen(false);
+      else onClose();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -230,8 +249,8 @@ export function WarningPopup({
       return next;
     });
   };
-  // §4.5.4 — "all" means all of what the user is LOOKING AT: the kind-filtered set (not the search window,
-  // which is a transient find-as-you-type view, §4.5). With no kind filter this is the whole found set.
+  // §4.5.4 — "all" means all of what the user is LOOKING AT: the rows the File types filter and the search
+  // box leave visible. Rows hidden by either are left exactly as they were.
   const selectAll = () => {
     setConfirming(false);
     setChecked((prev) => new Set([...prev, ...visibleTargets.map((t) => t.id)]));
@@ -256,11 +275,11 @@ export function WarningPopup({
       return { ...prev, [id]: row };
     });
   };
-  // §4.5.1 — a column header flips a whole axis across every row it applies to. If all applicable rows
+  // §4.5.1 — a column header flips a whole axis across every VISIBLE row (§4.5.4). If all applicable rows
   // are already ON, turn them all OFF; otherwise turn them all ON.
   const toggleColumn = (axis: AxisId) => {
     setConfirming(false);
-    const applicable = targets.filter((t) => t.axes?.[axis] !== undefined);
+    const applicable = visibleTargets.filter((t) => t.axes?.[axis] !== undefined);
     const allOn = applicable.every((t) => rowChecks[t.id]?.[axis]);
     setTouched((prev) => {
       const next = new Set(prev);
@@ -280,17 +299,17 @@ export function WarningPopup({
     hoverTimer.current = window.setTimeout(() => setPreviewId(id), 120);
   };
 
-  // §4.5.1 — the per-row "All / None" affordance: set every applicable axis on/off across all rows.
+  // §4.5.1 — the per-row "All / None" affordance: set every applicable axis on/off across all VISIBLE rows (§4.5.4).
   const setAllRows = (on: boolean) => {
     setConfirming(false);
     setTouched((prev) => {
       const next = new Set(prev);
-      for (const t of targets) for (const a of AXIS_ORDER) if (t.axes?.[a] !== undefined) next.add(`${t.id}:${a}`);
+      for (const t of visibleTargets) for (const a of AXIS_ORDER) if (t.axes?.[a] !== undefined) next.add(`${t.id}:${a}`);
       return next;
     });
     setRowChecks((prev) => {
       const next = { ...prev };
-      for (const t of targets) {
+      for (const t of visibleTargets) {
         if (!t.axes) continue;
         const row = { ...(next[t.id] ?? {}) };
         for (const a of AXIS_ORDER) if (t.axes[a] !== undefined) row[a] = on;
@@ -307,7 +326,7 @@ export function WarningPopup({
       return;
     }
     // The checked subjects, and — in per-row mode — each included row's ON axes (§4.5.1) handed to apply().
-    // Both are the VISIBLE set (§4.5.4): a row hidden by the kind filter is never handed to apply().
+    // Both are the VISIBLE set (§4.5.4): a row hidden by the File types filter or the search box is never handed to apply().
     const ids = perRowMode ? includedIds : effectiveChecked;
     let perRow: PerRowAxes | undefined;
     if (perRowMode) {
@@ -412,17 +431,29 @@ export function WarningPopup({
   };
 
   const showSearch = targets.length > 30;
-  // The rendered rows: the kind-filtered set (§4.5.4) narrowed further by the find-as-you-type search.
-  const filtered = useMemo(() => {
-    if (!query.trim()) return visibleTargets;
-    const q = query.toLowerCase();
-    return visibleTargets.filter(
-      (t) =>
-        (t.name ?? t.label).toLowerCase().includes(q) ||
-        (rowPath(t) ?? "").toLowerCase().includes(q) ||
-        (t.sizeText ?? "").toLowerCase().includes(q),
-    );
-  }, [targets, query]);
+  // §4.5.4 — the File types dropdown's derived view: the options its find-a-type box leaves listed, grouped
+  // under their kind, plus the one-line summary the closed button shows.
+  const shownTypeOptions = useMemo(() => {
+    const q = typeQuery.trim().toLowerCase().replace(/^\./, "");
+    if (!q) return typeOptions;
+    return typeOptions.filter((o) => o.ext.includes(q) || FILE_TYPE_GROUP_LABEL[o.group].toLowerCase().includes(q));
+  }, [typeOptions, typeQuery]);
+  const typeGroups = FILE_TYPE_GROUP_ORDER.map((group) => ({
+    group,
+    options: shownTypeOptions.filter((o) => o.group === group),
+  })).filter((g) => g.options.length > 0);
+  const hiddenCount = targets.length - visibleTargets.length;
+  const setTypes = (exts: string[], on: boolean) => {
+    setConfirming(false);
+    setTypesOn((prev) => {
+      const next = new Set(prev);
+      for (const e of exts) {
+        if (on) next.add(e);
+        else next.delete(e);
+      }
+      return next;
+    });
+  };
 
   const subjectsHeading = `${
     noun === "directory" ? "Directories" : `${noun[0].toUpperCase()}${noun.slice(1)}s`
@@ -435,10 +466,10 @@ export function WarningPopup({
 
   // §4.5.3 — ↑/↓ move a preview cursor down the file list; Space plays/pauses a previewed video/audio.
   const moveCursor = (delta: number) => {
-    if (filtered.length === 0) return;
-    const cur = filtered.findIndex((t) => t.id === previewId);
-    const next = cur < 0 ? 0 : Math.min(filtered.length - 1, Math.max(0, cur + delta));
-    setPreviewId(filtered[next].id);
+    if (visibleTargets.length === 0) return;
+    const cur = visibleTargets.findIndex((t) => t.id === previewId);
+    const next = cur < 0 ? 0 : Math.min(visibleTargets.length - 1, Math.max(0, cur + delta));
+    setPreviewId(visibleTargets[next].id);
   };
   const onDialogKeyDown = (e: React.KeyboardEvent) => {
     if (!hasTargets) return;
@@ -567,31 +598,111 @@ export function WarningPopup({
             <div className="flex min-h-0 flex-col border-t border-[var(--lfb-border)] md:w-1/2 md:border-l md:border-t-0">
               <div className="flex items-center justify-between gap-2 px-5 pt-4 pb-2">
                 <div className="text-sm font-medium text-black">{subjectsHeading}</div>
-                {/* §4.6 live count, over the VISIBLE set (§4.5.4) — filtering a kind out drops both numbers */}
+                {/* §4.6 live count, over the VISIBLE set (§4.5.4) — unchecking a type or searching drops both
+                    numbers; "N hidden" says how many rows the filters are holding back (never acted on) */}
                 <div className="text-xs text-black/60" aria-live="polite">
                   {perRowMode ? includedIds.length : effectiveChecked.length} of {visibleTargets.length}{" "}
                   selected
+                  {hiddenCount > 0 && <span className="text-black/40"> · {hiddenCount.toLocaleString()} hidden</span>}
                 </div>
               </div>
 
-              {/* §4.5.4 — the "Filter:" row: one checkbox per media kind, all ON at open. Unchecking a kind
-                  hides its rows AND drops them from the batch (the list IS the applied set). */}
-              {!!popup.kindFilters?.length && (
-                <div className="flex items-center gap-4 px-5 pb-2 text-xs">
-                  <span className="font-medium text-black/70">Filter:</span>
-                  {popup.kindFilters.map((f) => (
-                    <label key={f.id} className="flex cursor-pointer items-center gap-1.5 text-black/70">
-                      <input
-                        type="checkbox"
-                        checked={!!kindsOn[f.id]}
-                        onChange={(e) => {
-                          setConfirming(false);
-                          setKindsOn((prev) => ({ ...prev, [f.id]: e.target.checked }));
-                        }}
-                      />
-                      {f.label}
-                    </label>
-                  ))}
+              {/* §4.5.4 — the File types filter: a dropdown listing every extension in the subjects, grouped by
+                  kind, each with a checkbox, plus a find-a-type box and Select all / Clear. Videos (and audio)
+                  open checked; everything else opens unchecked. An unchecked type hides its rows AND drops them
+                  from the batch (the visible list IS the applied set). */}
+              {showTypeFilter && (
+                <div className="flex items-center gap-2 px-5 pb-2 text-xs">
+                  <span className="font-medium text-black/70">File types:</span>
+                  <div className="relative min-w-0">
+                    <button
+                      type="button"
+                      data-popover-toggle
+                      onClick={() => setTypesOpen((o) => !o)}
+                      aria-haspopup="true"
+                      aria-expanded={typesOpen}
+                      className="inline-flex max-w-full items-center gap-1 rounded-md border border-[var(--lfb-border)] px-2 py-1 text-black/80 hover:bg-black/5"
+                    >
+                      <span className="truncate">{summarizeFileTypes(typeOptions, typesOn)}</span>
+                      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-black/50" />
+                    </button>
+                    {typesOpen && (
+                      <div className="absolute left-0 top-full z-20 w-72">
+                        <Popover onClose={() => setTypesOpen(false)}>
+                          <div className="px-3 pb-1.5 pt-1">
+                            <div className="flex items-center gap-1 rounded-md border border-[var(--lfb-border)] px-2 py-1">
+                              <Search className="h-3.5 w-3.5 text-black/40" />
+                              <input
+                                autoFocus
+                                value={typeQuery}
+                                onChange={(e) => setTypeQuery(e.target.value)}
+                                placeholder="Find a type (mp4, image…)"
+                                aria-label="Find a file type"
+                                className="w-full bg-transparent text-xs outline-none"
+                              />
+                            </div>
+                            <div className="mt-1.5 flex items-center gap-3 text-xs">
+                              <button
+                                type="button"
+                                onClick={() => setTypes(shownTypeOptions.map((o) => o.ext), true)}
+                                className="text-[var(--lfb-primary)] hover:underline"
+                              >
+                                Select all
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setTypes(shownTypeOptions.map((o) => o.ext), false)}
+                                className="text-[var(--lfb-primary)] hover:underline"
+                              >
+                                Clear
+                              </button>
+                            </div>
+                          </div>
+                          <div className="max-h-[40vh] overflow-y-auto border-t border-[var(--lfb-border)] py-1">
+                            {typeGroups.map((g) => {
+                              const on = g.options.filter((o) => typesOn.has(o.ext)).length;
+                              const total = g.options.reduce((sum, o) => sum + o.count, 0);
+                              return (
+                                <div key={g.group} className="py-0.5">
+                                  <label className="flex cursor-pointer items-center gap-2 px-3 py-1 text-xs font-medium text-black">
+                                    <input
+                                      type="checkbox"
+                                      checked={on === g.options.length}
+                                      ref={(el) => {
+                                        if (el) el.indeterminate = on > 0 && on < g.options.length;
+                                      }}
+                                      onChange={(e) => setTypes(g.options.map((o) => o.ext), e.target.checked)}
+                                    />
+                                    {FILE_TYPE_GROUP_LABEL[g.group]}
+                                    <span className="ml-auto font-normal tabular-nums text-black/40">
+                                      {total.toLocaleString()}
+                                    </span>
+                                  </label>
+                                  {g.options.map((o) => (
+                                    <label
+                                      key={o.ext}
+                                      className="flex cursor-pointer items-center gap-2 py-0.5 pl-8 pr-3 text-xs text-black/70"
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={typesOn.has(o.ext)}
+                                        onChange={(e) => setTypes([o.ext], e.target.checked)}
+                                      />
+                                      {o.ext || o.label}
+                                      <span className="ml-auto tabular-nums text-black/40">{o.count.toLocaleString()}</span>
+                                    </label>
+                                  ))}
+                                </div>
+                              );
+                            })}
+                            {typeGroups.length === 0 && (
+                              <div className="px-3 py-2 text-xs text-black/50">No matching types.</div>
+                            )}
+                          </div>
+                        </Popover>
+                      </div>
+                    )}
+                  </div>
                 </div>
               )}
               <div className="flex items-center gap-3 px-5 pb-2 text-xs">
@@ -636,7 +747,10 @@ export function WarningPopup({
                     <Search className="h-3.5 w-3.5 text-black/40" />
                     <input
                       value={query}
-                      onChange={(e) => setQuery(e.target.value)}
+                      onChange={(e) => {
+                        setConfirming(false);
+                        setQuery(e.target.value);
+                      }}
                       placeholder="Filter…"
                       // NOT `.lfb-input` — the wrapper above already draws the border and padding, so
                       // the house field shape would render a box inside a box.
@@ -646,7 +760,7 @@ export function WarningPopup({
                 )}
               </div>
               <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-                {filtered.map((t) => {
+                {visibleTargets.map((t) => {
                   const isPreview = t.id === previewId;
                   return (
                     <div
@@ -714,8 +828,10 @@ export function WarningPopup({
                     </div>
                   );
                 })}
-                {filtered.length === 0 && (
-                  <div className="px-3 py-4 text-center text-xs text-black/50">No matches.</div>
+                {visibleTargets.length === 0 && (
+                  <div className="px-3 py-4 text-center text-xs text-black/50">
+                    {hiddenCount > 0 ? "Nothing matches the file types and search above." : "No matches."}
+                  </div>
                 )}
               </div>
             </div>

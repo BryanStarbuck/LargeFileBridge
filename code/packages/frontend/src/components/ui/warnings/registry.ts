@@ -5,6 +5,7 @@
 // disagree with the truth on screen. The §10 catalog documents one WarningDef per canonical warning.
 import type { ReactNode } from "react";
 import type { ProgressKind } from "@lfb/shared";
+import { fileExt, fileTypeForName } from "@lfb/shared";
 import type { Health } from "../health.js";
 
 // A single option in the popup's options region (warnings.mdx §4.3). Radios model a mutually
@@ -63,12 +64,23 @@ export type WarningTargetPreview = {
   height?: number;
 };
 
-// One checkbox in the popup's "Filter:" row (warnings.mdx §4.5.4) — a media-kind filter over the subjects
-// list. A filter's `id` is matched against each target's `kind`; all filters open CHECKED, so a popup that
-// declares them behaves exactly as an unfiltered one until the user narrows.
-export type WarningKindFilter = {
-  id: string; // matched against WarningTarget.kind ("video", "image", "audio")
-  label: string; // the checkbox label ("Videos", "Images")
+// §4.5.4 — one entry in the popup's FILE TYPES filter: a file extension found among the subjects, filed
+// under its kind so the dropdown reads "Videos: .mp4 .webm", "Images: .jpg .png", "Other: .pdf". Derived from
+// the targets themselves (fileTypeOptions below) — no popup declares it.
+export type FileTypeGroup = "video" | "audio" | "image" | "pdf" | "other";
+export type FileTypeOption = {
+  ext: string; // lowercased extension incl. the dot (".mp4"); "" = the file has no extension
+  label: string; // "MP4", or "(no extension)"
+  group: FileTypeGroup;
+  count: number; // how many subjects carry this extension
+};
+export const FILE_TYPE_GROUP_ORDER: FileTypeGroup[] = ["video", "audio", "image", "pdf", "other"];
+export const FILE_TYPE_GROUP_LABEL: Record<FileTypeGroup, string> = {
+  video: "Videos",
+  audio: "Audio",
+  image: "Images",
+  pdf: "PDFs",
+  other: "Other",
 };
 
 // One subject the warning is about — a file or directory (warnings.mdx §4.5). Rendered as a row in the
@@ -81,7 +93,6 @@ export type WarningKindFilter = {
 export type WarningTarget = {
   id: string; // stable key — usually the absolute path (also what apply() receives)
   label: string; // fallback display text when `name` is absent (repo-relative or middle-truncated path)
-  kind?: string; // §4.5.4 — the media kind this row is, matched against the popup's `kindFilters` ids
   // §4.5 two-line row layout — preferred over label/sublabel:
   name?: string; // ROW 1 left — the file's basename; the ROW strips the extension for display
   sizeText?: string; // ROW 1 right — right-aligned size ("128 MB") or a directory rollup ("12 videos")
@@ -109,10 +120,8 @@ export type WarningPopupSpec = {
   targets?: WarningTarget[];
   // Noun for the live count in the header/button ("file" default → "— 4 files"). e.g. "video", "directory".
   targetNoun?: string;
-  // §4.5.4 — the "Filter:" row above the subjects list: one checkbox per media kind, ALL ON at open. Each
-  // filter's id is matched against a target's `kind`; unchecking a kind HIDES those rows AND drops them
-  // from the batch (apply() gets visible ∩ checked). Omit ⇒ no filter row (every target always visible).
-  kindFilters?: WarningKindFilter[];
+  // §4.5.4 — there is no per-popup filter declaration: the File types filter above the list is DERIVED
+  // from the targets' own extensions (fileTypeOptions), so every subjects list gets it.
   // §4.4 — the blue action button label; may depend on the chosen options. When `targets` are present
   // the popup appends the LIVE checked count ("— {n} {noun}s"); do NOT bake a count into this string.
   actionLabel: string | ((sel: WarningSelection) => string);
@@ -204,28 +213,78 @@ export function initialCheckedTargets(popup?: WarningPopupSpec): Set<string> {
   return s;
 }
 
-// §4.5.4 — the filter row's state when the popup opens: EVERY declared kind ON, so a filtered popup starts
-// showing exactly what an unfiltered one would. Keyed by filter id → checked.
-export function initialKindFilters(popup?: WarningPopupSpec): Record<string, boolean> {
-  const out: Record<string, boolean> = {};
-  for (const f of popup?.kindFilters ?? []) out[f.id] = true;
-  return out;
+// ── §4.5.4 The File types filter ──────────────────────────────────────────────────────────────────────
+// A batch is very often wanted for ONE type — "just the MP4s" — and unchecking 1,800 photo rows by hand is
+// not an affordance. So the popup lists every extension actually present, each with a checkbox.
+
+// The file name a target's type is read from: its basename, else the last segment of its id (a path).
+function targetFileName(t: WarningTarget): string {
+  const n = t.name ?? t.id;
+  return n.slice(n.lastIndexOf("/") + 1);
 }
 
-// §4.5.4 — the ids currently VISIBLE under the filter row: a target whose `kind` matches an OFF filter is
-// hidden; a target with no kind (or a kind no filter covers) is unfilterable and always visible. This is
-// also the apply gate — the popup hands apply() visible ∩ checked, so a hidden row is never acted on.
-export function visibleTargetIds(
-  popup: WarningPopupSpec | undefined,
-  kindsOn: Record<string, boolean>,
-): Set<string> {
-  const filters = popup?.kindFilters ?? [];
-  const ids = new Set<string>();
-  for (const t of popup?.targets ?? []) {
-    const filtered = t.kind != null && filters.some((f) => f.id === t.kind);
-    if (!filtered || kindsOn[t.kind!]) ids.add(t.id);
+/** One entry per distinct extension among `targets`, ordered by group (videos first), then most common. */
+export function fileTypeOptions(targets: WarningTarget[]): FileTypeOption[] {
+  const byExt = new Map<string, FileTypeOption>();
+  for (const t of targets) {
+    const name = targetFileName(t);
+    const ext = fileExt(name);
+    const known = byExt.get(ext);
+    if (known) known.count++;
+    else
+      byExt.set(ext, {
+        ext,
+        label: ext ? ext.slice(1).toUpperCase() : "(no extension)",
+        group: fileTypeForName(name),
+        count: 1,
+      });
   }
-  return ids;
+  const rank = (g: FileTypeGroup) => FILE_TYPE_GROUP_ORDER.indexOf(g);
+  return [...byExt.values()].sort(
+    (a, b) => rank(a.group) - rank(b.group) || b.count - a.count || a.ext.localeCompare(b.ext),
+  );
+}
+
+/** The filter is only worth showing when the subjects span two or more types. */
+export function hasFileTypeFilter(options: FileTypeOption[]): boolean {
+  return options.length > 1;
+}
+
+/** The types ON when the popup opens (product owner, 2026-09-10): videos — and audio, the other timeline
+ *  media — ONLY. Every other type is listed but starts unchecked, so its rows start hidden. A list with no
+ *  video/audio at all (an images-only compress popup) opens with every type ON: a popup that opened showing
+ *  nothing would read as broken. */
+export function initialFileTypesOn(options: FileTypeOption[]): Set<string> {
+  const media = options.filter((o) => o.group === "video" || o.group === "audio");
+  return new Set((media.length ? media : options).map((o) => o.ext));
+}
+
+/** The closed dropdown's label: "All types" / "None" / "MP4, WEBM, MOV" / "MP4, WEBM, MOV +2 more". */
+export function summarizeFileTypes(options: FileTypeOption[], on: ReadonlySet<string>): string {
+  const labels = options.filter((o) => on.has(o.ext)).map((o) => o.label);
+  if (labels.length === options.length) return "All types";
+  if (labels.length === 0) return "None";
+  return labels.length <= 4 ? labels.join(", ") : `${labels.slice(0, 3).join(", ")} +${labels.length - 3} more`;
+}
+
+/** THE VISIBLE SET — and therefore the apply gate. A target is visible when its type is ON (`typesOn` null =
+ *  no type filter) AND it matches the search box (name, path, or size). The popup hands apply() visible ∩
+ *  checked, so a row hidden by EITHER filter is never acted on — what you see is what Apply does. */
+export function filterVisibleTargets(
+  targets: WarningTarget[],
+  typesOn: ReadonlySet<string> | null,
+  query: string,
+): WarningTarget[] {
+  const q = query.trim().toLowerCase();
+  return targets.filter((t) => {
+    if (typesOn && !typesOn.has(fileExt(targetFileName(t)))) return false;
+    if (!q) return true;
+    return (
+      (t.name ?? t.label).toLowerCase().includes(q) ||
+      (t.pathText ?? t.sublabel ?? "").toLowerCase().includes(q) ||
+      (t.sizeText ?? "").toLowerCase().includes(q)
+    );
+  });
 }
 
 // English pluralization for the live count noun ("file" → "files", "1 file"). Handles the common

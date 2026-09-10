@@ -14,6 +14,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { execFileSync } from "node:child_process";
 
 let tmp: string;
 let repoRoot: string;
@@ -177,5 +178,134 @@ describe("publishing a file whose bytes another tool already pinned here", () =>
     await pinRepoFolder(FOLDER);
 
     expect(ipfs.contentPinnedCid).not.toHaveBeenCalled();
+  });
+});
+
+// ── IDENTITY IS GLOBAL, INTENT IS LOCAL (foreign_pin_discovery.mdx §6.1, 2026-09-10) ──────────────────────
+// Every test above seeds `decisions: { [REL]: "sync" }` — the one condition that never held for the real
+// files. On charlie-kirk (2026-09-10) the 50 videos the Mac Studio could not see were `undecided` (24) or
+// `ignore` (26) on the Tower that held and pinned them, so the adoption branch above was unreachable and
+// these tests stayed green beside a broken product. The block below seeds the real shape.
+describe("a git-ignored file pinned here that nobody decided to sync", () => {
+  beforeEach(() => {
+    // A REAL working tree: publication asks git's own check-ignore, and a bare `.git` dir answers "unknown".
+    fs.rmSync(path.join(repoRoot, ".git"), { recursive: true, force: true });
+    execFileSync("git", ["init", "-q"], { cwd: repoRoot });
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), "videos/\n");
+  });
+
+  async function seed(decisions: Record<string, "sync" | "ignore" | "undecided">): Promise<void> {
+    const units = await import("../store-model/units.service.js");
+    await units.updateRepoConfig(FOLDER, (c) => ({
+      ...c,
+      repo: { ...c.repo, name: FOLDER, path: repoRoot, remote: null },
+      pinned: true,
+      decisions,
+    }));
+  }
+
+  it("publishes the discovered CID for an UNDECIDED file — no upload, no new pin, claimed by this computer", async () => {
+    await seed({});
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: FOREIGN_CID }] as never);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    const counts = await pinRepoFolder(FOLDER);
+
+    const entry = await manifestEntry();
+    expect(entry, "a file pinned here must reach the manifest, or no other computer can pull it").toBeDefined();
+    expect(entry!.cid).toBe(FOREIGN_CID);
+    const { computerLabel } = await import("../store-model/config.service.js");
+    expect(entry!.pinned_by).toEqual([computerLabel()]);
+    expect(ipfs.addFile).not.toHaveBeenCalled();
+    expect(counts.added).toBe(1);
+    expect(counts.pinned).toBe(0);
+  });
+
+  it("publishes it when the decision is `ignore` too — the decision governs moving bytes, not identity", async () => {
+    // 26 of the 50: `ipfs: false` from 2026-08-10, pinned by hand afterwards. The bytes are on IPFS from this
+    // node whatever the old answer said; hiding that from the user's other computers protects nothing.
+    await seed({ [REL]: "ignore" });
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: FOREIGN_CID }] as never);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    await pinRepoFolder(FOLDER);
+
+    expect((await manifestEntry())?.cid).toBe(FOREIGN_CID);
+    expect(ipfs.addFile).not.toHaveBeenCalled();
+  });
+
+  it("does not publish a CHECKED-IN file — git already carries it to every clone", async () => {
+    fs.writeFileSync(path.join(repoRoot, ".gitignore"), "");
+    await seed({});
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: FOREIGN_CID }] as never);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    await pinRepoFolder(FOLDER);
+
+    expect(await manifestEntry()).toBeUndefined();
+  });
+
+  it("never publishes a record whose pin is gone, and never ADDS a file nobody decided", async () => {
+    await seed({});
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([] as never); // another tool unpinned it since discovery
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    await pinRepoFolder(FOLDER);
+
+    expect(await manifestEntry()).toBeUndefined();
+    expect(ipfs.addFile, "an undecided file must never be uploaded on our own").not.toHaveBeenCalled();
+  });
+
+  it("keeps the entry on the NEXT pass — no flip on the shared manifest", async () => {
+    // The drop-fold deletes non-sync entries that no peer claims. If only a pass's NEW publications survived
+    // it, pass 2 would delete what pass 1 published and pass 3 would publish it again — a change to the
+    // committed manifest on every backbone cycle.
+    await seed({});
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: FOREIGN_CID }] as never);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    await pinRepoFolder(FOLDER);
+    const second = await pinRepoFolder(FOLDER);
+
+    expect((await manifestEntry())?.cid).toBe(FOREIGN_CID);
+    expect(second.added, "the second pass has nothing new to publish").toBe(0);
+  });
+
+  it("a paths-scoped pass KEEPS an identity it was not asked about — every decision click fires one", async () => {
+    // A scoped run only visits the files the user clicked. Its drop-fold still walks the whole list, so an
+    // identity it did not re-derive would be deleted by every click anywhere else in the repo.
+    await seed({});
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: FOREIGN_CID }] as never);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    await pinRepoFolder(FOLDER);
+    await pinRepoFolder(FOLDER, new Set(["videos/some-other-file.mp4"]));
+
+    expect((await manifestEntry())?.cid).toBe(FOREIGN_CID);
+  });
+
+  it("a paths-scoped pass does not publish NEW identities outside its scope — the full pass does", async () => {
+    await seed({});
+    seedDiscovery();
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockResolvedValue([{ cid: FOREIGN_CID }] as never);
+
+    const { pinRepoFolder } = await import("./pin.service.js");
+    const scoped = await pinRepoFolder(FOLDER, new Set(["videos/some-other-file.mp4"]));
+
+    expect(await manifestEntry()).toBeUndefined();
+    expect(scoped.added).toBe(0);
   });
 });

@@ -9,7 +9,6 @@ import type { OcrResult } from "@lfb/shared";
 import { api } from "@/api/client";
 import { clientLog } from "./clientLog.js";
 import { requestStorageSetup } from "./setupWizard.js";
-import type { WarningKindFilter } from "@/components/ui/warnings/registry";
 
 /**
  * The ONE readiness gate every OCR producer routes through (ocr.mdx §6) — the third sibling of
@@ -43,19 +42,6 @@ export async function withOcrReady(opts: { label: string; run: () => void }): Pr
   // the user to consent to or download here, only something to be told.
   toast.error(`Can't ${opts.label} — no OCR engine is available on this computer.`);
 }
-
-/**
- * The OCR popup's "Filter:" row (ocr.mdx §9.1 / warnings.mdx §4.5.4). More load-bearing here than for
- * describe: the two kinds differ in cost by TWO ORDERS OF MAGNITUDE — an image is ~250ms, a 40-minute video
- * is a frame-extraction pass plus ~160 recognitions. A user who wants "just the screenshots, now" must not be
- * forced to also commit to every video in the tree. Both open CHECKED, so the default is unchanged.
- * The ids MUST match `mediaKindForName()`'s values — that is what tags each target's `kind`.
- */
-export const OCR_KIND_FILTERS: WarningKindFilter[] = [
-  { id: "video", label: "Videos" },
-  { id: "image", label: "Images" },
-  { id: "pdf", label: "PDFs" },
-];
 
 /** One-file outcome → a human line (ocr.mdx §18's status set). */
 function msgOne(r: OcrResult): string {

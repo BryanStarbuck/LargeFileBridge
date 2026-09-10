@@ -58,7 +58,7 @@ export const METRIC_CATALOG: Record<MetricId, MetricDef> = {
   },
   notBackedUp: {
     label: "Not backed up",
-    hint: "Pinned files that live only on this computer — no other machine has a copy yet. Open Large File Bridge on another computer so it can pull them.",
+    hint: "Files that live only on this computer — no other machine has a copy yet. Large File Bridge already lists them on your other computers; open it on one of them and use Pull down to make the second copy.",
     positive: "bad",
   },
   pending: {

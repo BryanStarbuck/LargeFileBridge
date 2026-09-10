@@ -20,6 +20,7 @@ import {
   foreignPinByPath,
   foreignPinPathsUnder,
   foreignPinsByCanon,
+  foreignPinsUnder,
   probeForKey,
   probesForPaths,
   pruneProbes,
@@ -623,6 +624,21 @@ export async function foreignPinPathSetFor(rootAbs: string | null): Promise<Set<
     () => foreignPinPathSetFromJson(),
     "foreignPin.pathSet",
   );
+}
+
+/**
+ * The discovered pins under one unit root, as full records — what the pin pass publishes as identity-only
+ * manifest entries for files pinned here that nobody decided to sync (foreign_pin_discovery.mdx §6.1).
+ *
+ * Unlike {@link foreignPinPathSetFor}, the JSON path FILTERS to the root: the caller turns every record it
+ * gets into a manifest key relative to that root, so a superset would only be work it has to throw away.
+ * One read per unit per pass — never per file.
+ */
+export async function foreignPinRecordsFor(rootAbs: string): Promise<ForeignPinRecord[]> {
+  const prefix = rootAbs.endsWith(path.sep) ? rootAbs : rootAbs + path.sep;
+  const fromJson = (): ForeignPinRecord[] => readForeignPinsFromJson().filter((r) => r.absPath.startsWith(prefix));
+  if (!dbEnabled()) return fromJson();
+  return tryDb(async () => (await foreignPinsUnder(prefix)).map(rowToRecord), fromJson, "foreignPin.recordsUnder");
 }
 
 /** The whole-index set — the no-database path and (R3) the oracle `foreignPinPathSetFor` is checked against. */

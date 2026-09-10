@@ -74,7 +74,7 @@ import * as ipfs from "../ipfs/ipfs.service.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 // The RECORDED foreign-pin discovery (foreign_pin_discovery.mdx §5) — a flag read, never a hash, so it
 // is safe on the per-file pin path. Used to publish an already-pinned file without re-adding it.
-import { foreignPinByAbsPath } from "../ipfs/foreign-pin.service.js";
+import { foreignPinByAbsPath, foreignPinRecordsFor } from "../ipfs/foreign-pin.service.js";
 import { pinsetHasContent } from "./cid-equivalence.service.js";
 import { recordCidCorrection } from "./cid-correction.js";
 import { noteSupersededCid, supersededCid, supersededPairs, adoptSupersededCids } from "./superseded-cids.service.js";
@@ -177,6 +177,12 @@ interface UnitTarget {
   // here (a storage's mapped dir this device hasn't grafted — known-but-absent, devices.mdx §4). Repo and
   // computer units always return a string.
   resolveAbs: (rel: string) => string | null;
+  // The unit's working-tree root, when it has one. Only a repo unit sets it — it scopes the pinned-here
+  // identity publication in `runUnitPin` to THIS repo's recorded discoveries (foreign_pin_discovery.mdx §6.1).
+  rootAbs?: string;
+  // Which of these unit-relative paths git ignores here (git's own verdict, never the ledger). Identity
+  // publication is scoped to git-ignored files: a checked-in file already reaches every clone over git.
+  gitIgnored?: (rels: string[]) => Promise<Set<string>>;
   manifest: Manifest;
   status: UnitStatus;
   writeManifest: (m: Manifest) => void;
@@ -416,6 +422,79 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     ),
   );
 
+  // ── PINNED HERE ⇒ PUBLISHED, WHATEVER WAS DECIDED (foreign_pin_discovery.mdx §6.1) ─────────────────────
+  // Identity is global; intent is local. The fan-out above only visits files decided `sync`, and it used to be
+  // the ONLY producer of manifest entries — so a git-ignored file whose bytes ARE pinned on this node, but whose
+  // decision is `undecided` or `false`, never reached the manifest, and no other computer of the user's could
+  // learn it exists. Measured on charlie-kirk, 2026-09-10: 50 videos (1.57 GB) on disk here, pinned here, their
+  // CIDs recorded in foreign-pins.json AND in the company repo's per-file records — and in NO manifest, so the
+  // Mac Studio's `Pull down` read 0 for three weeks.
+  //
+  // Publishing an identity moves nothing: no upload, no new pin, no hash. It writes down what is already true
+  // on this node. The decision still governs every step that MOVES bytes — this computer never ADDS a non-sync
+  // file, and a peer only OFFERS it (a remote-only row + the Pull down count) until its user clicks.
+  //
+  // Same honest boundary as the NEW-ENTRY FOREIGN ADOPTION branch: the RECORDED discovery is the source, the
+  // live pinset is the authority (a pin another tool has since removed is not published, §5.1), and a size
+  // that no longer matches the file means the record describes other bytes. GIT-IGNORED ONLY: a checked-in
+  // file already reaches every clone over git, and publishing it would only grow the shared list — on
+  // charlie-kirk, 562 of the 920 candidates were checked in (506 site pages, 55 images, 1 IPFS file).
+  //
+  // THE KEEP-SET IS RE-DERIVED FROM STATE EVERY PASS, never "what this pass added". The drop-fold below
+  // deletes non-sync entries no peer claims; if only this pass's NEW publications survived it, pass 2 would
+  // drop what pass 1 published and pass 3 would publish it again — a flip on the shared manifest every
+  // backbone commit (the self-inflicted-churn failure git_backbone.mdx exists to prevent).
+  const identityOnly = new Set<string>();
+  if (t.rootAbs && t.gitIgnored) {
+    note.phase("publishing files already pinned on this computer");
+    await yieldToLoop();
+    let published = 0;
+    try {
+      const held = new Map<string, { cid: string; size: number; mtime: Date }>();
+      for (const rec of await foreignPinRecordsFor(t.rootAbs)) {
+        const rel = path.relative(t.rootAbs, rec.absPath).split(path.sep).join("/");
+        if (!rel || rel === ".." || rel.startsWith("../") || path.isAbsolute(rel)) continue;
+        if (t.resolveAbs(rel) === null) continue; // not a key that lands inside this unit
+        if (t.decisions[rel] === "sync") continue; // the fan-out above owns decided files
+        if (!pinset.has(ipfs.canonicalCid(rec.cid))) continue; // stale record — not pinned here any more
+        const st = statOrNull(rec.absPath);
+        if (!st?.isFile() || st.size !== rec.size) continue; // the file changed under the record
+        held.set(rel, { cid: rec.cid, size: st.size, mtime: st.mtime });
+      }
+      const ignored = held.size > 0 ? await t.gitIgnored([...held.keys()]) : new Set<string>();
+      for (const [rel, h] of held) {
+        if (!ignored.has(rel)) continue; // checked in, or git could not say — git carries it, not us
+        identityOnly.add(rel);
+        if (byPath.get(rel)?.cid) continue; // already published — keep the entry exactly as recorded
+        // A paths-scoped run (every decision click fires one) KEEPS every identity above but only publishes
+        // new ones on a full pass: the scope names the files the user acted on, and these are not those.
+        if (onlyPaths && !onlyPaths.has(rel)) continue;
+        byPath.set(rel, {
+          path: rel,
+          cid: h.cid, // the ACTUAL CID the bytes are pinned under, recorded verbatim (§5)
+          size: h.size,
+          modified_at: h.mtime.toISOString(),
+          sha256: null,
+          pinned_by: [t.label],
+        });
+        published++;
+      }
+    } catch (e) {
+      // Best-effort: failing to publish leaves the list exactly as it was, which is the old behavior. It must
+      // never fail the pass that pins the files the user DID decide.
+      log.warn("pin", `${t.name}: publishing files already pinned here was skipped this pass: ${(e as Error).message}`);
+    }
+    // `added`, not `pinned`: the manifest gained entries, but no byte moved and no pin was taken (§6).
+    counts.added += published;
+    if (published > 0) {
+      log.info(
+        "pin",
+        `${t.name}: published ${published} file(s) already pinned on this computer (no upload, no new pin) ` +
+          `so your other computers can pull them down.`,
+      );
+    }
+  }
+
   // Drop manifest entries whose decision is no longer "sync" — EXCEPT the ones another of the user's
   // computers pins (storage_company.mdx §8.5). Those are "known here, owned elsewhere": their identity
   // arrived over the sync repo, this computer has made no decision about them, and they are the raw material
@@ -426,7 +505,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
   for (const rel of [...byPath.keys()]) {
     if (t.decisions[rel] === "sync") continue;
     const entry = byPath.get(rel)!;
-    if (entry.cid && entry.pinned_by.some((d) => d && d !== t.label)) {
+    // Pinned HERE, git-ignored, recorded — published above and re-verified this pass. Same standing as a
+    // peer's claim: known, not decided, never fetched (it is on this disk already).
+    if (identityOnly.has(rel) || (entry.cid && entry.pinned_by.some((d) => d && d !== t.label))) {
       knownFromPeers.add(rel);
       continue;
     }
@@ -784,6 +865,8 @@ async function pinRepoFolderInner(
       // computer (or a teammate), and null here reads as "not placeable on this computer", the same
       // known-but-absent answer an ungrafted mapped dir gives — so a bad key is skipped, never written.
       resolveAbs: (rel) => joinRelConfined(repoPath, rel),
+      rootAbs: repoPath,
+      gitIgnored: (rels) => gitIgnoredPaths(repoPath, rels),
       manifest: unitManifest,
       status: getRepoStatus(folder),
       writeManifest: (m) => writeRepoManifest(folder, m),
@@ -801,6 +884,29 @@ async function pinRepoFolderInner(
     onlyPaths,
     opts.report,
   );
+}
+
+/**
+ * Which of these unit-relative paths git ignores in `repoRoot` — git's own verdict (git_ignore.mdx §5.4), one
+ * batched non-blocking `check-ignore`. Positive hits only: a path git could not answer for is left out, so an
+ * unknown never becomes a publication.
+ */
+async function gitIgnoredPaths(repoRoot: string, rels: string[]): Promise<Set<string>> {
+  const relByAbs = new Map<string, string>();
+  for (const rel of rels) {
+    const abs = joinRelConfined(repoRoot, rel);
+    if (abs !== null) relByAbs.set(abs, rel);
+  }
+  // LAZY: git.service reaches back into this module (via push-health.service), so a static import here
+  // would close an import cycle that only bites at module-evaluation time.
+  const { checkIgnoreAsync } = await import("../git/git.service.js");
+  const hits = await checkIgnoreAsync(repoRoot, [...relByAbs.keys()]);
+  const out = new Set<string>();
+  for (const abs of hits) {
+    const rel = relByAbs.get(abs);
+    if (rel !== undefined) out.add(rel);
+  }
+  return out;
 }
 
 /**

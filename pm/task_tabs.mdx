@@ -250,7 +250,7 @@ A count `> 0` tints the panel by how much it wants attention, reusing the app he
 
 | Metric shape | Tint when `> 0` |
 | --- | --- |
-| **Not backed up** (sync files with 0 peers), **Missing / pull-down** | **red** — data is at risk / owed. |
+| **Not backed up** (files on this disk and no other), **Missing / pull-down** | **red** — data is at risk / owed. |
 | **Add to IPFS**, **Git Ignore** (the two decision axes, §2.5.1) | **accent / amber** — action needed, not an emergency. |
 | **Compressible videos / images**, **Transcribable**, **AI Describable**, **OCRable** | **amber** — an offer, at the user's leisure. |
 
@@ -376,7 +376,24 @@ each `FileRow` against the special-files classifier and the storage index so the
 * `counts.undecided`, `counts.pending`, `counts.ignored`, `counts.pinned` — already on `RepoDetail.counts`.
   `taskMetrics.undecided` (undecided **minus** foreign-pinned) is the number the **Add to IPFS** tile shows.
 * `missingPinned.length` → **Pull down**.
-* `sync` files with `peers.length === 0` → **Not backed up**.
+* Files whose bytes are on this disk and no other → **Not backed up**. Two halves, one count:
+  * `sync` files pinned **here** that no **other** computer claims (`isSingleCopy`) — these clear on their
+    own once Large File Bridge runs on another computer and pulls them.
+  * **undecided** files another tool pinned here (`isUnpublishedForeignPin`,
+    [foreign_pin_discovery.mdx §6](./foreign_pin_discovery.mdx)). Large File Bridge publishes the git-ignored
+    ones into the manifest on every full pin pass, **by default and with no click**
+    ([foreign_pin_discovery.mdx §6.1](./foreign_pin_discovery.mdx)), so they too appear on the other
+    computers under **Pull down** and clear once one of them pulls.
+  * So both halves are fixed on **another** computer, and the tile keeps its Devices route; the hint says
+    "open Large File Bridge on one of them and use Pull down". There is no popup and no button here.
+  * *Measured on `charlie-kirk`, 2026-09-10:* **331** git-ignored videos pinned by the repo's own
+    `ipfs add` / `ipfs pin add` workflow (CIDv0), never decided — Add to IPFS excludes foreign pins, so the
+    count had no fix anywhere until §6.1 published all 331 automatically.
+
+  The publication runs in code:
+  `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `runUnitPin()`, the PINNED HERE ⇒ PUBLISHED phase
+  The tile's hint text is in code:
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarnings.ts` — `METRIC_CATALOG.notBackedUp`
 * per-file `compress` / `transcribe` / `describe` / `ocr` state (§4.4) rolled up → **Compressible videos /
   images**, **Transcribable**, **AI Describable**, **OCRable** (and their done twins).
 * **Git Ignore** is the one metric counted **on the client**, from the rows the page already holds, by the

@@ -1298,8 +1298,9 @@ export function isSingleCopy(transfer: TransferStatus, peers: string[], selfLabe
  * "Pinned here by some other tool, and published to nobody" — the OTHER way a file ends up as a single
  * copy on one disk (foreign_pin_discovery.mdx §5/§6).
  *
- * A foreign pin is REALITY on THIS node and nothing more: the file has no manifest entry, so no other
- * computer of the user's can see its CID, and none can fetch it. {@link isSingleCopy} cannot see this
+ * A foreign pin is REALITY on THIS node and nothing more. A git-ignored one is now PUBLISHED with a claim by
+ * this computer alone (foreign_pin_discovery.mdx §6.1), so a peer can see and pull it — but until one does,
+ * it is still one copy on one disk. {@link isSingleCopy} cannot see this
  * state at all — it requires `transfer === "pinned"`, and an undecided row's transfer is "na" — so every
  * durability surface read these files as fine. Measured on charlie-kirk (2026-08-19): 49 videos, 2.0 GB,
  * pinned on exactly one disk, with `Not backed up anywhere` reporting 0.

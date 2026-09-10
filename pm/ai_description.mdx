@@ -1333,6 +1333,11 @@ The metric-tile / header-primary describe popup's Apply enqueues (never inline) 
 
 ### 12.4.1 The popup's **Videos / Images** kind filter (NEW, LOCKED)
 
+> **Revised 2026-09-10 — superseded by [warnings.mdx §4.5.4](./warnings.mdx).** The two-checkbox Videos /
+> Images row below is replaced by the popup's **File types** filter (one checkbox per extension, grouped by
+> kind), and only **video** types now open checked — images are listed but start unchecked. The
+> visible ∩ checked guarantee below is unchanged, and now also covers the search box.
+
 An AI description applies to **two** media kinds — **videos** and **images** — and a user very often wants
 only **one** of them. A folder of 1,800 photos and 12 videos offers no way to say *"just do the videos"*
 short of unchecking 1,800 rows by hand, so today the user either describes everything or gives up. The
@@ -1375,13 +1380,12 @@ menu ([dialogs.mdx §5–§6](./dialogs.mdx)) — they are the one same popup, s
 filter. The transcribe popup carries the **same mechanism** with **its** kinds (audio / video) — the
 generic capability lives in the popup, not in describe ([warnings.mdx §4.5.4](./warnings.mdx)).
 
-The kind filter (the "Filter:" checkbox row, the visible-set narrowing, and the visible∩checked apply set) is
+The File types filter (the dropdown, the visible-set narrowing, and the visible∩checked apply set) is
 implemented in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup()`
-(the `kindsOn` state, the `visible` / `filtered` memos, and the `effectiveChecked` set handed to `apply()`),
-over the `kindFilters` / `WarningTarget.kind` model in
+(`typesOn` + `query` → `visibleTargets` → the `effectiveChecked` set handed to `apply()`), over
 `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts` —
-`initialKindFilters()` / `visibleTargetIds()`.
+`fileTypeOptions()` / `initialFileTypesOn()` / `filterVisibleTargets()`.
 
 The two describe popups declare the Videos/Images filter and tag each candidate's kind in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openDescribeBatch()` ·

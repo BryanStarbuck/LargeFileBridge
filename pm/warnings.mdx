@@ -438,7 +438,8 @@ seeing *which* 6. The **right pane** of the two-pane layout (§4.0) is that list
 * **The list header.** A title naming the subject — **"Files this applies to"** / **"Directories this
   applies to"** / **"Videos this applies to"** — plus the **live count** "**{checked} of {total}
   selected**" (§4.6) and two quiet link affordances: **"Select all"** and **"Clear"** (select-none).
-  A per-column search box appears when the list is long (> ~30 rows).
+  A per-column search box appears when the list is long (> ~30 rows). **The search box narrows the applied
+  set** — a row it hides is not acted on (§4.5.4).
 * **Every row is checked by default.** The popup opens with the found set — exactly the count in the
   headline (the "6") — **all checked**, because the offer *is* "apply Task X to these 6." A
   `defaultChecked: false` on a target opts a row out at open (rare; e.g. a file we suspect but aren't
@@ -567,36 +568,46 @@ While the file list is focused:
 The popup's Space-to-play + arrow-cursor scope is registered in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`useHotkeys("action-popup", …)` + the `<video>` ref play/pause handler).
 
-### 4.5.4 The kind-filter row — "Filter:" above the list (NEW, LOCKED)
+### 4.5.4 The File types filter — above the list (REVISED 2026-09-10, LOCKED)
 
-A popup whose subjects span **more than one media kind** may declare a **kind filter**: a row labelled
-**"Filter:"** at the top of the right pane, above the list, holding **one checkbox per kind**. It exists
-because a batch action that covers two kinds (AI descriptions cover **videos** and **images**; transcripts
-cover **audio** and **video**) is very often wanted for **one** kind only, and unchecking 1,800 photo rows
-by hand to reach 12 videos is not a real affordance.
+> **Revision 2026-09-10 (product owner) — amends the earlier LOCKED "kind-filter row".** That row held one
+> checkbox per *media kind*, declared per popup (`kindFilters`), all ON at open, and existed only on the
+> describe and OCR popups. It is replaced by a **File types** filter that **every** subjects list gets, listing
+> the actual **extensions**, with **only video types checked at open**. The search box — which used to be a
+> transient view that Apply ignored — is now part of the applied set. Both changes answer one reported bug:
+> *filtering down to a subset and pressing Apply still applied to the full set.*
 
-* **Every kind checkbox opens CHECKED (on).** With all kinds on, the popup behaves exactly as it does with
-  no filter at all — the filter only ever **narrows**.
-* **Unchecking a kind hides those rows** from the list.
-* **The visible list IS the applied set (the LOCKED guarantee).** `apply()` receives **visible ∩ checked**
-  ids — never a hidden row. A file the user cannot see in the list **is not acted on**. This is what makes
-  the filter safe to reason about: *what you see is what Confirm does.*
-* **The live count (§4.6) counts visible-checked only** — the header's *"N of M selected"* and the button's
-  *"— N files"* both fall the moment a kind is filtered out. **Zero visible-checked disables Confirm** (§5.2),
-  so filtering everything out is a visible dead-end, never a silent no-op.
-* **Filtering is non-destructive.** Hiding a kind does not uncheck its rows; re-checking the kind restores
-  them exactly as the user left them.
-* **"Select all" / "Clear" act on the visible rows** — they mean "all of what I'm looking at".
-* A target that declares **no kind**, or a kind no filter covers, is **always visible** (unfilterable).
+* **Derived, not declared.** The popup reads each subject's extension (its `name`, else its `id`) and lists
+  every distinct one, grouped under its kind: **Videos** (.mp4, .webm, .mov …), **Audio** (.mp3, .wav …),
+  **Images** (.jpg, .jpeg, .png …), **PDFs**, and **Other** (everything else, incl. "(no extension)"). Each
+  extension shows its row count; each group header is a tri-state checkbox that flips its whole group.
+* **Shown only when useful** — when the subjects span **two or more** extensions.
+* **A dropdown.** A **"File types:"** label and a button summarising the checked types (*"MP4, WEBM, MOV"*,
+  *"All types"*, *"None"*). It opens a pop-up with a **find-a-type box** (type *"mp4"* or *"image"*),
+  **Select all** / **Clear** (acting on the types the find box leaves listed), and the grouped checkboxes.
+  Click outside or Esc closes it — Esc closes only the dropdown, never the popup behind it.
+* **Only video types open CHECKED.** Video types — and audio (.wav, .mp3), the other timeline media — start
+  checked; every other type is **listed but unchecked**, so its rows start hidden. A subjects list with **no**
+  video or audio at all (e.g. an images-only compress popup) opens with **every** type checked — a popup that
+  opened showing nothing would read as broken.
+* **Rows stay checked.** Every row is still checked by default (§4.5); the type filter decides which rows are
+  **visible**. Hiding a type never unchecks its rows; re-checking the type brings them back exactly as the
+  user left them.
+* **The visible list IS the applied set (the LOCKED guarantee).** A row is **visible** when its type is
+  checked **AND** it matches the search box. `apply()` receives **visible ∩ checked** ids — never a hidden
+  row, whichever filter hid it. *What you see is what Apply does.*
+* **Counts follow the visible set.** The header's *"N of M selected"* and the button's *"— N files"* count
+  visible-checked only; the header adds *"· K hidden"* whenever the filters are holding rows back. **Zero
+  visible-checked disables Apply** (§5.2) — never a silent no-op.
+* **"Select all" / "Clear"** — and, in the per-row-toggles model (§4.5.1), **All / None** and the
+  column-header toggles — act on the **visible** rows only: *"all of what I'm looking at"*.
 * The filter is **client-side over the already-fetched candidates** — it never re-runs the plan/preview and
   never alters the upstream server-side narrowing ([dialogs.mdx §5.2](./dialogs.mdx)).
 
-The kind-filter row, the visible-set narrowing, and the visible∩checked apply set are implemented in code:
-`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup`
-(`kindsOn` state → `visible` / `filtered` memos → `effectiveChecked` handed to `apply()`); the model
-(`WarningPopupSpec.kindFilters`, `WarningTarget.kind`) plus `initialKindFilters()` / `visibleTargetIds()` in
-`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts`.
-The AI-description Videos/Images instance: [ai_description.mdx §12.4.1](./ai_description.mdx).
+The File types options, the video-first default, and the visible-set (type ∩ search) predicate are implemented in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/warnings/registry.ts` — `fileTypeOptions()`, `initialFileTypesOn()`, `summarizeFileTypes()`, `filterVisibleTargets()`.
+The dropdown, the visible ∩ checked apply set, and the visible-scoped Select all / Clear are implemented in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup()` (`typesOn` + `query` → `visibleTargets` → `effectiveChecked` handed to `apply()`).
 
 ### 4.6 The live count (the "6" that updates)
 
@@ -2499,8 +2510,8 @@ right pane renders it:
   **identity** — name, size, target directory, *"added by {device}"* — not as a playable video, and
   **Space** (§4.5.3) does nothing for it. Previewing must never trigger a fetch: pulling bytes is the
   **Apply**, never a hover.
-* **The kind-filter row (§4.5.4) still applies** — kind comes from the filename in the manifest entry, which
-  is present without the bytes.
+* **The File types filter (§4.5.4) still applies** — the type comes from the filename in the manifest entry,
+  which is present without the bytes.
 
 **Where the number comes from.** The count this warning headlines is the same `Pull down` metric the One-Repo
 tile shows, and a remote-only row counts toward **`Pull down` always** and **`Add to IPFS` while undecided

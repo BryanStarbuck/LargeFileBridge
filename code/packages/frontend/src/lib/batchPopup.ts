@@ -7,11 +7,10 @@
 // preview for the scope and build the same transcribe/describe/ocr WarningDef the tiles use, then open it.
 import { toast } from "sonner";
 import type { PreviewPlan } from "@lfb/shared";
-import { formatBytes, mediaKindForName, fileTypeForName } from "@lfb/shared";
+import { formatBytes, fileTypeForName } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
-import { DESCRIBE_KIND_FILTERS } from "./describe.js";
-import { OCR_KIND_FILTERS, withOcrReady } from "./ocr.js";
+import { withOcrReady } from "./ocr.js";
 import { requestStorageSetup } from "./setupWizard.js";
 import { withModelReady } from "./transcribe.js";
 import type { WarningDef } from "../components/ui/warnings/registry.js";
@@ -281,15 +280,11 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
           ? "Every image/video file in this scope already has an AI description, so there is nothing to do here."
           : `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
-        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
-      // ai_description.mdx §12.4.1 — the Videos/Images filter row. Each row is tagged with its media kind
-      // so unchecking a kind hides it AND drops it from the batch (the visible list IS the applied set).
-      kindFilters: DESCRIBE_KIND_FILTERS,
+        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the File types filter to narrow the list, and uncheck any you want to skip.",
       targets: plan.files.map((f) => ({
         id: f.path,
         label: labelForPath(f.path),
         name: basename(f.path),
-        kind: mediaKindForName(f.path) ?? undefined,
         sizeText: formatBytes(f.sizeBytes),
         pathText: labelForPath(f.path),
       })),
@@ -370,9 +365,7 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
             // lets a user decide to take the images and PDFs now and leave the videos for later.
             `Large File Bridge found ${countsClause(images, videos, pdfs)} with no OCR text yet. It reads the words that are visible on screen — a screenshot's error message, a slide's figures, a contract's clauses — so you can search for them later.`,
       whyItMatters:
-        "OCR text makes the words inside your images, videos, and PDFs searchable without opening them. It runs entirely on this computer — nothing is uploaded. Images and PDF pages finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the Videos / Images / PDFs filter to narrow the list, and uncheck any you want to skip.",
-      // ocr.mdx §9.1 — the Videos/Images filter row, load-bearing here because of the cost gap above.
-      kindFilters: OCR_KIND_FILTERS,
+        "OCR text makes the words inside your images, videos, and PDFs searchable without opening them. It runs entirely on this computer — nothing is uploaded. Images and PDF pages finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the File types filter to narrow the list, and uncheck any you want to skip.",
       targets: plan.files.map((f) => {
         const kind = ocrKindOf(f.path);
         // The frame count the plan resolved for a video row (ocr.mdx §9.2) — the one field OCR's plan has
@@ -382,7 +375,6 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
           id: f.path,
           label: labelForPath(f.path),
           name: basename(f.path),
-          kind,
           // The frame count rides ROW 1's right-hand slot, beside the size. It CANNOT go in `sublabel`:
           // that is a LEGACY fallback the row only reads when `pathText` is absent (registry.ts's
           // `rowPath()` = `pathText ?? sublabel`), and this row always sets `pathText` — so the hint

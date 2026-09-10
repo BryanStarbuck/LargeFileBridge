@@ -12,8 +12,7 @@ import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { relativeTime, timeUntil } from "../../lib/format.js";
-import { DESCRIBE_KIND_FILTERS } from "../../lib/describe.js";
-import { OCR_KIND_FILTERS, withOcrReady } from "../../lib/ocr.js";
+import { withOcrReady } from "../../lib/ocr.js";
 import { withModelReady } from "../../lib/transcribe.js";
 import type { WarningDef } from "../../components/ui/warnings/registry.js";
 import { gitIgnoreCandidates, type MetricId } from "./metricWarnings.js";
@@ -583,15 +582,11 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
     popup: {
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
-        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
-      // ai_description.mdx §12.4.1 — the Videos/Images filter row, same as the unified batch popup: each row
-      // carries its media kind, and a kind filtered out of the list is dropped from the batch too.
-      kindFilters: DESCRIBE_KIND_FILTERS,
+        "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the File types filter to narrow the list, and uncheck any you want to skip.",
       targets: files.map((f) => ({
         id: absPath(detail, f),
         label: f.path,
         name: basename(f.path),
-        kind: mediaKindForName(f.path) ?? undefined,
         sizeText: formatBytes(f.sizeBytes),
         pathText: f.path,
       })),
@@ -646,15 +641,11 @@ export function buildOcrWarning(detail: RepoDetail, repoId: string): WarningDef 
     popup: {
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo whose on-screen text hasn't been read yet. It reads the words visible in the pixels — a screenshot's error message, a slide's figures, a sign — so you can search for them later.`,
       whyItMatters:
-        "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded, and no API key is needed. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the Videos / Images filter to narrow the list, and uncheck any you want to skip.",
-      // ocr.mdx §9.1 — the Videos/Images filter row. More load-bearing here than for describe: the two kinds
-      // differ in cost by two orders of magnitude, so "just the screenshots" must be one click.
-      kindFilters: OCR_KIND_FILTERS,
+        "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded, and no API key is needed. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the File types filter to narrow the list, and uncheck any you want to skip.",
       targets: files.map((f) => ({
         id: absPath(detail, f),
         label: f.path,
         name: basename(f.path),
-        kind: mediaKindForName(f.path) ?? undefined,
         sizeText: formatBytes(f.sizeBytes),
         pathText: f.path,
       })),

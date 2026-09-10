@@ -143,6 +143,16 @@ export async function foreignPinPathsUnder(rootPrefix: string): Promise<string[]
 }
 
 /**
+ * The discovered pins under one unit root, as FULL rows — the pin pass's identity-publication source
+ * (foreign_pin_discovery.mdx §6.1). {@link foreignPinPathsUnder} answers "which paths"; publishing needs the
+ * CID and the recorded size too, and asking {@link foreignPinByPath} once per path would be one round trip
+ * per discovered file on every pass. Same `starts_with` prefix match, for the same reasons.
+ */
+export async function foreignPinsUnder(rootPrefix: string): Promise<ForeignPinRow[]> {
+  return q<ForeignPinRow>(`${FOREIGN_PIN_SELECT} WHERE starts_with(f.abs_path, $1)`, [rootPrefix]);
+}
+
+/**
  * Reverse resolution by CANONICAL cid (foreign_pin_discovery.mdx §4) — `foreign_pin_canon`.
  *
  * BATCHED, because the caller (`ipfs-page.service.ts computeIpfsPage`) asks once per untracked pin inside a
