@@ -7,6 +7,22 @@
 // and cancellation come free from the reader + the caller's AbortSignal.
 import { getFreshToken, refreshTokenOnce } from "../api/authCore.js";
 import { clientLog } from "./clientLog.js";
+import { timeoutError } from "./deadline.js";
+
+/**
+ * How long the CONNECT phase — request out, response headers back — may take before we call the stream
+ * dead and let the caller's backoff reconnect. Only the headers are bounded: an NDJSON stream's BODY is
+ * long-lived by design (`/events/stream` deliberately holds open between heartbeats), so a deadline on the
+ * read loop would sever every healthy stream on a schedule. `liveStream.ts` already has the right guard
+ * for the body — a stall watchdog that aborts when no line has arrived for two heartbeats.
+ *
+ * WHY THE CONNECT PHASE NEEDS ONE AT ALL: `fetch` has no default timeout. A stream that goes out over a
+ * socket nobody answers (the backend replaced under a kept-alive connection, the laptop woken mid-flight)
+ * never resolves and never rejects, so `runLoop`'s `catch` never runs, the backoff never fires, and the
+ * subscription is silently dead for the life of the tab — no data, no error, no reconnect. See
+ * lib/deadline.ts for the same defect on the axios and auth paths.
+ */
+const CONNECT_DEADLINE_MS = 20_000;
 
 export interface NdjsonStreamOptions {
   signal?: AbortSignal;
@@ -22,6 +38,13 @@ export async function streamNdjson(
   pathAndQuery: string,
   { signal, onEvent }: NdjsonStreamOptions,
 ): Promise<void> {
+  // THE ABORT CHAIN. The fetch is driven by OUR controller, not the caller's, because the connect
+  // deadline has to be able to abort it. The caller's `signal` is relayed into that controller, and the
+  // relay STAYS ATTACHED for the life of the response — detaching it once headers arrived would quietly
+  // sever the caller's control over the BODY, which is the only thing that ends a long-lived stream
+  // (`liveStream.ts` aborts on teardown and on its stall watchdog). Only the TIMER is disarmed on headers.
+  const relays: Array<() => void> = [];
+
   // A missing/failed token is non-fatal (the request may still resolve, or the backend rejects it and
   // we surface that below) — but a swallowed token error is worth a breadcrumb, so log and continue.
   // getFreshToken (not raw getToken): a stream (re)connect after a laptop wakes from sleep is exactly
@@ -29,9 +52,42 @@ export async function streamNdjson(
   const open = async (token: string | null): Promise<Response> => {
     const headers: Record<string, string> = { Accept: "application/x-ndjson" };
     if (token) headers.Authorization = `Bearer ${token}`;
-    return fetch(`/api${pathAndQuery}`, { headers, credentials: "include", signal });
+    const connectAc = new AbortController();
+    if (signal) {
+      if (signal.aborted) connectAc.abort();
+      const relay = (): void => connectAc.abort();
+      signal.addEventListener("abort", relay);
+      relays.push(() => signal.removeEventListener("abort", relay));
+    }
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      connectAc.abort();
+    }, CONNECT_DEADLINE_MS);
+    try {
+      return await fetch(`/api${pathAndQuery}`, { headers, credentials: "include", signal: connectAc.signal });
+    } catch (e) {
+      // Our own deadline, not the caller's abort: report it as a transient timeout so the caller's backoff
+      // treats it like any other unreachable-backend failure rather than a silent cancellation.
+      if (timedOut && !signal?.aborted) throw timeoutError(`stream ${pathAndQuery}`, CONNECT_DEADLINE_MS);
+      throw e;
+    } finally {
+      clearTimeout(timer); // headers are in (or the attempt failed) — the deadline must never reach the body
+    }
   };
 
+  try {
+    await pump(open, onEvent);
+  } finally {
+    for (const off of relays) off();
+  }
+}
+
+/** The stream itself, once the connect policy above is in place. */
+async function pump(
+  open: (token: string | null) => Promise<Response>,
+  onEvent: (event: unknown) => void,
+): Promise<void> {
   let res = await open(
     await getFreshToken().catch((e) => {
       clientLog.warn("streamNdjson.getToken", e);

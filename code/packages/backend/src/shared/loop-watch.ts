@@ -65,6 +65,16 @@ let histogram: IntervalHistogram | null = null;
 let timer: NodeJS.Timeout | null = null;
 /** Is the window we are about to close the FIRST one of this process? See `closeWindow`. */
 let firstWindow = true;
+/** Wall clock at the last window close, so we can tell a STALL from a SUSPENSION. See `closeWindow`. */
+let windowOpenedAt = 0;
+
+/**
+ * How much longer than `WINDOW_MS` a window may actually take before we call the process SUSPENDED rather
+ * than blocked. A `setInterval` that should fire every 60 s and fires 16 minutes late did not run late
+ * because JavaScript was busy — nothing ran at all. Generous (2x the window) so an ordinary heavily-loaded
+ * window is never mislabelled; a sleep is off by minutes, never by seconds.
+ */
+const SUSPEND_SLACK = 2;
 
 /** Last window's readings, for the diagnostics surface. Null until the first window closes. */
 export interface LoopDelaySample {
@@ -86,9 +96,33 @@ function ms(ns: number): number {
   return Math.round((ns / NS_PER_MS) * 10) / 10;
 }
 
+/**
+ * A LAPTOP THAT SLEPT IS NOT A BLOCKED EVENT LOOP, and until this check the log could not tell them apart.
+ *
+ * `monitorEventLoopDelay` is a libuv-level histogram: it keeps accumulating while the PROCESS is frozen,
+ * so macOS suspending this app for a 15-minute lid-close lands in it as one enormous delay sample. That is
+ * how `error.err` came to hold lines that contradict themselves — "stopped for up to 935229.1ms in the
+ * last 60s" (935 s inside a 60 s window), and 352187ms in a window whose `BLOCKED BY` tally added up to
+ * 23 ms of actual work. Both were sleep. Printed as stalls they are worse than no line at all: they are
+ * the loudest ERROR-adjacent entries in the trail, they name a culprit section that did nothing wrong, and
+ * a reader following debugging.mdx Node 0 starts every hang investigation on them.
+ *
+ * The discriminator is WALL TIME, which the histogram cannot see. A window that was supposed to take 60 s
+ * and took 16 minutes had ~15 minutes in which no JavaScript ran; a window that took 60 s and holds a 20 s
+ * delay sample really did block for 20 s. So: measure how long the window actually lasted, and when that
+ * overruns, report a SUSPENSION — with the gap named — instead of a stall.
+ */
+export function suspensionGapMs(actualWindowMs: number): number {
+  const overrun = actualWindowMs - WINDOW_MS;
+  return overrun > WINDOW_MS * SUSPEND_SLACK ? Math.round(overrun) : 0;
+}
+
 function closeWindow(): void {
   const h = histogram;
   if (!h) return;
+  const now = Date.now();
+  const actualWindowMs = windowOpenedAt ? now - windowOpenedAt : WINDOW_MS;
+  windowOpenedAt = now;
   const sample: LoopDelaySample = {
     meanMs: ms(h.mean),
     p50Ms: ms(h.percentile(50)),
@@ -113,6 +147,26 @@ function closeWindow(): void {
   // the fly, the migrations run, and the first backbone pass reconciles state no memo has seen yet. Those
   // are real milliseconds and they are worth reporting — but a reader who treats a boot window like a
   // steady-state one goes looking for a bug in an app that is merely starting.
+  // THE PROCESS WAS FROZEN, NOT BLOCKED (see `suspensionGapMs`). Reported at INFO, because a lid-close is
+  // not a fault and the surrounding minutes of delay data are meaningless rather than alarming — and
+  // reported at all, because "the app was asleep" is the honest explanation for the page that was spinning
+  // when the user came back, and it is the one fact the trail was previously missing.
+  const suspended = suspensionGapMs(actualWindowMs);
+  if (suspended > 0) {
+    firstWindow = false;
+    log.info(
+      "loop-watch",
+      `PROCESS SUSPENDED for about ${Math.round(suspended / 1000)}s — this ${Math.round(WINDOW_MS / 1000)}s ` +
+        `window actually took ${Math.round(actualWindowMs / 1000)}s of wall time, so no JavaScript ran for ` +
+        `most of it (a lid-close/sleep, or the process stopped and continued). The delay histogram counted ` +
+        `that freeze as one ${sample.maxMs}ms sample; it is NOT a stall and no section caused it. Requests ` +
+        `and streams that were in flight across the gap are dead sockets — the client bounds those with its ` +
+        `own deadlines (frontend lib/deadline.ts).` +
+        (culprits ? `\n    Work measured in this window (before/after the gap): ${culprits}` : ""),
+    );
+    return;
+  }
+
   const boot = firstWindow ? ` [FIRST WINDOW AFTER BOOT — includes process start-up: module compilation under tsx, the migrations, and the first backbone pass. Compare against a later window before treating this as a fault.]` : "";
   firstWindow = false;
 
@@ -165,6 +219,7 @@ export function startLoopWatch(): void {
     `Event-loop watch armed: warn above ${WARN_MAX_MS}ms of blockage in any ` +
       `${Math.round(WINDOW_MS / 1000)}s window.`,
   );
+  windowOpenedAt = Date.now();
   timer = setInterval(() => {
     try {
       closeWindow();
@@ -177,6 +232,7 @@ export function startLoopWatch(): void {
 
 export function stopLoopWatch(): void {
   firstWindow = true;
+  windowOpenedAt = 0;
   if (timer) clearInterval(timer);
   timer = null;
   try {

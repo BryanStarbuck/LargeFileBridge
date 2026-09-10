@@ -18,7 +18,7 @@
 // `dbEnabled()` is the OTHER half: "should I even try?". It answers from the last observed health, so a call
 // site can pick the Postgres path or the YAML path without paying a round trip to find out.
 import type { Pool, PoolClient, QueryResultRow } from "pg";
-import { getPool, probeDatabase, resolveDbMode } from "./pool.js";
+import { getPool, probeDatabase, resolveDbMode, setPoolErrorObserver } from "./pool.js";
 import { log } from "../logging.js";
 
 /**
@@ -53,6 +53,15 @@ export function noteDbHealth(ok: boolean): void {
   health = ok ? "up" : "down";
   healthAt = Date.now();
 }
+
+/**
+ * The pool tells us the moment an idle connection dies — a Postgres restart, `just db-down`, a crash. That
+ * is the earliest possible evidence, and acting on it is what stops the next fan-out of call sites from
+ * each spending `connectionTimeoutMillis` (3 s) on a request path rediscovering it (pool.ts
+ * `setPoolErrorObserver`). `dbEnabled()` answers false from here on, and `HEALTH_RECHECK_MS` later a
+ * background probe picks the server back up when it returns.
+ */
+setPoolErrorObserver(() => noteDbHealth(false));
 
 /** Forget everything we believe about the server. Tests use this; nothing in the app should need it. */
 export function resetDbHealth(): void {

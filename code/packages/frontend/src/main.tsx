@@ -7,6 +7,7 @@ import { queryClient } from "./api/queryClient.js";
 import { router } from "./router.js";
 import { api } from "./api/client.js";
 import { authCore, startSessionKeepAlive } from "./api/authCore.js";
+import { AUTH_DEADLINE_MS, withDeadlineOr } from "./lib/deadline.js";
 import { SignInPage } from "./pages/sign-in/SignInPage.js";
 import { SsoCallbackPage } from "./pages/sign-in/SsoCallbackPage.js";
 import { SecuritySetupPage } from "./pages/security/SecuritySetupPage.js";
@@ -139,7 +140,15 @@ function Root() {
   const auth = useQuery({
     queryKey: ["authInit"],
     queryFn: async () => {
-      await authCore.load();
+      // DEADLINED, and it must RESOLVE rather than throw. `authCore.load()` retries `/api/v1/client` on
+      // its own backoff, but only when the fetch REJECTS; an unanswered socket rejects never, so before
+      // this deadline the query sat pending forever. That is the exact hole the gate below could not see:
+      // `retryingTransiently` needs `failureCount > 0`, a never-failing query has none, so
+      // `backendUnreachable` stayed false and the gate fell through to a bare, permanent "Loading…"
+      // (lib/deadline.ts has the fault-trail evidence). RESOLVING with the SDK's own non-"loaded" state
+      // instead of throwing is what puts us on the "Reconnecting…" branch AND arms the 3 s poll below —
+      // a throw with `retry: false` would leave `auth.data` undefined and land back on "Loading…".
+      await withDeadlineOr(authCore.load(), AUTH_DEADLINE_MS, undefined);
       return { state: authCore.loadState(), signedIn: authCore.getSnapshot().isSignedIn };
     },
     retry: false,

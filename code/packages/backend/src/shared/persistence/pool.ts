@@ -152,6 +152,31 @@ export function buildPoolConfig(url: string): PoolConfig {
  * Get (or lazily create) the pool. Returns null when `LFB_DB_MODE=off` or no URL is configured — callers
  * treat null as "use the YAML path", which is the documented `auto` behaviour.
  */
+/**
+ * WHO TO TELL WHEN THE SERVER GOES AWAY WHILE WE WERE NOT LOOKING.
+ *
+ * `pg` raises 'error' on the POOL the instant an idle connection dies — `terminating connection due to
+ * unexpected postmaster exit` when someone runs `just db-down`, restarts Postgres, or the server crashes.
+ * That event is the EARLIEST evidence the database is gone, and until now it was only logged.
+ *
+ * Why that mattered: `db.ts`'s health latch only learns of a failure when a QUERY fails, and a query fails
+ * by waiting out `connectionTimeoutMillis` (3 s). So between the postmaster dying and the first call
+ * noticing, every `dbEnabled()` still answered "up" and every call site that trusted it paid a full 3 s
+ * before falling back to YAML — concurrently, so a fan-out of them all paid it at once. `error.err`
+ * 2026-09-09 shows the shape: `storage.syncFence: timeout exceeded when trying to connect (+16 more
+ * suppressed in the last minute)`, seventeen call sites each blocking a request path for 3 s to discover a
+ * fact the pool already knew.
+ *
+ * A callback rather than a direct call because `db.ts` imports THIS file — importing it back would be a
+ * cycle. `db.ts` registers `noteDbHealth(false)` at module load.
+ */
+let onIdleError: ((e: Error) => void) | null = null;
+
+/** Register the health observer for pool-level errors. Called once, by `db.ts`. */
+export function setPoolErrorObserver(cb: (e: Error) => void): void {
+  onIdleError = cb;
+}
+
 export function getPool(): Pool | null {
   if (resolveDbMode() === "off") return null;
   if (pool) return pool;
@@ -164,6 +189,12 @@ export function getPool(): Pool | null {
   // read to the user as the app dying for no reason while they were not even using it.
   pool.on("error", (e) => {
     log.warn("db", `idle client error (pool stays up): ${(e as Error).message}`);
+    // Mark the server down NOW rather than letting the next 17 callers each discover it by timing out.
+    try {
+      onIdleError?.(e as Error);
+    } catch {
+      // An observer that throws must never be the reason an idle-client error becomes a crash.
+    }
   });
   log.info("db", `pool ready: ${safeUrl(url)} schema=${DB_SCHEMA} max=${POOL_MAX} reserve=${INTERACTIVE_RESERVE}`);
   return pool;

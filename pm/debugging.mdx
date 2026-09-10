@@ -132,23 +132,66 @@ Four kinds of line come back, and **which ones appear together is the diagnosis*
 | `BLOCKED BY: nothing measured` | The stall came from code no `blocking()` section wraps yet. | Wrap the suspect path (`shared/blocking.ts`). An honest "I don't know" is the signal to instrument, not to guess. |
 | `STILL OPEN after Nms: GET /api/…` | A request the browser is **watching a spinner for right now**. | If it names an endpoint, that endpoint is the hang. |
 | `PAGE STILL SPINNING … waiting on ["x","y"]` | The BROWSER's own report, with the query keys it is waiting for. | Cross-check against the server lines — see below. |
+| `PROCESS SUSPENDED for about Ns` | The **machine slept**. Not a stall, not a fault, and no section caused it. | Nothing to fix here — but every request and stream in flight across the gap is a dead socket. See the third branch below. |
 
-**The cross-check is the whole method.** A spinner has exactly two possible owners:
+**The cross-check is the whole method.** A spinner has exactly **three** possible owners, and the third is
+the one that reads as "no evidence at all":
 
 * the browser names a query **and** the server has a `SLOW:`/`STILL OPEN` line for the same endpoint at the
   same moment → **the server never answered**. A backend problem; read the `BLOCKED BY` line beside it.
-* the browser names a query and the server has **no** slow line → the answer arrived and the **tab could
-  not render it**. A frontend problem; read the `perf.longtask` lines (T1/T2 — a list rendering every row
-  instead of a window, state every row subscribes to).
+* the browser names a query, the server has **no** slow line, **and there are `perf.longtask` lines** → the
+  answer arrived and the **tab could not render it**. A frontend problem; read those longtask lines (T1/T2
+  — a list rendering every row instead of a window, state every row subscribes to).
+* the browser names a query and **NOTHING else in the trail mentions that moment** — no `SLOW`, no
+  `STILL OPEN`, no `longtask` → **the request never completed.** It went out and no answer, and no error,
+  ever came back. This is not an absence of evidence; the absence *is* the evidence, and it eliminates both
+  other owners at once. Go to **Node 0a**.
 
 A `(yielded)` suffix on a `BLOCKED BY` row means that work ran **cooperatively** — it accumulated real CPU
 but handed the loop back between slices, so it is not what froze anything. Rank it, do not chase it.
 
+**Sanity-check the numbers before you chase them.** A `stopped for up to Nms in the last 60s` where N is
+larger than the window is arithmetically impossible as a stall — it is a suspended process, and since
+2026-09-09 `loop-watch` says so itself rather than printing the contradiction (`suspensionGapMs()`, below).
+Lines like `935229.1ms in the last 60s` in older logs are lid-closes, not bugs; ignore them.
+
+#### Node 0a — the request never completed (an unbounded client wait)
+
+The 2026-09-09 case, and the shape to suspect whenever the server looks innocent: **something on the client
+awaited forever.** Neither `fetch` nor axios has a default timeout, so a socket that is never answered and
+never reset — the backend replaced under a kept-alive connection, a laptop woken mid-flight — produces a
+promise that neither resolves nor rejects. The spinner is permanent, and worse, every recovery the app has
+is armed by a FAILURE: `main.tsx`'s boot gate reads `failureCount > 0`, so a request that never fails never
+reaches "Reconnecting to Large File Bridge…" and never retries.
+
+Every client-side wait therefore carries a deadline. They are collected in one place:
+
+```
+~/repos/LargeFileBridge/code/packages/frontend/src/lib/deadline.ts
+```
+
+* `READ_DEADLINE_MS` (45 s) — applied to GET/HEAD/OPTIONS by the interceptor in
+  `code/packages/frontend/src/api/axios.ts`. **Commands are deliberately NOT bounded**: `/ipfs/rescan`
+  walks the pinset, `/ipfs/daemon` starts Kubo, and cutting one off abandons work still running.
+* `AUTH_DEADLINE_MS` (12 s) — applied in `code/packages/frontend/src/api/authCore.ts` to
+  `getFreshToken()`, `refreshTokenOnce()` and the `reloadSession` bridge. The tightest one, because
+  `getFreshToken()` is awaited **inside** the axios request interceptor: one wedged mint stalls every
+  request in the tab *before it is sent*, which is why the spinner names every query at once.
+* `CONNECT_DEADLINE_MS` (20 s) — `code/packages/frontend/src/lib/streamNdjson.ts`, on the **headers**
+  phase only. An NDJSON body is long-lived by design; the body's guard is `liveStream.ts`'s stall watchdog.
+
+The deadline error is deliberately axios-shaped (`ECONNABORTED`), so `lib/transientError.ts` classifies it
+as "the backend isn't there" and the existing retry/Reconnecting path arms itself with no second code path.
+**If you add a new client-side wait, give it a deadline from this module** — an unbounded one is a hang
+waiting for the right afternoon.
+
 The three watches, and the browser one, are in code:
-`~/repos/LargeFileBridge/code/packages/backend/src/shared/loop-watch.ts` — `startLoopWatch()` / `closeWindow()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/loop-watch.ts` — `startLoopWatch()` / `closeWindow()` / `suspensionGapMs()`;
 `~/repos/LargeFileBridge/code/packages/backend/src/shared/blocking.ts` — `blocking()` / `takeBlockingTally()`;
 `~/repos/LargeFileBridge/code/packages/backend/src/shared/request-watch.ts` — `requestWatch()` / `startRequestWatch()`;
-`~/repos/LargeFileBridge/code/packages/frontend/src/lib/perfWatch.ts` — `startPerfWatch()`
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/perfWatch.ts` — `startPerfWatch()`;
+and the client-side deadlines that keep a spinner from becoming permanent:
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/deadline.ts` — `withDeadline()` / `withDeadlineOr()` / `timeoutError()`
 
 ### Node 1 — Is the backend actually alive?
 

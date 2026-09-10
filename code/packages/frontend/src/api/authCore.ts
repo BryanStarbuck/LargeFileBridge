@@ -15,6 +15,7 @@ import {
   safeToAttachStaleToken,
 } from "./tokenFreshness.js";
 import { clientLog } from "../lib/clientLog.js";
+import { AUTH_DEADLINE_MS, withDeadline, withDeadlineOr } from "../lib/deadline.js";
 
 // Coarse pre-filter only (mirrors the backend default); the authoritative allow-list gate is
 // server-side (identify.ts). Used here just to label the Google connection for the sign-in redirect.
@@ -66,11 +67,17 @@ function readJwtExp(jwt: string): number | null {
 // all. Funnelling every forced refresh through one shared promise gives exactly ONE mint per storm.
 let refreshInFlight: Promise<string | null> | null = null;
 
-/** Force one fresh mint, shared by all concurrent callers. Never throws — resolves null on failure. */
+/** Force one fresh mint, shared by all concurrent callers. Never throws — resolves null on failure.
+ *
+ *  DEADLINED. `authCore.refresh()` POSTs `/api/v1/client/sessions/:id/tokens` with a bare `fetch` and no
+ *  `AbortSignal` (OpenAuthFederated is a sister library, read-only to us), so a socket that is never
+ *  answered leaves this promise pending forever — and because it is SINGLE-FLIGHT, every later caller
+ *  joins the same wedged promise rather than starting a fresh one. That is the shape that took the whole
+ *  tab down: see lib/deadline.ts. Blowing the deadline resolves null, which every caller already handles
+ *  as "mint failed" — and clears `refreshInFlight`, so the NEXT caller gets a genuinely new attempt. */
 export function refreshTokenOnce(): Promise<string | null> {
   if (!refreshInFlight) {
-    refreshInFlight = authCore
-      .refresh()
+    refreshInFlight = withDeadlineOr(authCore.refresh(), AUTH_DEADLINE_MS, null)
       .catch((e) => {
         clientLog.warn("authCore.refreshTokenOnce", e);
         return null;
@@ -92,7 +99,13 @@ export function refreshTokenOnce(): Promise<string | null> {
  * that can lapse in flight.
  */
 export async function getFreshToken(): Promise<string | null> {
-  const token = await authCore.getToken();
+  // DEADLINED, and this one matters most: it is awaited INSIDE the axios request interceptor, so a wedged
+  // mint here stalls every request in the tab before any of them is even sent — which is exactly why the
+  // spinner named `authInit`, `me`, `securityConfig`, `progress`, `ipfsLiveness` and `repo` all at once
+  // (lib/deadline.ts). Falling back to "no Bearer" is safe and self-healing: the request goes out
+  // unauthenticated, the backend answers 401, and api/axios.ts's single-flight 401 backstop recovers it in
+  // one round trip. A null here costs one extra round trip; a hang here costs the whole page.
+  const token = await withDeadlineOr(authCore.getToken(), AUTH_DEADLINE_MS, null);
   if (!token) return null;
   const exp = readJwtExp(token);
   const now = Math.floor(Date.now() / 1000);
@@ -109,7 +122,11 @@ export async function getFreshToken(): Promise<string | null> {
 registerAuthBridge({
   getToken: () => getFreshToken(),
   refreshToken: () => refreshTokenOnce(),
-  reloadSession: () => authCore.load(),
+  // Deadlined for the same reason as the mint above: `load()` retries `/api/v1/client` on a backoff, but
+  // only when the fetch REJECTS — an unanswered socket rejects never, so the backoff never fires and the
+  // deeper 401 recovery hangs instead of failing. `recoverSession()` already treats a thrown reload as
+  // non-fatal and asks `isSignedIn()` for the authoritative answer.
+  reloadSession: () => withDeadline(authCore.load(), AUTH_DEADLINE_MS, "session reload").then(() => undefined),
   isSignedIn: () => authCore.getSnapshot().isSignedIn,
 });
 

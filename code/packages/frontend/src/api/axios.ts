@@ -3,8 +3,39 @@
 import axios from "axios";
 import { toast } from "sonner";
 import { queryClient } from "./queryClient.js";
+import { READ_DEADLINE_MS } from "../lib/deadline.js";
 
+/**
+ * EVERY READ CARRIES A DEADLINE. Axios's default `timeout` is 0 — wait forever — and that default is what
+ * turned an unanswered socket into a permanent spinner: `error.err` 2026-09-09 shows `PAGE STILL SPINNING
+ * after 80264ms` on `/repos/…` with NO matching `[request] STILL OPEN`, `[request] SLOW` or
+ * `[client:perf.longtask]` line, i.e. neither the server nor the tab's main thread was busy — the request
+ * had simply gone out and never come back (lib/deadline.ts has the full write-up).
+ *
+ * WHY THE DEADLINE IS THE FIX AND NOT JUST A BANDAGE: the boot gate in main.tsx rides out an absent
+ * backend by reading `q.failureCount > 0 && isTransientNetworkError(q.failureReason)`. A request that
+ * never fails has `failureCount === 0`, so the gate never reached "Reconnecting…" and never retried. A
+ * timeout raises `ECONNABORTED`, which `lib/transientError.ts` already classifies as transient, so the
+ * existing recovery arms itself with no second code path.
+ *
+ * READS ONLY. A GET is a bounded, idempotent read of state that exists; a POST/PUT/DELETE is a COMMAND
+ * that may legitimately run for minutes (`/ipfs/rescan` walks the whole pinset, `/repos/:id/pin` pins a
+ * repo, `/ipfs/daemon` starts Kubo), and cutting one off at 45 s would abandon work that is still running
+ * server-side — the opposite of a fix. Commands keep axios's no-deadline behaviour; the interceptor below
+ * applies the deadline to safe methods alone.
+ */
 export const http = axios.create({ baseURL: "/api", withCredentials: true });
+
+/** HTTP methods that are reads: safe, idempotent, and expected to answer promptly. */
+const READ_METHODS = new Set(["get", "head", "options"]);
+
+http.interceptors.request.use((config) => {
+  // An explicit per-call `timeout` always wins — a caller that knows its read is slow can say so.
+  if (config.timeout === undefined || config.timeout === 0) {
+    if (READ_METHODS.has((config.method ?? "get").toLowerCase())) config.timeout = READ_DEADLINE_MS;
+  }
+  return config;
+});
 
 /**
  * What the auth layer lends the transport (wired in api/authCore.ts):
