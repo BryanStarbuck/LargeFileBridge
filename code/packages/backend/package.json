@@ -9,11 +9,11 @@
   "//node_options": [
     "The heap ceiling is a DECISION, never V8's accidental default (memory.mdx P-31/P-32 + invariant 4).",
     "The flags, and the whole derivation of the 6144MB number, now live in ../../../scripts/node-heap-run.mjs",
-    "— read the header there before changing either.",
+    "\u2014 read the header there before changing either.",
     "WHY A WRAPPER SCRIPT: inline `VAR=... cmd` is POSIX-sh syntax. cmd.exe and PowerShell read it as a",
     "program name, so `pnpm dev` failed outright on Windows and the backend never started. The wrapper sets",
-    "the same NODE_OPTIONS the same way — ours first, the caller's appended after, so a user-supplied",
-    "--max-old-space-size still wins — and works on all three platforms."
+    "the same NODE_OPTIONS the same way \u2014 ours first, the caller's appended after, so a user-supplied",
+    "--max-old-space-size still wins \u2014 and works on all three platforms."
   ],
   "scripts": {
     "dev": "node ../../../scripts/node-heap-run.mjs tsx watch src/main.ts",
@@ -53,5 +53,8 @@
     "tsx": "^4.23.1",
     "typescript": "^7.0.2",
     "vitest": "^4.1.10"
+  },
+  "optionalDependencies": {
+    "sherpa-onnx-node": "^1.13.5"
   }
 }
