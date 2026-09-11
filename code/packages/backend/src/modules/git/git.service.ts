@@ -39,6 +39,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { healWindowsPath } from "../../shared/rel-path.js";
+import { repairUnionDamagedYaml } from "../storage/union-damage.js";
 import { log } from "../../shared/logging.js";
 // The heartbeat floor is shared with the WRITER (devices.service.ts). One fact, one place — see the module.
 import { HEARTBEAT_MAX_AGE_MS, heartbeatIsStale } from "../../shared/heartbeat.js";
@@ -212,7 +213,18 @@ export function unionConflictedText(rel: string, raw: string): string {
       kept.push(line);
     }
   }
-  return kept.join("\n");
+  const unioned = kept.join("\n");
+  if (!structured) return unioned;
+  // A LINE UNION OF A NESTED SEQUENCE DOES NOT PARSE, so keeping every line is only half the job.
+  //
+  // The comment above used to end at "a superset is always safe here and a lost line never is", and the
+  // superset part is right. What it missed is that the seam between the two sides falls wherever git put
+  // it, and an item whose `- ` leader lands on the far side of that seam is absorbed into the item above —
+  // leaving two `path:` keys in one mapping and a document no reader can open. Observed live as a 3.4 MB
+  // `decisions.yaml` that had been unparseable for a day, with that repo's decisions silently not
+  // travelling (union-damage.ts has the full trail). Restoring the dissolved leaders keeps the superset
+  // AND leaves something the folders can actually fold.
+  return repairUnionDamagedYaml(unioned) ?? unioned;
 }
 
 export function resolutionFor(p: string): ConflictResolution {

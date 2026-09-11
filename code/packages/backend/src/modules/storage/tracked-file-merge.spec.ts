@@ -239,7 +239,7 @@ describe("mirror + reconcile — neither leg may stamp over the other side's eve
   let mirrorDir: string;
   let localDir: string;
   let prevStateDir: string | undefined;
-  let mirrorToSyncRepo: (root: string) => boolean;
+  let mirrorToSyncRepoNow: (root: string) => boolean;
   let reconcileFromSyncRepo: (root: string) => boolean;
 
   const localSidecar = (): string => path.join(localDir, "files", `${CLIP}.yaml`);
@@ -264,7 +264,7 @@ describe("mirror + reconcile — neither leg may stamp over the other side's eve
 
     const mod = await import("./tracking-sync.service.js");
     const { repoStateDir, resolveStateSyncRepo } = await import("./tracking-root.service.js");
-    mirrorToSyncRepo = mod.mirrorToSyncRepo;
+    mirrorToSyncRepoNow = mod.mirrorToSyncRepoNow;
     reconcileFromSyncRepo = mod.reconcileFromSyncRepo;
     mod.setSyncRepoMarker(repoRoot, syncRepo, REMOTE);
     mirrorDir = resolveStateSyncRepo(repoRoot)!;
@@ -283,7 +283,7 @@ describe("mirror + reconcile — neither leg may stamp over the other side's eve
     write(mirrorSidecar(), sidecar([ev("2026-08-05T09:00:00.000Z", "observed", TOWER)]));
     write(localSidecar(), sidecar([ev("2026-08-05T10:00:00.000Z", "pull", LAPTOP)]));
 
-    expect(mirrorToSyncRepo(repoRoot)).toBe(true);
+    expect(mirrorToSyncRepoNow(repoRoot)).toBe(true);
     expect(eventsIn(mirrorSidecar())).toEqual([`observed@${TOWER}`, `pull@${LAPTOP}`]);
   });
 

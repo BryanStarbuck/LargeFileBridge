@@ -113,6 +113,30 @@ function writeManifestFile(file: string, manifest: Manifest): void {
     /* best effort */
   }
   const body = serializeManifest(manifest);
+  // AN IDENTICAL MANIFEST MUST NOT BE REWRITTEN (performance.mdx P-55).
+  //
+  // The write below is atomic — write a temp file, fsync, rename — which is right, and which also means it
+  // hands the destination a NEW INODE AND A NEW mtime every single time. That is the identity every memo
+  // in tracking-sync.service.ts is keyed on (`sameBytes`'s equality memo, `pairSettled`'s merge memo), so
+  // an unconditional rewrite of an unchanged manifest silently invalidates them all.
+  //
+  // Measured on the reference machine: `charlie-kirk`'s tracking manifest is 1.07 MB, the pin pass rewrote
+  // it byte-identically on every pass, and the reconcile that followed re-parsed BOTH 1 MB copies because
+  // the memo it would have hit had just been destroyed. That one `renameSync` was the whole of the
+  // remaining `EVENT LOOP BLOCKED … up to 1353ms` — a multi-megabyte `YAML.parse` is the one atom no yield
+  // point can split, so the only way to not pay it is to not need it.
+  //
+  // Exactly the same defect as P-45's `projectRepoStorageToMirror`: "the bytes came out identical either
+  // way (so git never committed anything and nothing looked wrong), but the mtime moved every time".
+  //
+  // The read costs one pass over a file we were about to overwrite anyway, and only when the content is
+  // genuinely new do we pay both. `serializeManifest` is deterministic (stable key order, no volatile
+  // fields), which is what makes the comparison meaningful rather than accidental.
+  try {
+    if (fs.readFileSync(file, "utf8") === body) return;
+  } catch {
+    /* absent or unreadable — fall through and write it */
+  }
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
     const fd = fs.openSync(tmp, "w");

@@ -150,8 +150,38 @@ the one that reads as "no evidence at all":
 A `(yielded)` suffix on a `BLOCKED BY` row means that work ran **cooperatively** — it accumulated real CPU
 but handed the loop back between slices, so it is not what froze anything. Rank it, do not chase it.
 
-**Sanity-check the numbers before you chase them.** A `stopped for up to Nms in the last 60s` where N is
-larger than the window is arithmetically impossible as a stall — it is a suspended process, and since
+**Node 0b — the section is real, the number is huge, and the repo it names is innocent.** Before you chase
+the named section, sanity-check the magnitude. A `blocking` WARN above a minute used to be a **suspended
+process** billed to whatever happened to be on the stack: `storage.mirror held the event loop for 967706ms`
+is sixteen minutes, and no pass in this product costs that. Since 2026-09-11 `blocking` says
+`PROCESS SUSPENDED for about Ns` instead (it compares wall time against `process.cpuUsage()` — a frozen
+process burns no CPU), and counts it against nobody. **Older generations of `error.err` still hold the
+impossible ones**, so a 900-second line in an archived log is not a lead.
+
+**Node 0c — the same section, over and over, on the same repo, forever.** This is the shape that produced
+the 2026-09-11 report ("it's just not loading ever"), and it is a **loop**, not a slow function. Look for
+these three lines *together*:
+
+```bash
+grep -aE "could not be parsed|held the event loop|noteArtifactWritten" ~/T/_large_files_bridge/error.err | tail -20
+```
+
+* An **ERROR that repeats every pass** (`mirrorToSyncRepo … could not be parsed`) means a shared document
+  is unreadable, the pass is refusing to write it, and — because a refusal deliberately is not memoized
+  (`forgetPair`) — **the full cost is re-paid on every pass, forever**. A repeating ERROR is therefore also
+  a performance bug, not only a data one. Check it can be healed before assuming it needs a human
+  (`union-damage.ts`).
+* A pass that **announces a write it did not make** arms a git cycle, and the merge in that cycle rewrites
+  the files whose `(ino, size, mtimeNs)` every memo in `tracking-sync.service.ts` is keyed on. The next
+  pass then finds every memo cold and re-derives everything. If `storage.mirror` is running dozens of times
+  a minute on a machine where nothing changed, this is why ([performance.mdx](./performance.mdx) P-51).
+* **RSS climbing into the gigabytes with a small `heapUsed`** is usually the same loop seen from the other
+  side: re-reading and re-merging multi-megabyte documents is Buffer churn, and the OS keeps the pages.
+  Fix the churn before hunting a leak.
+
+**Sanity-check the numbers before you chase them** — the `loop-watch` half of Node 0b above. A
+`stopped for up to Nms in the last 60s` where N is larger than the window is arithmetically impossible as
+a stall — it is a suspended process, and since
 2026-09-09 `loop-watch` says so itself rather than printing the contradiction (`suspensionGapMs()`, below).
 Lines like `935229.1ms in the last 60s` in older logs are lid-closes, not bugs; ignore them.
 

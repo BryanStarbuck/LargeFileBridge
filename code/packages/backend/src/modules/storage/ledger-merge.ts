@@ -13,8 +13,10 @@
 // An event log unions by EVENT IDENTITY: an event present on either side survives, exact duplicates
 // collapse, and `foldLedger` (latest decided_at per path) resolves any conflict deterministically on read.
 import YAML from "yaml";
-import { DecisionsLedgerSchema, type DecisionEvent } from "@lfb/shared";
+import { parseYamlHealingUnionDamage } from "./union-damage.js";
+import { DecisionEventSchema, type DecisionEvent } from "@lfb/shared";
 import { healWindowsPath } from "../../shared/rel-path.js";
+import { log } from "../../shared/logging.js";
 
 /** The full identity of one event — every recorded field. Two events are "the same" only when byte-equal
  *  on all of them; anything less risks collapsing a genuine tombstone/decide pair recorded in the same
@@ -98,18 +100,68 @@ export function compactLedger(events: DecisionEvent[]): DecisionEvent[] {
   return kept;
 }
 
-/** Read + parse a ledger file best-effort: missing/corrupt/schema-invalid → `[]`, and a file carrying git
+/** Read + parse a ledger file best-effort: missing/unparseable → `[]`, and a file carrying git
  *  merge-conflict markers → `[]` (never parse a half-merged file as truth — decisions.mdx §5). `[]` makes
- *  the union a no-op for that side, so one bad copy can never erase the other side's events. */
-export function parseLedgerBestEffort(raw: string | null): DecisionEvent[] {
+ *  the union a no-op for that side, so one bad copy can never erase the other side's events.
+ *
+ *  A SCHEMA-INVALID EVENT no longer voids the file: line-union damage is healed first and the remaining
+ *  events are validated one at a time, so one bad record costs one record (`eventsOfLedgerDoc`). `file` is
+ *  used only to name the document in the recovery WARN. */
+export function parseLedgerBestEffort(raw: string | null, file?: string): DecisionEvent[] {
   if (!raw) return [];
   if (/^(<{7}|={7}|>{7})(\s|$)/m.test(raw)) return [];
-  try {
-    const parsed = DecisionsLedgerSchema.safeParse(YAML.parse(raw) ?? {});
-    return parsed.success ? parsed.data.events : [];
-  } catch {
-    return [];
+  // A ledger that was UNION-MERGED by git (`decisions.yaml merge=union`) can arrive with an item's `- `
+  // leader dissolved, which makes the whole 3 MB document unparseable over one line. Healing it here is
+  // what turns 12,511 recovered events into a union instead of a `[]` that quietly discards them all;
+  // union-damage.ts explains the damage and why the repair is exactly its inverse.
+  const { doc, repaired } = parseYamlHealingUnionDamage(raw);
+  if (doc === null) return [];
+  const { events, dropped } = eventsOfLedgerDoc(doc);
+  if (repaired !== null || dropped > 0) {
+    // Say it once per read, with the numbers, because this is the line that tells the user their ledger
+    // was damaged in transit AND that we recovered it. Silence here would make the heal invisible and the
+    // one lost record look like a decision they never made.
+    log.warn(
+      "storage",
+      `${file ?? "a decision ledger"}: ${repaired !== null ? "repaired line-union damage and " : ""}` +
+        `recovered ${events.length} decision event(s)` +
+        `${dropped > 0 ? `, dropping ${dropped} record(s) the union left incomplete` : ""}. ` +
+        `The repaired document is written back on this pass. See union-damage.ts.`,
+    );
   }
+  return events;
+}
+
+/**
+ * Validate a parsed ledger document EVENT BY EVENT.
+ *
+ * ONE BAD RECORD MUST NEVER DISCARD THE REST, and `DecisionsLedgerSchema.safeParse` cannot give us that:
+ * `events: z.array(DecisionEventSchema)` fails the WHOLE array if a single element is wrong, so the
+ * document collapses to `[]` and — because `[]` is also what a valid empty ledger looks like — 12,510
+ * perfectly good decisions are read as "this side has nothing to contribute" and silently dropped out of
+ * the union.
+ *
+ * That is not theoretical. A ledger healed from line-union damage (union-damage.ts) is valid YAML whose
+ * ONE re-split item is missing whichever fields ended up on the far side of git's seam — on the live file
+ * the fused entry had lost its `sid`, which the schema requires. So the heal made the document parse and
+ * the all-or-nothing validation threw the whole thing away regardless: the mirror kept refusing that repo
+ * every pass, its decisions kept not travelling, and the 3.4 MB re-parse kept running on the event loop.
+ *
+ * `dropped` is returned rather than logged here because this is a pure function called from both legs of
+ * the mirror; the caller that knows WHICH file this was does the reporting.
+ */
+export function eventsOfLedgerDoc(doc: unknown): { events: DecisionEvent[]; dropped: number; shapeOk: boolean } {
+  const asDoc = (doc ?? {}) as { events?: unknown };
+  if (asDoc.events !== undefined && !Array.isArray(asDoc.events)) return { events: [], dropped: 0, shapeOk: false };
+  const raw = Array.isArray(asDoc.events) ? asDoc.events : [];
+  const events: DecisionEvent[] = [];
+  let dropped = 0;
+  for (const e of raw) {
+    const one = DecisionEventSchema.safeParse(e);
+    if (one.success) events.push(one.data);
+    else dropped += 1;
+  }
+  return { events, dropped, shapeOk: true };
 }
 
 /**
@@ -125,11 +177,18 @@ export function parseLedgerBestEffort(raw: string | null): DecisionEvent[] {
 export function ledgerIsUnreadable(raw: string | null): boolean {
   if (!raw?.trim()) return false;
   if (/^(<{7}|={7}|>{7})(\s|$)/m.test(raw)) return true; // conflict markers — a half-merged file
-  try {
-    return !DecisionsLedgerSchema.safeParse(YAML.parse(raw) ?? {}).success;
-  } catch {
-    return true; // not YAML at all
-  }
+  // "Unreadable" must mean "we cannot recover this", not "a strict parse threw": union damage is both
+  // recoverable and, on a fleet whose `.gitattributes` union-merges this file, routine. Answering `true`
+  // for a healable document is what made the mirror refuse the same repo every pass for a day, stopping
+  // its decisions from travelling at all (union-damage.ts).
+  const { doc } = parseYamlHealingUnionDamage(raw);
+  if (doc === null) return true;
+  // READABLE means "we can recover this document's events", not "every event in it is perfect". A ledger
+  // with one malformed record among 12,511 is a ledger we can merge; refusing it protects nothing and
+  // costs the user that repo's whole decision history (see `eventsOfLedgerDoc`). Only a document whose
+  // SHAPE is wrong — `events` present but not a list, or text we could not parse at all — is unreadable.
+  const { shapeOk } = eventsOfLedgerDoc(doc);
+  return !shapeOk;
 }
 
 /** The ONE serialization of this document, shared by `writeLedger`, the mirror and the reconcile:

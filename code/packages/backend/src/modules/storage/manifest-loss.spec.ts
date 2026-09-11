@@ -123,7 +123,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
   let repoRoot: string;
   let syncRepo: string;
   let mirrorDir: string;
-  let mirrorToSyncRepo: (repoRoot: string) => boolean;
+  let mirrorToSyncRepoNow: (repoRoot: string) => boolean;
   let computerLabel: () => string;
   let localManifestPath: string;
   let prevStateDir: string | undefined;
@@ -149,7 +149,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
 
     const mod = await import("./tracking-sync.service.js");
     const { repoStateDir, resolveStateSyncRepo } = await import("./tracking-root.service.js");
-    mirrorToSyncRepo = mod.mirrorToSyncRepo;
+    mirrorToSyncRepoNow = mod.mirrorToSyncRepoNow;
     computerLabel = (await import("../store-model/config.service.js")).computerLabel;
     mod.setSyncRepoMarker(repoRoot, syncRepo, REMOTE);
     mirrorDir = resolveStateSyncRepo(repoRoot)!;
@@ -182,7 +182,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
       "utf8",
     );
 
-    expect(mirrorToSyncRepo(repoRoot)).toBe(true);
+    expect(mirrorToSyncRepoNow(repoRoot)).toBe(true);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
     expect(after.files.map((f) => f.path).sort()).toEqual([VIDEO, "jfk/mine.mp4"].sort());
@@ -204,7 +204,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
       "utf8",
     );
 
-    mirrorToSyncRepo(repoRoot);
+    mirrorToSyncRepoNow(repoRoot);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
     expect(after.files.find((f) => f.path === shared)!.pinned_by).toEqual([peer]);
@@ -228,7 +228,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
       "utf8",
     );
 
-    mirrorToSyncRepo(repoRoot);
+    mirrorToSyncRepoNow(repoRoot);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
     expect(after.files.find((f) => f.path === shared)!.pinned_by).toEqual([]);
@@ -250,7 +250,7 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
       "utf8",
     );
 
-    mirrorToSyncRepo(repoRoot);
+    mirrorToSyncRepoNow(repoRoot);
 
     const after = YAML.parse(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")) as Manifest;
     expect(after.files.find((f) => f.path === shared)!.pinned_by.sort()).toEqual([peer, computerLabel()].sort());
@@ -265,14 +265,14 @@ describe("mirrorToSyncRepo — the mirror is MERGED, never stamped over (§8.4.3
     fs.writeFileSync(path.join(mirrorDir, "manifest.yaml"), conflicted, "utf8");
     fs.writeFileSync(localManifestPath, serializeManifest(manifest([file({ pinned_by: [] })])), "utf8");
 
-    mirrorToSyncRepo(repoRoot);
+    mirrorToSyncRepoNow(repoRoot);
 
     expect(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")).toBe(conflicted);
   });
 
   it("writes byte-stable bytes — a mirror of unchanged state produces no diff to commit", () => {
     const before = fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8");
-    mirrorToSyncRepo(repoRoot);
+    mirrorToSyncRepoNow(repoRoot);
     expect(fs.readFileSync(path.join(mirrorDir, "manifest.yaml"), "utf8")).toBe(before);
   });
 });

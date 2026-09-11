@@ -1875,3 +1875,309 @@ the review overturned four of its nine area recommendations:
   predate this pass and are untouched by it.
 * The reconcile still runs 2–4× per repo per pass. Coalescing per (repo, pass) remains
   the obvious next win.
+
+---
+
+## Tenth pass (P-51…P-55) — the churn engine behind "it never loads" · T3/T6
+
+**The report:** *"I have a browser trying to load Large File Bridge on localhost. It's just not
+loading ever."*
+
+The fault trail answered in one grep (debugging.mdx **Node 0**) and the answer was a **loop**,
+not a slow function. Four facts from one day of `error.err` on the reference machine:
+
+| Signal | Count / worst |
+|---|---|
+| `[blocking] storage.mirror held the event loop for …` | **131 WARNs**, 0.8 s typical, **79,087 ms** worst |
+| `[loop-watch] EVENT LOOP BLOCKED` | 52 windows |
+| `[storage] mirrorToSyncRepo … could not be parsed` | **31 ERRORs**, same repo every pass, all day |
+| `[client:perf.route] PAGE STILL SPINNING … ["authInit"], ["securityConfig"]` | the user's blank screen |
+
+The cross-check is branch 1 of Node 0's three: the browser named `authInit`/`securityConfig`
+and the backend logged `STILL OPEN` / `SLOW` on `POST /api/v1/client/sessions/…/tokens` and
+`GET /api/v1/client` for the same windows — **12 s, 42 s, 496 s**. Those two endpoints sit in
+front of every other request in the tab (`getFreshToken()` is awaited inside the axios request
+interceptor), so a backend that cannot answer them shows as a spinner naming *every* query at
+once. The deadlines added in the eighth pass did their job — the tab degrades to
+"Reconnecting…" instead of hanging forever — but a 79-second stall is still 79 seconds of
+nothing on screen. **The fix had to be on the server, in the walk that held the thread.**
+
+### 🔴 P-51 — The mirror announced a write on every pass, and the git cycle it armed invalidated the memos that made the next pass cheap · T3
+
+**This is the loop, and it is the whole pass.** `mirrorGen` ended with two lines:
+
+```ts
+projectRepoStorageToMirror(…);
+noteArtifactWritten(dst, "tracking-state");   // unconditional
+return true;                                  // the tree walk's own answer was discarded
+```
+
+`noteArtifactWritten` arms the owning SDL's git backbone on a 20 s debounce. So a mirror pass
+that changed **nothing** still scheduled a fetch + merge for that storage. The merge rewrote
+the mirror's own files — *same bytes, new inode, new mtime* — and inode + size + mtimeNs is
+precisely the identity every memo in this module is keyed on (`sameBytes`'s equality memo,
+`pairSettled`'s merge memo, P-45). The next pass therefore found every memo cold, re-read and
+re-merged all 3,649 sidecars of the largest repo, announced again, and the loop closed.
+
+Measured: `storage.mirror` **104 calls a minute**, while nothing in the product had changed.
+
+- **Fix.** Every leg already answered the precise question "did the destination's bytes move" —
+  `copyTreeGen` returns `changed`, `syncLedgerInto` / `mergeManifestInto` / `mergePolicyInto`
+  all return it, and `writeIfDifferent` is what makes those answers trustworthy. The pass now
+  carries the OR of them, announces **only** when it is true, and returns it.
+  `projectRepoStorageToMirror` was `void` and now reports too.
+- **Why P-45's "a settled pass does no work" test did not catch it.** It asserts the memos hold
+  across two passes *in one process with no git cycle between them*. The invalidation came from
+  outside that frame — from the cycle the pass itself asked for.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` —
+`mirrorGen()` (the `if (changed) noteArtifactWritten(…)` gate), `projectRepoStorageToMirror()`
+
+### 🔴 P-52 — `merge=union` on a nested YAML sequence produces a file that cannot be parsed at all · T3
+
+The 31 ERRORs were one file: `act3_large_files_bridge/repos/charlie-kirk-83e62afc2c80/decisions.yaml`,
+3.4 MB, 100,588 lines, unparseable since the previous afternoon —
+
+```
+Map keys must be unique at line 100581, column 5:
+    path: videos/video/https%3A%2F%2Fx.com%2F…mp4
+```
+
+`.gitattributes` carries `decisions.yaml merge=union` (`UNION_MERGE_PATHS`), and LFB's own
+conflict fallback did the same by hand for `.yaml` (`unionConflictedText`). Both reasoned that
+these are append-only lists, so keeping every line from both sides is a safe superset and *"the
+readers fold duplicate entries anyway"*. **That is true of a flat log and false of a nested
+block sequence.** A union interleaves the two sides' lines, and an item whose `- ` leader lands
+on the far side of git's seam is absorbed into the item above it — two `path:` keys in one
+mapping, and no reader ever gets to fold anything.
+
+Three consequences, each worse than the last:
+
+1. `mirrorToSyncRepo` **refuses** to overwrite a mirror document it could not read (rightly).
+   That repo's decisions **stopped travelling between the user's computers** — the entire
+   promise of the product — and nothing in the UI said so.
+2. The refusal calls `forgetPair` *deliberately*, so the next pass re-tries it. Against a file
+   that can never parse, "re-try every pass" means re-reading and re-merging that repo's 3,649
+   sidecars **forever, on the event loop**. It is the single largest contributor to P-51's WARNs.
+3. One ERROR per pass for a day, which is how a fault trail stops being read.
+
+- **Fix (heal).** `repairUnionDamagedYaml` is the exact inverse of the damage: inside a
+  block-sequence item, a key already seen in this item cannot belong to it, so it starts a new
+  item. No schema, no knowledge of which document this is, and it cannot invent or drop a field
+  — every line is kept and only `- ` leaders are restored. Verified on the live 3.4 MB file:
+  **one leader restored, 12,511 events recovered, content identical character for character.**
+- **Fix (stop making it).** `unionConflictedText` now repairs its own output for `.yaml`, so
+  LFB's conflict fallback can no longer produce the shape it was creating.
+- **Fix (one bad record must not discard the rest).** `DecisionsLedgerSchema.safeParse` fails
+  the **whole** `events` array on one bad element, and `[]` is indistinguishable from a valid
+  empty ledger — so 12,510 good decisions read as "this side has nothing to contribute" and
+  dropped out of the union. That is what happened here even *after* the heal: the re-split item
+  had lost its `sid`, which the schema requires. `eventsOfLedgerDoc` validates event by event;
+  `ledgerIsUnreadable` now means "we cannot recover this document", not "a strict parse threw".
+- **Still open:** git's own union driver still runs on the other five computers, so damage keeps
+  arriving until they are upgraded — which is exactly why the heal, not only the prevention, was
+  required. Retiring `merge=union` for the structured documents needs a two-phase rollout (an
+  older build re-adds the attribute line, so removing it unilaterally flaps `.gitattributes`
+  between machines); the semantic merges to resolve with already exist.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/union-damage.ts` —
+`repairUnionDamagedYaml()` / `parseYamlHealingUnionDamage()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/ledger-merge.ts` —
+`eventsOfLedgerDoc()` / `parseLedgerBestEffort()` / `ledgerIsUnreadable()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/git/git.service.ts` —
+`unionConflictedText()`;
+guards: `union-damage.spec.ts`
+
+### 🔴 P-53 — The mirror walk was the last uninterrupted synchronous stretch · T3
+
+P-47 closed the reconcile and left this one open *by name*, with its reason stated: making the
+mirror interruptible "means re-checking the gate at every slice boundary, which is a change to
+make deliberately with its own test". It also left an estimate — "the mirror is ~30 ms on the
+largest repo here anyway" — which was true of a settled fleet and false of this one, for the
+reason P-51 explains.
+
+- **Fix — a budget, not a second entry point.** `mirrorToSyncRepo` drains its generator on the
+  caller's thread for at most `MIRROR_SYNC_BUDGET_MS` (50 ms) and hands the remainder to
+  `finishMirrorCooperatively`, which runs 8 ms slices with `setImmediate` between them. One
+  entry point serves both callers: a small tree finishes inside the budget and behaves exactly
+  as before (returning the real `changed`), so the twenty existing call sites and every spec are
+  untouched; the 3,649-sidecar repo spends 50 ms synchronously and the rest cooperatively.
+- **The gate, re-checked at every slice boundary.** The moment `busyRootFor(dst)` says a cycle
+  started, the pass is **abandoned mid-tree** and re-armed through `deferWhileBusy`. Abandoning
+  is safe for two independent reasons: the mirror is a reconciliation, so the re-run converges
+  from wherever it stopped; and a cycle that finds LFB's own files dirty **commits them as a
+  checkpoint before merging** (`checkpointOwnWrites`, and `repos/` is in `SDL_ROOT_PAYLOAD`), so
+  partial mirrored text is a checkpoint commit rather than a refused merge.
+- **Coalescing.** A write arriving while a drain runs sets `again` rather than starting a second
+  walk over the same destination; exactly one more pass follows however many writes land. Same
+  rule `deferWhileBusy` already applied, and for the same reason.
+- **Guard.** `mirror-cost.spec.ts` — "the mirror hands the loop back past its budget": 6,000
+  sidecars, a `setTimeout(…, 0)` armed before the pass must fire **during** it, and all 6,000
+  files must still reach the mirror. The pre-existing reconcile test needed one line
+  (`await settleMirrorDrains()`) because its premise was a *completed* mirror.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` —
+`mirrorToSyncRepo()` / `driveMirrorBudgeted()` / `finishMirrorCooperatively()`;
+guard: `mirror-cost.spec.ts`
+
+### 🟠 P-54 — Two instruments that lied, and 752 KB of YAML parser in the browser · T6
+
+**`blocking()` billed process suspension to whatever section was on the stack.** `error.err`
+carried `storage.mirror held the event loop for 967706ms` — sixteen minutes, for a pass whose
+real cost is under a second. macOS had suspended the app and `performance.now()` kept counting.
+`loop-watch` learned this in the eighth pass (`suspensionGapMs` → `PROCESS SUSPENDED for about
+Ns`); `blocking` never did, so the one tool whose whole job is naming a culprit named a real
+section with a fictional number — and that number poisoned the window tally's `worstMs` too.
+Every minute spent chasing the named repo was wasted.
+
+- **Fix.** `process.cpuUsage()` advances only while the process is scheduled, so a span with
+  900 s of wall time and ~0 s of CPU was frozen, not working. Above a 60 s floor, a span using
+  under 5% of its wall time in CPU is reported as `PROCESS SUSPENDED` at INFO and counted
+  against nobody. **The asymmetry is deliberate:** a disk-bound section also shows wall ≫ cpu
+  and that IS real blocking, so below the floor every measurement is taken at face value — a
+  mis-flagged suspension would hide a genuine stall, which is the one thing this module must
+  never do. Guard: `blocking.spec.ts`.
+
+**`config/left_bar.ts` ran a `YAML.parse` at module-evaluation time.** `export const leftBar =
+parse()` — on the browser's main thread, before React mounted, on the critical path to first
+paint, every load. And it was the **only** importer of `yaml` in the frontend, which put a
+**752 KB** parser in the boot payload (13.35 MiB of static modules measured on this machine) to
+read one small nav file that cannot change while the tab is open.
+
+- **Fix.** A Vite plugin (`yamlParsedAtBuildTime`) serves `*.yaml?parsed` as a plain object
+  literal, so the parse happens in the build. left_bar.mdx §AC4 is untouched — the yaml is still
+  the one source of truth and still the thing being read — and `addWatchFile` keeps the dev loop
+  identical (edit the yaml, the sidebar hot-reloads). A malformed nav file now fails the **build**
+  rather than silently degrading to an empty sidebar in the user's browser.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/blocking.ts` — `looksSuspended()` / `blocking()`;
+`~/repos/LargeFileBridge/code/packages/frontend/vite.config.ts` — `yamlParsedAtBuildTime()`;
+`~/repos/LargeFileBridge/code/packages/frontend/src/config/left_bar.ts`
+
+### What this pass measured about the browser's main thread
+
+Asked directly — *"find out if there are things running on the UI thread"* — and the honest
+answer is **yes, but it was never the seconds**:
+
+* **13.35 MiB** of JavaScript over 101 modules in the dev static graph, parsed before first
+  paint. `lucide-react` is **4.19 MB** of it (31%) — Vite's dev pre-bundle of the whole icon
+  barrel, imported by name in 73 files. This is a **dev-only** cost: the production build
+  tree-shakes it, and `build.rollupOptions.manualChunks` already documents why the barrel must
+  never be named in a manual chunk.
+* `perfWatch`'s `perf.longtask` line has **never once fired** — not in any generation of
+  `error.err`. Its threshold is 500 ms of long tasks per 10 s window, so the tab's main thread
+  has never crossed it. Combined with the `STILL OPEN`/`SLOW` lines that *did* line up with
+  every spinner, the seconds were all server-side.
+* The one piece of genuine UI-thread *work* (as opposed to parse) was the module-scope
+  `YAML.parse` above, now gone.
+
+### 🔴 P-55 — An atomic write of an UNCHANGED manifest destroyed every memo keyed on its mtime · T3
+
+Found by re-measuring after P-51…P-54, which is the only reason it was findable: with the churn loop cut,
+one stall was left — `EVENT LOOP BLOCKED … up to 1353ms`, attributed to `storage.reconcile.yielding`
+`worst 1590ms on charlie-kirk` — and it recurred every few minutes on a machine where the two ledgers were
+byte-stable (verified by watching their mtimes for 100 s). A probe settled it: three consecutive reconciles
+in one process cost **759 ms → 42 ms → 38 ms**. The memo works. Something was breaking it between passes.
+
+Snapshotting every per-repo document for 100 s named it in one line: the **local** `manifest.yaml`
+(1.07 MB) had a new mtime while nothing else had moved.
+
+```ts
+function writeManifestFile(file: string, manifest: Manifest): void {
+  const body = serializeManifest(manifest);
+  const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
+  …fs.writeSync(fd, body); fs.fsyncSync(fd); fs.renameSync(tmp, file);   // unconditional
+}
+```
+
+The write is **atomic**, which is right, and which also means it hands the destination a **new inode and a
+new mtime every time it runs** — the exact triple `sameBytes`'s equality memo and `pairSettled`'s merge
+memo are keyed on. Watching the file across one rewrite confirmed it directly: **same size, byte-for-byte
+identical content, new mtime**. So the pin pass rewrote 1.07 MB for nothing, and the reconcile that
+followed re-parsed **both** 1 MB copies because the memo it would have hit had just been destroyed. A
+multi-megabyte `YAML.parse` is the one atom no yield point can split, so the only way not to pay it is not
+to need it.
+
+**What is proven and what is not.** The pointless rewrite is proven (above), and it is proven gone: across
+four forced `pin`/`scan`/`device` passes after the fix, an instrumented `writeManifestFile` recorded **zero**
+writes to that file and its identity did not move. What is NOT proven is that this rewrite was the *whole*
+of the remaining ~1.3 s stall — the reconcile has other unmemoized work, and on a fleet where five peers
+still push claims, `pinned_by` can change for real. Treat P-55 as "one certain cause of memo invalidation,
+removed", not as a closed book on the atom.
+
+The module's own header already asserted the premise the fix needs: *"serialized DETERMINISTICALLY — files
+sorted by `path`, stable key order, no volatile timestamp — so re-serializing an unchanged list is
+byte-identical (no noise commits)"*. It just never checked.
+
+- **Fix.** Compare the serialized body against the bytes on disk and return early when they match. The
+  read costs one pass over a file we were about to overwrite anyway; only a genuinely new manifest pays
+  both. An absent or unreadable destination falls through to the write, so the skip can never swallow a
+  first write or leave garbage in place.
+- **This is the third instance of one defect class**, and it is worth naming as a rule: **P-45**
+  (`projectRepoStorageToMirror` — "the bytes came out identical either way, but the mtime moved every
+  time"), **P-51** (an announce that armed a git cycle whose merge moved the mtime), and now P-55.
+  *Any writer whose output feeds an (ino, size, mtimeNs) memo must not write when the bytes are unchanged*
+  — and every one of these was invisible in the output, which is why each needed its own guard test.
+- **Guard.** `manifest-rewrite.spec.ts` asserts on the file IDENTITY, not on a call count, because the
+  identity is what the memos actually read: settled → unchanged across three read-write passes; a real
+  change → identity moves and the new entry is readable; absent and unreadable destinations → still
+  written.
+
+In code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `writeManifestFile()`;
+guard: `manifest-rewrite.spec.ts`
+
+### What it measures, end to end
+
+Same machine, same 105 repos, `curl` against the three endpoints `authInit` / `securityConfig` actually
+hit (`/api/security/config`, `/api/auth/me`, `/api/v1/client`), 45 s deadline per request:
+
+| | before | after |
+|---|---|---|
+| Worst `storage.mirror` stretch on the event loop | **79,087 ms** (131 WARNs in one day, 0.8 s typical) | **~330 ms** — and it reports mostly as `(yielded)` |
+| `mirrorToSyncRepo … could not be parsed` ERRORs | **31**, same repo, all day | **0** (healed; 12,510 events recovered) |
+| `storage.reconcile` per 60 s window | 6,091 ms / 226 calls, **worst 1,590 ms** | 2,925 ms / 324 calls, **worst 335 ms** |
+| Mean latency, 35,000+ samples across four runs | pages spinning on `authInit` for minutes | **0–3 ms**, every run |
+| Worst case, fully idle window (10,773 samples) | — | **5 ms** |
+| Worst case, a pass with a changed multi-MB document in flight | **12 s / 42 s / 496 s** on the auth endpoints | **1.2 s – 3.4 s** |
+| Resident memory | **3.2 GB** with `heapUsed` 110 MB, 64 WARNs | **140 MB**, no WARNs since |
+| Dev boot payload (static module graph) | 13.35 MiB | 12.63 MiB (the 752 KB YAML parser is gone) |
+
+Two honest caveats on that table:
+
+* **The RSS number is provisional.** It is consistent with the churn loop having been what drove it
+  (re-reading multi-megabyte documents is Buffer churn, and `heap-watch`'s own message said the growth was
+  outside the V8 heap), but it is minutes of observation against hours of the old behaviour.
+* **The multi-second tail is the atom, it is still there, and it is NOT only a forced-pass artefact.** An
+  early draft of this table claimed "steady state worst 5 ms" on the strength of one genuinely idle
+  window. A second run of the same script disagreed: `WORST=3440ms` during its *steady-state* phase, and
+  the fault trail pins it to the minute — `EVENT LOOP BLOCKED … up to 3294.6ms`, culprits
+  `storage.reconcile.yielding 2925ms/324 calls` and two `storage.mirror` rows — because a pass forced a
+  few minutes earlier was still draining. The honest statement is the one in the table: the MEAN is 0–3 ms
+  in every run, and the TAIL is 1.2–3.4 s whenever a genuinely-changed multi-megabyte document is being
+  merged. A 60 s window with 104 mirror calls and 324 reconcile calls hits several un-sliceable
+  `YAML.parse` steps back to back, and `monitorEventLoopDelay` reads the run of them as one multi-second
+  sample even though no single section exceeds ~390 ms. The budget cannot help: it is checked at yield
+  points, and the merges have none inside them. **This is the strongest argument for the worker thread
+  being the next pass rather than a someday item.**
+
+### Still open after this pass
+
+* **The atom is still a multi-megabyte `YAML.parse`, and it is now the ONLY thing left.** The ledger and
+  manifest unions cannot be sliced, so a repo whose document genuinely changed pays one ~330 ms
+  synchronous step, and a window that hits several back to back reads as one multi-second stall
+  (measured: 3.35 s with all three passes forced at once). P-51, P-52 and P-55 make it rare — a settled
+  pass skips it entirely — but none of them makes it *smaller*. **A worker thread for the merge legs is
+  the next step**, and this is the third pass in a row to say so (eighth, ninth, tenth). It was
+  deliberately not attempted here: it is an architectural change to the path where a bug means silent
+  data loss between the user's computers, and it wants its own pass with its own tests, not the tail end
+  of one aimed at a hang.
+* `lucide-react`'s 4.19 MB dev barrel. Fixing it means either per-icon deep imports across 73
+  files or `optimizeDeps.exclude`, which trades one 4 MB parse for ~1,500 module requests —
+  measure before choosing.
+* `merge=union` still runs on the other five computers (P-52's two-phase rollout).
+* Everything the ninth pass left open stands.
