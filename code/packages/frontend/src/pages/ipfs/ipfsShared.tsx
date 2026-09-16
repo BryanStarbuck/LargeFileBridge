@@ -530,6 +530,25 @@ export function UpgradeCard({
 }
 
 // ── Auto-start-on-reboot control (ipfs_ui.mdx §13/§18) ───────────────────────
+// The toast after `POST /autostart` — shared by the dashboard row and the app-wide banner so both tell
+// the SAME truth. It reads the status the server just returned, not the action we asked for: the
+// install path legitimately installs NOTHING when Homebrew already owns the start (§13.2), and the old
+// unconditional "IPFS will now start automatically" was the lie that made the button look dead (§13.3).
+export function toastAutostartOutcome(action: "install" | "remove", a: IpfsAutostartStatus): void {
+  if (action === "remove") {
+    toast.success(
+      a.owner === "foreign"
+        ? `Large File Bridge's auto-start agent was removed — ${a.conflict?.source ?? "another agent"} still starts IPFS when you log in`
+        : "Reboot auto-start turned off",
+    );
+    return;
+  }
+  if (a.owner === "lfb") toast.success("IPFS will now start automatically on reboot");
+  else if (a.owner === "foreign")
+    toast.success(`${a.conflict?.source ?? "Another auto-start agent"} already starts IPFS when you log in — nothing to add`);
+  else toast.error("Auto-start couldn't be enabled — see the IPFS page for the reason");
+}
+
 // The running dashboard's "will IPFS come back after a reboot?" control. PROMINENCE follows state
 // (ipfs_ui.mdx §18): when OFF it's a FILLED BLUE call-to-action (we want the user to enable it); when
 // ON it drops to a muted "Starts on reboot ✓" status line with only an understated Turn-off. Not shown
@@ -551,19 +570,17 @@ export function AutostartRow({
       </div>
     );
   }
-  // This row answers ONE question: "will IPFS come back after I reboot?" (ipfs_ui.mdx §13.1)
-  //
-  // Two ways it used to answer wrongly:
-  //   1. "Registered with launchd" is NOT "working". An agent that lost the repo-lock race sits
-  //      registered-but-DEAD at exit code 1, and this rendered it "on ✓" — the exact contradiction the
-  //      user hit ("it says on, but IPFS is off after every reboot"). So: enabled && !lastRunFailed.
-  //   2. Someone ELSE may be the one starting IPFS (Homebrew's kubo agent). We deliberately don't
-  //      compete with it (§13.2) — but the honest answer to the question is then still YES. Reporting
-  //      "off" because *our* agent isn't the owner would be a new lie in the other direction.
+  // This row answers ONE question: "will IPFS come back after I reboot?" (ipfs_ui.mdx §13.1) — and the
+  // answer is `autostart.owner` / `willStartOnBoot`, derived ONCE on the backend (§13.3). This row used
+  // to derive it locally (`enabled && !failed || conflict !== null`) and got it right, while the banner
+  // derived it differently and got it wrong; the fix is that neither derives it any more.
+  //   1. "Registered with launchd" is NOT "working" — a dead agent at exit 1 is not "on ✓".
+  //   2. Homebrew's kubo agent starting IPFS IS "on ✓", credited to Homebrew, not "off" because it's
+  //      not ours. But only when launchd will actually RUN it — a disabled/unloaded plist starts nothing.
   const failed = autostart.lastRunFailed;
-  const conflict = autostart.conflict;
-  const oursOn = autostart.enabled && !failed;
-  const on = oursOn || conflict !== null;
+  const conflict = autostart.owner === "foreign" ? autostart.conflict : null;
+  const oursOn = autostart.owner === "lfb";
+  const on = autostart.willStartOnBoot;
   return (
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-lg border border-[var(--lfb-border)] bg-white px-4 py-3 text-sm">
       <RotateCw className={`h-4 w-4 ${failed && !conflict ? "text-amber-600" : on ? "text-green-600" : "text-black/40"}`} />

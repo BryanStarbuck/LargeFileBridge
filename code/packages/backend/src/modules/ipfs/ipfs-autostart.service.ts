@@ -17,7 +17,7 @@ import os from "node:os";
 import path from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
-import type { IpfsAutostartConflict, IpfsAutostartStatus } from "@lfb/shared";
+import type { IpfsAutostartConflict, IpfsAutostartOwner, IpfsAutostartStatus } from "@lfb/shared";
 import { updateAppConfig } from "../store-model/config.service.js";
 import { stableIpfsBin, ipfsBinResolved } from "./ipfs-bin.js";
 import { resolveStateDir } from "../../config/state-dir.js";
@@ -141,10 +141,10 @@ async function readLaunchd(): Promise<LaunchdView> {
 }
 
 /** Has the user disabled the job? A disabled job is registered but will NOT run at boot. */
-async function isDisabled(): Promise<boolean> {
+async function isDisabled(label = IPFS_AUTOSTART_LABEL, domain = `gui/${uid()}`): Promise<boolean> {
   try {
-    const { stdout } = await run("launchctl", ["print-disabled", `gui/${uid()}`]);
-    return new RegExp(`"${IPFS_AUTOSTART_LABEL}"\\s*=>\\s*disabled`).test(stdout);
+    const { stdout } = await run("launchctl", ["print-disabled", domain]);
+    return new RegExp(`"${label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}"\\s*=>\\s*disabled`).test(stdout);
   } catch {
     return false;
   }
@@ -175,23 +175,45 @@ function readFailureReason(): string | null {
   }
 }
 
-/**
- * Extract a plist's ProgramArguments as a string[] — the ONLY key that says what a job actually
- * executes. Prefer plutil (a real parser: handles binary plists, entities, whitespace); fall back to a
- * regex scoped to the ProgramArguments <array> block if plutil is missing or the file is malformed.
- */
-async function readProgramArguments(file: string, body: string): Promise<string[]> {
+/** A plist as JSON via plutil (a real parser: binary plists, entities, whitespace). Null if it can't. */
+async function readPlistJson(file: string): Promise<Record<string, unknown> | null> {
   try {
     const { stdout } = await run("plutil", ["-convert", "json", "-o", "-", file]);
-    const args = (JSON.parse(stdout) as { ProgramArguments?: unknown }).ProgramArguments;
+    const parsed: unknown = JSON.parse(stdout);
+    return parsed && typeof parsed === "object" ? (parsed as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Extract a plist's ProgramArguments as a string[] — the ONLY key that says what a job actually
+ * executes. Prefer plutil; fall back to a regex scoped to the ProgramArguments <array> block if plutil
+ * is missing or the file is malformed.
+ */
+function readProgramArguments(plist: Record<string, unknown> | null, body: string): string[] {
+  if (plist) {
+    const args = plist.ProgramArguments;
     if (Array.isArray(args)) return args.filter((a): a is string => typeof a === "string");
     return [];
-  } catch {
-    // Scoped fallback: only the <array> that immediately follows <key>ProgramArguments</key>.
-    const block = /<key>\s*ProgramArguments\s*<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(body)?.[1];
-    if (!block) return [];
-    return [...block.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1].trim());
   }
+  // Scoped fallback: only the <array> that immediately follows <key>ProgramArguments</key>.
+  const block = /<key>\s*ProgramArguments\s*<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(body)?.[1];
+  if (!block) return [];
+  return [...block.matchAll(/<string>([\s\S]*?)<\/string>/g)].map((m) => m[1].trim());
+}
+
+/**
+ * Does the plist ASK launchd to start it at login? `RunAtLoad` true, or any truthy `KeepAlive` (a bare
+ * `true`, or a dict such as `{ SuccessfulExit: false }` — launchd starts a KeepAlive job on load
+ * regardless of the conditions inside). Homebrew's kubo plist has both. Regex fallback for no plutil.
+ */
+function startsAtLogin(plist: Record<string, unknown> | null, body: string): boolean {
+  if (plist) {
+    const keepAlive = plist.KeepAlive;
+    return plist.RunAtLoad === true || keepAlive === true || (!!keepAlive && typeof keepAlive === "object");
+  }
+  return /<key>\s*RunAtLoad\s*<\/key>\s*<true\s*\/>/.test(body) || /<key>\s*KeepAlive\s*<\/key>\s*<(true\s*\/|dict)>/.test(body);
 }
 
 /** Does this argv actually launch an ipfs daemon? argv[0]'s BASENAME is the program; `daemon` its verb. */
@@ -239,19 +261,28 @@ async function findConflict(): Promise<IpfsAutostartConflict | null> {
         continue;
       }
       // Only a job that actually launches an ipfs daemon competes for the repo lock.
-      if (!runsIpfsDaemon(await readProgramArguments(file, body))) continue;
+      const plist = await readPlistJson(file);
+      if (!runsIpfsDaemon(readProgramArguments(plist, body))) continue;
+      // LaunchDaemons live in the system domain; LaunchAgents in the user's gui domain.
+      const domain = dir === "/Library/LaunchDaemons" ? "system" : `gui/${uid()}`;
+      let loaded = false;
       let running = false;
       try {
-        const { stdout } = await run("launchctl", ["print", `gui/${uid()}/${label}`]);
+        const { stdout } = await run("launchctl", ["print", `${domain}/${label}`]);
+        loaded = true;
         running = /^\s*state\s*=\s*running\s*$/m.test(stdout);
       } catch {
-        running = false;
+        loaded = false;
       }
+      // The same §13.1 rule we hold OURSELVES to: a plist on disk proves nothing. It will bring IPFS back
+      // only if launchd has it registered, the user hasn't disabled it, and it asks to be started on load.
+      const willRunAtLogin = loaded && startsAtLogin(plist, body) && !(await isDisabled(label, domain));
       return {
         label,
         source: label.startsWith("homebrew.mxcl.") ? "Homebrew (brew services)" : label,
         path: file,
         running,
+        willRunAtLogin,
       };
     }
   }
@@ -274,6 +305,8 @@ export async function autostartStatus(): Promise<IpfsAutostartStatus> {
       lastRunFailed: false,
       failureReason: null,
       conflict: null,
+      willStartOnBoot: false,
+      owner: null,
     };
   }
   let installed = false;
@@ -287,6 +320,8 @@ export async function autostartStatus(): Promise<IpfsAutostartStatus> {
   // Failed = it ran and exited non-zero, and isn't up right now. (A daemon we deliberately stopped
   // exits 0, so a clean Off is never reported as a failure.)
   const lastRunFailed = enabled && !view.running && view.lastExitCode !== null && view.lastExitCode !== 0;
+  const conflict = await findConflict();
+  const owner = resolveOwner({ enabled, lastRunFailed, conflict });
   return {
     supported: true,
     installed,
@@ -294,8 +329,34 @@ export async function autostartStatus(): Promise<IpfsAutostartStatus> {
     lastExitCode: view.lastExitCode,
     lastRunFailed,
     failureReason: lastRunFailed ? readFailureReason() : null,
-    conflict: await findConflict(),
+    conflict,
+    willStartOnBoot: owner !== null,
+    owner,
   };
+}
+
+/**
+ * The single derivation of "who brings IPFS back after a reboot" (ipfs_ui.mdx §13.3). Every surface —
+ * the app-wide banner's liveness poll, the dashboard row, the off page, the start job's log line — reads
+ * the result of THIS, never `enabled` or `conflict` on its own. It used to be re-derived per surface,
+ * and the surfaces disagreed: the dashboard credited Homebrew ("on ✓"), the banner read `enabled`
+ * (ours only) and said "won't restart", and the button it offered ran an install that correctly
+ * refused to compete with Homebrew — so it changed nothing the banner could see. Pressed four times
+ * on one machine, four "success" toasts, banner still there.
+ *
+ *   ours    — registered, not disabled, and not dead at exit≠0 (§13.1)
+ *   foreign — a non-LFB job launchd will actually run at login (§13.2) — it wins even when ours is
+ *             also installed, because ours is then the one LOSING the repo-lock race
+ *   nobody  — a plist on disk that launchd won't run, a dead agent, or nothing at all
+ */
+export function resolveOwner(s: {
+  enabled: boolean;
+  lastRunFailed: boolean;
+  conflict: Pick<IpfsAutostartConflict, "willRunAtLogin"> | null;
+}): IpfsAutostartOwner {
+  if (s.conflict?.willRunAtLogin) return "foreign";
+  if (s.enabled && !s.lastRunFailed) return "lfb";
+  return null;
 }
 
 /**
@@ -315,8 +376,11 @@ export async function installAutostart(): Promise<IpfsAutostartStatus> {
   // Refuse to become the second agent racing for the repo lock (ipfs_ui.mdx §13.2). Something else
   // already starts IPFS at login; adding our own is what produced "auto-start says on, IPFS is off" —
   // the loser of the race exits 1 and, with KeepAlive off, never retries. Adopt instead of compete.
+  // Only a foreign job that launchd will actually RUN (or is running now) races us. A plist left on disk
+  // but disabled / never bootstrapped starts nothing — refusing on its account would leave IPFS with no
+  // owner at all, which is the outcome this guard exists to prevent.
   const conflict = await findConflict();
-  if (conflict) {
+  if (conflict && (conflict.willRunAtLogin || conflict.running)) {
     log.warn(
       "ipfs",
       `not installing IPFS auto-start: ${conflict.label} (${conflict.source}) already auto-starts a daemon at ${conflict.path}`,

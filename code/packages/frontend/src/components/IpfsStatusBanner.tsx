@@ -17,6 +17,7 @@ import { AlertTriangle, RotateCw, X } from "lucide-react";
 import { toast } from "sonner";
 import { api } from "../api/client.js";
 import { clientLog } from "../lib/clientLog.js";
+import { toastAutostartOutcome } from "../pages/ipfs/ipfsShared.js";
 
 // Persist the scenario-C dismissal so the gentle nudge is genuinely one-time (ipfs_ui.mdx §17.3).
 const AUTOSTART_NUDGE_DISMISSED = "lfb.ipfs.autostartNudgeDismissed";
@@ -46,10 +47,11 @@ export function IpfsStatusBanner() {
   // Turn on reboot auto-start in place (scenario C) — no page change, no daemon restart.
   const enableAutostart = useMutation({
     mutationFn: () => api.ipfsAutostart("install"),
-    onSuccess: () => {
+    onSuccess: (n) => {
+      qc.setQueryData(["ipfsNode"], n);
       qc.invalidateQueries({ queryKey: ["ipfsLiveness"] });
-      qc.invalidateQueries({ queryKey: ["ipfsNode"] });
-      toast.success("IPFS will now start automatically on reboot");
+      // Say what the server actually did — it may have adopted Homebrew's agent and installed nothing.
+      toastAutostartOutcome("install", n.autostart);
     },
     onError: (e: Error) => { clientLog.error("IpfsStatusBanner.autostart", e); toast.error(e.message); },
   });
@@ -83,7 +85,10 @@ export function IpfsStatusBanner() {
 
   // Scenario C — running fine, but it won't come back after a reboot. GENTLE (the node is healthy):
   // a low-key, dismissible, one-time strip — never the alarming red/amber "can't pin" banner.
-  if (data.autostartSupported && !data.autostartEnabled && !nudgeDismissed()) {
+  // `willStartOnBoot` is the derived answer (§13.3) — it is TRUE when Homebrew's agent owns the start.
+  // This used to read `autostartEnabled` (our agent only), which is false by design on that machine, so
+  // the strip never went away and its button could never make it go away.
+  if (data.autostartSupported && !data.willStartOnBoot && !nudgeDismissed()) {
     const dismiss = () => {
       try {
         localStorage.setItem(AUTOSTART_NUDGE_DISMISSED, "1");

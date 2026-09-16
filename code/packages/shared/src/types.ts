@@ -561,7 +561,20 @@ export interface IpfsAutostartStatus {
   lastRunFailed: boolean; // it ran at the last boot and exited non-zero
   failureReason: string | null; // the daemon's own last error line, e.g. the repo.lock message
   conflict: IpfsAutostartConflict | null; // a FOREIGN agent also auto-starts `ipfs daemon` (the race, §13.2)
+  // THE ONE ANSWER to "will IPFS come back after I reboot?" — derived ONCE, on the backend, from the
+  // fields above, and the only thing any UI surface may read to decide it. `enabled` is about OUR agent;
+  // this is about IPFS. They differ on every computer where Homebrew (`brew services start kubo`) owns
+  // the daemon: our agent is deliberately absent (§13.2), so `enabled` is false, yet IPFS does come back.
+  // Reading `enabled` for this question is what made the app-wide banner say "won't restart after you
+  // reboot" and its Turn-on button a no-op on exactly that computer (ipfs_ui.mdx §13.3).
+  willStartOnBoot: boolean;
+  owner: IpfsAutostartOwner; // who is doing it — ours, a foreign agent, or nobody
 }
+
+// Who owns the reboot start: "lfb" = our com.largefilebridge.ipfs agent (registered, not disabled, and
+// not dead at exit≠0); "foreign" = another launchd job that will run `ipfs daemon` at login (the
+// Homebrew case); null = nobody, IPFS stays off after a reboot.
+export type IpfsAutostartOwner = "lfb" | "foreign" | null;
 
 // A non-LFB launchd job that also runs `ipfs daemon` — e.g. Homebrew's `brew services start kubo`
 // (homebrew.mxcl.kubo). Two agents racing for ~/.ipfs/repo.lock is why auto-start silently failed:
@@ -571,6 +584,10 @@ export interface IpfsAutostartConflict {
   source: string; // human name, e.g. "Homebrew (brew services)"
   path: string; // the plist backing it
   running: boolean; // it currently owns the daemon / repo lock
+  // Will launchd actually run it at the next login? Registered AND not disabled AND its plist asks to be
+  // started (RunAtLoad or KeepAlive). A plist merely sitting on disk — disabled with `launchctl disable`,
+  // or never bootstrapped — does not race us for the repo lock and does not bring IPFS back either.
+  willRunAtLogin: boolean;
 }
 
 // POST /api/ipfs/autostart — install (set up reboot auto-start) or remove it.
@@ -642,7 +659,9 @@ export interface IpfsLiveness {
   installed: boolean;
   running: boolean;
   autostartSupported: boolean;
-  autostartEnabled: boolean;
+  // Renamed from `autostartEnabled` on purpose: that name invited reading OUR agent's state as the answer
+  // to "will IPFS come back?", and the banner did. This mirrors IpfsAutostartStatus.willStartOnBoot.
+  willStartOnBoot: boolean;
   configBlocker: boolean; // a config issue is blocking start (ipfs_ui.mdx §14) → route to the fix
 }
 

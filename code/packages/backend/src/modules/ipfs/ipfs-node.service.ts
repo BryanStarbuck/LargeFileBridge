@@ -260,7 +260,9 @@ export async function liveness(): Promise<IpfsLiveness> {
     installed,
     running,
     autostartSupported: autostart.supported,
-    autostartEnabled: autostart.enabled,
+    // The derived answer, not `enabled` — `enabled` is OUR agent only, and on a Homebrew-owned machine it
+    // is false forever by design (§13.2). Reading it here is what kept the banner nagging (§13.3).
+    willStartOnBoot: autostart.willStartOnBoot,
     // A config blocker only matters when the node isn't already running.
     configBlocker: !running && cfg.hasBlocker,
   };
@@ -276,6 +278,8 @@ function unknownAutostart(): IpfsAutostartStatus {
     lastRunFailed: false,
     failureReason: null,
     conflict: null,
+    willStartOnBoot: false,
+    owner: null,
   };
 }
 
@@ -706,10 +710,14 @@ export async function controlDaemon(
         append("Setting IPFS to start automatically when you reboot…");
         try {
           const st = await installAutostart();
+          // Report the owner, not just a yes/no: when Homebrew's agent already does this we deliberately
+          // installed nothing (§13.2), and "will now start" would claim credit for someone else's work.
           append(
-            st.enabled
+            st.owner === "lfb"
               ? "✓ IPFS will now start automatically on reboot."
-              : "IPFS is running, but auto-start couldn't be fully enabled — you can retry from the IPFS page.",
+              : st.owner === "foreign"
+                ? `✓ ${st.conflict?.source ?? "Another auto-start agent"} already starts IPFS when you log in — Large File Bridge is leaving that in place.`
+                : "IPFS is running, but auto-start couldn't be fully enabled — you can retry from the IPFS page.",
           );
         } catch (e) {
           append(`(couldn't set up reboot auto-start: ${(e as Error).message})`);

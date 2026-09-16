@@ -21,7 +21,7 @@ import { middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { writeClipboard } from "@/lib/clipboard";
-import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, restartIpfsAndWait, num } from "./ipfsShared.js";
+import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, restartIpfsAndWait, num, toastAutostartOutcome } from "./ipfsShared.js";
 
 export function IpfsDashboardPage() {
   const qc = useQueryClient();
@@ -56,9 +56,10 @@ export function IpfsDashboardPage() {
 
   const autostart = useMutation({
     mutationFn: (action: IpfsAutostartAction) => api.ipfsAutostart(action),
-    onSuccess: (n) => {
+    onSuccess: (n, action) => {
       qc.setQueryData(["ipfsNode"], n);
-      toast.success(n.autostart.enabled ? "IPFS will now start automatically on reboot" : "Reboot auto-start turned off");
+      qc.invalidateQueries({ queryKey: ["ipfsLiveness"] }); // the app-wide banner reads this one
+      toastAutostartOutcome(action, n.autostart);
     },
     onError: (e: Error) => { clientLog.error("IpfsDashboardPage.autostart", e); toast.error(e.message); },
   });

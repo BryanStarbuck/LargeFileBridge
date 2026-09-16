@@ -148,9 +148,10 @@ function StoppedCard({
   onTurnOnOnly: () => void;
 }) {
   const a = node.autostart;
-  // If auto-start is already set up (or the OS can't do it), there's no meaningful choice — one button.
-  const alreadyAuto = a.supported && a.enabled;
-  const canAuto = a.supported && !a.enabled;
+  // If IPFS already comes back after a reboot — by our agent OR Homebrew's (§13.3) — or the OS can't do
+  // it, there's no meaningful choice — one button.
+  const alreadyAuto = a.supported && a.willStartOnBoot;
+  const canAuto = a.supported && !a.willStartOnBoot;
 
   return (
     <div className="rounded-lg border border-[var(--lfb-border)] bg-white p-6">
@@ -161,7 +162,10 @@ function StoppedCard({
       <p className="mt-2 max-w-2xl text-sm text-black/60">
         {node.version ? `Kubo v${node.version}. ` : ""}Turn it on so your big files can pin across your
         computers.
-        {alreadyAuto && " IPFS is already set to start automatically when you reboot ✓."}
+        {alreadyAuto &&
+          (a.owner === "foreign"
+            ? ` ${a.conflict?.source ?? "Another agent"} already starts IPFS when you log in ✓.`
+            : " IPFS is already set to start automatically when you reboot ✓.")}
       </p>
 
       {canAuto ? (

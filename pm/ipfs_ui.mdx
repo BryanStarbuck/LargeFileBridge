@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — The IPFS Page (Node Control Panel / Dashboard)
-description: The left-bar "IPFS" landing page — the product-manager-facing DASHBOARD for the user's LOCAL IPFS (Kubo) node. It answers, at a glance, "Is IPFS installed? Is it running right now? Should it be?" and gives the two big controls — INSTALL (when the node/CLI is missing) and an ON/OFF toggle (start/stop the daemon) — plus a clean grid of live metrics (shared files, blocks/objects, storage used, connected peers, bandwidth) and a gateway summary. Each metric TILE drills into a deeper page: "Shared files" opens the pinset table (pm/ipfs.mdx, now at /ipfs/pins); "Peers" opens the Peers page; "Gateway" opens the gateway detail. The page is built to work on macOS, Windows, and Linux: it detects the platform and drives the right install path (Homebrew / winget / package manager), falls back to a copyable manual command when auto-install can't run, and shows a live PROGRESS view while installing or starting. It carries the only-our-content security posture card (reprovide pinned, gateway local-only, GC on) with a Fix (knowledge/ipfs.mdx §6). And it is the SOURCE of the app-wide "IPFS is not running — Install / Start" nudge that appears on every OTHER page when the node is missing or off (and never when it is healthy). Every state is designed for errors: install failed, daemon won't start, node unreachable — each says what happened and the concrete next step. When the node is OFF, `/ipfs` redirects to a separate IPFS-OFF page (`/ipfs/off`) whose whole job is turning IPFS back on — and, front and center, KEEPING it on across reboots via a two-button choice (turn on + auto-start on every reboot, recommended; or turn on now without changing the reboot setup). Auto-start on reboot is a per-user macOS launchd LaunchAgent that runs `ipfs daemon` at login/boot, so a machine restart no longer leaves IPFS silently off. §13 was rewritten after a real reported bug: the page claimed "Start on reboot: on ✓" while IPFS was off after every single reboot — because `autostart.enabled` was defined as "`launchctl print` succeeds", which only proves the job is REGISTERED, not that it RAN. The agent was registered and dead (`last exit code = 1`), having lost a repo-lock race against Homebrew's own `homebrew.mxcl.kubo` agent (from a `brew services start kubo` the user ran outside this app); with `KeepAlive` off the loser was never retried. So: status now reports `lastRunFailed`/`failureReason` and only claims "on ✓" when it truly works (§13.1); we detect a foreign agent and REFUSE to become a second owner of the daemon rather than re-create the race (§13.2); and `KeepAlive` now retries a FAILED start only, so the Off toggle still wins (`ipfs shutdown` exits 0) while a boot-time failure recovers. §13.3 is honest that this whole section is damage control around a brew-provisioned daemon we do not own, and is scheduled for deletion by the in-process Helia migration (external_tools_policy.mdx), which makes the bug unreachable rather than fixed. Cross-links pm/ipfs.mdx (the pinset drill-down), pm/tools.mdx (the install-tools preflight this reuses), knowledge/ipfs.mdx (what a node/gateway/pin is), pm/settings.mdx (the reprovide/gateway settings), pm/left_bar.mdx (nav), and pm/menus.mdx (drill-in navigation).
+description: The left-bar "IPFS" landing page — the product-manager-facing DASHBOARD for the user's LOCAL IPFS (Kubo) node. It answers, at a glance, "Is IPFS installed? Is it running right now? Should it be?" and gives the two big controls — INSTALL (when the node/CLI is missing) and an ON/OFF toggle (start/stop the daemon) — plus a clean grid of live metrics (shared files, blocks/objects, storage used, connected peers, bandwidth) and a gateway summary. Each metric TILE drills into a deeper page: "Shared files" opens the pinset table (pm/ipfs.mdx, now at /ipfs/pins); "Peers" opens the Peers page; "Gateway" opens the gateway detail. The page is built to work on macOS, Windows, and Linux: it detects the platform and drives the right install path (Homebrew / winget / package manager), falls back to a copyable manual command when auto-install can't run, and shows a live PROGRESS view while installing or starting. It carries the only-our-content security posture card (reprovide pinned, gateway local-only, GC on) with a Fix (knowledge/ipfs.mdx §6). And it is the SOURCE of the app-wide "IPFS is not running — Install / Start" nudge that appears on every OTHER page when the node is missing or off (and never when it is healthy). Every state is designed for errors: install failed, daemon won't start, node unreachable — each says what happened and the concrete next step. When the node is OFF, `/ipfs` redirects to a separate IPFS-OFF page (`/ipfs/off`) whose whole job is turning IPFS back on — and, front and center, KEEPING it on across reboots via a two-button choice (turn on + auto-start on every reboot, recommended; or turn on now without changing the reboot setup). Auto-start on reboot is a per-user macOS launchd LaunchAgent that runs `ipfs daemon` at login/boot, so a machine restart no longer leaves IPFS silently off. §13 was rewritten after a real reported bug: the page claimed "Start on reboot: on ✓" while IPFS was off after every single reboot — because `autostart.enabled` was defined as "`launchctl print` succeeds", which only proves the job is REGISTERED, not that it RAN. The agent was registered and dead (`last exit code = 1`), having lost a repo-lock race against Homebrew's own `homebrew.mxcl.kubo` agent (from a `brew services start kubo` the user ran outside this app); with `KeepAlive` off the loser was never retried. So: status now reports `lastRunFailed`/`failureReason` and only claims "on ✓" when it truly works (§13.1); we detect a foreign agent and REFUSE to become a second owner of the daemon rather than re-create the race (§13.2); and `KeepAlive` now retries a FAILED start only, so the Off toggle still wins (`ipfs shutdown` exits 0) while a boot-time failure recovers. §13.3 records the follow-on bug on the same machine — the app-wide strip said "won't restart after you reboot" and its Turn-on button did nothing, because the answer to "will IPFS come back?" was re-derived per surface and the strip read `enabled` (our agent only, false by design when Homebrew owns the start) — and the rule that ends it: ONE derived `owner`/`willStartOnBoot` on the backend, read by every surface, with toasts that report the outcome, not the request. §13.4 is honest that this whole section is damage control around a brew-provisioned daemon we do not own, and is scheduled for deletion by the in-process Helia migration (external_tools_policy.mdx), which makes the bug unreachable rather than fixed. Cross-links pm/ipfs.mdx (the pinset drill-down), pm/tools.mdx (the install-tools preflight this reuses), knowledge/ipfs.mdx (what a node/gateway/pin is), pm/settings.mdx (the reprovide/gateway settings), pm/left_bar.mdx (nav), and pm/menus.mdx (drill-in navigation).
 ---
 
 # LargeFileBridge — The IPFS Page (Node Control Panel)
@@ -486,8 +486,10 @@ The app-wide nudge — polling cheap liveness, suppressing on `/ipfs*`, and hidi
   peerId, platform, install hint (the manual command), the metric block (pins, repo stat, swarm,
   bandwidth), the gateway summary, the posture (reprovide / gc / compliant / publicGateway), and the
   **`autostart`** block (`{ supported, installed, enabled, lastExitCode, lastRunFailed, failureReason,
-  conflict }` — the reboot auto-start state, §13). Note `enabled` means launchd will **try**;
-  `lastRunFailed` says whether it actually **worked** (§13.1) — the UI must read both.
+  conflict, willStartOnBoot, owner }` — the reboot auto-start state, §13). Note `enabled` means launchd
+  will **try** with **our** agent; `lastRunFailed` says whether it actually **worked** (§13.1); and
+  **`willStartOnBoot` / `owner`** is the **one derived answer** to "will IPFS come back?" that every UI
+  surface must read **instead of** re-deriving it from the others (§13.3).
   Metric reads are **best-effort and bounded**: a slow or unset value comes back null → the tile shows
   `—`. Reading is **metadata-only** (like the scan) — it opens no file and moves no bytes.
 * **POST `/api/ipfs/daemon`** `{action:"start"|"stop", autostart?:boolean}` — drives the on/off toggle;
@@ -671,7 +673,57 @@ back after a reboot was a **coin flip we did not control**, and on this machine 
   and "Turn on" would promise the competing agent we deliberately refuse to create. When a **stale** LFB
   agent is still losing the race, the button becomes **"Clear the conflict"** (removes ours only).
 
-### 13.3 This whole section is scheduled for deletion
+### 13.3 One answer, derived once — the banner that never went away
+
+**This was the second real bug on the same machine, and it was reported as "the button doesn't work."**
+The app-wide strip on every page said *"IPFS is on, but it won't restart automatically after you
+reboot"* with a **Turn on auto-start** button. Pressing it produced a green *"IPFS will now start
+automatically on reboot"* toast — and the strip stayed. Pressed four times; four toasts; no change.
+Meanwhile the IPFS dashboard, on the same machine at the same moment, said *"Start on reboot: on ✓ —
+Homebrew (brew services) starts IPFS when you log in."* **Both surfaces were reading the same status
+and answering the same question differently.**
+
+The cause: the question *"will IPFS come back after I reboot?"* was **re-derived on every surface**.
+The dashboard row computed `enabled && !lastRunFailed || conflict !== null` and got it right. The
+liveness endpoint behind the banner exported `autostart.enabled` — **our** agent only — which on a
+Homebrew-owned machine is **false forever by design** (§13.2: we refuse to install a competing agent).
+So the banner asked for an install, the install correctly refused and returned 200, the toast reported
+the *request* rather than the *result*, and the banner re-read the same `enabled: false` it started
+with. Every part behaved as specified and the product lied.
+
+**The rule now:**
+
+* **`autostart.owner`** ∈ `"lfb" | "foreign" | null` and **`autostart.willStartOnBoot`** (`owner !==
+  null`) are computed **once, on the backend**, from `enabled`, `lastRunFailed` and `conflict`:
+  * **`foreign`** — a non-LFB job launchd **will actually run** at login (`conflict.willRunAtLogin`).
+    It wins even when our agent is also installed, because ours is then the one **losing** the race.
+  * **`lfb`** — our agent is registered, not disabled, and not dead at exit≠0 (§13.1).
+  * **`null`** — a dead agent, a plist launchd won't run, or nothing at all.
+* **Every surface reads `willStartOnBoot` / `owner` and nothing else** for this question: the liveness
+  endpoint (`willStartOnBoot`, renamed from `autostartEnabled` so the old reading can't come back),
+  the app-wide strip, the dashboard row, the off page's *"already set to start"* line, and the start
+  job's log line. **No surface derives it locally.**
+* **The foreign agent is held to the §13.1 standard too.** `conflict.willRunAtLogin` = its plist asks
+  to start (`RunAtLoad` or `KeepAlive`) **and** launchd has it registered **and** it is not disabled. A
+  kubo plist merely sitting on disk — `launchctl disable`d, or never bootstrapped — neither races us
+  nor brings IPFS back, so it is **not** an owner and does **not** block our install.
+* **The toast reports the outcome, not the request.** After `POST /autostart`, the UI reads the
+  returned `owner`: *"IPFS will now start automatically on reboot"* (ours), *"Homebrew (brew services)
+  already starts IPFS when you log in — nothing to add"* (adopted), or an **error** toast when nobody
+  will (the install did not take). A success toast for an install that installed nothing is the lie
+  that made the button look dead.
+
+The single derivation of the owner (and `willStartOnBoot`), plus the foreign agent's own registered /
+enabled / starts-on-load check, is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `resolveOwner()`, `startsAtLogin()`, and the `willRunAtLogin` field set in `findConflict()`
+
+The liveness endpoint exporting that derived answer (not `enabled`) to the app-wide strip is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `liveness()`
+
+The outcome-not-request toast shared by the strip and the dashboard row is handled in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `toastAutostartOutcome()`
+
+### 13.4 This whole section is scheduled for deletion
 
 **The honest framing:** §13 exists only because IPFS is a **daemon we do not own**, provisioned by
 **brew**, whose lifecycle we can only influence through launchd — where anyone else may also be an
@@ -963,9 +1015,10 @@ all** (the charter's no-nagging rule holds).
 
 ### 17.3 Scenario C — running, but won't come back after a reboot
 
-* **Trigger:** installed **and** running, but reboot **auto-start is off** (`autostart.supported &&
-  !autostart.enabled`). Pinning works *now*, but the next restart silently drops the node — the exact
-  failure this whole feature exists to end.
+* **Trigger:** installed **and** running, but **nobody** will bring IPFS back after a reboot
+  (`autostart.supported && !autostart.willStartOnBoot` — the **derived** answer, §13.3, never
+  `enabled`, which is our agent only and stays false on a Homebrew-owned machine). Pinning works *now*,
+  but the next restart silently drops the node — the exact failure this whole feature exists to end.
 * **App-start behavior — deliberately gentle (LOCKED).** Because the node is **healthy right now**, we
   must **not** show the alarming red/amber "can't pin" banner (that would violate no-nagging). Instead
   we show a **low-prominence, dismissible, one-time** encouragement — an **info** strip (or the blue
@@ -975,7 +1028,9 @@ all** (the charter's no-nagging rule holds).
     this is encouragement, not a nag. It never blocks a page.
 * **Agree-button (Turn on auto-start) behavior:** `POST /autostart {action:"install"}` (§13) — writes
   and loads the launchd LaunchAgent. On success the strip disappears and the dashboard's control flips
-  to its quiet "on ✓" status (§18). No daemon restart, no interruption.
+  to its quiet "on ✓" status (§18). No daemon restart, no interruption. The toast names the **outcome**
+  from the returned `owner` (§13.3) — never a blanket "will now start" for an install that, by §13.2,
+  installed nothing.
 
 The dismissible, one-time auto-start encouragement (distinct from the blocking "can't pin" banner, shown only when running-but-not-auto-starting) is rendered in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/components/IpfsStatusBanner.tsx` — `IpfsStatusBanner`
