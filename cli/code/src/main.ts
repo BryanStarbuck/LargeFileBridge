@@ -45,8 +45,9 @@ USAGE
   lfb description FILE [--create] [--overwrite] [--text]
                         Same for the AI visual description (.ai_description).
                         (alias: lfb describe FILE)
-  lfb ocr FILE [--create] [--overwrite] [--text]
+  lfb ocr FILE [--create] [--overwrite] [--text] [--out PATH]
                         Same for the on-screen/OCR text (.ocr sidecar).
+                        --out also writes the text to PATH of your choosing.
   lfb ensure PATH [--ocr] [--description] [--transcription]
              [--images-only] [--skip-existing | --overwrite] [--dry-run]
                         Walk PATH recursively and make sure EVERY media file
@@ -96,6 +97,12 @@ ARTIFACTS (lfb transcription / description / ocr)
                       then print its path. If it already exists, just prints the
                       path — safe to run repeatedly.
     --overwrite       Regenerate even if the artifact exists (implies --create).
+    --out PATH        ALSO write the artifact's text to PATH (parent dirs are
+                      created; written atomically). The canonical sidecar is
+                      still written to the tracking repo — --out is delivery,
+                      not a second placement policy. stdout becomes PATH, so a
+                      caller with its own naming scheme never has to work out
+                      the mirrored tracking path. (alias: -o; --out=PATH)
     --text            Print the artifact's TEXT CONTENT on stdout instead of
                       its path.
 
@@ -104,6 +111,7 @@ ARTIFACTS (lfb transcription / description / ocr)
     lfb transcription ~/videos/demo.mp4 --create     # make it if needed, print path
     lfb description  poster.png --create --text      # AI description text itself
     lfb ocr contract.pdf --create                    # OCR a PDF, print sidecar path
+    lfb ocr stmt.pdf --create --out stmt_ocr.txt     # …and deliver it where you want it
 
 BULK COVERAGE (lfb ensure)
   One recursive sweep that leaves a whole tree fully covered. Pick the artifacts
@@ -256,16 +264,30 @@ async function cmdArtifact(kindWord: string, args: string[]): Promise<void> {
   let create = false;
   let overwrite = false;
   let text = false;
-  for (const a of args) {
+  let outArg: string | null = null;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
     if (a === "--create") create = true;
     else if (a === "--overwrite") { overwrite = true; create = true; }
     else if (a === "--text") text = true;
+    else if (a === "--out" || a === "-o") {
+      const next = args[++i];
+      if (!next || next.startsWith("-")) fail(`${a} needs a file path: lfb ${kindWord} FILE ${a} /path/to/out.txt`);
+      outArg = next;
+    } else if (a.startsWith("--out=")) outArg = a.slice("--out=".length);
     else if (a === "-h" || a === "--help") return void process.stdout.write(HELP);
     else if (a.startsWith("-")) fail(`Unknown flag: ${a}\n\n${HELP}`);
     else if (fileArg) fail(`Only one FILE may be given (got "${fileArg}" and "${a}").`);
     else fileArg = a;
   }
-  if (!fileArg) fail(`A media file is required: lfb ${kindWord} FILE [--create] [--overwrite] [--text]`);
+  if (!fileArg) fail(`A media file is required: lfb ${kindWord} FILE [--create] [--overwrite] [--text] [--out PATH]`);
+  // --out is a DELIVERY option, not a second placement policy: the backend still writes the canonical
+  // sidecar into the tracking area (artifact_placement_policy.mdx), and the CLI copies that text to the
+  // caller's chosen path. One generator, one source of truth, two destinations. It exists because a
+  // caller with its own naming scheme (an audit tree wanting `{name}_ocr.txt` next to each PDF) should
+  // not have to reverse-engineer the mirrored tracking path to collect the result.
+  const outAbs = outArg ? path.resolve(outArg.replace(/^~(?=\/|$)/, os.homedir())) : null;
+  if (outAbs && text) fail("--out and --text are mutually exclusive: --out writes the text to a file, --text prints it to stdout.");
   const abs = path.resolve(fileArg.replace(/^~(?=\/|$)/, os.homedir()));
   if (!fs.existsSync(abs)) fail(`No such file: ${abs}`);
 
@@ -275,10 +297,19 @@ async function cmdArtifact(kindWord: string, args: string[]): Promise<void> {
 
   const finish = async (view: ArtifactView, how: "found" | "created"): Promise<void> => {
     const artifactPath = view[kind.pathField] as string;
+    if (outAbs) {
+      // Write to a temp sibling and rename, so an interrupted copy never leaves a half-written file
+      // that a resumable caller would mistake for a finished one.
+      fs.mkdirSync(path.dirname(outAbs), { recursive: true });
+      const tmp = `${outAbs}.tmp-${process.pid}`;
+      fs.writeFileSync(tmp, view.text ?? "");
+      fs.renameSync(tmp, outAbs);
+    }
     await logInvocation(
-      `${kindWord} file=${abs} outcome=${how} artifact=${artifactPath} durationMs=${Date.now() - started}`,
+      `${kindWord} file=${abs} outcome=${how} artifact=${artifactPath}` +
+        `${outAbs ? ` out=${outAbs}` : ""} durationMs=${Date.now() - started}`,
     );
-    process.stdout.write(`${text ? view.text : artifactPath}\n`);
+    process.stdout.write(`${text ? view.text : (outAbs ?? artifactPath)}\n`);
   };
 
   // 1. Locate: does the artifact already exist? (GET /api/<kind>/file — a pure read.)

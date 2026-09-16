@@ -26,6 +26,46 @@ import { log } from "./logging.js";
  *  loop-watch fires, so a single bad call is named before the window that contains it is. */
 const WARN_MS = Math.max(25, Number(process.env.LFB_BLOCK_WARN_MS) || 250);
 
+// ── A FROZEN PROCESS IS NOT A BLOCKED SECTION ────────────────────────────────────────────────────────
+//
+// `performance.now()` measures WALL time, and macOS suspends this app wholesale when the lid closes or the
+// machine sleeps. A section that happened to be on the stack at that moment is billed for the entire
+// freeze, so `error.err` carried lines like
+//
+//     storage.mirror held the event loop for 967706ms (…/charlie-kirk)
+//
+// — sixteen minutes, for a pass whose real cost is under a second. That is worse than no measurement:
+// loop-watch learned to say `PROCESS SUSPENDED for about Ns` instead (`suspensionGapMs`), but `blocking`
+// did not, so the ranked culprit list this tool exists to produce named a real section with a fictional
+// number, and the `worstMs` it reported poisoned the window's tally too. Every minute spent chasing the
+// named repo was wasted; the log was lying.
+//
+// THE DISCRIMINATOR IS CPU TIME. `process.cpuUsage()` advances only while the process is scheduled, so a
+// stretch with 900 s of wall time and ~0 s of CPU was frozen, not working. A stretch that really held the
+// loop for 900 s burned 900 s of CPU (or of kernel time, which `cpuUsage` counts as `system`).
+//
+// WHY IT IS NOT JUST A RATIO. A section that blocks on DISK also shows wall ≫ cpu, and that IS real
+// blocking — `sameBytes` reads two files per tracked file and its cost is mostly open/read/close. So the
+// ratio only applies above a floor no local filesystem can plausibly reach in one synchronous section.
+// Below the floor every measurement is taken at face value, which is the safe side: a mis-flagged
+// suspension would hide a genuine stall, and hiding stalls is the one thing this module must never do.
+const SUSPEND_FLOOR_MS = 60_000;
+const SUSPEND_CPU_FRACTION = 0.05;
+
+/** Total CPU (user + system) charged to this process, in milliseconds. */
+function cpuMs(): number {
+  const c = process.cpuUsage();
+  return (c.user + c.system) / 1000;
+}
+
+/**
+ * Was this stretch a frozen PROCESS rather than a blocked section? Exported for test: the rule is a
+ * judgement about two numbers and belongs somewhere it can be pinned without suspending a machine.
+ */
+export function looksSuspended(wallMs: number, cpuUsedMs: number): boolean {
+  return wallMs >= SUSPEND_FLOOR_MS && cpuUsedMs < wallMs * SUSPEND_CPU_FRACTION;
+}
+
 /** How many distinct labels to name in the per-window ranking. Beyond this it is noise, not a diagnosis. */
 const TOP_N = 6;
 
@@ -67,6 +107,7 @@ function record(label: string, ms: number, detail?: string): void {
  */
 export function blocking<T>(label: string, fn: () => T, detail?: string): T {
   const started = performance.now();
+  const cpuStarted = cpuMs();
   const outermost = depth === 0;
   depth += 1;
   try {
@@ -74,13 +115,26 @@ export function blocking<T>(label: string, fn: () => T, detail?: string): T {
   } finally {
     depth -= 1;
     const ms = performance.now() - started;
-    if (outermost) record(label, ms, detail);
-    if (ms >= WARN_MS) {
-      log.warn(
+    const cpu = cpuMs() - cpuStarted;
+    if (looksSuspended(ms, cpu)) {
+      // Neither tallied nor warned: this section did not hold the loop, the OS held the process. Said at
+      // INFO so the fact is still in the trail — a reader who sees a gap in the log wants to know why.
+      log.info(
         "blocking",
-        `${label} held the event loop for ${Math.round(ms)}ms${detail ? ` (${detail})` : ""} — nothing else ` +
-          `was answered while it ran: no HTTP response, no stream chunk, no timer. See performance.mdx T3.`,
+        `PROCESS SUSPENDED for about ${Math.round(ms / 1000)}s while ${label} was on the stack` +
+          `${detail ? ` (${detail})` : ""} — only ${Math.round(cpu)}ms of CPU was used in that span, so the ` +
+          `machine was asleep, not blocked. Not counted against ${label}. See performance.mdx T3.`,
       );
+    } else {
+      if (outermost) record(label, ms, detail);
+      if (ms >= WARN_MS) {
+        log.warn(
+          "blocking",
+          `${label} held the event loop for ${Math.round(ms)}ms${detail ? ` (${detail})` : ""} — nothing ` +
+            `else was answered while it ran: no HTTP response, no stream chunk, no timer. See ` +
+            `performance.mdx T3.`,
+        );
+      }
     }
   }
 }

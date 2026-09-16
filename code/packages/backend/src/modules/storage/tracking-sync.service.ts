@@ -48,8 +48,9 @@ import { resolveStateDir } from "../../config/state-dir.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
 // logs. Both directions route through it, so neither leg can stamp over the other side's events.
 import { copyTrackedFile } from "./tracked-file-merge.js";
+import { parseYamlHealingUnionDamage } from "./union-damage.js";
 // The working-tree gate — a LEAF module (logging + path only), so no cycle with the git service.
-import { deferWhileBusy } from "../git/worktree-gate.js";
+import { deferWhileBusy, busyRootFor } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
 // Name this section in the event-loop stall report. Both legs of the mirror are SYNCHRONOUS walks over
@@ -351,26 +352,152 @@ function copyTreeExcept(src: string, dst: string, skip: ReadonlySet<string>): bo
  * Category-B write (e.g. from `writeRepoStorage`) and on demand.
  */
 export function mirrorToSyncRepo(repoRoot: string): boolean {
-  return blocking("storage.mirror", () => drainSync(mirrorGen(repoRoot)), repoRoot);
+  const key = path.resolve(repoRoot);
+  // A pass is already draining for this repo. Mark it dirty and return: the drain re-runs once when it
+  // finishes, which is the same coalescing `deferWhileBusy` does and for the same reason — the mirror is a
+  // reconciliation to current state, never a queue of work items, so N writes want ONE more pass.
+  const inFlight = mirrorInFlight.get(key);
+  if (inFlight) {
+    inFlight.again = true;
+    return false;
+  }
+  return blocking("storage.mirror", () => driveMirrorBudgeted(key), key);
 }
 
-// THERE IS DELIBERATELY NO `mirrorToSyncRepoYielding`. The two directions are not symmetric, and the
-// asymmetry is a safety one, not a taste one:
+/**
+ * Mirror NOW, on this thread, to completion — the deterministic twin of {@link mirrorToSyncRepo}.
+ *
+ * WHY BOTH EXIST. `mirrorToSyncRepo`'s budget is WALL-CLOCK, which makes its sync/async boundary a
+ * property of how busy the machine is rather than of the work: the same small tree finishes inline on an
+ * idle box and hands off on a loaded one. For production that is exactly right — the caller wants "get
+ * this mirrored, don't hold my thread" and has no use for the boundary. For a CALLER THAT NEEDS THE
+ * ANSWER it is not right at all, and the flakiness is not hypothetical: `mirror-cost.spec.ts` asserts on
+ * the return value and on the mirror's contents immediately afterwards, and under a full-suite load a
+ * different test failed on each run.
+ *
+ * So the choice is explicit instead of accidental. This is the same split the reconcile has already had
+ * since P-47 — `reconcileFromSyncRepo` (sync, what the specs assert through) beside
+ * `reconcileFromSyncRepoYielding` (interruptible, what production runs) — and it is safe for the same
+ * reason: ONE generator backs both drivers, so the behaviour under test cannot drift from the behaviour
+ * that ships. The interruptible driver has its own test ("the mirror hands the loop back past its
+ * budget").
+ */
+export function mirrorToSyncRepoNow(repoRoot: string): boolean {
+  const key = path.resolve(repoRoot);
+  return blocking("storage.mirror", () => drainSync(mirrorGen(key)), key);
+}
+
+/** How long a mirror pass may hold the caller's thread before the REST of it is finished cooperatively.
+ *
+ *  The budget is what lets one entry point serve two very different callers without a second code path:
+ *  a small tree (every test in this suite, a repo with a handful of sidecars) finishes inside the budget
+ *  and behaves exactly as the old synchronous pass did, returning the real `changed` answer; the 3,649-
+ *  sidecar repo on the reference machine spends 50 ms here and the remaining ~450 ms in 8 ms slices with
+ *  the event loop handed back between them. 50 ms is chosen so the sync leg cannot be the reason a request
+ *  misses a frame, while being long enough that the ordinary small pass never pays a `setImmediate`. */
+const MIRROR_SYNC_BUDGET_MS = Math.max(1, Number(process.env.LFB_MIRROR_SYNC_BUDGET_MS) || 50);
+
+/** Repos whose mirror is draining asynchronously right now. `again` records that a write arrived while the
+ *  drain ran, so exactly one more pass follows it however many writes landed. */
+const mirrorInFlight = new Map<string, { again: boolean }>();
+
+/** TEST-ONLY: is a cooperative mirror drain still in flight? */
+export function mirrorDrainsInFlight(): number {
+  return mirrorInFlight.size;
+}
+
+/**
+ * Drain `mirrorGen` on the caller's thread for at most {@link MIRROR_SYNC_BUDGET_MS}, then hand the
+ * remainder to {@link finishMirrorCooperatively}. Returns the pass's real `changed` answer when it
+ * completed here, and `false` when it was handed off — the continuation owns the announcement in that case
+ * (it is made inside the generator), so a `false` here means "not decided yet", never "nothing changed".
+ */
+function driveMirrorBudgeted(key: string): boolean {
+  const gen = mirrorGen(key);
+  const began = performance.now();
+  let step = gen.next();
+  while (!step.done) {
+    if (performance.now() - began >= MIRROR_SYNC_BUDGET_MS) {
+      mirrorInFlight.set(key, { again: false });
+      void finishMirrorCooperatively(key, gen);
+      return false;
+    }
+    step = gen.next();
+  }
+  return step.value;
+}
+
+/**
+ * Finish a mirror pass in 8 ms slices, RE-CHECKING THE WORKING-TREE GATE at every slice boundary.
+ *
+ * THE GATE CHECK IS THE WHOLE REASON THIS FUNCTION IS SHAPED LIKE THIS, and it is the "change to make
+ * deliberately, with its own test" that performance.mdx P-47 declined to make speculatively. The mirror
+ * writes INTO the sync repo's working tree, and `deferWhileBusy`'s check at the START of the pass was sound
+ * only while the pass was atomic: an interruptible mirror can begin before a git cycle and still be writing
+ * when one starts, which is the "Your local changes to the following files would be overwritten by merge"
+ * abort that worktree-gate.ts exists to prevent. So the moment the destination goes busy, this pass is
+ * ABANDONED mid-tree and re-armed through `deferWhileBusy`, which runs it again — whole — once the cycle
+ * releases the tree.
+ *
+ * A half-mirrored tree is safe to abandon for two independent reasons: the mirror is a reconciliation, so
+ * the re-run converges on the same result from wherever it stopped; and a cycle that finds LFB's own files
+ * dirty COMMITS them as a checkpoint before merging (`checkpointOwnWrites`, and `repos/` is in
+ * `SDL_ROOT_PAYLOAD`), so partial mirrored text is a checkpoint commit rather than a refused merge.
+ *
+ * Why this had to happen at all: `blocking` measured `storage.mirror` holding the event loop for 0.8 s
+ * typically and 79 s at worst on the reference machine (131 WARNs in one day of `error.err`), while the
+ * browser reported `PAGE STILL SPINNING … waiting on ["authInit"], ["securityConfig"]` for the same
+ * windows. Nothing is answered while this walk runs — not a request, not a stream chunk, not a timer — so
+ * every one of those seconds is a second of blank spinner in the tab. See performance.mdx P-53.
+ */
+async function finishMirrorCooperatively(key: string, gen: Generator<void, boolean, void>): Promise<void> {
+  const dst = resolveStateSyncRepo(key);
+  let synchronousMs = 0;
+  try {
+    let sliceStarted = performance.now();
+    let step = gen.next();
+    while (!step.done) {
+      if (performance.now() - sliceStarted >= SLICE_MS) {
+        synchronousMs += performance.now() - sliceStarted;
+        await handBackTheLoop();
+        if (dst && busyRootFor(dst)) {
+          deferWhileBusy(dst, `mirror:${key}`, () => void mirrorToSyncRepo(key));
+          log.info("storage", `mirrorToSyncRepo(${key}): ${dst} entered a git cycle mid-pass — re-armed for when it releases`);
+          return;
+        }
+        sliceStarted = performance.now();
+      }
+      step = gen.next();
+    }
+    synchronousMs += performance.now() - sliceStarted;
+  } catch (e) {
+    log.warn("storage", `mirrorToSyncRepo(${key}): cooperative drain failed: ${(e as Error).message}`);
+  } finally {
+    // Cooperative time is ranked but NEVER warned (see `recordCooperative`): it is real CPU and belongs in
+    // the window's report, and it blocked nothing.
+    recordCooperative("storage.mirror", synchronousMs, key);
+    const state = mirrorInFlight.get(key);
+    mirrorInFlight.delete(key);
+    if (state?.again) void mirrorToSyncRepo(key);
+  }
+}
+
+// WHY THE MIRROR IS A BUDGETED PASS AND THE RECONCILE IS A PLAIN YIELDING ONE. The two directions are not
+// symmetric, and the asymmetry is a safety one, not a taste one:
 //
 //   * The RECONCILE reads the sync repo and writes LOCAL STORAGE. Nothing it writes is inside a git working
 //     tree, so a pass that spans several event-loop turns cannot collide with a git cycle. It is also
 //     called from INSIDE the cycle (`reconcileMirroredRepos`, right after the pull), where the worktree
 //     gate is already held on our behalf — so yielding there is if anything safer than not yielding.
-//   * The MIRROR writes INTO the sync repo's working tree. `deferWhileBusy` protects that with a check at
-//     the START of the pass, which is sound only because the pass is atomic: an interruptible mirror could
-//     begin before a git cycle and still be writing when one starts, which is exactly the
-//     "Your local changes to the following files would be overwritten by merge" abort that worktree-gate.ts
-//     exists to prevent. Making the mirror interruptible therefore requires re-checking the gate at every
-//     slice boundary, and that is a change to make deliberately, with its own test — not a twin to add
-//     speculatively because the reconcile has one.
+//   * The MIRROR writes INTO the sync repo's working tree, so an interruptible pass has to keep asking
+//     whether a cycle started while it was away. That is what `finishMirrorCooperatively` does at every
+//     slice boundary, and abandoning the pass when the answer changes is what makes it safe.
 //
-// After P-45 the mirror is ~30 ms on the largest repo here anyway, so the pressure that motivated the
-// reconcile's driver does not exist on this side.
+// The claim that stood here before — "after P-45 the mirror is ~30 ms on the largest repo here anyway, so
+// the pressure that motivated the reconcile's driver does not exist on this side" — was true of a settled
+// fleet and false of this one. It measured a pass whose memos were warm; in production the memos were being
+// invalidated on every cycle by the very git merge this mirror was announcing (see the `noteArtifactWritten`
+// gate in `mirrorGen`), so the real pass was 0.8 s typical and 79 s at worst.
 
 function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
   const dst = resolveStateSyncRepo(repoRoot);
@@ -428,7 +555,10 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
     // entries and 13 pin claims one commit after the peer that owned them pushed them, and 8 commits in
     // that file's history dropped entries that way. `mergeManifests` has always documented "absence is
     // NEVER a delete"; the mirror simply never called it.
-    yield* copyTreeGen(localStateDir, dst, "", MERGED_NEVER_COPIED);
+    // THE ANSWER IS THE POINT, not a by-product. Every leg below reports whether it changed the mirror's
+    // bytes, and this pass must report the OR of them — see the `noteArtifactWritten` call at the end for
+    // what a false "yes" costs.
+    let changed = yield* copyTreeGen(localStateDir, dst, "", MERGED_NEVER_COPIED);
     // Between the walk and the two merges: each merge is ATOMIC (a multi-megabyte YAML parse cannot be
     // sliced), so the yields have to sit at the seams between them.
     yield;
@@ -442,12 +572,12 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
       // `incomingIsWire` is the other half: every OTHER computer's claim passes through FROM the mirror
       // rather than being re-unioned from our copy, so this machine can never re-publish a peer's
       // withdrawn claim (manifest-merge.ts).
-      mergeManifestInto(JOB_MIRROR_MANIFEST, mirrorManifestFile, localManifestFile, mirrorManifestFile, repoRoot);
+      changed = mergeManifestInto(JOB_MIRROR_MANIFEST, mirrorManifestFile, localManifestFile, mirrorManifestFile, repoRoot) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
     }
     try {
-      syncLedgerInto(mirrorLedgerFile, localLedgerFile, JOB_MIRROR_LEDGER, repoRoot);
+      changed = syncLedgerInto(mirrorLedgerFile, localLedgerFile, JOB_MIRROR_LEDGER, repoRoot) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
     }
@@ -455,11 +585,12 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
       // The SHARED policy travels by FOLD, not copy (see `mergePolicyInto`). Same direction as the ledger:
       // local is the source, the mirror is the destination — but the rule is symmetric, so the reconcile
       // leg applying it in reverse converges on the same document rather than fighting this one.
-      mergePolicyInto(
-        path.join(dst, "decisions_policy.yaml"),
-        path.join(localStateDir, "decisions_policy.yaml"),
-        JOB_MIRROR_POLICY,
-      );
+      changed =
+        mergePolicyInto(
+          path.join(dst, "decisions_policy.yaml"),
+          path.join(localStateDir, "decisions_policy.yaml"),
+          JOB_MIRROR_POLICY,
+        ) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): policy merge write failed: ${(e as Error).message}`);
     }
@@ -478,9 +609,27 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
     // other's number on every cycle — a commit per repo per cycle, forever, from a value that was never
     // shared state to begin with. With both held at their schema defaults here, the mirror's bytes change
     // only when genuinely shared state (name, policy, enlist provenance) does.
-    projectRepoStorageToMirror(path.join(localStateDir, "repo_storage.yaml"), path.join(dst, "repo_storage.yaml"));
-    noteArtifactWritten(dst, "tracking-state");
-    return true;
+    changed =
+      projectRepoStorageToMirror(path.join(localStateDir, "repo_storage.yaml"), path.join(dst, "repo_storage.yaml")) ||
+      changed;
+    // ONLY ANNOUNCE A WRITE WHEN THERE WAS ONE (performance.mdx P-52).
+    //
+    // This call used to be unconditional, and the cost of that was the whole churn engine this module
+    // spends its life defending against. `noteArtifactWritten` arms the owning SDL's git backbone on a
+    // 20 s debounce, so a mirror pass that changed NOTHING still scheduled a fetch + merge for that
+    // storage. The merge then rewrote the mirror's own files — same bytes, new inode and new mtime — which
+    // is precisely the identity every memo in this module is keyed on (`sameBytes`'s equality memo,
+    // `pairSettled`'s merge memo). So the next pass found every memo cold, re-read and re-merged all
+    // 3,649 sidecars of the largest repo, announced again, and the loop closed: measured on the reference
+    // machine as `storage.mirror` 104 calls a minute and stalls of 0.8 s typical / 79 s worst, while
+    // nothing in the product had changed at all.
+    //
+    // `changed` is now the OR of every leg (the tree walk, the three merges, the repo_storage projection),
+    // and every one of those already answers the precise question "did the destination's bytes move" —
+    // `writeIfDifferent` and `copyTrackedFile`'s `sameBytes` short-circuit are what make that answer
+    // trustworthy. A settled pass is therefore silent, which is what lets the memos stay warm.
+    if (changed) noteArtifactWritten(dst, "tracking-state");
+    return changed;
   } catch (e) {
     log.warn("storage", `mirrorToSyncRepo(${repoRoot}) failed (path missing/unwritable): ${(e as Error).message}`);
     return false;
@@ -534,17 +683,20 @@ const MACHINE_LOCAL_REPO_STORAGE = ["last_scan", "counts"] as const;
  * out identical either way (so git never committed anything and nothing looked wrong), but the mtime moved
  * every time — and the mtime is the identity every memo in this module is keyed on (performance.mdx P-45).
  */
-function projectRepoStorageToMirror(localFile: string, mirrorFile: string): void {
+function projectRepoStorageToMirror(localFile: string, mirrorFile: string): boolean {
   try {
     const parsed = RepoStorageDocSchema.safeParse(YAML.parse(fs.readFileSync(localFile, "utf8")) ?? {});
-    if (!parsed.success) return;
+    if (!parsed.success) return false;
     const defaults = RepoStorageDocSchema.parse({ repo_storage: {} }).repo_storage;
     for (const key of MACHINE_LOCAL_REPO_STORAGE) {
       (parsed.data.repo_storage as Record<string, unknown>)[key] = (defaults as Record<string, unknown>)[key];
     }
-    writeIfDifferent(mirrorFile, YAML.stringify(parsed.data, { sortMapEntries: true }));
+    // Returns whether the mirror's bytes moved — the caller ORs it into the pass's answer, which is what
+    // decides whether a git cycle is announced at all (see `mirrorGen`).
+    return writeIfDifferent(mirrorFile, YAML.stringify(parsed.data, { sortMapEntries: true }));
   } catch {
     /* missing/unreadable local copy — nothing to project */
+    return false;
   }
 }
 
@@ -584,7 +736,9 @@ function readManifestChecked(file: string, unit: Manifest["unit"]): { manifest: 
   if (!raw.trim()) return { manifest: empty, unreadable: false };
   try {
     if (raw.includes("<<<<<<<")) return { manifest: empty, unreadable: true }; // conflict markers — half-merged
-    const parsed = YAML.parse(raw) as Partial<Manifest> | null;
+    // Heal line-union damage before judging the document unreadable — `manifest.yaml` carries the same
+    // `merge=union` attribute as the ledger and fails the same way (union-damage.ts).
+    const parsed = parseYamlHealingUnionDamage(raw).doc as Partial<Manifest> | null;
     if (!parsed || !Array.isArray(parsed.files)) return { manifest: empty, unreadable: true };
     // Same POSIX-separator heal as the primary reader (manifest.service.ts): a Windows peer's mirrored
     // copy carries `\` paths, and merging those unnormalized would re-introduce duplicate spellings of
@@ -795,7 +949,7 @@ function syncLedgerInto(dstFile: string, srcFile: string, job: string = JOB_LEDG
     forgetPair(job, dstFile, srcFile); // a refusal is not a completion — re-announce it every pass
     return false;
   }
-  const merged = unionLedgerEvents(parseLedgerBestEffort(dstRaw), parseLedgerBestEffort(readFileOrNull(srcFile)));
+  const merged = unionLedgerEvents(parseLedgerBestEffort(dstRaw, dstFile), parseLedgerBestEffort(readFileOrNull(srcFile), srcFile));
   const changed = writeIfDifferent(dstFile, serializeLedger(merged));
   // AFTER the write — the memo must describe the bytes now on disk, not the ones we started from.
   markPairSettled(job, dstFile, srcFile);

@@ -1,10 +1,12 @@
-import { defineConfig, type ProxyOptions } from "vite";
+import { defineConfig, type Plugin, type ProxyOptions } from "vite";
 import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
+import fs from "node:fs/promises";
 import path from "node:path";
+import YAML from "yaml";
 import { resolveWebPort, DEFAULT_WEB_PORT } from "./scripts/web-port.mjs";
 
-// Grant read access up to the LargeFileBridge repo root so we can import pm/left_bar.yaml?raw
+// Grant read access up to the LargeFileBridge repo root so we can import pm/left_bar.yaml?parsed
 // (left_bar.mdx §AC4 — the frontend renders the nav straight from the yaml, no code copy).
 const repoRoot = path.resolve(__dirname, "../../..");
 
@@ -35,6 +37,49 @@ const proxyConfigure: NonNullable<ProxyOptions["configure"]> = (proxy) => {
   });
 };
 
+/**
+ * `import nav from "…/left_bar.yaml?parsed"` — parse the YAML AT BUILD TIME and hand the browser a plain
+ * object literal (performance.mdx P-54).
+ *
+ * WHAT THIS TAKES OFF THE MAIN THREAD. `config/left_bar.ts` did `export const leftBar = parse()`, a
+ * `YAML.parse` at MODULE-EVALUATION time — so it ran on the browser's main thread before React mounted,
+ * on the critical path to first paint, every load. Worse than its own cost: it was the only importer of
+ * `yaml` in the whole frontend, and that pulled a **752 KB** parser into the boot payload (13.35 MiB of
+ * static modules measured on this machine, of which this was 5.5%) to read one small nav file that cannot
+ * change while the tab is open.
+ *
+ * IT DOES NOT WEAKEN left_bar.mdx §AC4 ("render the nav straight from pm/left_bar.yaml, no code copy").
+ * The yaml is still the ONE source of truth and still the thing being read — the parse simply happens in
+ * the build rather than in the user's browser. `addWatchFile` keeps the dev loop identical: editing
+ * `pm/left_bar.yaml` re-runs this transform and hot-reloads the sidebar.
+ */
+function yamlParsedAtBuildTime(): Plugin {
+  const SUFFIX = "?parsed";
+  return {
+    name: "lfb-yaml-parsed",
+    enforce: "pre",
+    async resolveId(source, importer) {
+      if (!source.endsWith(`.yaml${SUFFIX}`)) return null;
+      const bare = source.slice(0, -SUFFIX.length);
+      // Resolve the path exactly as Vite would, then re-attach the marker so `load` still sees it.
+      const abs = path.isAbsolute(bare)
+        ? bare
+        : path.resolve(importer ? path.dirname(importer) : process.cwd(), bare);
+      return abs + SUFFIX;
+    },
+    async load(id) {
+      if (!id.endsWith(`.yaml${SUFFIX}`)) return null;
+      const file = id.slice(0, -SUFFIX.length);
+      this.addWatchFile(file);
+      const text = await fs.readFile(file, "utf8");
+      // A malformed yaml must fail the BUILD loudly rather than silently shipping an empty nav — the
+      // runtime fallback in config/left_bar.ts covers the case where this file is absent, not the case
+      // where someone broke it and nobody noticed.
+      return `export default ${JSON.stringify(YAML.parse(text))};`;
+    },
+  };
+}
+
 export default defineConfig(async () => {
   // The web app that serves pages ALWAYS defaults to :2222 (code_plan.mdx §2). Before Vite binds we
   // resolve the real port under the collision policy: free → take it; held by our own stale instance
@@ -60,7 +105,7 @@ export default defineConfig(async () => {
   }
 
   return {
-    plugins: [react(), tailwindcss()],
+    plugins: [yamlParsedAtBuildTime(), react(), tailwindcss()],
     server: {
       // Bind the SAME address family the resolver manages (web-port.mjs uses 127.0.0.1). Without this
       // Vite binds "localhost" → ::1 (IPv6) on macOS, which our IPv4 port checks can't see or reclaim,

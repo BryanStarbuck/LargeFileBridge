@@ -3,7 +3,7 @@
 # ============================================================================
 # Single source of truth for the app's left-side navigation bar.
 # The frontend imports THIS file directly (code/.../src/config/left_bar.ts,
-# via Vite `?raw`) — there is no separate code copy of the nav content.
+# via Vite `?parsed`, which parses this file at BUILD time) — there is no separate code copy of the nav.
 # Human companion spec: pm/left_bar.mdx (wordmark, color rules, states).
 #
 # There is ONE left bar (the product is a focused, single-window localhost app):

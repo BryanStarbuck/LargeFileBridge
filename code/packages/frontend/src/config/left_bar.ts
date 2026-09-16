@@ -1,8 +1,13 @@
 // Render the left bar straight from pm/left_bar.yaml (left_bar.mdx §AC4 — no code copy of the nav).
-import YAML from "yaml";
+//
+// `?parsed`, NOT `?raw`. The yaml is still the one source of truth and still the thing being read; the
+// PARSE moved from the browser to the build (vite.config.ts `yamlParsedAtBuildTime`). It used to run here
+// at module-evaluation time — on the main thread, before React mounted, on the critical path to first
+// paint — and it was the only importer of `yaml` in the frontend, which put a 752 KB parser in the boot
+// payload to read one small file that cannot change while the tab is open (performance.mdx P-54).
 import { clientLog } from "../lib/clientLog.js";
-// Vite ?raw import; fs.allow grants read access to the repo root (vite.config.ts).
-import rawYaml from "../../../../../pm/left_bar.yaml?raw";
+// Vite plugin import; fs.allow grants read access to the repo root (vite.config.ts).
+import parsedYaml from "../../../../../pm/left_bar.yaml?parsed";
 
 export interface NavChild {
   id: string;
@@ -84,7 +89,7 @@ const FALLBACK: LeftBar = {
 
 function parse(): LeftBar {
   try {
-    const doc = YAML.parse(rawYaml) as { Left_Nav?: { Left_bars?: RawBar[] } };
+    const doc = parsedYaml as { Left_Nav?: { Left_bars?: RawBar[] } };
     const bars = doc.Left_Nav?.Left_bars ?? [];
     const app = bars.find((b) => b.Location === "app") ?? bars[0] ?? {};
     const navItems = (app.nav_items ?? [])
@@ -113,7 +118,9 @@ function parse(): LeftBar {
       sidebarWidth: app.sidebar_width ?? "200px",
     };
   } catch (e) {
-    // Malformed / missing YAML — log and fall back so the app still boots with a bare sidebar.
+    // A shape we did not expect (a renamed key, an absent `Left_Nav`) — log and fall back so the app still
+    // boots with a bare sidebar. Malformed YAML no longer reaches here at all: it fails the build, which
+    // is where a broken nav file should be caught.
     clientLog.error("leftBar.parse", e);
     return FALLBACK;
   }

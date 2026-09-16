@@ -6,8 +6,12 @@ description: The left navigation bar specification — the human companion to pm
 # LargeFileBridge — Left Bar
 
 The **left bar** is the fixed **200px** navigation column on every screen — sized to its widest item plus a small gap (§5), never wider. There is **one** left bar —
-the **app bar** — data-driven from **`pm/left_bar.yaml`**, which the frontend imports raw
-(`src/config/left_bar.ts`, via Vite `?raw`). There is no second code copy of the nav content.
+the **app bar** — data-driven from **`pm/left_bar.yaml`**, which the frontend imports
+directly (`src/config/left_bar.ts`, via Vite `?parsed`). There is no second code copy of the nav content.
+The `?parsed` suffix parses this yaml at BUILD time (`vite.config.ts` `yamlParsedAtBuildTime`) rather than
+in the browser — §AC4 is unchanged, the yaml is still the one thing being read; it kept a 752 KB YAML
+parser and a module-scope parse off the main thread (performance.mdx P-54). A malformed nav file now fails
+the build instead of degrading to an empty sidebar in the user's browser.
 
 Division of labor:
 
