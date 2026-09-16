@@ -315,11 +315,61 @@ right one.
 | **Unreachable / error** | `/ipfs/off` | red dot · *"Can't reach the IPFS node"* | the **error panel** (§9) with cause + retry + manual command. |
 
 The **on/off toggle** is only meaningful once installed. **On** = daemon running; flipping **Off**
-stops the daemon (RPC `shutdown`); flipping **On** starts it (spawn `ipfs daemon`, then poll health).
-Both are **jobs with progress** (§7.2) because starting a daemon isn't instant.
+stops the daemon; flipping **On** starts it, then polls health. Both are **jobs with progress** (§7.2)
+because starting a daemon isn't instant. HOW it is stopped and started depends on **who owns it** —
+§6.1.
 
 Starting or stopping the daemon behind the on/off toggle (and, on start, optionally installing reboot auto-start) is handled in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `controlDaemon()`
+
+### 6.1 Off must stick — stop the daemon the way its owner started it
+
+**This was a real bug on the same Homebrew-owned machine as §13.3.** Flipping **Off** sent the daemon
+RPC `shutdown`, the daemon exited 0, the stop job watched it go down and reported *"✓ IPFS stopped"* —
+and the daemon was back before the page re-rendered. Homebrew's `homebrew.mxcl.kubo` plist says
+`KeepAlive = true`, which tells launchd to relaunch the job **whenever it exits, exit 0 included**. An
+RPC shutdown is not a stop on that machine; it is a one-second gap. The same relaunch fought every
+other stop in the file — the compliance restart, **Restart IPFS**, the pre-upgrade stop — so a
+"restart to apply your settings" was in fact launchd's restart, with whatever timing it chose.
+
+**The rule now — one stop path, owner-aware:**
+
+* **Every stop goes through `stopDaemon()`**; nothing else calls the RPC directly.
+* **Ours (spawned, or our own agent — whose `KeepAlive = { SuccessfulExit: false }` relaunches only a
+  failed exit): RPC `shutdown`.** A clean exit stays down.
+* **A foreign launchd job that is running the daemon (`conflict.running`): `launchctl bootout`** of
+  that job — the stop launchd itself performs, which KeepAlive does not undo. It is **session-scoped**:
+  the plist stays on disk, nothing is disabled, `brew services list` still says *started*, and the job
+  comes back at the next login exactly as before. That is the §13.2 line — we may **run** the user's
+  service for them; we never **reconfigure** it. A system-domain LaunchDaemon (needs root) is refused
+  with the `sudo launchctl bootout` command to run by hand.
+* **After any stop, look again 1.5 s later.** A stop that "took" only because we sampled the gap is the
+  exact lie this section ends; a daemon that is straight back is reported as *not stopped* — *"IPFS came
+  straight back — something relaunched it."*
+* **Symmetric start.** While a foreign job's plist is present (booted out or merely idle), **On** starts
+  IPFS **through** that job — `launchctl bootstrap` (if unloaded) + `kickstart` — handing the daemon
+  back to the owner that had it, supervised the way the user set it up, instead of leaving their service
+  unloaded and a second, unsupervised daemon of ours where it was. Two exceptions fall through to our
+  own spawn: `--migrate` (can't ride a foreign plist), and a foreign start that doesn't come up — we
+  boot it out again (no KeepAlive loop racing our spawn) and spawn ours so the failure is diagnosed
+  from a log we own (§14.2).
+* **Confirm before stopping someone else's service.** When the dashboard's **On/Off** would boot out a
+  foreign owner, it asks first — *"IPFS on this computer is run by Homebrew (brew services)
+  (homebrew.mxcl.kubo). Turning it off stops that service for this login session only — it starts again
+  the next time you log in or reboot, and nothing about your Homebrew setup is changed."* — the explicit,
+  confirmed action §13.2 requires. A daemon we spawned needs no ceremony.
+* **Status stays honest while Off.** `willStartOnBoot` (§13.3) reads the plist's intent and the disabled
+  DB, **not** whether the job is loaded right now — so the dashboard/off page still say *"Homebrew starts
+  IPFS when you log in ✓"* for a job we booted out, which is true.
+
+The owner-aware stop (RPC vs. `launchctl bootout`), the 1.5 s relaunch check, and the foreign-first start are handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `stopDaemon()`, and the foreign branch at the top of `startDaemon()`
+
+The launchd primitives for a foreign job — who runs the daemon now, bootout for the session, bootstrap + kickstart, and the `KeepAlive`/`RunAtLoad`/domain fields on the conflict — are handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-autostart.service.ts` — `foreignDaemonOwner()`, `foreignDaemonStarter()`, `stopForeignAgent()`, `startForeignAgent()`, `keepsAlive()`
+
+The confirmation before booting out a foreign owner is handled in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — the `onToggleOff` handler in `IpfsDashboardPage`
 
 Choosing which URL renders (running dashboard vs. off page) and redirecting between them is handled in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/IpfsDashboardPage.tsx` — `IpfsDashboardPage` (running; redirects to `/ipfs/off` when down)
@@ -662,7 +712,8 @@ back after a reboot was a **coin flip we did not control**, and on this machine 
   starting a second daemon that would fight it for the repository lock."*
 * **We never touch the user's brew setup on our own.** Stopping or disabling a service the user
   configured outside this app is an explicit, **confirmed** action ([dialogs.mdx](./dialogs.mdx)) —
-  never a silent side effect of pressing a button in our UI. *(Trade-off worth surfacing: Homebrew's
+  never a silent side effect of pressing a button in our UI. The On/Off toggle **is** that confirmed
+  action (§6.1), and even then it only boots the job out for the session — never disables or removes it. *(Trade-off worth surfacing: Homebrew's
   plist runs plain `ipfs daemon`, without our `--enable-gc`.)*
 * **A foreign owner still means "on ✓".** The row answers *"will IPFS come back after I reboot?"* — and
   when Homebrew starts it, the honest answer is **yes**, credited to its real owner (*"on ✓ — Homebrew

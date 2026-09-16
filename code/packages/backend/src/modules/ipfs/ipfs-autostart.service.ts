@@ -209,11 +209,24 @@ function readProgramArguments(plist: Record<string, unknown> | null, body: strin
  * regardless of the conditions inside). Homebrew's kubo plist has both. Regex fallback for no plutil.
  */
 function startsAtLogin(plist: Record<string, unknown> | null, body: string): boolean {
-  if (plist) {
-    const keepAlive = plist.KeepAlive;
-    return plist.RunAtLoad === true || keepAlive === true || (!!keepAlive && typeof keepAlive === "object");
-  }
-  return /<key>\s*RunAtLoad\s*<\/key>\s*<true\s*\/>/.test(body) || /<key>\s*KeepAlive\s*<\/key>\s*<(true\s*\/|dict)>/.test(body);
+  return runAtLoad(plist, body) || keepsAlive(plist, body);
+}
+
+function runAtLoad(plist: Record<string, unknown> | null, body: string): boolean {
+  if (plist) return plist.RunAtLoad === true;
+  return /<key>\s*RunAtLoad\s*<\/key>\s*<true\s*\/>/.test(body);
+}
+
+/**
+ * Does the plist say KeepAlive? A bare `true` means launchd relaunches the job the instant it exits —
+ * exit 0 included — which is why `ipfs shutdown` can never turn Homebrew's daemon off: the RPC lands,
+ * the process exits cleanly, launchd starts it again within the second, and the Off toggle looks like
+ * it did nothing (§6.1). A dict (`{ SuccessfulExit: false }`, our own agent) relaunches only a FAILED
+ * exit, so a clean shutdown stays down; that is not the fighting kind and is reported as false here.
+ */
+function keepsAlive(plist: Record<string, unknown> | null, body: string): boolean {
+  if (plist) return plist.KeepAlive === true;
+  return /<key>\s*KeepAlive\s*<\/key>\s*<true\s*\/>/.test(body);
 }
 
 /** Does this argv actually launch an ipfs daemon? argv[0]'s BASENAME is the program; `daemon` its verb. */
@@ -274,14 +287,20 @@ async function findConflict(): Promise<IpfsAutostartConflict | null> {
       } catch {
         loaded = false;
       }
-      // The same §13.1 rule we hold OURSELVES to: a plist on disk proves nothing. It will bring IPFS back
-      // only if launchd has it registered, the user hasn't disabled it, and it asks to be started on load.
-      const willRunAtLogin = loaded && startsAtLogin(plist, body) && !(await isDisabled(label, domain));
+      // The same §13.1 rule we hold OURSELVES to: a plist on disk proves nothing by itself. It will bring
+      // IPFS back at login if it sits in a directory launchd scans at login (it does — that is how we
+      // found it), asks to be started on load, and the user hasn't disabled it. Whether it is loaded
+      // RIGHT NOW is a different question: the Off toggle boots it out for this session on purpose
+      // (§6.1), and it still comes back at the next login.
+      const willRunAtLogin = startsAtLogin(plist, body) && !(await isDisabled(label, domain));
       return {
         label,
         source: label.startsWith("homebrew.mxcl.") ? "Homebrew (brew services)" : label,
         path: file,
+        domain,
+        loaded,
         running,
+        keepAlive: keepsAlive(plist, body),
         willRunAtLogin,
       };
     }
@@ -437,4 +456,53 @@ async function persistIntent(on: boolean): Promise<void> {
   } catch (e) {
     log.warn("ipfs", `persist auto_start_daemon=${on} failed: ${(e as Error).message}`);
   }
+}
+
+// ── Driving a FOREIGN owner's daemon through launchd (ipfs_ui.mdx §6.1) ──────────────────────────
+// When Homebrew's agent owns the daemon, the daemon is not ours to stop with an RPC: its plist says
+// `KeepAlive = true`, so launchd relaunches it the instant `ipfs shutdown` lands, and the Off toggle
+// looks like it did nothing. The only stop that sticks is the one launchd itself performs — bootout —
+// and the matching start is bootstrap. Both are SESSION-SCOPED: the plist stays on disk, nothing is
+// disabled, and the job comes back at the next login exactly as before. That is the line §13.2 draws:
+// we may run the user's service for them, we never reconfigure it.
+
+/** The foreign launchd job that is running the daemon RIGHT NOW, if any (its `running` is true). */
+export async function foreignDaemonOwner(): Promise<IpfsAutostartConflict | null> {
+  if (!supported()) return null;
+  const c = await findConflict();
+  return c?.running ? c : null;
+}
+
+/** A foreign job that can start the daemon for this session (plist present, in the user's domain). */
+export async function foreignDaemonStarter(): Promise<IpfsAutostartConflict | null> {
+  if (!supported()) return null;
+  const c = await findConflict();
+  return c && c.domain !== "system" ? c : null;
+}
+
+/**
+ * Stop a foreign owner's daemon for THIS login session: `launchctl bootout` unloads the job, which
+ * sends the daemon SIGTERM and — unlike a kill — is not something KeepAlive undoes. Throws when the job
+ * lives in the system domain (a LaunchDaemon needs root; we don't have it and won't ask).
+ */
+export async function stopForeignAgent(c: IpfsAutostartConflict): Promise<void> {
+  if (c.domain === "system") {
+    throw new Error(
+      `${c.source} runs IPFS as a system-wide LaunchDaemon (${c.label}); stopping it needs an administrator — run \`sudo launchctl bootout system/${c.label}\` yourself.`,
+    );
+  }
+  await run("launchctl", ["bootout", `${c.domain}/${c.label}`]);
+  log.info("ipfs", `booted out ${c.label} (${c.source}) for this session — it returns at the next login`);
+}
+
+/**
+ * Start (or resume) a foreign owner's daemon for THIS session: bootstrap the plist if we booted it out,
+ * then kickstart so a loaded-but-idle job runs now. Errors are the caller's to interpret — the node
+ * service falls back to spawning its own daemon and diagnosing the failure from a log it owns.
+ */
+export async function startForeignAgent(c: IpfsAutostartConflict): Promise<void> {
+  if (c.domain === "system") throw new Error(`${c.label} is a system LaunchDaemon; we can't start it without root.`);
+  if (!c.loaded) await run("launchctl", ["bootstrap", c.domain, c.path]);
+  await run("launchctl", ["kickstart", `${c.domain}/${c.label}`]);
+  log.info("ipfs", `started ${c.label} (${c.source}) via launchd${c.loaded ? "" : " (bootstrapped)"}`);
 }

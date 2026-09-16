@@ -583,10 +583,14 @@ export interface IpfsAutostartConflict {
   label: string; // launchd label, e.g. "homebrew.mxcl.kubo"
   source: string; // human name, e.g. "Homebrew (brew services)"
   path: string; // the plist backing it
+  domain: string; // its launchd domain — `gui/<uid>` for LaunchAgents, `system` for LaunchDaemons
+  loaded: boolean; // registered with launchd in THIS login session (`launchctl print` succeeds)
   running: boolean; // it currently owns the daemon / repo lock
-  // Will launchd actually run it at the next login? Registered AND not disabled AND its plist asks to be
-  // started (RunAtLoad or KeepAlive). A plist merely sitting on disk — disabled with `launchctl disable`,
-  // or never bootstrapped — does not race us for the repo lock and does not bring IPFS back either.
+  keepAlive: boolean; // its plist says KeepAlive — launchd relaunches it the instant it exits, exit 0 included
+  // Will launchd run it at the next login? Its plist sits in a directory launchd scans at login, asks to
+  // be started (RunAtLoad or KeepAlive), and is not disabled (`launchctl disable`, which persists). NOT
+  // "loaded now": a job we booted out for this session (the Off toggle, §6.1) is unloaded right now and
+  // still comes back at the next login — that is the whole point of bootout over anything permanent.
   willRunAtLogin: boolean;
 }
 

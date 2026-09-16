@@ -20,6 +20,7 @@ import { api } from "../../api/client.js";
 import { middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
+import { confirmModal } from "../../lib/modals.js";
 import { writeClipboard } from "@/lib/clipboard";
 import { ProgressView, SecurityCard, AutostartRow, ConfigHealthCard, UpgradeCard, restartIpfsAndWait, num, toastAutostartOutcome } from "./ipfsShared.js";
 
@@ -120,7 +121,29 @@ export function IpfsDashboardPage() {
         <RunningDashboard
           node={node}
           navigate={navigate}
-          onToggleOff={() => daemon.mutate({ action: "stop" })}
+          onToggleOff={async () => {
+            // Off on a Homebrew-owned daemon stops the user's OWN service for this login session — the
+            // one action §13.2 says we never take silently. Our stop with an RPC was being relaunched by
+            // its KeepAlive within the second (§6.1); the fix is launchd's own stop, and the price of
+            // that is saying so first. A daemon we spawned needs no ceremony.
+            const owner = node.autostart.conflict;
+            if (owner?.running) {
+              const ok = await confirmModal({
+                title: "Turn off IPFS?",
+                body: (
+                  <>
+                    IPFS on this computer is run by <b>{owner.source}</b> ({owner.label}). Turning it off stops
+                    that service for this login session only — it starts again the next time you log in or
+                    reboot, and nothing about your {owner.source} setup is changed.
+                  </>
+                ),
+                confirmLabel: "Turn off IPFS",
+                danger: false,
+              });
+              if (!ok) return;
+            }
+            daemon.mutate({ action: "stop" });
+          }}
           toggling={daemon.isPending}
           onAutostart={(action) => autostart.mutate(action)}
           autostartBusy={autostart.isPending}
@@ -172,7 +195,7 @@ function RunningDashboard({
 }: {
   node: IpfsNodeStatus;
   navigate: ReturnType<typeof useNavigate>;
-  onToggleOff: () => void;
+  onToggleOff: () => void | Promise<void>;
   toggling: boolean;
   onAutostart: (action: IpfsAutostartAction) => void;
   autostartBusy: boolean;

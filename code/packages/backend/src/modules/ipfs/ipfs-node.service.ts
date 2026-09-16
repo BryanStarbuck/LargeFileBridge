@@ -21,7 +21,14 @@ import type {
 import { getAppConfig } from "../store-model/config.service.js";
 import { resolveStateDir } from "../../config/state-dir.js";
 import { computeIpfsPage } from "./ipfs-page.service.js";
-import { autostartStatus, installAutostart } from "./ipfs-autostart.service.js";
+import {
+  autostartStatus,
+  installAutostart,
+  foreignDaemonOwner,
+  foreignDaemonStarter,
+  stopForeignAgent,
+  startForeignAgent,
+} from "./ipfs-autostart.service.js";
 import {
   configHealth,
   diagnoseStartFailure,
@@ -370,12 +377,7 @@ async function applyComplianceWithRestart(): Promise<StartDiagnosis | null> {
     });
   if (!outcome?.restartRequired) return null;
   append("Applying your only-your-content settings (restarting IPFS)…");
-  try {
-    await ipfs.shutdownDaemon();
-  } catch (e) {
-    log.warn("ipfs", `shutdown for compliance restart failed: ${(e as Error).message}`);
-  }
-  if (!(await waitForStopped(10_000))) {
+  if (!(await stopDaemon("for compliance restart"))) {
     // Still running — un-adopted, but running. The job succeeded; the card carries the rest.
     append("(couldn't restart IPFS to apply the settings — they'll take effect next time it starts)");
     return null;
@@ -428,6 +430,51 @@ async function waitForHealthy(timeoutMs: number): Promise<boolean> {
     await sleep(1000);
   }
   return false;
+}
+
+/**
+ * Stop the daemon HOWEVER it is owned, and wait until it is really down (ipfs_ui.mdx §6.1).
+ *
+ * The RPC (`ipfs shutdown`) is the right stop for a daemon we spawned, or for our own agent (whose
+ * KeepAlive relaunches only a FAILED exit). It is the wrong stop for a daemon owned by a foreign launchd
+ * job with `KeepAlive = true` — Homebrew's `brew services start kubo` — because launchd relaunches that
+ * job the instant it exits, exit 0 included. On this machine the Off toggle "worked" for about a second:
+ * `waitForStopped` saw the gap, reported stopped, and the daemon was back before the page re-rendered.
+ * So when a foreign job owns the daemon we stop the JOB (`launchctl bootout`, session-scoped — it comes
+ * back at the next login), and only otherwise ask the daemon to stop itself.
+ *
+ * Every stop in this file goes through here — the toggle, the compliance restart, Restart, upgrade —
+ * because every one of them was fought the same way.
+ */
+async function stopDaemon(context: string): Promise<boolean> {
+  const owner = await foreignDaemonOwner().catch(() => null);
+  if (owner) {
+    append(`Stopping ${owner.source}'s IPFS service (${owner.label}) for this login session — it starts again when you next log in.`);
+    try {
+      await stopForeignAgent(owner);
+    } catch (e) {
+      append(`(couldn't stop ${owner.label}: ${(e as Error).message})`);
+      log.warn("ipfs", `bootout ${owner.label} ${context} failed: ${(e as Error).message}`);
+      return false;
+    }
+  } else {
+    try {
+      await ipfs.shutdownDaemon();
+    } catch (e) {
+      append(`(shutdown RPC error: ${(e as Error).message})`);
+      log.warn("ipfs", `shutdown ${context} failed: ${(e as Error).message}`);
+    }
+  }
+  if (!(await waitForStopped(10_000))) return false;
+  // A KeepAlive job relaunches in well under a second; a stop that "took" only because we sampled the
+  // gap is the exact lie this function exists to end. Give launchd its chance and look again.
+  await sleep(1500);
+  if ((await ipfs.health()) === "ok") {
+    append("IPFS came straight back — something relaunched it.");
+    log.warn("ipfs", `daemon relaunched within 1.5s of stop ${context}`);
+    return false;
+  }
+  return true;
 }
 
 async function waitForStopped(timeoutMs: number): Promise<boolean> {
@@ -515,6 +562,28 @@ function readDaemonLogTail(outPath: string, fromOffset: number): string[] {
 async function startDaemon(opts?: { migrate?: boolean }): Promise<StartDiagnosis | null> {
   job.phase = opts?.migrate ? "migrating" : "starting";
   append(opts?.migrate ? "Starting IPFS and migrating its repository…" : "Starting the IPFS daemon…");
+  // A foreign job that owns the daemon on this machine (Homebrew's, §13.2) is started THROUGH launchd,
+  // not beside it: after the Off toggle booted it out, spawning our own daemon would leave the user's
+  // service unloaded for the session and put a second, unsupervised daemon where theirs was. Bootstrap
+  // + kickstart hands the daemon back to the owner that had it. `--migrate` can't ride a foreign plist,
+  // and a foreign start that doesn't come up falls through to our spawn so the failure is diagnosed
+  // from a log we own (§14.2) rather than shrugged at.
+  if (!opts?.migrate) {
+    const starter = await foreignDaemonStarter().catch(() => null);
+    if (starter) {
+      append(`Starting IPFS through ${starter.source}'s service (${starter.label})…`);
+      try {
+        await startForeignAgent(starter);
+        if (await waitForHealthy(30_000)) return null;
+        append(`(${starter.label} didn't come up — trying a direct start to find out why)`);
+        log.warn("ipfs", `foreign start via ${starter.label} didn't become healthy; falling back to spawn`);
+        await stopForeignAgent(starter).catch(() => undefined); // don't leave a KeepAlive loop racing our spawn
+      } catch (e) {
+        append(`(couldn't start ${starter.label}: ${(e as Error).message} — trying a direct start)`);
+        log.warn("ipfs", `foreign start via ${starter.label} failed: ${(e as Error).message}`);
+      }
+    }
+  }
   const stateRoot = resolveStateDir();
   try {
     fs.mkdirSync(stateRoot, { recursive: true });
@@ -664,13 +733,7 @@ export async function controlDaemon(
 
   if (action === "stop") {
     append("Stopping the IPFS daemon…");
-    try {
-      await ipfs.shutdownDaemon();
-    } catch (e) {
-      append(`(shutdown RPC error: ${(e as Error).message})`);
-      log.warn("ipfs", `shutdown RPC error: ${(e as Error).message}`);
-    }
-    const stopped = await waitForStopped(10_000);
+    const stopped = await stopDaemon("(toggle off)");
     if (stopped) {
       job.status = "done";
       job.phase = "done";
@@ -756,13 +819,7 @@ export async function restartDaemon(): Promise<IpfsDaemonResult> {
 
   void (async () => {
     try {
-      try {
-        await ipfs.shutdownDaemon();
-      } catch (e) {
-        append(`(shutdown RPC error: ${(e as Error).message})`);
-        log.warn("ipfs", `shutdown for restart failed: ${(e as Error).message}`);
-      }
-      if (!(await waitForStopped(10_000))) {
+      if (!(await stopDaemon("for restart"))) {
         return fail(
           "IPFS didn't stop, so it's still running the settings it started with — quit it yourself, then start it again.",
           null,
@@ -809,12 +866,7 @@ export function startUpgrade(): IpfsInstallJob {
       // Stop the daemon first so the binary can be replaced cleanly (ignore if it's already off).
       if ((await ipfs.health()) === "ok") {
         append("Stopping IPFS before the upgrade…");
-        try {
-          await ipfs.shutdownDaemon();
-        } catch (e) {
-          log.warn("ipfs", `shutdown before upgrade failed: ${(e as Error).message}`);
-        }
-        await waitForStopped(10_000);
+        await stopDaemon("before upgrade");
       }
       job.phase = "upgrading";
       append(`Running ${plan.command}…`);
