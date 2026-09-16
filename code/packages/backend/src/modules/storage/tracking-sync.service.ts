@@ -154,12 +154,23 @@ export function setSyncRepoMarker(repoRoot: string, syncRepoRoot: string | null,
  * when — and only when — the repo has a remote to derive a shared identity from. No remote ⇒ no marker ⇒
  * Local-Storage-only, which is the honest answer: there is no key the user's other computers could agree on.
  *
+ * `observedSyncRepo` is a sync repo the caller has DIRECT EVIDENCE holds this repo's subtree — the receive
+ * path passes the sdl root it is standing in, having just matched `repos/<slug>-<uid>/` there. It is a
+ * FALLBACK, not an override: owner config still wins when it resolves. What it changes is the `!target`
+ * case, which used to DELETE the marker unconditionally. On the receive path that deletion is self-defeating
+ * and permanent: `reconcileFromSyncRepo` reads the marker to find its source, so clearing it makes the fold
+ * we were about to do impossible, and the outbound mirror stops with it. Owner resolution comes back null for
+ * ordinary reasons — the storage is not mapped yet, the repo sits outside every mapped directory, the storage
+ * root is not a git tree — and none of them are evidence that the peer state sitting in front of us is not
+ * ours. A pull that can see the subtree must not be able to un-configure the repo that owns it.
+ *
  * Returns the resolved sync-repo ROOT (not the per-repo subtree), or null when this repo does not mirror.
  */
 export function ensureSyncRepoMarker(
   repoRoot: string,
   remote: string | null,
   enabled?: boolean,
+  observedSyncRepo?: string | null,
 ): string | null {
   if (enabled === false) {
     setSyncRepoMarker(repoRoot, null);
@@ -181,6 +192,8 @@ export function ensureSyncRepoMarker(
   const current = readSyncRepoMarker(repoRoot);
   const uid = repoUidFor(remote);
   const slug = repoSlugFor(remote);
+  // Owner config first; the caller's observed sync repo only fills the gap it leaves behind.
+  if (!target && observedSyncRepo && observedSyncRepo.trim()) target = path.resolve(observedSyncRepo.trim());
   if (!target) {
     if (current) setSyncRepoMarker(repoRoot, null);
     return null;
@@ -1134,8 +1147,13 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
         const uid = repoUidFor(cfg.repo.remote ?? null);
         if (!repoPath || !uid || !hasSubtreeFor(uid)) continue;
         // Make sure this repo points at THIS sync repo before folding, so a repo whose marker was never
-        // written (the default-ON case on a fresh computer) still receives its peer's state.
-        ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled);
+        // written (the default-ON case on a fresh computer) still receives its peer's state. `mirrorDir` is
+        // passed as the observed sync repo BECAUSE that is what we are standing in: `hasSubtreeFor(uid)`
+        // just proved this repo's subtree is here. Without it the owner lookup — null whenever the storage
+        // is unmapped, the repo sits outside every mapped directory, or the storage root is not a git tree —
+        // deleted the marker instead, and the fold two lines below was skipped for want of the source we
+        // had already found.
+        ensureSyncRepoMarker(repoPath, cfg.repo.remote ?? null, cfg.sync_repo?.enabled, path.resolve(sdlRoot));
         // YIELDING, not the synchronous driver. This loop runs the reconcile for all 105 repos on
         // every backbone pull, and `loop-watch` named exactly this as the multi-second stall:
         // `storage.reconcile 3776ms/105 calls, worst 1466ms on charlie-kirk`. Same work, same

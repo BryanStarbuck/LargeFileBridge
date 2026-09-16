@@ -646,6 +646,17 @@ export interface IpfsLiveness {
   configBlocker: boolean; // a config issue is blocking start (ipfs_ui.mdx §14) → route to the fix
 }
 
+// Can the user's OTHER computers reach files pinned on this one? (ipfs.mdx §3.3)
+// Derived from the node's own announced addresses, which Kubo publishes only after AutoNAT confirms a
+// peer dialed them back — so this is observed evidence, not intent. No third-party probe is involved:
+// asking an outside service whether it can see us would leak a CID off the machine on a status poll.
+export interface IpfsNodeReach {
+  directAddrs: string[]; // publicly routable addresses a peer can dial directly
+  relayAddrs: string[]; // `/p2p-circuit` addresses — dialable via someone else's relay
+  externallyReachable: boolean; // is there any way in at all from outside this LAN?
+  relayOnly: boolean; // reachable ONLY through a relay: it works, but it is materially slower
+}
+
 // GET /api/ipfs/node — the whole dashboard payload (ipfs_ui.mdx §11).
 export interface IpfsNodeStatus {
   installed: boolean; // the `ipfs` CLI/daemon is present on this computer
@@ -670,6 +681,11 @@ export interface IpfsNodeStatus {
   relayServiceOff: boolean; // Swarm.RelayService.Enabled=false — we don't relay strangers' traffic
   dhtClientOnly: boolean; // Routing.Type=autoclient — we don't answer strangers' DHT queries
   compliant: boolean;
+  // The OTHER half of the question, and the one the product is FOR (ipfs.mdx §3.3). Every field above
+  // says what we refuse to serve, and a switched-off node satisfies all of them. This says whether a
+  // file pinned here can actually be fetched by the user's other computers over the internet — which a
+  // successful pin does NOT imply, and whose loss is otherwise completely silent.
+  reach: IpfsNodeReach;
   restartRequired: boolean; // the compliant config is written but this daemon predates it (ipfs.mdx §3.1.1)
   autostart: IpfsAutostartStatus; // will IPFS come back on its own after a reboot? (ipfs_ui.mdx §13)
   configHealth: IpfsConfigHealth; // is the node config sane / repairable? (ipfs_ui.mdx §14)

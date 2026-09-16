@@ -1138,6 +1138,98 @@ export async function version(): Promise<string | null> {
   }
 }
 
+/**
+ * CAN OUR OTHER COMPUTERS ACTUALLY REACH OUR FILES? (ipfs.mdx §3.3)
+ *
+ * Every vector in `NodePosture` answers the charter's DEFENSIVE question — "are we serving anyone else's
+ * content or traffic?" — and all five are satisfied by a node that is switched off. Nothing measured the
+ * question the product exists to answer: a file pinned here has to be fetchable BY US, from the other
+ * computers, over the internet. That is not implied by a successful pin. A pin is a purely local promise;
+ * it succeeds identically on a node no peer on earth can dial.
+ *
+ * The failure is silent and total, which is why it earns a measurement rather than a comment. The public
+ * address this machine announces today is a UPnP/NAT-PMP lease (`/ip4/<wan>/tcp/32862` — a mapped port,
+ * not the configured 4001). Lose the lease, move behind CGNAT, or have the router drop UPnP on a firmware
+ * update, and the node keeps running, keeps pinning, keeps reporting "Only your content ✓" — while every
+ * other computer quietly stops being able to fetch anything. Pins succeed; sync dies.
+ *
+ * WE ASK THE NODE, NOT THE INTERNET. `id`'s `Addresses` are already AutoNAT-filtered: Kubo announces an
+ * observed public address only once AutoNAT has confirmed peers can dial it back, so their presence is
+ * real evidence and not a guess. Deliberately NO third-party probe — asking a public router or gateway
+ * whether it can see us would leak a CID off this machine on a status poll, which is the networking the
+ * charter refuses (knowledge/ipfs.mdx; the local-only rule). Local evidence, honestly labelled.
+ *
+ * A `/p2p-circuit` address counts as reachable, separately: relay-assisted dialing is how a NAT'd peer
+ * stays fetchable at all, so calling it "unreachable" would be false — but it is slower and depends on a
+ * third party's relay, so the two are never merged into one number.
+ */
+export interface NodeReach {
+  /** Publicly routable addresses we announce — a peer can dial these directly. */
+  directAddrs: string[];
+  /** Relay-assisted addresses (`/p2p-circuit`) — dialable, but through someone else's relay. */
+  relayAddrs: string[];
+  /** Can anything off this LAN dial us at all? */
+  externallyReachable: boolean;
+  /** True when the ONLY way in is a relay — worth saying out loud; it is materially slower. */
+  relayOnly: boolean;
+}
+
+// Address families that are NOT reachable from the public internet. Kept as one list so the classifier
+// reads as the definition it is: loopback, RFC1918 private, link-local, CGNAT (100.64/10 — the carrier
+// NAT that makes UPnP silently useless), and IPv6 ULA (fc00::/7, i.e. fc/fd).
+const NOT_PUBLIC = [
+  /^\/ip4\/127\./,
+  /^\/ip4\/10\./,
+  /^\/ip4\/192\.168\./,
+  /^\/ip4\/172\.(1[6-9]|2[0-9]|3[01])\./,
+  /^\/ip4\/169\.254\./,
+  /^\/ip4\/100\.(6[4-9]|[7-9][0-9]|1[01][0-9]|12[0-7])\./,
+  /^\/ip4\/0\.0\.0\.0/,
+  /^\/ip6\/::1(\/|$)/,
+  /^\/ip6\/::(\/|$)/,
+  /^\/ip6\/f[cd][0-9a-f]{2}:/i,
+  /^\/ip6\/fe80:/i,
+];
+
+/** Is this announced multiaddr one the outside world could dial? DNS forms (the AutoTLS
+ *  `…libp2p.direct` address among them) are public by construction — they only resolve to a routable
+ *  host. Everything else must survive the private-range list above. */
+function isPublicAddr(addr: string): boolean {
+  if (/^\/dns(4|6|addr)?\//.test(addr)) return true;
+  return !NOT_PUBLIC.some((re) => re.test(addr));
+}
+
+/**
+ * Read the node's own announced addresses and classify them. Unreachable node ⇒ NOT reachable — the same
+ * never-claim-what-you-did-not-verify rule `nodePosture()` follows, pointed the other way: a node we
+ * cannot read is one we certainly cannot prove the fleet can dial.
+ */
+export async function nodeReach(): Promise<NodeReach> {
+  try {
+    const res = await rpc("id");
+    const json = (await res.json()) as { Addresses?: unknown };
+    const addrs = Array.isArray(json.Addresses) ? json.Addresses.map(String) : [];
+    // Strip the trailing `/p2p/<peerid>` so the classifier sees the transport, and de-duplicate: Kubo
+    // announces the same host once per transport (tcp, quic-v1, webtransport, webrtc-direct), which would
+    // otherwise report "5 public addresses" for what is one way in.
+    const seen = new Set<string>();
+    const directAddrs: string[] = [];
+    const relayAddrs: string[] = [];
+    for (const full of addrs) {
+      const a = full.replace(/\/p2p\/[^/]+$/, "");
+      if (!a || seen.has(a)) continue;
+      seen.add(a);
+      if (a.includes("/p2p-circuit")) relayAddrs.push(a);
+      else if (isPublicAddr(a)) directAddrs.push(a);
+    }
+    const externallyReachable = directAddrs.length > 0 || relayAddrs.length > 0;
+    return { directAddrs, relayAddrs, externallyReachable, relayOnly: directAddrs.length === 0 && relayAddrs.length > 0 };
+  } catch (e) {
+    log.debug("ipfs", `nodeReach cannot read the node (unreachable): ${(e as Error).message}`);
+    return { directAddrs: [], relayAddrs: [], externallyReachable: false, relayOnly: false };
+  }
+}
+
 export interface RepoStat {
   repoSizeBytes: number | null;
   storageMaxBytes: number | null;

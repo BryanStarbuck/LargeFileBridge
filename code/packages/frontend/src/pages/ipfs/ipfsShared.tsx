@@ -313,7 +313,36 @@ export function SecurityCard({
         <Posture label="Relay" ok={node.relayServiceOff} value={node.relayServiceOff ? "off" : "relaying"} />
         <Posture label="Routing" ok={node.dhtClientOnly} value={node.dhtClientOnly ? "client-only" : "serving"} />
         <Posture label="GC" ok={node.gcOn} value={node.gcOn ? "on" : "off"} />
+        {/* The one chip that is NOT about refusing to serve strangers. Every chip to its left is
+            satisfied by a node that is switched off; this one asks whether the files we pinned can
+            actually be fetched by the user's other computers (ipfs.mdx §3.3). */}
+        <Posture
+          label="Reachable"
+          ok={node.reach.externallyReachable}
+          value={!node.reach.externallyReachable ? "no" : node.reach.relayOnly ? "via relay" : "yes"}
+        />
       </div>
+      {node.running && !node.reach.externallyReachable && (
+        <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <ShieldAlert className="h-4 w-4" />
+          <span className="flex-1">
+            This computer is not reachable from the internet, so your other computers cannot download the
+            files pinned here. Large File Bridge will keep pinning them, but they are not being backed up
+            anywhere else. This is usually your router: turn on UPnP or NAT-PMP, or forward a port to this
+            computer.
+          </span>
+        </div>
+      )}
+      {node.running && node.reach.relayOnly && (
+        <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          <ShieldAlert className="h-4 w-4" />
+          <span className="flex-1">
+            Your other computers can only reach this one through a relay, which is much slower than a
+            direct connection. Turning on UPnP or NAT-PMP on your router, or forwarding a port to this
+            computer, will let them connect directly.
+          </span>
+        </div>
+      )}
       {pendingRestart && (
         <div className="flex items-center gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
           <RotateCw className="h-4 w-4" />

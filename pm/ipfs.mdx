@@ -364,6 +364,58 @@ Requiring all four for the green verdict is handled in code:
 > compliance stops being a config we must police on a daemon we don't own and becomes a **property of
 > the program**. Until then, §3.2 is the contract.
 
+### 3.3 The other half of the question: can our OWN computers reach our files? (LOCKED)
+
+[§3.2](#32-content-is-only-half-the-charter--traffic-is-the-other-half-locked) closed the charter's
+**defensive** question across all four vectors — *are we serving anyone else's content or traffic?* Every
+one of those vectors, and the green "Only your content ✓" that follows from them, **is satisfied by a node
+that is switched off.** Nothing on any surface measured the question the product exists to answer:
+
+> A file pinned on this computer has to be fetchable **by the user**, from their **other computers**, over
+> the internet. That is the whole feature. A pin that no other machine can reach is not a backup.
+
+**A successful pin does not imply it.** `ipfs add` succeeds identically on a node no peer on earth can
+dial — pinning is a purely local promise. The two facts are independent, and only one of them was measured.
+
+**The failure mode is silent, total, and likely.** Verified on Bryan_Tower 2026-09-10: the node's public
+address is a UPnP/NAT-PMP lease — `/ip4/50.35.54.162/tcp/**32862**`, a *mapped* port, not the configured
+4001. Lose that lease, land behind CGNAT, or have the router drop UPnP on a firmware update, and the daemon
+keeps running, keeps accepting pins, and keeps rendering the full green card — while every other computer
+quietly stops being able to fetch anything. Pins succeed; the sync is dead; nothing says so.
+
+**We ask the NODE, never the internet.** Kubo publishes an observed public address only after AutoNAT has
+confirmed a peer dialed it back, so the announced set is *evidence*, not a guess. There is deliberately **no
+third-party probe**: asking an outside router or gateway whether it can see us would leak a CID off this
+machine on a status poll, which is exactly the networking the charter refuses. Local evidence, honestly
+labelled.
+
+* **Unreadable node ⇒ NOT reachable.** The same never-claim-what-you-did-not-verify rule as §3.2, pointed
+  outward: a node we cannot read is one we cannot prove the fleet can dial.
+* **CGNAT is the case that makes UPnP a liar.** The router grants a mapping to an address (`100.64/10`)
+  that is itself un-routable, so the node announces something that *looks* public and is not. It must
+  classify as private.
+* **Relay-assisted counts as reachable, and says so.** A `/p2p-circuit` address genuinely works — it is how
+  a NAT'd peer stays fetchable — so calling it "unreachable" would be false. But it is materially slower and
+  leans on a third party's relay, so it is reported as its own state (`relayOnly`) and never merged into
+  the direct count. Note this is us being a relay **client**, which §3.2 explicitly permits; it is
+  unaffected by `Swarm.RelayService.Enabled=false`, which is about relaying for *strangers*.
+* **It is NOT folded into `compliant`.** Compliance asks *"are we serving other people's things?"*;
+  reachability asks *"can our own people reach ours?"* Merging them would turn the security card red over
+  an unreachable node and send the user hunting for a privacy leak that does not exist — and would imply
+  the **Fix** button could repair it, when Fix writes charter keys and cannot touch a router. Two
+  questions, two verdicts, two remedies.
+
+Classifying the node's announced addresses into direct / relay / none is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.service.ts` — `nodeReach()`, with the private-range classifier `isPublicAddr()`
+
+Carrying the verdict on the dashboard payload, deliberately beside `compliant` rather than inside it, is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs-node.service.ts` — `nodeStatus()` (the `reach` field; `IpfsNodeReach` in `code/packages/shared/src/types.ts`)
+
+Telling the user their files are not being backed up anywhere, and naming the router as the usual cause, is handled in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/ipfs/ipfsShared.tsx` — `SecurityCard` (the **Reachable** chip and the amber not-reachable / relay-only banners)
+
+Regression test: `code/packages/backend/src/modules/ipfs/external-reach.spec.ts`.
+
 ---
 
 ## 4. Import — the load-bearing feature

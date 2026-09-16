@@ -121,6 +121,12 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
   let metrics: IpfsNodeStatus["metrics"] = emptyMetrics();
   let gateway = { enabled: false, localOnly: true, url: null as string | null, addr: null as string | null };
   const posture = await ipfs.nodePosture(); // reads config; falls back to app-config when unreachable
+  // The OUTBOUND half of the charter question (ipfs.mdx §3.3): every posture vector above describes
+  // what we refuse to serve, and a node that is switched off satisfies all of them. This one asks the
+  // question the product is FOR — can the user's other computers actually fetch what we pinned? Read
+  // unconditionally, including when the daemon is down, because `nodeReach()` answers "not reachable"
+  // for an unreadable node, which is the honest verdict rather than a missing field.
+  const reach = await ipfs.nodeReach();
 
   if (running) {
     const [ver, pid, stat, peers, bw, gw, page] = await Promise.all([
@@ -224,6 +230,12 @@ export async function nodeStatus(): Promise<IpfsNodeStatus> {
     relayServiceOff: posture.relayServiceOff,
     dhtClientOnly: posture.dhtClientOnly,
     compliant,
+    // Deliberately NOT folded into `compliant`. Compliance is "are we serving other people's things?";
+    // reachability is "can our own people reach ours?". Merging them would let an unreachable node turn
+    // the security card red and send the user hunting for a privacy leak that isn't there — and would
+    // let a reachability problem be "fixed" by the Fix button, which writes charter keys and would not
+    // touch it. Two different questions, two different verdicts, two different remedies.
+    reach,
     // `compliant` describes the CONFIG. This says the daemon answering us right now started before we
     // wrote it, so the green card would be a claim about a file rather than about this machine.
     restartRequired: running && ipfs.compliancePendingRestart(),
