@@ -53,6 +53,7 @@ import { resolveStateDir } from "./config/state-dir.js";
 import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
 import { migrateSdlLfbridge } from "./config/migrate-sdl-lfbridge.js";
+import { migrateAllRepoLfbridgeToSync } from "./config/migrate-repo-lfbridge-to-sync.js";
 import { migrateSyncRepoDefault, repairEmptySyncRepoBlocks } from "./config/migrate-sync-repo-default.js";
 import { migratePosixPaths } from "./config/migrate-posix-paths.js";
 import { migrateRepoDirNames } from "./config/migrate-repo-dir-names.js";
@@ -390,6 +391,13 @@ async function main(): Promise<void> {
   blocking("boot.migrate.sdl-lfbridge", () => migrateSdlLfbridge());
 
   await bootstrapState();
+
+  // Move a WORKING repo's artifacts (.ocr / .ai_description / .transcription) out of its own `.lfbridge/`
+  // and into the owning company/Personal sync repo whenever that repo is cloned here
+  // (artifact_placement_policy.mdx §0.5) — the placement the write path now uses. Not latched (a repo can
+  // gain a sync repo later); a repo with no `.lfbridge/` costs one existsSync. Never throws. After
+  // bootstrapState so the storages it schedules delivery for are loaded.
+  blocking("boot.migrate.repo-lfbridge-to-sync", () => migrateAllRepoLfbridgeToSync());
 
   // THE DATABASE STAGE (database_migration.mdx §6): connect → probe (which is also the §7.1 loopback
   // compliance assertion) → schema migrations → epoch → adopt the five legacy sentinels into the ledger.

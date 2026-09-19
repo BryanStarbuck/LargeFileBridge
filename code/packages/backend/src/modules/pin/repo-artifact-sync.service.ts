@@ -28,7 +28,7 @@ import { openRepo, parseBlockedPaths, gitAutoCommitEnabled } from "../git/git.se
 import { isTransientNetworkError, hostFromGitError, whenOnline } from "../../shared/net-transient.js";
 import { repairLegacyArtifactIgnores } from "../git/gitignore.service.js";
 import { resolveStorageType, usesLfbridgeDir, LFBRIDGE_DIR } from "../storage/storage-type.service.js";
-import { hasDurableArtifact } from "../storage/tracking-root.service.js";
+import { hasDurableArtifact, repoStateDir } from "../storage/tracking-root.service.js";
 import { expandHome } from "../fs/badges.js";
 
 export interface RepoArtifactSyncResult {
@@ -63,6 +63,26 @@ function describeStaged(paths: string[]): string {
   return parts.join(", ") || "artifact tree";
 }
 
+/** Clear the "moved into the sync repo, removal not yet delivered" latch (migrate-repo-lfbridge-to-sync.ts)
+ *  once the removal has actually been pushed. Inlined name (not imported) to keep config/ out of this module. */
+function clearMovedLatch(root: string): void {
+  try {
+    fs.rmSync(path.join(repoStateDir(root), ".lfbridge-moved"), { force: true });
+  } catch {
+    /* best-effort: a stale latch only costs one no-op delivery pass per boot */
+  }
+}
+
+/** True when git's index still holds anything under `.lfbridge/` (the on-disk dir may already be gone). */
+async function tracksLfbridge(root: string): Promise<boolean> {
+  try {
+    const out = await openRepo(root).raw(["ls-files", "--", LFBRIDGE_DIR]);
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Commit and push a working repo's `.lfbridge/` artifact quarantine — and NOTHING else.
  *
@@ -75,7 +95,13 @@ export async function syncWorkingRepoArtifacts(repoRoot: string): Promise<RepoAr
   const result: RepoArtifactSyncResult = { ran: false, healed: [], committed: false, pushed: false, problem: null };
   const root = path.resolve(expandHome(repoRoot));
   if (!isWorkingGitRepo(root)) return result;
-  if (!fs.existsSync(path.join(root, LFBRIDGE_DIR))) return result; // no quarantine → nothing of ours to ship
+  // No quarantine on disk → nothing of ours to ship, UNLESS git still tracks one: that is a `.lfbridge/`
+  // whose artifacts were moved to the company/Personal sync repo (migrate-repo-lfbridge-to-sync.ts), and
+  // the removal must be committed + pushed or every other computer keeps (and re-reads) the old copies.
+  if (!fs.existsSync(path.join(root, LFBRIDGE_DIR)) && !(await tracksLfbridge(root))) {
+    clearMovedLatch(root); // the removal is already in git (or there never was one) — nothing left to deliver
+    return result;
+  }
   if (!gitAutoCommitEnabled()) {
     // The user's write switch (settings `git_backbone.auto_commit`) covers artifact delivery too — not
     // even the `.gitignore` heal may write this repo. The skip is said, never silent.
@@ -91,17 +117,20 @@ export async function syncWorkingRepoArtifacts(repoRoot: string): Promise<RepoAr
   try {
     await git.add(["--", ...pathspecs]);
     const status = await git.status();
+    // A Set: one staged path appears in several of these lists (a staged delete is in BOTH `staged` and
+    // `deleted`), which made the commit subject count every file twice.
     const ours = [
-      ...status.created,
-      ...status.staged,
-      ...status.deleted,
-      ...status.renamed.map((r) => r.to),
+      ...new Set([...status.created, ...status.staged, ...status.deleted, ...status.renamed.map((r) => r.to)]),
     ].filter((p) => p === ".gitignore" || p.startsWith(`${LFBRIDGE_DIR}/`));
     if (ours.length === 0) return result; // nothing of ours changed — a guest leaves quietly
     const healedNote = result.healed.length > 0 ? " (healed legacy .gitignore artifact-ignore lines)" : "";
+    const removedOnly = ours.every((p) => status.deleted.includes(p));
+    const subject = removedOnly
+      ? `moved ${describeStaged(ours)} out of ${LFBRIDGE_DIR}/ into the sync repo`
+      : describeStaged(ours);
     // Commit with the explicit pathspec: only the quarantine (+ the heal) enters this commit, whatever
     // else the user may have staged.
-    await git.commit(`LFB: ${describeStaged(ours)}${healedNote}`, pathspecs);
+    await git.commit(`LFB: ${subject}${healedNote}`, pathspecs);
     result.committed = true;
     log.info("sync", `${root}: committed ${ours.length} .lfbridge artifact file(s)${healedNote}`);
   } catch (e) {
@@ -130,6 +159,7 @@ export async function syncWorkingRepoArtifacts(repoRoot: string): Promise<RepoAr
       result.pushed = true;
     }
     log.info("sync", `${root}: pushed .lfbridge artifacts to origin/${branch}`);
+    clearMovedLatch(root);
   } catch (e) {
     const message = (e as Error).message;
     result.problem = `artifact push failed: ${message}`;

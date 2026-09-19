@@ -204,8 +204,8 @@ function GlobField({ label, value, placeholder, onSave }: {
 const PLACEMENT_OPTIONS: { value: PlacementChoice; label: string; helper: string; disabled?: boolean }[] = [
   {
     value: "lfbridge",
-    label: "In this repo's hidden .lfbridge/ folder",
-    helper: "Default — path-mirrored inside the repo, travels with it. Written only once the repo has produced its first transcript or AI description.",
+    label: "In your company or Personal Large File Bridge repo (recommended)",
+    helper: "Default — path-mirrored into the Large File Bridge repo that owns this repo, so nothing is added to this repo. Only when no such repo is cloned on this computer does it fall back to a hidden .lfbridge/ folder inside this repo.",
   },
   {
     value: "beside",

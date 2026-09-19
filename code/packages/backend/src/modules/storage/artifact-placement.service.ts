@@ -34,8 +34,9 @@ import type { ArtifactPlacementView, PlacementChoice } from "@lfb/shared";
 import { expandHome } from "../fs/badges.js";
 import { LFBRIDGE_DIR } from "./tracking.service.js";
 import { resolveStorageType, usesLfbridgeDir, trackingBaseDir } from "./storage-type.service.js";
-import { resolveStateSyncRepo } from "./tracking-root.service.js";
-import { listStoragesPage, ensureCompanyForOwner } from "./storage.service.js";
+import { resolveStateSyncRepo, readSyncRepoMarker } from "./tracking-root.service.js";
+import { listStoragesPage, ensureCompanyForOwner, readDescriptor } from "./storage.service.js";
+import { readGitRemote } from "../store-model/units.service.js";
 import { parseRemoteOwner } from "./repo-identity.js";
 import { resolveBackingLocations } from "./storage-settings.service.js";
 import { readSelfGraft } from "./devices.service.js";
@@ -210,7 +211,55 @@ export function resolveOwnerDedicatedRepo(repoRoot: string, remote?: string | nu
   const { index } = ownerIndex();
   const owned = resolveOwningStorage(abs, index);
   if (!owned) return null;
-  return owned.storage.dedicatedRepoPath ?? autoAdoptedSdlRoot(owned.storage.root);
+  const target = owned.storage.dedicatedRepoPath ?? autoAdoptedSdlRoot(owned.storage.root);
+  if (!target || owned.storage.isPersonal) return target;
+  // Containment picked a COMPANY for a repo whose remote org that company does not claim (a personal repo
+  // cloned under a company-mapped directory). The remote decides, not the folder: Personal gets it.
+  const rem = remote !== undefined ? remote : readGitRemote(abs);
+  return syncRepoAdmitsRemote(target, rem) ? target : personalSyncRepo(abs, index);
+}
+
+/** Personal's sync repo, for a repo under ~ — the catch-all home of every repo no company claims. */
+function personalSyncRepo(abs: string, index: OwnerStorage[]): string | null {
+  const personal = index.find((s) => s.isPersonal);
+  if (!personal || !isUnder(abs, path.resolve(os.homedir()))) return null;
+  return personal.dedicatedRepoPath ?? autoAdoptedSdlRoot(personal.root);
+}
+
+/**
+ * THE CONFIDENTIALITY FENCE (artifact_placement_policy.mdx §0.6): may a working repo whose git remote is
+ * `remote` put ANYTHING — artifacts (.ocr / .transcription / .ai_description) or tracking state — into
+ * `syncRepoRoot`?
+ *
+ *   • Personal's sync repo admits every repo (it is the user's own, private).
+ *   • A COMPANY (or any other shared) sync repo admits a repo ONLY when the repo's remote org is one the
+ *     company explicitly claims (`storage.yaml` company.owner_slugs, e.g. `ACT3ai`). No remote, an
+ *     unparseable remote, or any other org → REFUSED.
+ *
+ *   github.com/ACT3ai/charlie-kirk          → act3_large_files_bridge  ✔ (ACT3ai is claimed)
+ *   github.com/BryanStarbuck/Bryan_Arindom  → act3_large_files_bridge  ✘ → personal_large_files_bridge
+ *
+ * A company repo is shared with every teammate, so one wrong answer here publishes a private repo's OCR
+ * (bank statements, contracts) to the whole company. That is why this is checked at every seam that
+ * chooses OR USES a sync repo — resolveOwnerDedicatedRepo, ensureSyncRepoMarker (incl. the receive path's
+ * observed fallback), usableSyncRepoSubtree (every artifact write + the .lfbridge migration) — and why it
+ * fails CLOSED: a refusal only costs the private `.lfbridge/` fallback inside the user's own repo.
+ */
+export function syncRepoAdmitsRemote(syncRepoRoot: string, remote: string | null): boolean {
+  const sync = path.resolve(expandHome(syncRepoRoot));
+  const { index } = ownerIndex();
+  const personal = index.find((s) => s.isPersonal);
+  if (personal && (sync === personal.root || sync === personal.dedicatedRepoPath)) return true;
+  if (resolveStorageType(sync) === "personal") return true;
+  const owner = parseRemoteOwner(remote)?.owner.toLowerCase();
+  if (!owner) return false;
+  // The company whose SDL root or dedicated repo this is; the claims live in that company's storage.yaml.
+  const companies = index.filter((s) => !s.isPersonal && (s.root === sync || s.dedicatedRepoPath === sync));
+  const claimRoots = companies.length > 0 ? companies.map((c) => c.root) : [sync];
+  return claimRoots.some((r) => {
+    const slugs: unknown = readDescriptor(r)?.company?.owner_slugs;
+    return Array.isArray(slugs) && slugs.some((s) => typeof s === "string" && s.toLowerCase() === owner);
+  });
 }
 
 /** A storage's sync repo: its explicitly configured dedicated repo, else its AUTO-ADOPTED own git root. */
@@ -295,8 +344,10 @@ export const AI_DESCRIPTION_REJECTED_EXT = ".ai_description_rejected";
  * The base depends on the root's storage KIND (artifact_placement_policy.mdx §0) — the whole point of
  * routing through `trackingBaseDir()` rather than joining LFBRIDGE_DIR here:
  *
- *   working repo (LFB is a guest → quarantine under one hidden dir):
- *     charlie-kirk/ + `videos/x.mp4` → charlie-kirk/.lfbridge/videos/x.mp4.transcription
+ *   working repo WITH a company/Personal sync repo (the normal case — {@link workingRepoArtifactBase}):
+ *     charlie-kirk/ + `videos/x.mp4` → act3_large_files_bridge/repos/charlie-kirk-83e62afc2c80/videos/x.mp4.transcription
+ *   working repo with NO sync repo (fallback — LFB is a guest → quarantine under one hidden dir):
+ *     some-repo/ + `videos/x.mp4` → some-repo/.lfbridge/videos/x.mp4.transcription
  *   SDL file repo (the repo exists ONLY for LFB → its root IS the .lfbridge area):
  *     personal_large_files_bridge/ + `_Mirror/a/x.mp4` → personal_large_files_bridge/_Mirror/a/x.mp4.transcription
  *
@@ -321,14 +372,61 @@ export function lfbridgeArtifactPath(root: string, rel: string, ext: string, own
  */
 function artifactBase(root: string, owner?: ArtifactOwner): string {
   if (owner === "dedicated-repo" || owner === "storage-root") return root;
-  if (owner === "repo") return path.join(root, LFBRIDGE_DIR);
-  return trackingBaseDir(root);
+  if (owner === "repo") return workingRepoArtifactBase(root);
+  const base = trackingBaseDir(root);
+  // No owner in hand: `trackingBaseDir` answered `.lfbridge/` only when it resolved `root` to a WORKING repo,
+  // so the same sync-repo preference applies.
+  return base === root ? root : workingRepoArtifactBase(root);
+}
+
+/**
+ * Where a WORKING repo's Category-A artifacts (.transcription / .ai_description / .ocr) are written.
+ *
+ * THE OWNING STORAGE'S SYNC REPO WINS whenever this repo has one (artifact_placement_policy.mdx §0.5):
+ *   charlie-kirk (remote ACT3ai/charlie-kirk) + `site/x.jpg` →
+ *     ~/BGit/act3/act3_large_files_bridge/repos/charlie-kirk-83e62afc2c80/site/x.jpg.ocr
+ * The repo's own `.lfbridge/` is only the FALLBACK for a repo with no sync repo (no company/Personal owner
+ * with a git-backed SDL, no git remote, or the per-repo mirror toggle switched off). Before this rule every
+ * artifact for an ACT3 repo landed in the user's working repo — 5,545 files in charlie-kirk/.lfbridge/ —
+ * even though the company repo that exists precisely to hold them was cloned on every machine.
+ *
+ * Resolved through the `.sync-repo` marker (the same one the Category-B mirror and the `sync_repo` radio
+ * read), so all three agree on ONE `repos/<slug>-<repoUid>/` subtree per repo across the fleet.
+ */
+export function workingRepoArtifactBase(root: string): string {
+  return usableSyncRepoSubtree(root) ?? path.join(root, LFBRIDGE_DIR);
+}
+
+/** This repo's `<syncRepo>/repos/<slug>-<repoUid>/` subtree — but only when the sync repo is actually a git
+ *  clone ON THIS COMPUTER. A marker can name a company repo this machine never cloned (or one since deleted);
+ *  writing there would plant a stray, untracked directory tree that travels nowhere, which is worse than the
+ *  `.lfbridge/` fallback that at least rides the working repo's own git. */
+const refusedRoots = new Set<string>();
+export function usableSyncRepoSubtree(root: string): string | null {
+  const marker = readSyncRepoMarker(root);
+  if (!marker) return null;
+  if (!exists(path.join(path.resolve(expandHome(marker.syncRepo)), ".git"))) return null;
+  // Re-checked at USE time, not only when the marker was written: a marker planted by an older build, a
+  // peer's observed fallback, or a hand edit must never route a private repo's files into a company repo.
+  if (!syncRepoAdmitsRemote(marker.syncRepo, readGitRemote(root))) {
+    if (!refusedRoots.has(root)) refusedRoots.add(root);
+    else return null; // said once per root per process — this runs on every artifact write
+    log.error(
+      "placement",
+      `REFUSED: ${root} is not claimed by the company sync repo ${marker.syncRepo} (remote org mismatch) — ` +
+        `writing to the repo's own ${LFBRIDGE_DIR}/ instead (artifact_placement_policy.mdx §0.6)`,
+    );
+    return null;
+  }
+  return resolveStateSyncRepo(root);
 }
 
 /**
  * The artifact path for a chosen PLACEMENT (placement_radios.mdx / repo_settings.mdx §4-5). The per-repo
  * setting picks WHERE the transcript/description lands:
  *   • "lfbridge"  → the root's TRACKING BASE, `<base>/<rel><ext>` (the default; {@link lfbridgeArtifactPath}).
+ *                   For a WORKING repo that base is its sync-repo mirror whenever one exists, and `.lfbridge/`
+ *                   only when none does ({@link workingRepoArtifactBase}).
  *   • "beside"    → `<root>/<rel><ext>` — literally next to the media (the opt-in beside-media layout).
  *   • "sync_repo" → `<syncRepo>/<rel><ext>` when the owning storage has a state-sync repo configured, else
  *                   falls back to "lfbridge" (the sync-repo settings surface is a later seam).

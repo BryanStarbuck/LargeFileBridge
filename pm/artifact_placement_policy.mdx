@@ -176,6 +176,71 @@ alternative convention:
 Resolving the committed manifest path for a storage through the storage-kind choke point (it formerly hardcoded `<root>/.lfbridge/manifest.yaml`) is handled in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — `committedManifestPath(repoPath)`, consumed by `readCommittedManifest()` / `writeCommittedManifest()` (and by the SDL pin pass in `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/pin.service.ts` — `pinStorageUnitInner()`); the storage-kind base directory it must defer to is `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/storage-type.service.ts` — `trackingBaseDir()`.
 
+
+### 0.5 A working repo's artifacts go to its SYNC REPO; `.lfbridge/` is only the fallback (LOCKED — 2026-09-19)
+
+**Revision (Bryan, 2026-09-19).** A working repo whose owner has an LFB sync repo **cloned on this computer**
+never gets a `.lfbridge/`. Its Category-A artifacts — `.transcription`, `.ai_description`,
+`.ai_description_rejected`, `.ocr` — are written into the owning company/Personal sync repo's mirror subtree,
+path-mirrored, extension appended:
+
+| Working repo | Media | Artifact lands at |
+| --- | --- | --- |
+| `~/BGit/Bryan_git/charlie-kirk/` (remote `ACT3ai/charlie-kirk` → ACT3 company) | `site/…/b88c….jpg` | `~/BGit/act3/act3_large_files_bridge/repos/charlie-kirk-83e62afc2c80/site/…/b88c….jpg.ocr` |
+| a repo with **no** sync repo (no owner SDL, no remote, mirror toggle off, or the SDL not cloned here) | `videos/x.mp4` | `<repo>/.lfbridge/videos/x.mp4.transcription` (the fallback) |
+
+* **Why.** The company repo exists precisely to hold LFB's files and is cloned on every computer of the team.
+  Writing into the working repo instead put 5,545 OCR / AI-description / transcript files into
+  `charlie-kirk/.lfbridge/` — noise in a repo LFB is only a guest in.
+* **Same subtree as the Category-B mirror** — `repos/<slug>-<repoUid>/` (§4.1, §3.1), resolved from the same
+  `.sync-repo` marker, so every clone of the repo on every computer writes one directory. Artifacts are
+  never copied down into Local Storage by the mirror/reconcile passes (they are not tracking state).
+* **"Cloned here" is checked**, not assumed: a marker naming a sync repo that is not a git clone on this
+  computer falls back to `.lfbridge/` rather than planting an untracked directory that travels nowhere.
+* **The "already done?" probe checks the sync subtree first**, then `.lfbridge/`, then beside the media — a
+  false MISSING would regenerate (and re-bill) the artifact.
+* **The `lfbridge` radio value keeps its frozen name** (placement_radios.mdx §1.1); for a working repo it now
+  means "the owner's LFB repo, else `.lfbridge/`". `beside` and an explicit `sync_repo` are unchanged.
+* **Existing artifacts are migrated** at every boot: moved out of `.lfbridge/` into the sync subtree
+  (identical bytes → source dropped; differing → newer mtime wins; non-artifact files never touched), then
+  the working repo commits + pushes the removal (pathspec `.lfbridge` only). A Local-Storage latch
+  (`.lfbridge-moved`) keeps the removal scheduled across restarts until it is pushed.
+
+Picks the sync subtree (else `.lfbridge/`) for every working-repo artifact write, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `workingRepoArtifactBase()` / `usableSyncRepoSubtree()` (reached via `artifactBase()` from `artifactPathForPlacement()`).
+Probes the sync subtree when deciding "already done", in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking.service.ts` — `artifactLayoutFor()` (`bodyBases`).
+Keeps artifacts out of the Category-B mirror/reconcile copy, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `copyTreeGen()` (`isContentArtifactName`).
+Moves existing `.lfbridge/` artifacts and schedules both commits, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/config/migrate-repo-lfbridge-to-sync.ts` — `migrateAllRepoLfbridgeToSync()` / `migrateRepoLfbridgeToSync()`; the removal commit is `~/repos/LargeFileBridge/code/packages/backend/src/modules/pin/repo-artifact-sync.service.ts` — `syncWorkingRepoArtifacts()`.
+
+### 0.6 The confidentiality fence — the GIT REMOTE ORG decides company vs Personal (LOCKED — 2026-09-19)
+
+**Revision (Bryan, 2026-09-19).** A company sync repo is shared with every teammate, so it may receive a
+working repo's files — artifacts (§0.5) **or** Category-B tracking state (§4) — **only when the repo's git
+remote org is one that company explicitly claims** (`storage.yaml` → `company.owner_slugs`). Everything else
+goes to the Personal sync repo, which is private and admits any repo.
+
+| Working repo | `origin` | Goes to |
+| --- | --- | --- |
+| `~/BGit/Bryan_git/charlie-kirk/` | `github.com/ACT3ai/charlie-kirk` | `~/BGit/act3/act3_large_files_bridge/` (ACT3 claims `ACT3ai`) |
+| `~/BGit/Bryan_git/Bryan_Arindom/` | `github.com/BryanStarbuck/Bryan_Arindom` | `~/BGit/Bryan_git/personal_large_files_bridge/` — **never** the company repo |
+
+* **The remote decides, not the folder.** A personal repo cloned under a company-mapped directory still goes
+  to Personal; path containment may only pick a company whose claims include the repo's org.
+* **No remote, an unparseable remote, or an unclaimed org → refused** for every company sync repo.
+* **Checked where the destination is CHOSEN and where it is USED** — owner resolution, the marker writer
+  (including the receive path's observed-sync-repo fallback), and every artifact write / the `.lfbridge/`
+  migration — so a stale or hand-edited `.sync-repo` marker can never leak a private repo.
+* **Fails closed.** A refusal at write time falls back to the repo's own `.lfbridge/` (inside the user's own
+  repo, private) and logs one ERROR per repo; the next scan rewrites the marker to Personal.
+
+The fence itself (company claims vs the repo's remote org), in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/artifact-placement.service.ts` — `syncRepoAdmitsRemote()`; applied in `resolveOwnerDedicatedRepo()` and `usableSyncRepoSubtree()`.
+Applied before any `.sync-repo` marker is written, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `ensureSyncRepoMarker()`.
+
 ---
 
 ## 1. The two categories (LOCKED)
@@ -187,6 +252,10 @@ The two **durable user artifacts**:
 * a **transcript** — a `.transcription` file ([Transcribe.mdx §3](./Transcribe.mdx)); and
 * an **AI description** — a `.ai_description` file ([ai_description.mdx §2](./ai_description.mdx))
   (the visuals-and-action-by-time YAML rides with the AI-description analysis family).
+
+**Superseded in part by §0.5 (2026-09-19):** when the repo's owner has an LFB sync repo cloned on this
+computer, these are written into that sync repo's `repos/<slug>-<repoUid>/` subtree and travel with IT;
+the text below describes the `.lfbridge/` FALLBACK for a repo with no sync repo.
 
 These are written INSIDE the working repo's committed `.lfbridge/`, path-mirrored, extension **appended**,
 and **travel with the repo**. Their placement offers a per-repo choice — `lfbridge` (default), `beside`, or

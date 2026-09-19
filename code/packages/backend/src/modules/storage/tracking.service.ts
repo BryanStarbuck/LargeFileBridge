@@ -213,8 +213,15 @@ export function artifactLayoutFor(root: string, type?: StorageType): ArtifactLay
     { dir: path.join(trackingBase, ANALYSIS_DIR), placement: "tracking_base" },
     ...(legacy ? [{ dir: path.join(legacy, ANALYSIS_DIR), placement: "legacy_lfbridge" as const }] : []),
   ];
+  // A WORKING repo's artifacts are written into its sync-repo mirror whenever it has one
+  // (artifact-placement.service.ts `workingRepoArtifactBase`), so that is probed FIRST — without it every
+  // artifact written there would read as MISSING and be regenerated (a re-bill for an AI description).
+  // `.lfbridge/` stays probed after it: the fallback for a repo with no sync repo, and the not-yet-migrated
+  // leftovers of one that has.
+  const syncSub = trackingBase !== root ? cachedStateSyncRepo(root) : null;
   return {
     bodyBases: [
+      ...(syncSub ? [{ dir: syncSub, placement: "sync_repo" as const }] : []),
       { dir: trackingBase, placement: "tracking_base" },
       { dir: root, placement: "beside" },
       ...(legacy ? [{ dir: legacy, placement: "legacy_lfbridge" as const }] : []),
@@ -375,23 +382,23 @@ function primedOutputs(root: string, rel: string): string[] | null {
 const OUTPUT_ORDER = ["transcript", "description", "ocr", "visuals_by_time", "compression"];
 
 // resolveStateSyncRepo reads the `.sync-repo` marker file each call; analysisOutputs runs per ROW on the
-// View-One-Repo hot path, so memoize per root (the marker changes only when the user re-configures the
-// owning storage's sync repo — a restart-scale event; a stale null/path here only delays a metric hint).
-const stateSyncRepoCache = new Map<string, string | null>();
+// View-One-Repo hot path, so memoize per root. SHORT-LIVED, not forever: artifact BODIES are now written into
+// the mirror too (see artifactLayoutFor), so a stale `null` cached before the marker was written would make
+// every one of them read as MISSING — a regenerate, and for an AI description a re-bill — until a restart.
+const STATE_SYNC_REPO_TTL_MS = 30_000;
+const stateSyncRepoCache = new Map<string, { at: number; value: string | null }>();
 function cachedStateSyncRepo(root: string): string | null {
-  if (!stateSyncRepoCache.has(root)) {
-    stateSyncRepoCache.set(
-      root,
-      (() => {
-        try {
-          return resolveStateSyncRepo(root);
-        } catch {
-          return null;
-        }
-      })(),
-    );
+  const now = Date.now();
+  const hit = stateSyncRepoCache.get(root);
+  if (hit && now - hit.at < STATE_SYNC_REPO_TTL_MS) return hit.value;
+  let value: string | null = null;
+  try {
+    value = resolveStateSyncRepo(root);
+  } catch {
+    value = null;
   }
-  return stateSyncRepoCache.get(root) ?? null;
+  stateSyncRepoCache.set(root, { at: now, value });
+  return value;
 }
 
 /** Fresh iff the record's compressed size matches the media's CURRENT size (a record without a size is

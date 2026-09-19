@@ -34,7 +34,7 @@ export { mergeManifests } from "./manifest-merge.js";
 // SHARED state that must union, never last-writer-copy (decisions.mdx §5; the 2026-07-20 "not backed up:
 // 22 here / 0 there" defect where wholesale ledger copies erased events the copy source didn't know).
 import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger, ledgerIsUnreadable } from "./ledger-merge.js";
-import { resolveOwnerDedicatedRepo } from "./artifact-placement.service.js";
+import { resolveOwnerDedicatedRepo, syncRepoAdmitsRemote } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
 import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar-heal.js";
@@ -78,6 +78,7 @@ import { blocking, recordCooperative } from "../../shared/blocking.js";
 const LOCAL_ONLY = new Set([
   ".sync-repo",
   ".durable-artifact",
+  ".lfbridge-moved", // migrate-repo-lfbridge-to-sync.ts LFBRIDGE_MOVED_LATCH — this computer's pending commit
   "files.yaml",
   "decisions.conflicted.yaml",
   "manifest.conflicted.yaml",
@@ -195,6 +196,12 @@ export function ensureSyncRepoMarker(
   const slug = repoSlugFor(remote);
   // Owner config first; the caller's observed sync repo only fills the gap it leaves behind.
   if (!target && observedSyncRepo && observedSyncRepo.trim()) target = path.resolve(observedSyncRepo.trim());
+  // THE CONFIDENTIALITY FENCE (artifact_placement_policy.mdx §0.6): a company sync repo only ever receives a
+  // repo whose remote org it claims — whichever branch above produced the target. Fails closed: no marker.
+  if (target && !syncRepoAdmitsRemote(target, remote)) {
+    log.error("storage", `ensureSyncRepoMarker(${repoRoot}): REFUSED ${target} — remote ${remote} is not claimed by that company`);
+    target = null;
+  }
   if (!target) {
     if (current) setSyncRepoMarker(repoRoot, null);
     return null;
@@ -214,6 +221,12 @@ export function ensureSyncRepoMarker(
     );
   }
   return target;
+}
+
+/** The Category-A content artifacts — see the skip in {@link copyTreeGen}. */
+const CONTENT_ARTIFACT_RE = /\.(transcription|ai_description|ai_description_rejected|ocr)$/;
+function isContentArtifactName(name: string): boolean {
+  return CONTENT_ARTIFACT_RE.test(name);
 }
 
 /**
@@ -271,7 +284,12 @@ function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<s
         continue;
       }
       if (e.isDirectory()) changed = (yield* copyTreeGen(s, d, childRel, NO_SKIP)) || changed;
-      else if (e.isFile()) changed = copyTrackedFile(s, d, childRel) || changed;
+      else if (e.isFile() && isContentArtifactName(e.name)) {
+        // A Category-A artifact (.ocr / .transcription / .ai_description) written straight into the mirror
+        // (artifact-placement.service.ts `workingRepoArtifactBase`). It already lives where it travels —
+        // the company repo's own git carries it — and it is not tracking state, so it is never copied down
+        // into Local Storage (thousands of duplicate files per repo) nor back up again.
+      } else if (e.isFile()) changed = copyTrackedFile(s, d, childRel) || changed;
     } catch (err) {
       // Skip an unreadable/unwritable leaf; never fail the whole mirror — BUT make it observable. A file
       // that silently stops copying between the user's computers is the exact failure this module exists to

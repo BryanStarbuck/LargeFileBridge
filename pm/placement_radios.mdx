@@ -48,7 +48,7 @@ strings are read by the placement resolver and any migration.
 
 | Enum (`placement`) | Radio label (user-facing English) | Where the artifact lands |
 | --- | --- | --- |
-| `lfbridge` | **In this repo's hidden `.lfbridge/` folder** *(recommended)* | `<trackingBase>/<relDir>/<name.ext><artifactExt>` — path-mirrored, extension **appended**, committed, travels with the repo by git. The base is **kind-resolved** (§1.1): `<repo>/.lfbridge/` in a working repo, the **root itself** in an SDL. |
+| `lfbridge` | **In your company or Personal Large File Bridge repo** *(recommended)* — *revised 2026-09-19, artifact_placement_policy.mdx §0.5: for a working repo this is the owner's sync repo subtree whenever one is cloned here, and `<repo>/.lfbridge/` only as the fallback* | `<trackingBase>/<relDir>/<name.ext><artifactExt>` — path-mirrored, extension **appended**, committed, travels with the repo by git. The base is **kind-resolved** (§1.1): `<repo>/.lfbridge/` in a working repo, the **root itself** in an SDL. |
 | `beside` | **Next to the media file** | `<mediaDir>/<name.ext><artifactExt>` — a sibling of the media in the same working-tree directory. |
 | `sync_repo` | **In this storage's LFB sync repo** | `<syncRepo>/repos/<repoKey>/<relDir>/<name.ext><artifactExt>` — inside the owning company/personal sync repo. |
 
