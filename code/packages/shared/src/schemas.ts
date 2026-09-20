@@ -859,6 +859,15 @@ export const ManifestFileSchema = z.object({
   modified_at: iso.optional(),
   sha256: z.string().nullable().default(null),
   pinned_by: z.array(z.string()).default([]),
+  // The marker sync_list.mdx §5.2 named and deletion.mdx defines: this file was DELETED FLEET-WIDE.
+  // The entry survives rather than being dropped, because a dropped entry is indistinguishable from one an
+  // older build never knew about and the next backfill would simply re-add it. A visible tombstoned entry
+  // is what makes the deletion STABLE (deletion.mdx §7.2 step 4).
+  // OPTIONAL, not defaulted: ABSENCE MEANS PRESENT. A manifest written by any build that predates
+  // fleet deletion has no `state` key at all, and it must read as a live file rather than as a schema
+  // violation — and the serializer must be free to omit the key for every live entry, so a 31k-row
+  // manifest does not gain 31k lines of `state: present` noise on its first write (deletion.mdx §7.2).
+  state: z.enum(["present", "removed"]).optional(),
 });
 export const ManifestSchema = z.object({
   schema_version: z.number().default(1),
@@ -1158,3 +1167,63 @@ export const UserConfigSchema = z.object({
   sessions: z.array(SessionRecordSchema).default([]),
 });
 export type UserConfig = z.infer<typeof UserConfigSchema>;
+
+
+// ── deletions.yaml — the fleet-wide tombstone ledger (deletion.mdx) ──────────
+// Lives beside manifest.yaml in the unit's tracking directory and travels the git backbone to every
+// device. APPEND-ONLY: a record leaves only by an explicit undelete, which DEACTIVATES it by recording
+// rather than by erasing (deletion.mdx §12). Absence NEVER lifts a tombstone (§6) — that is the
+// manifest's "absence is never a delete" rule pointed the other way, and it is why a truncated or
+// mid-transfer incoming ledger can no more resurrect a deleted file than it can delete a live one.
+
+/** One device's receipt that it carried the tombstone out (deletion.mdx §7.4). */
+export const DeletionReceiptSchema = z.object({
+  device: z.string(),
+  at: iso,
+  /** What happened to the working-tree bytes on that device. */
+  bytes: z.enum(["deleted", "already-absent", "kept", "failed"]).default("already-absent"),
+  /** What happened to that device's IPFS pin. */
+  pin: z.enum(["unpinned", "not-held", "kept", "failed"]).default("not-held"),
+  /** Derived .transcription/.ai_description/.ocr sidecars removed there (deletion.mdx §7.2 step 6). */
+  sidecars: z.number().default(0),
+  note: z.string().nullable().default(null),
+});
+export type DeletionReceipt = z.infer<typeof DeletionReceiptSchema>;
+
+export const DeletionRecordSchema = z.object({
+  /** Unit-relative POSIX path, spelled exactly as the manifest spells it (`rel_posix`). A MATCH KEY. */
+  path: z.string(),
+  cid: z.string().nullable().default(null),
+  /** Every other CID known to address these same bytes — CID equivalence (deletion.mdx §5.2). */
+  cid_alternates: z.array(z.string()).default([]),
+  sha256: z.string().nullable().default(null),
+  size: z.number().default(0),
+  /** `fleet` = every computer enforces. `here` = only `removed_on_device` does (deletion.mdx §3). */
+  scope: z.enum(["fleet", "here"]).default("fleet"),
+  reason: z.string().default(""),
+  removed_at: iso,
+  removed_by: z.string().default(""),
+  removed_on_device: z.string().default(""),
+  /** What enforcement is AUTHORISED to do. `--keep-bytes` / `--keep-pin` turn these off. */
+  actions: z
+    .object({
+      delete_bytes: z.boolean().default(true),
+      unpin: z.boolean().default(true),
+    })
+    .prefault({}),
+  /** Append-only receipts, one per device. NEVER a precondition: a silent device has not RUN (§7.5). */
+  enforced_by: z.array(DeletionReceiptSchema).default([]),
+  // ── undelete (deletion.mdx §12). The record is deactivated, never erased: "deleted, then restored,
+  // by whom, and why" is exactly what an audit needs, and erasing it is how a deletion silently un-happens.
+  undeleted_at: iso.nullable().default(null),
+  undeleted_by: z.string().nullable().default(null),
+  undelete_reason: z.string().nullable().default(null),
+});
+export type DeletionRecord = z.infer<typeof DeletionRecordSchema>;
+
+export const DeletionsSchema = z.object({
+  schema_version: z.number().default(1),
+  unit: z.enum(["repo", "computer", "storage"]).default("repo"),
+  deletions: z.array(DeletionRecordSchema).default([]),
+});
+export type Deletions = z.infer<typeof DeletionsSchema>;

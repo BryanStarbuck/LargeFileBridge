@@ -1,0 +1,443 @@
+---
+title: LargeFileBridge — Deletion (delete a file everywhere)
+description: The authoritative spec for DELETING a synced file — not "remove it from this computer," but "this file is gone, on every computer, forever." Defines the TOMBSTONE, the append-only deletion ledger (deletions.yaml) that lives beside the per-repo manifest in the tracking/sync repo and travels the git backbone to every device, the three identities a tombstone matches on (CID, sha256, path) so the same bytes cannot return under a different name, the UNION merge rule that makes a tombstone impossible to lose (absence never lifts one), and the REAPER — the per-device enforcement pass that deletes the working-tree bytes, drops the IPFS pin, retracts this device's manifest claim, and records that it did so. Separates this fleet-wide delete from the per-computer "deleted here" orphan grace period in decisions.mdx §12 / orphans.service.ts, which was never able to express it: on a computer that never pinned the file, absence reads as "never here," which is a healthy pull-down offer, so fetch-missing restores the file on the next pass forever. Also locks what deletion can and cannot honestly promise about IPFS, and specifies the `lfb delete` / `lfb deleted` / `lfb undelete` CLI family and the web app surface.
+---
+
+# LargeFileBridge — Deletion (delete a file everywhere)
+
+This is the **primary, authoritative** spec for deleting a file that Large File Bridge syncs.
+
+The product's whole job is to make a file **come back** — on every computer the user owns, without
+being asked twice. That is the right default and it is not changing. But it makes the opposite act,
+**deletion**, a first-class feature that has to be built deliberately, because every other mechanism
+in the system is actively working to undo it.
+
+Neighbors that describe *pieces* of deletion and defer here for the act itself:
+
+* [decisions.mdx §12](./decisions.mdx) — the **per-computer** "deleted here" lifecycle: the orphan
+  grace period, staling, and returning a decision to Undecided. That is a *local* delete. It is not
+  this, and §2 below is the line between them.
+* [pin_process.mdx](./pin_process.mdx) — the pin pass, which is where a tombstone is enforced and
+  where the fetch it has to beat lives (`fetchMissing`).
+* [sync_list.mdx §5.2](./sync_list.mdx) — "Absence is NOT deletion," which first named the explicit
+  `state: removed` marker. This spec is the full definition that section pointed at.
+* [repo_tracking_scheme.mdx](./repo_tracking_scheme.mdx) — the on-disk shape of a tracking-repo unit,
+  which `deletions.yaml` joins.
+* [artifact_placement_policy.mdx](./artifact_placement_policy.mdx) — `deletions.yaml` is **Category B**
+  data: it lives in Local Storage and travels via the company/personal SYNC REPO, never committed
+  into the working repo it describes.
+
+---
+
+## 1. The defect this exists to fix (the real one, measured)
+
+On **2026-09-19** ten image files were removed from the `charlie-kirk` repo and its published site.
+They were not ordinary files. They were images of **a private individual** — a bereaved parent with
+no role in the investigation — plus third-party screenshots assigning **named living people a
+"suspicion score."** The user's decision was that they must not exist on the site or in the repo.
+
+They were deleted from git and from disk. **Every hour, Large File Bridge put them back:**
+
+```
+[2026-09-20T12:22:37.559Z] [INFO] [pin] Fetched site/internals/static/img/evidence/25c8f78….jpg
+    -> /Users/bryan/BGit/Bryan_git/charlie-kirk/site/internals/static/img/evidence/25c8f78….jpg
+[2026-09-20T13:22:41.764Z] [INFO] [pin] Fetched …  (and again, and again)
+```
+
+**Why the existing delete could not stop it.** `orphans.service.ts` (`classifyAbsent()`) tells
+"deleted here" from "never here" using exactly one fact: *is this computer's own label in the
+entry's `pinned_by`?* For these ten files the manifest said:
+
+```yaml
+pinned_by: [bryan-mac-studio, bryanstarbuck-macbook-pro, lenovo-laptop-ug0k96ca,
+            pc-10-pc10-mint, pc-4-pc-4, rafin-macbook-pro]
+```
+
+The computer the user was deleting on is **`bryan-mac-pro`**, which is not in that list. So the
+absence classified as **"never here"** — the healthy case, the pull-down offer — and `fetchMissing`
+did precisely what it is supposed to do. The code was not broken. **It was asked a question it had
+no way to answer.**
+
+Three facts fall out of that, and they are the requirements:
+
+1. **A delete has to be expressible on a computer that never held the file.** Deletion is a statement
+   about the *file*, not about this disk.
+2. **A delete has to travel.** Six other machines — some belonging to other people — still pinned
+   those bytes and still offered them. Deleting locally, even correctly, fixes one machine out of
+   seven and the other six keep re-serving it.
+3. **A delete has to outrank every re-fetch.** The pin pass, the pull-down offer, the retry queue,
+   and a teammate's next sync are all engines for restoring files. A delete that is merely *another
+   input* to those engines loses. It has to be a **gate in front of them**.
+
+---
+
+## 2. Two different deletes, and never confuse them (LOCKED)
+
+| | **Local delete** ("deleted here") | **Fleet delete** ("delete everywhere") |
+|---|---|---|
+| Spec | [decisions.mdx §12](./decisions.mdx) | **this spec** |
+| Means | "I don't want these bytes *on this computer*." | "This file should not exist *anywhere*." |
+| Detected | implicitly — bytes vanish from a disk that pinned them | **explicitly** — the user asks for it |
+| Travels? | **No.** It is a local disk-space decision. | **Yes.** Every device enforces it. |
+| Reversible | trivially — re-pull it | yes, but by an explicit `undelete` (§12), never by accident |
+| Needs this device in `pinned_by` | **yes** — that is the signal | **no** — works from any device |
+| Grace period | 24h (an unmounted drive must not destroy a decision) | **none for the gate** (§7.1) |
+
+**The bug in one line:** the system had only the left column, and the left column can never say the
+right column's sentence.
+
+Both stay. A user reclaiming disk space is a real and common thing and must not be escalated into a
+fleet-wide destruction. **The distinguishing fact is that a fleet delete is always asked for out
+loud** — a CLI command or a UI action — and is never inferred from a filesystem observation.
+
+---
+
+## 3. The tombstone (LOCKED)
+
+A **tombstone** is one append-only record that says a file is deleted. It is the unit of this whole
+feature.
+
+```yaml
+- path: site/internals/static/img/evidence/476892283dfc…691d.jpg
+  cid: bafkreichncjcqpp4nxyufek4m6tb272z4nqc5eqconlan7oso6szixtjdu
+  cid_alternates:                 # every other CID known to be these same bytes (§5.2)
+    - QmbNmAkC3UJegGWCV5QrAjc4krrFmoT3QPnW4URXG9gk96
+  sha256: 476892283dfc6df142915c67a61d7f59e3602e9202735606fdd277a5945e691d
+  size: 224366
+  scope: fleet                    # fleet | here          (§4)
+  reason: "Private individual; must not appear on the site or in the repo."
+  removed_at: 2026-09-20T14:02:11.004Z
+  removed_by: bryan@thestarbucks.com
+  removed_on_device: bryan-mac-pro
+  actions:                        # what enforcement is authorised to do (§8)
+    delete_bytes: true
+    unpin: true
+  enforced_by:                    # append-only receipts, one per device (§7.4)
+    - device: bryan-mac-pro
+      at: 2026-09-20T14:02:11.180Z
+      bytes: deleted              # deleted | already-absent | failed
+      pin: not-held               # unpinned | not-held | failed
+```
+
+Field rules:
+
+* `path` is the unit-relative POSIX path, spelled **exactly** as the manifest spells it
+  (`rel_posix`, see `manifest.repo.ts → toRelPosix()`). It is a *match key*, not the identity.
+* `cid` / `sha256` / `size` may each be `null` when unknown; **at least one of `cid`, `sha256`,
+  `path` must be present** or the tombstone matches nothing and is rejected at write time.
+* `scope: here` is a tombstone that only the recording device enforces. It exists so the UI's
+  "stop syncing this to my laptop" can use the same ledger. **`fleet` is the default** for
+  `lfb delete` — the command exists because the user wants it gone everywhere.
+* `reason` is free text and **strongly encouraged**; it is the only thing that explains a deletion to
+  a teammate in six months, and to the user's own future self. It is never used for matching.
+* `enforced_by` is **append-only receipts**, never a precondition. A device that has not reported is
+  a device that has not run yet, not a device that refused.
+
+---
+
+## 4. Where the ledger lives, and how it travels
+
+```
+<syncRepo>/repos/<repoUid>/deletions.yaml
+```
+
+Beside `manifest.yaml`, in the same unit directory, keyed by the same normalized git remote
+(`storage_company.mdx §8.4.1`) so every computer reads and writes the same path. For the repo in §1
+that is:
+
+```
+~/BGit/act3/act3_large_files_bridge/repos/charlie-kirk-83e62afc2c80/deletions.yaml
+```
+
+```yaml
+schema_version: 1
+unit: repo
+deletions:
+  - …one record per §3…
+```
+
+* It is **Category B** — Local Storage plus the sync repo, never committed into `charlie-kirk`
+  itself. A tombstone about a repo must not need a commit *to* that repo, because the most common
+  reason to delete a file is that it should not be in that repo's history at all.
+* It rides the **git backbone** exactly like `manifest.yaml`
+  ([git_backbone.mdx](./git_backbone.mdx)), so it reaches every device on the next backbone pull with
+  no new transport, no new daemon, and no server.
+* A unit with no deletions has **no file** — not an empty list. Absence of the file is absence of
+  tombstones, and it is the only absence in this spec that means anything.
+
+---
+
+## 5. Identity — what a tombstone matches (LOCKED)
+
+This is the part that decides whether deletion actually works, and it is where a naive
+implementation quietly fails.
+
+### 5.1 Any of the three matches, not all three
+
+A manifest entry is tombstoned when **any** of these is true:
+
+1. its canonical CID equals the tombstone's `cid` or any `cid_alternates` entry, **or**
+2. its `sha256` equals the tombstone's `sha256`, **or**
+3. its `rel_posix` equals the tombstone's `path`.
+
+**Any match tombstones it.** Requiring agreement would mean a re-add under a new CID, or a move to a
+new path, walks straight through the gate.
+
+### 5.2 Why CID matching is not optional
+
+The same bytes are routinely tracked more than once:
+
+* the original under `~/_Mirror/…/Skyler_Baird/1Robbie_Parker_.jpg`, and
+* the site's served copy at `site/internals/static/img/evidence/<sha256>.jpg`.
+
+Those are two paths, two units, possibly two tracking repos — **one set of bytes.** A path-only
+tombstone deletes the second and lets the first re-seed it. Content identity is what makes a
+deletion stick, which is why `sha256` is carried even though the manifest often leaves it `null`,
+and why enforcement **computes and backfills the sha256** of any file it deletes (§7.3).
+
+CID equivalence is already a solved problem here — `cid-equivalence.service.ts` and
+`superseded-cids.service.ts` know that one file can have several CIDs under different add profiles.
+Tombstone matching **reuses that map**; it does not invent a second notion of sameness.
+
+### 5.3 Scope of a match
+
+A tombstone written for one unit is enforced **in that unit**. A user who wants the same bytes gone
+from a second unit as well gets that offered explicitly — `lfb delete` reports every other unit
+whose manifest holds a matching CID or sha256 and asks whether to tombstone those too (§10.1). It is
+never done silently, because "delete this from my repo" and "delete every copy I own anywhere" are
+genuinely different intents and only the user knows which was meant.
+
+---
+
+## 6. The merge rule — a tombstone cannot be lost (LOCKED)
+
+`deletions.yaml` merges on **every** backbone pull, by the same discipline as the manifest
+(`repo_tracking_scheme.mdx §8.4.3`) with one deliberate asymmetry:
+
+* **Union by identity key** `(path, cid, sha256)`. Records from both sides survive.
+* **`enforced_by` unions** across devices. Two devices enforcing concurrently both keep their receipt.
+* **Absence NEVER lifts a tombstone.** This is the manifest's "absence is never a delete" rule
+  pointed the other way, and it is the single most important line in this section. An incoming
+  `deletions.yaml` that is empty, truncated, mid-transfer, or written by an older build that did not
+  know about the file **removes nothing**.
+* **Append-only.** A tombstone leaves the ledger by exactly one route: an explicit `undelete` (§12),
+  which is itself recorded rather than by erasure.
+* **Conflicting records for the same identity** merge field-wise; the **widest scope wins**
+  (`fleet` beats `here`), and the **most destructive `actions` win** (`true` beats `false`). A
+  deletion is a safety action — when two records disagree, honour the one that removes more, because
+  the failure mode of over-deleting is an `undelete`, and the failure mode of under-deleting is a
+  private individual's photograph back on a public website.
+
+That last clause is the one place in the whole product where **conflict resolution deliberately does
+not preserve data**, and it is correct here for exactly that reason.
+
+---
+
+## 7. Enforcement — the reaper (LOCKED)
+
+Enforcement runs **inside the pin pass** ([pin_process.mdx](./pin_process.mdx)), on every device, on
+every unit, every pass. It is idempotent: a pass over an already-enforced tombstone does nothing and
+reports nothing.
+
+### 7.1 The gate comes FIRST, and has no grace period
+
+Before `fetchMissing` builds its target list — before the orphan classification, before the
+pull-down offer, before the retry queue — every manifest entry matching a live tombstone is
+**removed from consideration entirely.**
+
+* **No grace period.** The grace period in decisions.mdx §12 exists because an *inferred* deletion
+  might be an unmounted drive. A tombstone is not inferred; the user said it out loud. Waiting 24
+  hours to stop re-publishing someone's photograph is not caution, it is the defect.
+* The gate applies to **every** path that can materialize bytes, not just the pin pass's own fetch:
+  `pullMissing()`, `pull-retry.service.ts`, `auto-sync-in.service.ts`, and the interactive
+  "pull down" action all consult the same predicate. **One predicate, every caller** — a gate with a
+  second door is not a gate.
+
+### 7.2 Then the reap, in this order
+
+For each live tombstone matching this unit, in order, each step independent of the last succeeding:
+
+1. **Working-tree bytes.** If a file exists at the resolved absolute path and `actions.delete_bytes`
+   is true, delete it. Record `bytes: deleted` (or `already-absent`, or `failed` with the reason).
+2. **The IPFS pin.** If `actions.unpin` and this node's pinset holds the CID (content-aware, so a
+   foreign add profile counts), `pin rm` it. Record `pin: unpinned` / `not-held` / `failed`.
+3. **This device's manifest claim.** Drop our label from `pinned_by` — we no longer hold it and must
+   stop advertising that we do.
+4. **The manifest entry.** Mark it `state: removed` (the marker sync_list.mdx §5.2 named). The entry
+   is **not** deleted from `manifest.yaml`, because a deleted entry is indistinguishable from an
+   entry an old build never knew about, and would be re-added by the next backfill. A tombstoned
+   entry that stays visible is what makes the deletion *stable*.
+5. **The decision ledger.** Record a `decided_by: "deleted"` tombstone so the file does not sit in
+   the Undecided queue asking to be re-synced (`decisions.service.ts → recordDecision(..., asked:false)`).
+6. **Sidecars.** The `.transcription`, `.ai_description`, and `.ocr` artifacts derived from the file
+   are deleted too, and so is the per-file record under `files/<path>.yaml`. **A transcription of a
+   deleted file is still the content of that file.** This is not tidiness; a deletion that leaves a
+   full text extraction of the image's contents behind has not deleted anything that matters.
+
+### 7.3 Backfill identity while you have it
+
+At step 1, before deleting the bytes, **compute the sha256 and record it on the tombstone** if it is
+`null`. This is the only moment the bytes are guaranteed to be in hand, and §5.2 depends on having
+them. A tombstone that never saw the file it names stays path-and-CID only, which is weaker and
+should be reported as such by `lfb deleted`.
+
+### 7.4 Report the receipt
+
+Append this device's `enforced_by` entry and write the ledger back. A device that enforced nothing
+because there was nothing here still records `bytes: already-absent` — **the receipt is evidence the
+device saw the instruction**, which is what makes "is this really gone everywhere?" an answerable
+question instead of an assumption.
+
+### 7.5 Offline and third-party devices
+
+A device that is off, or whose owner has not pulled the backbone, has not refused — it has not run.
+It enforces on its next pass, whenever that is. `lfb deleted` shows exactly which of the fleet's
+known devices have reported and which have not (§10.2), and that list is the honest answer to "is it
+gone everywhere yet."
+
+---
+
+## 8. What deletion removes — and what it truthfully cannot (LOCKED)
+
+**It removes:** the working-tree bytes on every device; every device's IPFS pin; the derived
+sidecars and per-file record; this device's manifest claim; the file's presence in every re-fetch,
+offer, and retry path, permanently.
+
+**It does not remove, and must never claim to:**
+
+* **The user's own source original outside the unit.** The `~/_Mirror/…` original and the repo's
+  served copy are separate tracked entries. §5.3 *offers* to tombstone the others; it does not do it
+  behind the user's back, and the CLI says plainly which other copies it found.
+* **Git history.** If the bytes were ever committed to the working repo, deletion does not rewrite
+  that history. The CLI **says so explicitly** when it finds the path in `git log`, because a user
+  deleting a sensitive image needs to know that in one sentence, at the moment they act — not
+  discover it later. Rewriting history is a separate, deliberate operation this feature never
+  performs on its own.
+* **Copies held by anyone outside the fleet.** Unpinning removes *our* copies and stops *us*
+  providing the bytes. It cannot un-publish content someone else already fetched and pinned. IPFS is
+  content-addressed and permissionless; any honest deletion UI in this product says "removed from
+  your computers and stopped being served by them," never "erased from IPFS."
+* **Published sites, CDNs, caches, and mirrors.** Out of scope, and named here only so no reader
+  assumes otherwise.
+
+**The honesty rule (LOCKED):** every surface that reports a completed deletion reports *what was
+actually done, on which devices*, and never a broader claim. "Deleted here, unpinned on 6 of 7
+computers, 1 not reported yet" is the truth and is more useful than "Deleted."
+
+---
+
+## 9. Ordering against the rest of the pin pass
+
+Within a pass:
+
+```
+load manifest ─▶ load + merge deletions.yaml ─▶ BUILD TOMBSTONE INDEX
+      ─▶ REAP (§7.2)  ─▶ orphan classification  ─▶ add/pin half
+      ─▶ fetch half, with the §7.1 gate applied to its target list
+      ─▶ write manifest (entries marked state: removed) ─▶ write deletions.yaml receipts
+```
+
+The reap runs **before** orphan classification so a tombstoned file never enters the grace-period
+machinery at all — it is already gone by the time "deleted here vs never here" would be asked, and
+the two systems never argue about the same path.
+
+---
+
+## 10. CLI surface (`lfb delete` / `lfb deleted` / `lfb undelete`)
+
+Specified in full in [cli.mdx §11](./cli.mdx). Summary:
+
+### 10.1 `lfb delete PATH… [--reason TEXT] [--here] [--keep-bytes] [--keep-pin] [--dry-run] [--json]`
+
+Takes **one or more full file paths** — the everyday invocation is a path the user can paste from
+`git status`. Resolves each to its unit and manifest entry, writes a tombstone, and enforces it
+locally at once rather than waiting for the next scheduled pass.
+
+* **Default scope is `fleet`.** `--here` narrows it to this computer.
+* **Reports other copies.** Before writing, it searches every known unit for the same CID or sha256
+  and names what it found (§5.3), then asks whether to tombstone those too. `--json` and `--dry-run`
+  report the same set without acting.
+* **Warns about git history** when the path appears in the working repo's commits (§8).
+* Works on a path whose bytes are **not on this computer** — that is the whole point (§1), and it is
+  the case the old code could not express.
+
+### 10.2 `lfb deleted [PATH|--repo PATH] [--json]`
+
+Lists tombstones for a unit: what, when, by whom, why, and **the enforcement matrix** — which
+devices have reported and which have not (§7.5). This is the command that answers "is it really gone
+everywhere?"
+
+### 10.3 `lfb undelete PATH [--reason TEXT]`
+
+Lifts a tombstone (§12). Deliberately a separate verb, never a flag on `delete`.
+
+---
+
+## 11. Web app surface
+
+* **One repo page** — a **"Deleted"** metric beside the existing "Deleted here," linking to the
+  tombstone list with the same enforcement matrix as §10.2. ([one_repo.mdx](./one_repo.mdx))
+* **The file row kebab** — **"Delete everywhere…"**, sitting below the existing local
+  "Stop pinning (untrack/unpin)" and visually separated from it, because they are different acts
+  (§2). ([menus.mdx](./menus.mdx), [files.mdx](./files.mdx))
+* **A confirm dialog that states the scope in words**: which devices, what will be removed, what
+  will not (§8), and a **required** reason field for `fleet` scope. This is the one destructive
+  action in the product that reaches other people's computers; it gets a real confirmation, and the
+  dialog never says "permanently erased."
+  ([dialogs.mdx](./dialogs.mdx), [warnings.mdx](./warnings.mdx))
+
+---
+
+## 12. Un-delete
+
+`undelete` appends an `undeleted_at` / `undeleted_by` / `undelete_reason` to the record and marks it
+inactive. It does **not** erase the tombstone — the history of "this was deleted, then restored, by
+whom, and why" is exactly the thing an audit needs, and erasing the record is how a deletion silently
+un-happens.
+
+Once inactive, the entry's `state: removed` is cleared and the file becomes an ordinary remote-only
+row again: offered, not restored. **Un-deleting never re-fetches bytes on its own** — it returns the
+file to the pull-down offer and the user pulls it if they want it. Lifting a deletion must not itself
+be a surprise re-publication.
+
+---
+
+## 13. Acceptance — the simulation this feature must pass
+
+A change to this feature is not done until this runs clean. It is written as the §1 case because
+that is the case that failed.
+
+1. **Both** `manifest.yaml` and the working tree hold `<sha>.jpg`; this device is **not** in its
+   `pinned_by`. (The configuration the old code could not handle.)
+2. `lfb delete <full path> --reason "…"` → tombstone written, bytes gone, pin dropped or reported
+   not-held, sidecars gone, `state: removed` on the entry, receipt recorded.
+3. **Run the pin pass.** The file is **not** fetched. The log says it was skipped as deleted, not
+   that it was fetched. *(This is the single assertion the defect would have failed.)*
+4. Run it again. Still not fetched, and nothing new is written — idempotent.
+5. Simulate a **second computer**: enforce the same ledger against a fixture where the file **is**
+   present and **is** pinned. Bytes deleted, pin removed, its own receipt appended, its `pinned_by`
+   claim retracted.
+6. Simulate a **backbone merge** where the incoming `deletions.yaml` is **empty** → the tombstone
+   survives (§6). And where incoming has a tombstone we lack → we adopt and enforce it.
+7. Simulate **the same bytes at a different path** → matched by CID/sha256 and gated (§5.1).
+8. `lfb undelete` → entry inactive, file becomes an offer, and **no bytes are fetched by the act of
+   undeleting** (§12).
+
+---
+
+## 14. Invariants recap (LOCKED)
+
+1. A fleet delete is **always explicit**, never inferred from the filesystem (§2).
+2. It works from **any** device, including one that never held the file (§1).
+3. The gate runs **before every fetch path**, with **no grace period**, through **one predicate**
+   shared by all callers (§7.1).
+4. A tombstone matches on **CID or sha256 or path** — any one of them (§5.1).
+5. **Absence never lifts a tombstone**; the ledger is append-only; only `undelete` deactivates one,
+   and it does so by recording, not erasing (§6, §12).
+6. When two records conflict, **the more destructive one wins** — the only place in the product
+   where that is the right answer (§6).
+7. Enforcement is **idempotent** and leaves a **receipt per device**; a silent device has not run,
+   it has not refused (§7.4, §7.5).
+8. Deleting a file deletes its **derived artifacts** (§7.2 step 6).
+9. Every report says **what was actually done on which devices**, and never claims erasure from IPFS
+   or the world (§8).

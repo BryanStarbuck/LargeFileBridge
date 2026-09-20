@@ -16,6 +16,7 @@ import { entityRouter } from "./modules/entity/entity.router.js";
 import { mediaRouter } from "./modules/media/media.router.js";
 import { settingsRouter } from "./modules/settings/settings.router.js";
 import { jobsRouter } from "./modules/pin/jobs.router.js";
+import { deletionsRouter } from "./modules/pin/deletions.router.js";
 import { sessionsRouter } from "./modules/sessions/sessions.router.js";
 import { peersRouter } from "./modules/peers/peers.router.js";
 import { devicesRouter } from "./modules/peers/devices.router.js";
@@ -484,6 +485,7 @@ async function main(): Promise<void> {
   app.use("/api/media", mediaRouter);
   app.use("/api/settings", settingsRouter);
   app.use("/api/jobs", jobsRouter);
+  app.use("/api/pin/deletions", deletionsRouter); // fleet-wide deletion — the CLI and the web app share these (deletion.mdx §10)
   app.use("/api/sessions", sessionsRouter); // web-session activity ping + stale-return auto-pin (sessions.mdx)
   app.use("/api/peers", peersRouter);
   app.use("/api/devices", devicesRouter); // the Devices / Peers table: self + peers + registry (devices.mdx §6)

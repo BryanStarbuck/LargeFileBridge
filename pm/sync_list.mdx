@@ -252,6 +252,14 @@ Deletes must be **explicit** — an entry marked `state: removed` with its own `
 provenance — so a real delete propagates but a partial file never destroys data. (An operator can opt
 into `absence_is_delete: true` per computer, but it is off by default.)
 
+**`state: removed` is defined in full by [deletion.mdx](./deletion.mdx).** This section named the
+marker; that spec is the feature — the append-only `deletions.yaml` tombstone ledger that carries it,
+the CID/sha256/path matching that stops the same bytes returning under another name, and the reaper
+that enforces it on every device. Two rules there complete this one and must be read together with it:
+a tombstone matches on **content as well as path** (§5), and **absence never LIFTS a tombstone** (§6) —
+this section's rule pointed the other way, so a truncated or older incoming list can no more resurrect
+a deleted file than it can delete a live one.
+
 ### 5.3 Conflicts resolve by revision, then content, then time
 
 When the same entry (repo key, or a repo's file `path`) exists in both the incoming list and ours and

@@ -632,3 +632,113 @@ It is backed by `GET /api/ocr/where` and `GET /api/describe/where`, which are pu
 resolve placement and stat the sidecar, and create nothing. That is the distinction from
 `/file`, which returns the CONTENT and therefore `null` when the artifact is absent — the exact
 case `where` exists to answer.
+
+---
+
+## 11. Command family: deletion (`lfb delete` / `lfb deleted` / `lfb undelete`)
+
+The **first destructive action family** on the CLI, and the reference implementation of §6's action
+pattern for a verb that changes other people's computers. The feature itself — the tombstone, the
+ledger, the merge rule, and the reaper — is specified in **[deletion.mdx](./deletion.mdx)**; this
+section specifies only the command surface.
+
+§6's ground rules hold without exception: the CLI **enqueues and records, it never computes**. Every
+answer below (which unit owns this path, which other units hold these bytes, whether the path is in
+git history, what enforcement did) comes from the backend.
+
+### 11.1 `lfb delete` — command surface
+
+```
+lfb delete PATH... [--reason TEXT] [--here] [--keep-bytes] [--keep-pin]
+                   [--also-other-copies | --only-this-copy] [--dry-run] [--json] [--yes]
+```
+
+| Argument | Meaning |
+|---|---|
+| `PATH...` | One or more paths. **A full absolute path is the primary form** — the everyday invocation is a path pasted straight out of `git status`. `~`-relative and cwd-relative both resolve. |
+| `--reason TEXT` | Why. Recorded on the tombstone. **Required for fleet scope** unless `--yes` is given, because a deletion that reaches a teammate's computer with no explanation is an unexplained file disappearance on their machine. |
+| `--here` | Narrow the scope to this computer (`scope: here`). **Default is `fleet`.** |
+| `--keep-bytes` | Tombstone and stop re-fetching, but do not delete the file that is on disk. (`actions.delete_bytes: false`) |
+| `--keep-pin` | Do not drop the IPFS pin. (`actions.unpin: false`) |
+| `--also-other-copies` / `--only-this-copy` | Answer deletion.mdx §5.3 non-interactively. |
+| `--dry-run` | Print exactly what would happen — every unit, every other copy, every device — and write nothing. **Exit 0.** |
+| `--json` | Machine-readable result. |
+| `--yes` | Skip the interactive confirm (for scripts). Does **not** waive `--reason`; it waives the prompt. |
+
+**A path whose bytes are not on this computer is valid and must work.** That is the §1 case in
+deletion.mdx, and it is the case the old per-computer delete could not express. A CLI that required
+the file to be present would reproduce the original defect exactly.
+
+### 11.2 What it prints (LOCKED)
+
+Plain, and truthful per deletion.mdx §8 — it reports what was **done**, never "erased":
+
+```
+$ lfb delete ~/BGit/Bryan_git/charlie-kirk/site/internals/static/img/evidence/4768….jpg \
+      --reason "Private individual; must not appear on the site"
+
+  unit           charlie-kirk  (company tracking repo act3_large_files_bridge)
+  path           site/internals/static/img/evidence/4768….jpg
+  cid            bafkreichncjcqpp4nxyufek4m6tb272z4nqc5eqconlan7oso6szixtjdu
+  sha256         476892283dfc…691d
+  scope          fleet — every computer in this repo's fleet
+
+  ALSO FOUND, same bytes, NOT deleted unless you say so:
+    ~/_Mirror/Politics/Charlie_Kirk_Mi/Other/Skyler_Baird/1Robbie_Parker_.jpg
+        (personal tracking repo · matched by sha256)
+    → re-run with --also-other-copies, or delete it by path
+
+  NOTE  this path appears in 2 commits of the charlie-kirk git history.
+        Deleting it here does not rewrite that history.
+
+  Delete everywhere? [y/N]
+
+  on bryan-mac-pro   bytes deleted · pin not held here · sidecars removed (2)
+  tombstone written  deletions.yaml (charlie-kirk) — travels on the next backbone push
+  6 other computers  will enforce on their next pin pass — `lfb deleted` to watch
+```
+
+Three things in that output are requirements, not decoration: **the other copies it found**
+(deletion.mdx §5.3), **the git-history note** (§8), and **"6 other computers will enforce"** rather
+than a claim that they already have (§7.5).
+
+### 11.3 `lfb deleted` — the "is it really gone?" command
+
+```
+lfb deleted [PATH | --repo PATH] [--json] [--pending]
+```
+
+Lists the unit's tombstones with the **enforcement matrix** — one row per device, showing reported
+vs not-yet-reported (deletion.mdx §7.4–§7.5). `--pending` filters to tombstones not yet enforced
+everywhere, which is the standing answer to "what am I waiting on."
+
+The matrix is the honest form of the answer. A device that has not reported has **not run**; it has
+not refused, and the output says so in those words.
+
+### 11.4 `lfb undelete` — lifting one
+
+```
+lfb undelete PATH [--reason TEXT]
+```
+
+A **separate verb, never a flag on `delete`** — so no single-character typo turns a deletion into a
+restoration. It deactivates the tombstone by recording an `undeleted_at` (deletion.mdx §12); it does
+not erase the record, and **it fetches nothing**. The file returns to being a pull-down offer.
+
+### 11.5 Endpoints
+
+The same routes the web app's "Delete everywhere…" action uses (§6 — no CLI-only backdoor):
+
+* `POST /api/pin/deletions` — resolve paths, report other copies and git history, write tombstones,
+  enforce locally. `dryRun: true` performs the whole resolution and writes nothing.
+* `GET /api/pin/deletions` — the ledger plus the enforcement matrix.
+* `POST /api/pin/deletions/undelete` — lift one.
+
+### 11.6 Exit codes
+
+* **0** — tombstone written and locally enforced (or `--dry-run` completed).
+* **0** — path already tombstoned. Idempotent, and says so; re-running a delete is not an error.
+* **non-zero** — path resolves to no known unit; `--reason` missing for a fleet delete; the backend
+  could not be brought up (§2); enforcement failed locally (the tombstone is still written — the
+  instruction stands even when this device could not carry it out, and the receipt records the
+  failure).

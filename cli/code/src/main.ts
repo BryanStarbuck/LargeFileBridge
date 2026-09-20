@@ -57,6 +57,20 @@ USAGE
                         Print where PATH's artifacts are (or would be) stored in
                         the tracking repo — the personal/company sidecar repo —
                         without creating anything.
+  lfb delete PATH... [--reason TEXT] [--here] [--keep-bytes] [--keep-pin]
+             [--also-other-copies] [--dry-run] [--yes] [--json]
+                        DELETE A FILE EVERYWHERE (pm/deletion.mdx). Writes a
+                        travelling tombstone, then deletes the bytes, drops the
+                        IPFS pin, and removes the derived transcription/
+                        description/OCR here. Every other computer does the same
+                        on its next sync. Works even when the file is not on this
+                        computer. --here limits it to this computer only.
+  lfb deleted [PATH] [--pending] [--json]
+                        List tombstones and WHICH COMPUTERS have carried them
+                        out — the "is it really gone everywhere?" answer.
+  lfb undelete PATH [--reason TEXT]
+                        Lift a tombstone. Fetches nothing: the file goes back to
+                        being an offer you can pull if you want it.
   lfb up                Bring the web app up (build if needed) and wait for /api/health
   lfb status            Report backend health and the web app port
   lfb help              Show this help (also: -h, --help)
@@ -465,6 +479,262 @@ async function cmdEnsure(args: string[]): Promise<void> {
   if (failures > 0) process.exit(1);
 }
 
+// ── Fleet-wide deletion (pm/deletion.mdx, pm/cli.mdx §11) ───────────────────
+// The CLI computes NOTHING here (cli.mdx §1). Which unit owns the path, which other units hold the same
+// bytes, whether the path is in git history, and what enforcement actually did all come from the backend —
+// the same endpoints the web app's "Delete everywhere…" action uses, so the two can never drift.
+
+interface DeleteOther {
+  folder: string;
+  path: string;
+  matchedBy: "cid" | "sha256";
+}
+interface DeleteResultRow {
+  input: string;
+  ok: boolean;
+  error?: string;
+  unit?: string;
+  path?: string;
+  cid?: string | null;
+  sha256?: string | null;
+  scope?: string;
+  inManifest?: boolean;
+  onDiskHere?: boolean;
+  otherCopies?: DeleteOther[];
+  gitHistoryCommits?: number;
+}
+interface DeleteEnforced {
+  unit: string;
+  ok: boolean;
+  error?: string;
+  bytesDeleted?: number;
+  unpinned?: number;
+  sidecarsRemoved?: number;
+  entriesMarked?: number;
+  pinsSkipped?: boolean;
+}
+interface DeleteResponse {
+  dryRun: boolean;
+  device: string;
+  results: DeleteResultRow[];
+  enforced: DeleteEnforced[] | null;
+}
+
+async function confirm(question: string): Promise<boolean> {
+  // No TTY (a pipe, a cron, CI) must never be read as consent. Refuse and name the flag instead.
+  if (!process.stdin.isTTY) {
+    process.stderr.write(`Not a terminal — refusing to delete without --yes.\n`);
+    return false;
+  }
+  process.stdout.write(question);
+  return await new Promise<boolean>((resolve) => {
+    const onData = (d: Buffer): void => {
+      process.stdin.pause();
+      process.stdin.off("data", onData);
+      resolve(/^\s*y(es)?\s*$/i.test(d.toString()));
+    };
+    process.stdin.resume();
+    process.stdin.on("data", onData);
+  });
+}
+
+async function cmdDelete(args: string[]): Promise<void> {
+  const paths: string[] = [];
+  let reason = "";
+  let scope: "fleet" | "here" = "fleet";
+  let deleteBytes = true;
+  let unpin = true;
+  let alsoOtherCopies = false;
+  let dryRun = false;
+  let assumeYes = false;
+  let json = false;
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--reason") reason = args[++i] ?? "";
+    else if (a === "--here") scope = "here";
+    else if (a === "--keep-bytes") deleteBytes = false;
+    else if (a === "--keep-pin") unpin = false;
+    else if (a === "--also-other-copies") alsoOtherCopies = true;
+    else if (a === "--only-this-copy") alsoOtherCopies = false;
+    else if (a === "--dry-run") dryRun = true;
+    else if (a === "--yes" || a === "-y") assumeYes = true;
+    else if (a === "--json") json = true;
+    else if (a === "-h" || a === "--help") return void process.stdout.write(HELP);
+    else if (a.startsWith("-")) fail(`Unknown flag: ${a}\n\n${HELP}`);
+    else paths.push(a);
+  }
+  if (paths.length === 0) fail("At least one PATH is required: lfb delete PATH... [--reason TEXT]");
+  // A fleet delete reaches other people's computers. A file that vanishes there with no explanation is an
+  // unexplained disappearance on someone else's machine, so the reason is required rather than encouraged.
+  if (scope === "fleet" && !reason.trim() && !assumeYes && !dryRun) {
+    fail("--reason is required for a fleet-wide delete (it travels to every computer). Use --here to limit it to this computer.");
+  }
+  const abs = paths.map((p) => path.resolve(p.replace(/^~(?=\/|$)/, os.homedir())));
+  if (!(await ensureServerUp())) process.exit(1);
+
+  // ALWAYS resolve first, even without --dry-run: the other copies and the git-history note are the two
+  // things the user needs BEFORE they answer the prompt, not after the bytes are gone.
+  const preview = await apiPost<DeleteResponse>("/pin/deletions", {
+    paths: abs, reason, scope, deleteBytes, unpin, alsoOtherCopies, dryRun: true,
+  });
+  if (json && dryRun) return void process.stdout.write(`${JSON.stringify(preview, null, 2)}\n`);
+
+  let anyResolved = false;
+  for (const r of preview.results) {
+    if (!r.ok) {
+      process.stderr.write(`  ERROR  ${r.input} — ${r.error}\n`);
+      continue;
+    }
+    anyResolved = true;
+    process.stdout.write(`\n  unit           ${r.unit}\n`);
+    process.stdout.write(`  path           ${r.path}\n`);
+    if (r.cid) process.stdout.write(`  cid            ${r.cid}\n`);
+    if (r.sha256) process.stdout.write(`  sha256         ${r.sha256}\n`);
+    process.stdout.write(
+      `  scope          ${r.scope === "fleet" ? "fleet — every computer in this repo's fleet" : "here — this computer only"}\n`,
+    );
+    process.stdout.write(`  on disk here   ${r.onDiskHere ? "yes" : "no (deleting it everywhere anyway)"}\n`);
+    if (r.otherCopies && r.otherCopies.length > 0) {
+      // §5.3: reported, never acted on. "Delete this from my repo" and "delete every copy I own anywhere"
+      // are different intents and only the user knows which was meant.
+      process.stdout.write(`\n  ALSO FOUND, same bytes, NOT deleted unless you say so:\n`);
+      for (const o of r.otherCopies) process.stdout.write(`    ${o.folder}: ${o.path}  (matched by ${o.matchedBy})\n`);
+      if (!alsoOtherCopies) process.stdout.write(`    -> re-run with --also-other-copies to include them\n`);
+    }
+    if (r.gitHistoryCommits && r.gitHistoryCommits > 0) {
+      // deletion.mdx §8 — say it at the moment they act, not after they find out.
+      process.stdout.write(
+        `\n  NOTE  this path appears in ${r.gitHistoryCommits} commit(s) of that repo's git history.\n` +
+          `        Deleting it here does NOT rewrite that history.\n`,
+      );
+    }
+  }
+  if (!anyResolved) process.exit(1);
+  if (dryRun) {
+    process.stdout.write(`\n  --dry-run: nothing was written.\n`);
+    return;
+  }
+  if (!assumeYes && !(await confirm(`\n  Delete ${scope === "fleet" ? "everywhere" : "here"}? [y/N] `))) {
+    process.stdout.write("  Cancelled — nothing was deleted.\n");
+    process.exit(1);
+  }
+
+  const res = await apiPost<DeleteResponse>("/pin/deletions", {
+    paths: abs, reason, scope, deleteBytes, unpin, alsoOtherCopies, dryRun: false,
+  });
+  if (json) return void process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+  let failures = 0;
+  for (const e of res.enforced ?? []) {
+    if (!e.ok) {
+      failures++;
+      // The tombstone is still written and every other device still enforces it — say exactly that, so a
+      // local failure does not read as "the delete did not happen."
+      process.stderr.write(`  ${e.unit}: enforcement FAILED here — ${e.error}\n`);
+      process.stderr.write(`  (the tombstone IS written and travels; other computers will still enforce it)\n`);
+      continue;
+    }
+    const bits = [
+      `${e.bytesDeleted ?? 0} file(s) deleted`,
+      e.pinsSkipped ? "pins deferred (IPFS node unreachable)" : `${e.unpinned ?? 0} unpinned`,
+      `${e.sidecarsRemoved ?? 0} sidecar(s) removed`,
+    ];
+    process.stdout.write(`\n  on ${res.device}   ${bits.join(" · ")}\n`);
+    process.stdout.write(`  tombstone written  ${e.unit} — travels on the next backbone push\n`);
+  }
+  // TRUTHFUL, per deletion.mdx §8: what was DONE, here, and what is still pending elsewhere. Never "erased".
+  process.stdout.write(`  other computers    will enforce on their next sync — run \`lfb deleted\` to watch\n\n`);
+  await logInvocation(`delete paths=${abs.length} scope=${scope} reason="${reason}" failures=${failures}`);
+  if (failures > 0) process.exit(1);
+}
+
+interface DeletedRow {
+  path: string;
+  cid: string | null;
+  sha256: string | null;
+  scope: string;
+  reason: string;
+  removed_at: string;
+  removed_by: string;
+  removed_on_device: string;
+  active: boolean;
+  undeleted_at: string | null;
+  enforced_by: Array<{ device: string; at: string; bytes: string; pin: string; sidecars: number }>;
+  notReported: string[];
+}
+interface DeletedResponse {
+  device: string;
+  units: Array<{ unit: string; error?: string; deletions?: DeletedRow[] }>;
+}
+
+async function cmdDeleted(args: string[]): Promise<void> {
+  let target: string | null = null;
+  let pending = false;
+  let json = false;
+  for (const a of args) {
+    if (a === "--pending") pending = true;
+    else if (a === "--json") json = true;
+    else if (a === "-h" || a === "--help") return void process.stdout.write(HELP);
+    else if (a === "--repo") continue; // accepted and ignored: a path IS the repo selector
+    else if (a.startsWith("-")) fail(`Unknown flag: ${a}\n\n${HELP}`);
+    else target = a;
+  }
+  if (!(await ensureServerUp())) process.exit(1);
+  const q = new URLSearchParams();
+  if (target) q.set("path", path.resolve(target.replace(/^~(?=\/|$)/, os.homedir())));
+  if (pending) q.set("pending", "true");
+  const res = await apiGet<DeletedResponse>(`/pin/deletions${q.toString() ? `?${q}` : ""}`);
+  if (json) return void process.stdout.write(`${JSON.stringify(res, null, 2)}\n`);
+  if (res.units.length === 0) {
+    process.stderr.write("No deletions recorded.\n");
+    return;
+  }
+  for (const u of res.units) {
+    process.stdout.write(`\n${u.unit}\n`);
+    if (u.error) {
+      process.stdout.write(`  ERROR reading ledger: ${u.error}\n`);
+      continue;
+    }
+    for (const d of u.deletions ?? []) {
+      process.stdout.write(`  ${d.active ? "DELETED " : "restored"}  ${d.path}\n`);
+      process.stdout.write(`      when   ${d.removed_at}  by ${d.removed_by || "(unrecorded)"} on ${d.removed_on_device}\n`);
+      if (d.reason) process.stdout.write(`      why    ${d.reason}\n`);
+      for (const e of d.enforced_by) {
+        process.stdout.write(`      done   ${e.device}: bytes ${e.bytes}, pin ${e.pin}, ${e.sidecars} sidecar(s)\n`);
+      }
+      // A device that has not reported has NOT RUN — it has not refused. Say it in those words; an implicit
+      // omission would read as "done" and that would be a lie (deletion.mdx §7.5).
+      if (d.notReported.length > 0) {
+        process.stdout.write(`      NOT YET RUN on: ${d.notReported.join(", ")}\n`);
+      }
+    }
+  }
+  process.stdout.write("\n");
+  await logInvocation(`deleted target=${target ?? "(all)"} pending=${pending}`);
+}
+
+async function cmdUndelete(args: string[]): Promise<void> {
+  let target: string | null = null;
+  let reason = "";
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "--reason") reason = args[++i] ?? "";
+    else if (a === "-h" || a === "--help") return void process.stdout.write(HELP);
+    else if (a.startsWith("-")) fail(`Unknown flag: ${a}\n\n${HELP}`);
+    else target = a;
+  }
+  if (!target) fail("A PATH is required: lfb undelete PATH [--reason TEXT]");
+  if (!(await ensureServerUp())) process.exit(1);
+  const abs = path.resolve(target.replace(/^~(?=\/|$)/, os.homedir()));
+  const res = await apiPost<{ unit: string; path: string; lifted: number }>("/pin/deletions/undelete", {
+    path: abs,
+    reason,
+  });
+  process.stdout.write(`  lifted ${res.lifted} tombstone(s) on ${res.unit}: ${res.path}\n`);
+  // Saying this out loud matters: lifting a deletion must not itself be a surprise re-publication.
+  process.stdout.write(`  Nothing was fetched — the file is an offer again. Pull it if you want it back.\n`);
+  await logInvocation(`undelete path=${abs} lifted=${res.lifted}`);
+}
+
 async function cmdWhere(args: string[]): Promise<void> {
   let fileArg: string | null = null;
   const kinds: EnsureKind[] = [];
@@ -542,6 +812,12 @@ async function main(): Promise<void> {
       return cmdEnsure(rest);
     case "where":
       return cmdWhere(rest);
+    case "delete":
+      return cmdDelete(rest);
+    case "deleted":
+      return cmdDeleted(rest);
+    case "undelete":
+      return cmdUndelete(rest);
     case "up":
       process.exit((await ensureServerUp()) ? 0 : 1);
       break;

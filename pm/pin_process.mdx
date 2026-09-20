@@ -205,6 +205,10 @@ A pin pass holds the repo **unit lock** (§2), so two passes never overlap on on
 nothing, and it has **four** entry points that all reach the same repo:
 
 * the repo page's **Pull down** button (`POST /:repoId/pull`);
+* the **tombstone reap and fetch gate** ([deletion.mdx §7](./deletion.mdx)) — loaded and applied at the
+  TOP of the pass, before orphan classification and before `fetchMissing` builds its target list, with no
+  grace period. A file the user deleted fleet-wide must never reach the fetch half, on any device,
+  including one that never held it;
 * the **To Do** apply (`todo.router.ts`, fire-and-forget);
 * **auto-sync-in**, hourly ([storage_company.mdx §14.3](./storage_company.mdx));
 * **pull-retry**, 3-hourly ([warnings.mdx §10.8.12 C.3](./warnings.mdx)).

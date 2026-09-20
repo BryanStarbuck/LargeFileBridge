@@ -20,6 +20,10 @@ import {
   type ManifestFile,
 } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
+// The fleet-deletion ledger merge (deletion.mdx §6). Imported from the pin module because the ledger's
+// semantics — append-only, widest scope wins, absence never lifts — belong with the feature, not with the
+// transport that happens to carry it.
+import { readDeletions, serializeDeletions, mergeDeletions } from "../pin/deletions.service.js";
 import { repoUidFor, repoSlugFor } from "./repo-identity.js";
 import { namedKeyDir, isDirForKey } from "../../shared/store/keyed-dir.js";
 // THIS computer's device label — the identity a manifest's `pinned_by` is keyed by. Both directions of
@@ -96,6 +100,12 @@ const LOCAL_ONLY = new Set([
 const MERGED_NEVER_COPIED: ReadonlySet<string> = new Set([
   "manifest.yaml",
   "decisions.yaml",
+  // The FLEET DELETION ledger (deletion.mdx §4, §6). Merged for a reason stronger than the others': a COPY
+  // here is how a deleted file comes back. The mirror is shared, so a peer that has not yet seen a tombstone
+  // pushes a ledger without it; last-writer-wins would erase the record on the way through and every device
+  // would happily re-fetch the bytes on its next pass. `mergeDeletions` only ever ADDS — absence never lifts
+  // a tombstone — which is precisely the invariant a copy cannot hold.
+  "deletions.yaml",
   // SHARED user intent (decisions.mdx §9/§14): the per-repo default-decision mode plus attribution. It
   // used to fall through to `fs.copyFileSync` in both directions, so the last computer to mirror silently
   // imposed its policy on the fleet — and, worse, an OLDER policy arriving on the reconcile leg could
@@ -294,7 +304,16 @@ function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<s
       // Skip an unreadable/unwritable leaf; never fail the whole mirror — BUT make it observable. A file
       // that silently stops copying between the user's computers is the exact failure this module exists to
       // prevent, so a per-leaf copy failure must reach error.err (the top-level caller still returns true).
-      log.warn("storage", `copyTree: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
+      // A SOURCE THAT VANISHED MID-WALK IS NOT A FAULT. `readdirSync` snapshots the directory, and the
+      // fleet-deletion reaper (deletion.mdx §7.2 step 6) removes a deleted file's sidecars from this very
+      // mirror — so a delete running alongside a mirror/reconcile legitimately races the walk. The entry is
+      // simply gone, which is the outcome the copy was heading for anyway. Logged at DEBUG so it stays
+      // visible without dressing a normal race as a warning the user should act on.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT" && !fs.existsSync(s)) {
+        log.debug("storage", `copyTree: source vanished mid-walk (deleted concurrently): ${s}`);
+      } else {
+        log.warn("storage", `copyTree: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
+      }
     }
     // ONE yield point per entry. The synchronous driver ignores it; the asynchronous one uses it to hand
     // the event loop back. Per-ENTRY rather than per-DIRECTORY on purpose: one repo here holds 20,062 of
@@ -595,6 +614,19 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
     }
     try {
+      // The deletion ledger, OUT to the mirror (deletion.mdx §4). A throw here leaves BOTH copies untouched:
+      // an unreadable ledger must never be published over a good one.
+      changed =
+        mergeDeletionsInto(
+          JOB_MIRROR_DELETIONS,
+          path.join(dst, "deletions.yaml"),
+          path.join(localStateDir, "deletions.yaml"),
+          path.join(dst, "deletions.yaml"),
+        ) || changed;
+    } catch (e) {
+      log.warn("storage", `mirrorToSyncRepo(${repoRoot}): deletions merge failed: ${(e as Error).message}`);
+    }
+    try {
       changed = syncLedgerInto(mirrorLedgerFile, localLedgerFile, JOB_MIRROR_LEDGER, repoRoot) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
@@ -857,6 +889,8 @@ const JOB_MIRROR_POLICY = "mirror-policy";
 const JOB_MIRROR_LEDGER = "mirror-ledger";
 const JOB_MIRROR_MANIFEST = "mirror-manifest";
 const JOB_RECONCILE_MANIFEST = "reconcile-manifest";
+const JOB_MIRROR_DELETIONS = "mirror-deletions";
+const JOB_RECONCILE_DELETIONS = "reconcile-deletions";
 
 const memoKey = (job: string, dstFile: string, srcFile: string): string => `${job}|${dstFile}|${srcFile}`;
 
@@ -1087,6 +1121,32 @@ function mergeManifestInto(
   return changed;
 }
 
+/**
+ * Fold two `deletions.yaml` into `dstFile` (deletion.mdx §6). The twin of {@link mergeManifestInto}, and it
+ * runs in BOTH directions for the same reason the ledger does.
+ *
+ * It deliberately has no `guardDstFor`-style "refuse, never replace" leg: `readDeletions` already THROWS on
+ * a half-merged or unparseable document, and the caller treats that throw as "leave both files alone."
+ * Writing a partially-understood deletion ledger is the one outcome that must never happen — every record
+ * we fail to carry is a file that comes back on every computer.
+ */
+function mergeDeletionsInto(job: string, dstFile: string, localFile: string, mirrorFile: string): boolean {
+  const other = dstFile === localFile ? mirrorFile : localFile;
+  if (pairSettled(job, dstFile, other)) return false;
+  const merged = mergeDeletions(readDeletions(localFile), readDeletions(mirrorFile));
+  // A UNIT WITH NO DELETIONS HAS NO FILE — not an empty list (deletion.mdx §4). Without this, every one of
+  // the ~105 repos on this machine gains a `deletions: []` stub on the first pass after upgrading, each one
+  // a new file committed and pushed to the backbone to say nothing at all. Absence of the file already IS
+  // absence of tombstones, and it is the only absence in this feature that means anything.
+  if (merged.deletions.length === 0 && !fs.existsSync(dstFile)) {
+    markPairSettled(job, dstFile, other);
+    return false;
+  }
+  const changed = writeIfDifferent(dstFile, serializeDeletions(merged));
+  markPairSettled(job, dstFile, other);
+  return changed;
+}
+
 /** TEST-ONLY: forget every memoized merge, in every direction — including the copy on disk, so a test that
  *  points `LFB_STATE_DIR` at a fresh directory starts genuinely cold. */
 export function resetLedgerSyncMemo(): void {
@@ -1137,6 +1197,24 @@ function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
     const incomingLedger = path.join(src, "decisions.yaml");
     if (fs.existsSync(incomingLedger)) {
       changed = syncLedgerInto(path.join(dst, "decisions.yaml"), incomingLedger) || changed;
+    }
+    // 1a. the FLEET DELETION ledger — a MERGE, never a copy (deletion.mdx §6). This is the leg that carries
+    // another computer's deletion TO this one, and it is what makes `lfb delete` mean anything beyond the
+    // machine it was typed on. A failure is logged and the local ledger left exactly as it was: enforcing a
+    // stale-but-real set of tombstones is always safer than enforcing a half-read one.
+    const incomingDeletions = path.join(src, "deletions.yaml");
+    if (fs.existsSync(incomingDeletions)) {
+      try {
+        changed =
+          mergeDeletionsInto(
+            JOB_RECONCILE_DELETIONS,
+            path.join(dst, "deletions.yaml"),
+            path.join(dst, "deletions.yaml"),
+            incomingDeletions,
+          ) || changed;
+      } catch (e) {
+        log.warn("storage", `reconcile: deletions merge failed for ${dst}: ${(e as Error).message}`);
+      }
     }
     // 2a. the SHARED default-decision policy — a FOLD, for the same reason as the ledger. This is the leg
     // that used to lose intent: a copy on the way IN replaced a policy this computer had just set with

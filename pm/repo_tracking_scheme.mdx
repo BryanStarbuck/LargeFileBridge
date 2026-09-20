@@ -119,6 +119,10 @@ this section records the two keys so nothing in this spec reads as if there were
   two clones disagree in the mirror, the union-merge rules apply
   ([storage_company.mdx §8.4.3](./storage_company.mdx#843-receiving-is-a-merge-never-a-copy-locked)):
   union by path, union `pinned_by`, newer `modified_at` wins, absence is **never** a delete.
+  The unit directory also carries **`deletions.yaml`** — the append-only tombstone ledger
+  ([deletion.mdx §4](./deletion.mdx)) — which merges by the same discipline with one deliberate
+  asymmetry: absence never *lifts* a tombstone, and when two records for one identity conflict the
+  **more destructive** one wins.
 
 * **BOTH directories are NAMED as well as keyed** — `repos/<slug>-<repoKey>/` and
   `<syncRepo>/repos/<slug>-<repoUid>/`, e.g. `repos/charlie-kirk-83e62afc2c80/`. The key after the prefix is

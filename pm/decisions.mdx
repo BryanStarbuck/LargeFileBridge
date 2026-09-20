@@ -652,7 +652,13 @@ losing the user's intent or leaving zombie records:
   [the perceptual-fingerprint goal](../CLAUDE.md)). The decision **follows the asset**: the compress/convert
   flow re-stamps the decision onto the output path (carried by the perceptual/content match), so a file the
   team already chose to pin stays pinned after it is compressed — it does **not** fall back to Undecided.
-* **Delete.** When a decided file **disappears from disk**, its ledger record becomes **orphaned**. LFB
+* **Delete.** *(This bullet is the **per-computer** delete — "I don't want these bytes on THIS machine."
+  It is not, and cannot be, "delete this file everywhere": it is detected by observing that bytes vanished
+  from a disk that pinned them, so on a computer that never pinned the file there is nothing to observe and
+  absence correctly reads as the healthy never-here pull-down offer. The fleet-wide delete is an explicit,
+  travelling instruction specified in **[deletion.mdx](./deletion.mdx)**, and §2 there is the line between
+  the two. Conflating them is what let ten files re-download hourly for a day.)*
+  When a decided file **disappears from disk**, its ledger record becomes **orphaned**. LFB
   does **not** immediately drop it (a temporarily-unmounted drive or an un-fetched teammate must not lose
   the decision — mirrors the scanner's "retain config for a vanished repo",
   [storage_local.mdx §7](./storage_local.mdx)). The record is marked **stale** after a grace period and

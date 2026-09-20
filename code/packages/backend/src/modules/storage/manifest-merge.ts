@@ -52,6 +52,11 @@ export function foldManifestFiles(files: ManifestFile[], unit: Manifest["unit"])
       // silently stops travelling between the user's computers: the exact silent-loss failure this
       // module exists to prevent, reached through a missing optional field.
       pinned_by: [...new Set([...(prev.pinned_by ?? []), ...(f.pinned_by ?? [])])],
+      // REMOVED IS STICKY (deletion.mdx §6). Without this the winner's spread decides `state`, so folding a
+      // tombstoned entry against an untombstoned twin — a second clone of the repo, a peer still on an older
+      // build — silently resurrects a deleted file. Absence means present, so `??` alone is not enough:
+      // "either side says removed" is the rule.
+      state: prev.state === "removed" || f.state === "removed" ? "removed" : (prev.state ?? f.state),
     });
   }
   return [...byPath.values()];
@@ -155,6 +160,11 @@ export function mergeManifests(
       sha256: cur.sha256 ?? inc.sha256,
       modified_at: incAuthoritative ? inc.modified_at : cur.modified_at,
       pinned_by: [...new Set([...ownClaims(cur), ...peerClaims(inc)])].sort((a, b) => a.localeCompare(b)),
+      // REMOVED IS STICKY across the wire too (deletion.mdx §6). A peer that has not yet pulled the deletion
+      // ledger sends us its entry with no `state`, and `incAuthoritative` would hand that entry the win on a
+      // newer `modified_at` — un-deleting the file on THIS computer and re-arming the fetch. A deletion must
+      // never be undone by a merge; only an explicit undelete lifts it.
+      state: cur.state === "removed" || inc.state === "removed" ? "removed" : (cur.state ?? inc.state),
     });
   }
   // LAST, AFTER the winner is chosen — a CID we have PROVEN wrong must not stand however it won.
@@ -200,6 +210,13 @@ export function serializeManifest(manifest: Manifest): string {
         sha256: f.sha256,
         modified_at: f.modified_at,
         pinned_by: [...(f.pinned_by ?? [])].sort((a, b) => a.localeCompare(b)), // see foldManifestFiles
+        // EMITTED ONLY WHEN REMOVED (deletion.mdx §7.2 step 4). `undefined` is omitted by YAML.stringify,
+        // so a live entry serializes byte-identically to how it always has — writing `state: present` onto
+        // all ~31k rows of a real manifest would be a pure-noise diff on every pass, which is exactly what
+        // this serializer's determinism contract exists to prevent (repo__list_syns.mdx §6). A tombstoned
+        // entry is rare and its marker must survive the round-trip, or the deletion silently un-sticks on
+        // the next write.
+        state: f.state === "removed" ? "removed" : undefined,
       }))
       .sort((a, b) => a.path.localeCompare(b.path)),
   });

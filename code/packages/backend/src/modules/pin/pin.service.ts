@@ -76,6 +76,18 @@ import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 // is safe on the per-file pin path. Used to publish an already-pinned file without re-adding it.
 import { foreignPinByAbsPath, foreignPinRecordsFor } from "../ipfs/foreign-pin.service.js";
 import { pinsetHasContent } from "./cid-equivalence.service.js";
+// FLEET-WIDE DELETION (pm/deletion.mdx). The reap runs at the top of the pass and the gate in front of the
+// fetch — a delete that is merely another INPUT to the re-fetch engines loses to them.
+import {
+  deletionsPathForRepo,
+  sidecarPathsForRepoRel,
+  readDeletions,
+  writeDeletions,
+  buildTombstoneIndex,
+  matchTombstone,
+  reap,
+  type TombstoneIndex,
+} from "./deletions.service.js";
 import { recordCidCorrection } from "./cid-correction.js";
 import { noteSupersededCid, supersededCid, supersededPairs, adoptSupersededCids } from "./superseded-cids.service.js";
 import { classifyAbsent, mergeOrphans } from "./orphans.service.js";
@@ -198,6 +210,13 @@ interface UnitTarget {
   // orphans.service.ts). Only a repo unit can have a twin (two clones of one remote); the computer and
   // storage units leave it undefined, which is exactly the prior behavior.
   bytesHeldByLocalTwin?: (rel: string) => boolean;
+  // `<trackingRoot>/deletions.yaml` for this unit (deletion.mdx §4). Only a unit with a tracking directory
+  // has one; when it is undefined the pass behaves exactly as it always did — no ledger, no tombstones.
+  deletionsFile?: string;
+  // Derived artifacts for a unit-relative path (.transcription / .ai_description / .ocr). Deleting a file
+  // deletes these too: a transcription of a deleted file is still the content of that file
+  // (deletion.mdx §7.2 step 6).
+  sidecarPathsFor?: (rel: string) => string[];
   // Assert the RECORDED git-ignore decision for the files this pass is about to write into the working tree
   // (decisions.mdx §7). Only a repo unit has a ledger and a `.gitignore`; the computer and storage units
   // leave it undefined. Best-effort — a throw is logged and the fetch proceeds.
@@ -264,6 +283,63 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     markUnitError(t, msg);
     counts.error = msg;
     return counts;
+  }
+
+  // ── FLEET-WIDE DELETION: REAP FIRST, THEN GATE (deletion.mdx §7, §9) ──────────────────────────────
+  // This runs BEFORE the add half, before orphan classification, and before the fetch half builds its
+  // target list, with NO grace period. The grace period in decisions.mdx §12 exists because an INFERRED
+  // deletion might be an unmounted drive; a tombstone is not inferred — the user said it out loud. Waiting
+  // 24 hours to stop re-publishing someone's photograph is not caution, it is the defect (deletion.mdx §1).
+  let tombstones: TombstoneIndex = { byCid: new Map(), bySha: new Map(), byPath: new Map(), size: 0 };
+  if (t.deletionsFile) {
+    try {
+      const ledger = readDeletions(t.deletionsFile);
+      tombstones = buildTombstoneIndex(ledger, t.label, ipfs.canonicalCid);
+      if (tombstones.size > 0) {
+        note.phase("applying deletions");
+        const r = await reap(
+          ledger,
+          {
+            resolveAbs: t.resolveAbs,
+            pinsetHasContent: (cid) => pinsetHasContent(pinset, cid),
+            pinRm: (cid) => ipfs.pinRm(cid),
+            canonicalCid: ipfs.canonicalCid,
+            label: t.label,
+            byPath,
+            tombstoneDecision: t.tombstone,
+            sidecarPathsFor: t.sidecarPathsFor,
+          },
+          new Date().toISOString(),
+        );
+        // Rebuild the index AFTER the reap: identity backfill (§7.3) may have learned a sha256 from bytes
+        // it was about to delete, and the gate below has to see it.
+        tombstones = buildTombstoneIndex(ledger, t.label, ipfs.canonicalCid);
+        // Drop the unpinned CIDs from the in-memory pinset so the claim-refresh at the end of this pass
+        // does not immediately re-assert a pin we just removed.
+        for (const c of tombstones.byCid.keys()) pinset.delete(c);
+        if (r.touched.length > 0 || r.bytesDeleted > 0 || r.entriesMarked > 0) {
+          try {
+            writeDeletions(t.deletionsFile, ledger);
+          } catch (e) {
+            log.warn("pin", `${t.name}: writing deletion receipts failed: ${(e as Error).message}`);
+          }
+        }
+        if (r.bytesDeleted || r.unpinned || r.sidecarsRemoved || r.entriesMarked) {
+          log.info(
+            "pin",
+            `${t.name}: deletions enforced — ${r.bytesDeleted} file(s) deleted, ${r.unpinned} unpinned, ` +
+              `${r.sidecarsRemoved} sidecar(s) removed, ${r.entriesMarked} entr(y/ies) marked removed.`,
+          );
+        }
+      }
+    } catch (e) {
+      // A ledger we cannot READ must never be treated as an empty one — that would silently un-delete
+      // everything in it. Skip the unit's byte work this pass and say why; the next pass retries.
+      const msg = `deletions.yaml unreadable — skipping pin pass for safety: ${(e as Error).message}`;
+      markUnitError(t, msg);
+      counts.error = msg;
+      return counts;
+    }
   }
 
   // Add + pin any new / changed / no-longer-pinned Add-to-IPFS-decided file — IN PARALLEL, bounded by the
@@ -589,6 +665,12 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
       // (selected)", and the targeted pin every decision click fires — asked for THESE files. Without this
       // the add half honored the selection while the fetch half quietly pulled down every missing file in
       // the repo, and reported `fetched`/`failed` counts for files the user never selected.
+      // THE GATE (deletion.mdx §7.1). First test, before every other reason to skip — a file the user
+      // deleted fleet-wide must never reach the fetch half on ANY device, including one that never held it.
+      // That last clause is the whole defect: on a computer absent from `pinned_by`, the orphan check below
+      // classifies the absence as the healthy "never here" and this filter used to let it through, so the
+      // file re-downloaded every single pass, forever.
+      if (matchTombstone(tombstones, entry, ipfs.canonicalCid)) return false;
       if (onlyPaths && !onlyPaths.has(entry.path)) return false;
       // A peer-known file this computer has NOT decided to sync is an OFFER, not an obligation
       // (storage_company.mdx §8.5). Fetching it here would silently download every big file the user's
@@ -880,6 +962,10 @@ async function pinRepoFolderInner(
       tombstone: (rels) => recordDecision(folder, rels, {}, "deleted", { asked: false }),
       bytesHeldByLocalTwin: localTwinProbe(folder, cfg.repo.remote ?? null, repoPath),
       ensureIgnored: (rels) => ensureDecidedIgnores(repoPath, rels),
+      // FLEET-WIDE DELETION (deletion.mdx §4). Beside manifest.yaml in this repo's Local-Storage tracking
+      // directory, mirrored to the sync repo and carried to every device by the git backbone.
+      deletionsFile: deletionsPathForRepo(repoPath),
+      sidecarPathsFor: (rel) => sidecarPathsForRepoRel(repoPath, rel),
     },
     onlyPaths,
     opts.report,
@@ -1803,6 +1889,7 @@ function repoBumpTopicsForRoot(repoRoot: string): string[] {
 
 async function pullMissingInner(
   repoRoot: string,
+  // Reassigned below: the fleet-deletion gate filters this list before any byte work happens.
   checkedPaths: string[],
   opts: { compress?: boolean; by?: string | null },
   report: PinReport,
@@ -1826,6 +1913,33 @@ async function pullMissingInner(
     return { pulled: 0, failed: checkedPaths.length, errors: [(e as Error).message] };
   }
   const byPath = new Map(manifest.files.map((f) => [f.path, f]));
+  // THE SAME GATE, THE SAME PREDICATE (deletion.mdx §7.1). This is the INTERACTIVE pull — a user clicking
+  // "pull down" on a row — and it must refuse a tombstoned file exactly as the scheduled pass does. A gate
+  // the background honours and the button walks around is not a gate; it is a slower way to restore the file.
+  let deletedRefusals = 0;
+  try {
+    const idx = buildTombstoneIndex(
+      readDeletions(deletionsPathForRepo(repoRoot)),
+      computerLabel(),
+      ipfs.canonicalCid,
+    );
+    if (idx.size > 0) {
+      const before = checkedPaths.length;
+      checkedPaths = checkedPaths.filter(
+        (rel) => !matchTombstone(idx, byPath.get(rel) ?? { path: rel, cid: null, sha256: null }, ipfs.canonicalCid),
+      );
+      deletedRefusals = before - checkedPaths.length;
+      if (deletedRefusals > 0) {
+        log.info("pin", `pullMissing: skipped ${deletedRefusals} file(s) deleted fleet-wide (deletion.mdx §7.1)`);
+      }
+    }
+  } catch (e) {
+    // An unreadable ledger must NOT be read as "no deletions" — that would let one click restore every
+    // deleted file in the repo. Refuse the whole pull and say why.
+    const msg = `deletions.yaml unreadable — pull refused for safety: ${(e as Error).message}`;
+    log.warn("pin", `pullMissing: ${msg}`);
+    return { pulled: 0, failed: checkedPaths.length, errors: [msg] };
+  }
   note.phase("reading this computer's pin list");
   // The two callers of `pinnedCidSet` want OPPOSITE things from an unknown answer, which is why it returns
   // null rather than deciding for them. The pull-down LIST is a passive report, so unknown means "say
