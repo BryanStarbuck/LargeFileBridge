@@ -55,8 +55,8 @@ export type WarningTargetAxes = {
 export const AXIS_ORDER = ["ipfs", "ignore", "compress"] as const;
 export type AxisId = (typeof AXIS_ORDER)[number];
 
-// Media the left pane previews when this row is hovered/keyboard-focused (warnings.mdx §4.5.2). Absent ⇒
-// a non-media row (hovering it just restores the educate copy).
+// Media the left pane previews when this row is clicked/arrow-selected (warnings.mdx §4.5.2). Absent ⇒
+// a non-media row (selecting it hides the preview area).
 export type WarningTargetPreview = {
   kind: "image" | "video" | "audio";
   url: string; // media-serving URL (same /api/media endpoint the media viewer uses)
@@ -100,7 +100,7 @@ export type WarningTarget = {
   sublabel?: string; // LEGACY fallback for the ROW-2 line when `pathText` is absent (shown muted)
   defaultChecked?: boolean; // single-checkbox model: default true; false opts the row OUT at open (rare)
   axes?: WarningTargetAxes; // per-row-toggles model (§4.5.1) — present ⇒ row shows up-to-3 axis toggles
-  preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews on hover/focus
+  preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews when this row is selected
 };
 
 // Per-row map of the axes left ON for each still-included row — apply()'s 3rd argument in the per-row
@@ -109,9 +109,16 @@ export type PerRowAxes = Record<string, { ipfs?: boolean; ignore?: boolean; comp
 
 export type WarningPopupSpec = {
   // §4.2 — the two mandatory education blocks.
+  // §4.2.1 — the ONE sentence a two-pane popup shows at rest; the blocks below sit behind "More info ▾".
+  // Absent ⇒ the banner `sub` line stands in.
+  summary?: ReactNode;
   whatThisIs: ReactNode; // "What this is" — plain-English what LFBridge found and what it means
   whyItMatters: ReactNode; // "Why it matters" — the consequence to the user's files
   details?: ReactNode; // optional Disclosure content (the file list, CIDs, the exact command)
+  // §4.5.2 — lazy URL for the SELECTED row's preview when its `preview.url` is "" (e.g. a media grant). Lets a
+  // warning bring its own resolver so every host (tile, header primary, arrow button) previews alike; the
+  // host's `resolvePreviewUrl` prop wins when both are given.
+  resolvePreviewUrl?: (target: WarningTarget) => Promise<string | null>;
   // §4.3 — zero or more left-column options. Empty/omitted = no options region.
   options?: WarningOption[];
   // §4.5 — THE SUBJECTS LIST: the actual files/directories this warning is about. Present ⇒ the popup

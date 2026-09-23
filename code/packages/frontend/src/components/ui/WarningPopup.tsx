@@ -5,13 +5,14 @@
 // TWO LAYOUTS (§4.0), chosen automatically by whether the warning names specific subjects (`targets`):
 //   • single-pane (narrow w-[34rem]) — a one-click engine/config/worker fix (Start IPFS, Fix gateway).
 //   • two-pane (WIDE, up to 80vw, overlays the left nav) — a file/directory-scoped warning. The LEFT
-//     column educates + options; the RIGHT column is the SUBJECTS LIST (§4.5): the actual files/dirs,
+//     column stacks a ONE-sentence summary with a "More info" chevron (§4.2.1), the options, and — below
+//     them — a preview of the row the user CLICKED (§4.5.2, 2026-09-23); the RIGHT column is the SUBJECTS LIST (§4.5): the actual files/dirs,
 //     each with a checkbox, all checked at open. Unchecking excludes. The File types dropdown and the
 //     search box narrow what is VISIBLE, and Apply runs Task X over exactly the VISIBLE ∩ CHECKED rows
 //     (§4.5.4); a LIVE count (§4.6) tracks that set in the list header AND the button label.
 // Footer (both layouts): Cancel HYPERLINK left + blue action button (white text + right chevron) right.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, CircleSlash, Film, Image as ImageIcon, Music, Pin, Search, Shrink } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, CircleSlash, Film, Image as ImageIcon, Music, Pin, Play, Search, Shrink } from "lucide-react";
 import { healthColor, healthIcon } from "./health.js";
 import { Disclosure } from "./Disclosure.js";
 import { useProgress } from "../../progress/progress-context.js";
@@ -142,11 +143,13 @@ export function WarningPopup({
   onClose: () => void;
   onApplied?: () => void;
   // §4.5.2 — optional lazy resolver for a target's preview bytes. When a target's `preview.url` is empty
-  // the popup calls this on hover (e.g. to mint a short-lived media grant) instead of pre-fetching every
-  // file. Kept generic: the caller injects the media API; the popup never imports it.
+  // the popup calls this for the SELECTED row only (e.g. to mint a short-lived media grant) instead of
+  // pre-fetching every file. Kept generic: the caller injects the media API; the popup never imports it.
+  // Falls back to the warning's own `popup.resolvePreviewUrl`.
   resolvePreviewUrl?: (target: WarningTarget) => Promise<string | null>;
 }) {
   const popup = warning.popup!;
+  const resolveUrl = resolvePreviewUrl ?? popup.resolvePreviewUrl;
   const targets = popup.targets ?? [];
   const hasTargets = targets.length > 0;
   const noun = popup.targetNoun ?? "file";
@@ -174,10 +177,12 @@ export function WarningPopup({
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [confirming, setConfirming] = useState(false); // second tap needed for a destructive apply
-  const [previewId, setPreviewId] = useState<string | null>(null); // §4.5.2 — hovered/focused media row
+  const [previewId, setPreviewId] = useState<string | null>(null); // §4.5.2 — the clicked/arrow-selected row
+  const [playing, setPlaying] = useState(false); // §4.5.2 — the selected video left its poster and is playing
+  const [explainOpen, setExplainOpen] = useState(false); // §4.2.1 — "More info ▾" expands the educate copy
   const { run } = useProgress(); // §5.3 — async fixes hand off to the bottom Progress dock
   const mediaRef = useRef<HTMLMediaElement | null>(null); // previewed <video>/<audio> element (§4.5.3)
-  const hoverTimer = useRef<number | null>(null);
+  const listRef = useRef<HTMLDivElement>(null); // the subjects list — arrow moves scroll the selection into view
 
   const Icon = healthIcon(warning.state);
   const color = healthColor(warning.state);
@@ -293,11 +298,24 @@ export function WarningPopup({
     });
   };
 
-  // §4.5.2 — hovering a row previews it in the left pane (short debounce so skimming doesn't thrash).
-  const hoverPreview = (id: string) => {
-    if (hoverTimer.current) window.clearTimeout(hoverTimer.current);
-    hoverTimer.current = window.setTimeout(() => setPreviewId(id), 120);
+  // §4.5.2 — CLICKING a row selects it for the preview below the options (hover no longer swaps it —
+  // 2026-09-23). Read-only: selecting never checks or unchecks anything. A new row stops the old video.
+  const selectPreview = (id: string) => {
+    if (id === previewId) return;
+    setPlaying(false);
+    setPreviewId(id);
   };
+
+  // §4.5.2 — open already showing something: when nothing is selected (or the selection was filtered out of
+  // view), select the first VISIBLE media row. A deliberately clicked non-media row stays selected.
+  useEffect(() => {
+    if (previewId && visibleTargets.some((t) => t.id === previewId)) return;
+    const first = visibleTargets.find((t) => t.preview)?.id ?? null;
+    if (first !== previewId) {
+      setPlaying(false);
+      setPreviewId(first);
+    }
+  }, [visibleTargets, previewId]);
 
   // §4.5.1 — the per-row "All / None" affordance: set every applicable axis on/off across all VISIBLE rows (§4.5.4).
   const setAllRows = (on: boolean) => {
@@ -459,8 +477,8 @@ export function WarningPopup({
     noun === "directory" ? "Directories" : `${noun[0].toUpperCase()}${noun.slice(1)}s`
   } this applies to`;
 
-  // §4.5.2 — the row currently previewed (hovered or keyboard-cursored). Only a target that carries
-  // media renders in the left pane; a non-media row leaves the educate copy up.
+  // §4.5.2 — the row currently previewed (clicked or keyboard-cursored). Only a target that carries
+  // media draws the preview area below the options; a non-media row draws none.
   const previewTarget = previewId ? (targets.find((t) => t.id === previewId) ?? null) : null;
   const previewMedia = previewTarget?.preview ?? null;
 
@@ -469,7 +487,13 @@ export function WarningPopup({
     if (visibleTargets.length === 0) return;
     const cur = visibleTargets.findIndex((t) => t.id === previewId);
     const next = cur < 0 ? 0 : Math.min(visibleTargets.length - 1, Math.max(0, cur + delta));
-    setPreviewId(visibleTargets[next].id);
+    const id = visibleTargets[next].id;
+    selectPreview(id);
+    // §4.5.3 — keep the selected row in view as the cursor walks the list.
+    const row = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []).find(
+      (el) => el.dataset.rowId === id,
+    );
+    row?.scrollIntoView({ block: "nearest" });
   };
   const onDialogKeyDown = (e: React.KeyboardEvent) => {
     if (!hasTargets) return;
@@ -482,6 +506,11 @@ export function WarningPopup({
       // Space toggles a focused checkbox/toggle natively — only intercept when focus is NOT on a control
       // and a video/audio is previewed (§4.5.3), then play/pause it.
       if (el.closest("input,textarea,button,[contenteditable=true]")) return;
+      if (previewMedia?.kind === "video" && !playing) {
+        e.preventDefault();
+        setPlaying(true); // leave the poster — the <video> mounts with autoplay (§4.5.2)
+        return;
+      }
       const media = mediaRef.current;
       if (media && (previewMedia?.kind === "video" || previewMedia?.kind === "audio")) {
         e.preventDefault();
@@ -490,6 +519,25 @@ export function WarningPopup({
       }
     }
   };
+
+  // §4.2 — the three educate blocks. At rest in single-pane; behind "More info ▾" in two-pane (§4.2.1).
+  const educateBlocks = (
+    <div className="space-y-3 text-sm text-black/70">
+      <section>
+        <div className="mb-0.5 font-medium text-black">What this is</div>
+        <div>{popup.whatThisIs}</div>
+      </section>
+      <section>
+        <div className="mb-0.5 font-medium text-black">Why it matters</div>
+        <div>{popup.whyItMatters}</div>
+      </section>
+      {popup.details && (
+        <Disclosure label="Details">
+          <div className="text-sm text-black/70">{popup.details}</div>
+        </Disclosure>
+      )}
+    </div>
+  );
 
   return (
     <div className="lfb-scrim fixed inset-0 z-50 grid place-items-center p-4" onClick={onClose}>
@@ -521,58 +569,41 @@ export function WarningPopup({
 
         {/* Body — one column, or two (educate/options | subjects list) */}
         <div className="flex min-h-0 flex-1 flex-col md:flex-row">
-          {/* LEFT: educate + options — OR a full-size media preview of the hovered/focused row (§4.5.2) */}
+          {/* LEFT: single-pane = the full educate copy + options (§4.2/§4.3). Two-pane = ONE sentence + a
+              "More info" chevron (§4.2.1), the options, then the preview of the clicked row BELOW them
+              (§4.5.2, 2026-09-23) — the preview never replaces the options. */}
           <div className={`min-h-0 flex-1 overflow-y-auto px-5 py-4 ${hasTargets ? "md:w-1/2" : ""}`}>
-            {previewMedia && previewTarget ? (
-              <PreviewPane target={previewTarget} mediaRef={mediaRef} resolveUrl={resolvePreviewUrl} />
+            {hasTargets ? (
+              <div className="text-sm text-black/70">
+                <p className="inline">{popup.summary ?? warning.sub ?? popup.whatThisIs}</p>{" "}
+                <button
+                  type="button"
+                  onClick={() => setExplainOpen((o) => !o)}
+                  aria-expanded={explainOpen}
+                  className="inline-flex items-center gap-0.5 whitespace-nowrap text-xs text-[var(--lfb-primary)] hover:underline"
+                >
+                  {explainOpen ? "Less" : "More info"}
+                  {explainOpen ? <ChevronUp className="h-3.5 w-3.5" /> : <ChevronDown className="h-3.5 w-3.5" />}
+                </button>
+                {explainOpen && <div className="mt-3">{educateBlocks}</div>}
+              </div>
             ) : (
-              <>
-                <div className="space-y-3 text-sm text-black/70">
-                  <section>
-                    <div className="mb-0.5 font-medium text-black">What this is</div>
-                    <div>{popup.whatThisIs}</div>
-                  </section>
-                  <section>
-                    <div className="mb-0.5 font-medium text-black">Why it matters</div>
-                    <div>{popup.whyItMatters}</div>
-                  </section>
-                  {popup.details && (
-                    <Disclosure label="Details">
-                      <div className="text-sm text-black/70">{popup.details}</div>
-                    </Disclosure>
-                  )}
-                </div>
+              educateBlocks
+            )}
 
-                {(radioGroups.size > 0 || checkboxes.length > 0) && (
-                  <div className="mt-4 space-y-3">
-                    <div className="text-sm font-medium text-black">What do you want to do</div>
-                    {[...radioGroups.entries()].map(([group, opts]) => (
-                      <div key={group} role="radiogroup" className="space-y-1.5">
-                        {opts.map((o) => (
-                          <label key={o.value} className="flex cursor-pointer items-start gap-2 text-sm">
-                            <input
-                              ref={takeFirstRef()}
-                              type="radio"
-                              name={group}
-                              checked={sel.radios[group] === o.value}
-                              onChange={() => setRadio(group, o.value)}
-                              className="mt-0.5"
-                            />
-                            <span className="min-w-0">
-                              <span className={o.destructive ? "text-[var(--lfb-bad)]" : "text-black"}>{o.label}</span>
-                              {o.helper && <span className="block text-xs text-black/50">{o.helper}</span>}
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                    ))}
-                    {checkboxes.map((o) => (
-                      <label key={o.name} className="flex cursor-pointer items-start gap-2 text-sm">
+            {(radioGroups.size > 0 || checkboxes.length > 0) && (
+              <div className="mt-4 space-y-3">
+                <div className="text-sm font-medium text-black">What do you want to do</div>
+                {[...radioGroups.entries()].map(([group, opts]) => (
+                  <div key={group} role="radiogroup" className="space-y-1.5">
+                    {opts.map((o) => (
+                      <label key={o.value} className="flex cursor-pointer items-start gap-2 text-sm">
                         <input
                           ref={takeFirstRef()}
-                          type="checkbox"
-                          checked={!!sel.checks[o.name]}
-                          onChange={(e) => setCheck(o.name, e.target.checked)}
+                          type="radio"
+                          name={group}
+                          checked={sel.radios[group] === o.value}
+                          onChange={() => setRadio(group, o.value)}
                           className="mt-0.5"
                         />
                         <span className="min-w-0">
@@ -582,8 +613,35 @@ export function WarningPopup({
                       </label>
                     ))}
                   </div>
-                )}
-              </>
+                ))}
+                {checkboxes.map((o) => (
+                  <label key={o.name} className="flex cursor-pointer items-start gap-2 text-sm">
+                    <input
+                      ref={takeFirstRef()}
+                      type="checkbox"
+                      checked={!!sel.checks[o.name]}
+                      onChange={(e) => setCheck(o.name, e.target.checked)}
+                      className="mt-0.5"
+                    />
+                    <span className="min-w-0">
+                      <span className={o.destructive ? "text-[var(--lfb-bad)]" : "text-black"}>{o.label}</span>
+                      {o.helper && <span className="block text-xs text-black/50">{o.helper}</span>}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            )}
+
+            {hasTargets && previewMedia && previewTarget && (
+              <div className="mt-4 border-t border-[var(--lfb-border)] pt-4">
+                <PreviewPane
+                  target={previewTarget}
+                  mediaRef={mediaRef}
+                  resolveUrl={resolveUrl}
+                  playing={playing}
+                  onPlay={() => setPlaying(true)}
+                />
+              </div>
             )}
 
             {error && (
@@ -759,14 +817,17 @@ export function WarningPopup({
                   </div>
                 )}
               </div>
-              <div className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
+              <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
                 {visibleTargets.map((t) => {
                   const isPreview = t.id === previewId;
                   return (
                     <div
                       key={t.id}
-                      onMouseEnter={() => hoverPreview(t.id)}
-                      className={`flex items-center gap-2 rounded-md px-3 py-1.5 text-sm ${
+                      data-row-id={t.id}
+                      // §4.5.2 — clicking anywhere on the row selects it for the preview (read-only).
+                      onClick={() => selectPreview(t.id)}
+                      aria-selected={isPreview}
+                      className={`flex cursor-pointer items-center gap-2 rounded-md px-3 py-1.5 text-sm ${
                         isPreview ? "bg-[color-mix(in_srgb,var(--lfb-primary)_8%,transparent)]" : "hover:bg-black/[0.03]"
                       }`}
                     >
@@ -865,18 +926,24 @@ export function WarningPopup({
   );
 }
 
-// §4.5.2 — the left-pane media preview. Full-size, aspect-ratio preserved, best-fit (object-contain,
-// never stretched/cropped) — the same fit rule as the media viewer (media_viewer.mdx §3.2). Below it a
-// one-line caption (name · pixel dimensions · size) and, for video/audio, the "Space to play" hint
-// (§4.5.3). Keyed by url so switching rows remounts the element (and resets playback).
+// §4.5.2 — the left-pane media preview, drawn BELOW the options (revision 2026-09-23). Aspect-ratio preserved,
+// best-fit (object-contain, never stretched/cropped) — the same fit rule as the media viewer
+// (media_viewer.mdx §3.2) — capped at ~45vh so a portrait video never pushes the caption away. A video
+// shows its cached POSTER frame (the /api/media/poster render, which also covers HEVC/ProRes) under a big
+// ▶; clicking it mounts the real <video> with autoplay + native controls. An image the browser can't decode
+// (HEIC, TIFF) falls back to that same poster render. Keyed by url so switching rows remounts (and stops) it.
 function PreviewPane({
   target,
   mediaRef,
   resolveUrl,
+  playing,
+  onPlay,
 }: {
   target: WarningTarget;
   mediaRef: React.RefObject<HTMLMediaElement | null>;
   resolveUrl?: (target: WarningTarget) => Promise<string | null>;
+  playing: boolean;
+  onPlay: () => void;
 }) {
   const p = target.preview!;
   const dims = p.width && p.height ? `${p.width}×${p.height}` : null;
@@ -885,62 +952,132 @@ function PreviewPane({
     .filter(Boolean)
     .join(" · ");
 
-  // Use the target's direct url, else lazily resolve one (e.g. a media grant) on first preview (§4.5.2).
+  // Use the target's direct url, else lazily resolve one (e.g. a media grant) for this selected row (§4.5.2).
+  // `failed` distinguishes "still loading" from "no bytes to show" so a missing grant never spins forever.
   const [url, setUrl] = useState<string | null>(p.url || null);
+  const [failed, setFailed] = useState(false);
   useEffect(() => {
+    setFailed(false);
     if (p.url) {
       setUrl(p.url);
       return;
     }
     let alive = true;
     setUrl(null);
-    if (resolveUrl) {
-      resolveUrl(target)
-        .then((u) => alive && setUrl(u))
-        .catch(() => alive && setUrl(null));
+    if (!resolveUrl) {
+      setFailed(true);
+      return;
     }
+    resolveUrl(target)
+      .then((u) => {
+        if (!alive) return;
+        setUrl(u);
+        if (!u) setFailed(true);
+      })
+      .catch(() => alive && setFailed(true));
     return () => {
       alive = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [target.id, p.url]);
 
+  // The poster render rides the same signed grant: /api/media/raw?… → /api/media/poster?…&w=960.
+  const posterUrl = url && url.includes("/api/media/raw") ? `${url.replace("/api/media/raw", "/api/media/poster")}&w=960` : null;
+  const [imgSrc, setImgSrc] = useState<string | null>(null);
+  const [posterBroken, setPosterBroken] = useState(false);
+  useEffect(() => {
+    setImgSrc(url);
+    setPosterBroken(false);
+  }, [url]);
+
+  // The click that left the poster is still a fresh user gesture, so start playback explicitly the moment
+  // the <video> mounts. The `autoplay` attribute alone was not honored for a freshly mounted element
+  // (it sat at readyState 0, never fetching), while an explicit play() starts it at once.
+  useEffect(() => {
+    if (!playing || p.kind !== "video" || !url) return;
+    void mediaRef.current?.play().catch(() => {});
+  }, [playing, url, p.kind, mediaRef]);
+
+  const box = "flex w-full items-center justify-center overflow-hidden";
+  const fit = "max-h-[45vh] max-w-full rounded object-contain";
+
   return (
-    <div className="flex h-full min-h-0 flex-col items-center justify-center gap-3">
-      <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden">
-        {url == null ? (
-          <div className="text-xs text-black/40">Loading preview…</div>
-        ) : p.kind === "image" ? (
-          <img key={url} src={url} alt={target.label} className="max-h-full max-w-full rounded object-contain" />
-        ) : p.kind === "video" ? (
-          <video
+    <div className="flex flex-col items-center gap-2">
+      {url == null ? (
+        <div className={`${box} h-40 text-xs text-black/40`}>{failed ? "No preview available" : "Loading preview…"}</div>
+      ) : p.kind === "image" ? (
+        <div className={box}>
+          <img
+            key={imgSrc ?? url}
+            src={imgSrc ?? url}
+            alt={target.label}
+            className={fit}
+            // HEIC/TIFF etc. — the browser can't decode the raw bytes; retry once with the poster JPEG render.
+            onError={() => {
+              if (posterUrl && imgSrc !== posterUrl) setImgSrc(posterUrl);
+            }}
+          />
+        </div>
+      ) : p.kind === "video" ? (
+        <div className={box}>
+          {playing ? (
+            <video
+              key={url}
+              ref={mediaRef as React.Ref<HTMLVideoElement>}
+              src={url}
+              poster={posterUrl && !posterBroken ? posterUrl : undefined}
+              controls
+              autoPlay
+              playsInline
+              aria-label={target.label}
+              className={fit}
+            />
+          ) : (
+            <button
+              type="button"
+              onClick={onPlay}
+              aria-label={`Play ${target.name ?? target.label}`}
+              title="Click to play"
+              className="group relative inline-flex max-w-full items-center justify-center rounded"
+            >
+              {posterUrl && !posterBroken ? (
+                <img
+                  key={posterUrl}
+                  src={posterUrl}
+                  alt=""
+                  className={fit}
+                  onError={() => setPosterBroken(true)}
+                />
+              ) : (
+                <span className="flex h-48 w-80 max-w-full items-center justify-center rounded bg-black/80" />
+              )}
+              <span className="absolute inset-0 grid place-items-center">
+                <span className="grid h-14 w-14 place-items-center rounded-full bg-black/55 text-white shadow-lg transition group-hover:scale-105 group-hover:bg-black/70">
+                  <Play className="ml-0.5 h-7 w-7" fill="currentColor" />
+                </span>
+              </span>
+            </button>
+          )}
+        </div>
+      ) : (
+        <div className="flex w-full flex-col items-center gap-3 px-6">
+          <Music className="h-12 w-12 text-black/30" aria-hidden />
+          <audio
             key={url}
-            ref={mediaRef as React.Ref<HTMLVideoElement>}
+            ref={mediaRef as React.Ref<HTMLAudioElement>}
             src={url}
             controls
-            playsInline
             aria-label={target.label}
-            className="max-h-full max-w-full rounded object-contain"
+            className="w-full"
           />
-        ) : (
-          <div className="flex w-full flex-col items-center gap-3 px-6">
-            <Music className="h-12 w-12 text-black/30" aria-hidden />
-            <audio
-              key={url}
-              ref={mediaRef as React.Ref<HTMLAudioElement>}
-              src={url}
-              controls
-              aria-label={target.label}
-              className="w-full"
-            />
-          </div>
-        )}
-      </div>
-      <div className="w-full shrink-0 text-center text-xs text-black/60">
+        </div>
+      )}
+      <div className="w-full text-center text-xs text-black/60">
         <div className="truncate">{caption}</div>
-        {(p.kind === "video" || p.kind === "audio") && (
-          <div className="mt-0.5 text-black/40">Space to play ▸</div>
+        {p.kind === "video" && !playing && url != null && (
+          <div className="mt-0.5 text-black/40">Click the video (or press Space) to play ▸</div>
         )}
+        {p.kind === "audio" && <div className="mt-0.5 text-black/40">Space to play ▸</div>}
       </div>
     </div>
   );

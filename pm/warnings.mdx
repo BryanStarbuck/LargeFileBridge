@@ -228,10 +228,15 @@ The popup has **two layouts**, chosen automatically by whether the warning names
     the **per-row action toggles** (§4.5.1): up to **three** checkboxes — **Add to IPFS (pin/get)**,
     **Add to git-ignore (add eventually)**, and **Compress** — each **pre-checked exactly where LFBridge
     recommends it**, for the user to uncheck.
-  * **Left pane — dual purpose** (§4.5.2): by default it **educates** (What this is / Why it matters /
-    options). But the moment the user **hovers or keyboard-focuses a media row** on the right, the left
-    pane becomes a **large, full-size preview** of that image or video (aspect-ratio preserved), so the
-    user can *see what they're deciding on* before they act. Moving off the row restores the educate copy.
+  * **Left pane — summary, options, then preview (REVISED 2026-09-23, LOCKED)** (§4.2 / §4.5.2): top to
+    bottom it stacks **(1)** a **one-sentence summary** with a **down chevron** that expands the full
+    educate copy only when the user asks for it, **(2)** the **options** (e.g. ☑ Add them to IPFS ·
+    ☑ Add to git ignore) — always visible, never replaced — and **(3)** a **preview** of the row the user
+    **clicked** in the right list (image, or a video they click to play). The preview sits **below** the
+    options; it no longer takes over the whole pane.
+    *Superseded (pre-2026-09-23):* the left pane showed the full What this is / Why it matters text at rest
+    and, on **hover**, swapped the whole pane — options included — for the preview. Users found the text
+    too long, the options vanished while previewing, and hover-swapping made the pane jump.
 
 **Width — use the room (LOCKED).** The two-pane popup is **big on purpose**: it takes **up to ~80% of the
 viewport width** (`width: 80vw`), capped at a sane maximum (`max-w-[80rem]`), with **min `44rem`** so the
@@ -241,8 +246,35 @@ and the preview both breathe. Height takes up to `85vh`; the header and footer a
 pane bodies scroll. On a **narrow viewport** (`< 44rem`, e.g. a phone) the two panes **stack** vertically
 (educate/preview on top, file list below) instead of sitting side by side.
 
-**Anatomy — two-pane (the common, file-specific case).** Left pane shown in its **educate** mode; see §4.5.2
-for the **preview** mode it flips to on hover. Right rows carry the three per-row axis toggles (§4.5.1):
+**Anatomy — two-pane, CURRENT (REVISED 2026-09-23).** Summary line + chevron, options, then the preview of
+the clicked row — all in the left pane at once:
+
+```
+┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ⚠  12 files need a decision                                                                 (×)  │
+├──────────────────────────────────────────────┬───────────────────────────────────────────────────┤
+│  12 large files here have no decision yet —  │  Files this applies to              12 of 12       │
+│  pin them over IPFS, git-ignore them, or     │  File types: Videos (.mp4 .mov) ▾                  │
+│  both.                          More info ▾  │  Select all  Clear                                 │
+│                                              │  ☑ final_4k                            8.2 GB  🎞  │
+│  What do you want to do                      │  ☑ city_night          ◀ clicked       820 MB  🎞  │
+│  ☑ Add them to IPFS                          │  ☑ hero                                240 MB  🖼  │
+│    back them up across your computers …      │  …                                                 │
+│  ☑ Add to git ignore                         │                                                    │
+│    keep Git from committing these big files  │                                                    │
+│  ┌────────────────────────────────────────┐  │                                                    │
+│  │        ▶   (poster frame — click to     │  │                                                    │
+│  │             play; aspect ratio kept)    │  │                                                    │
+│  └────────────────────────────────────────┘  │                                                    │
+│  city_night.mov · 1920×1080 · 820 MB         │                                                    │
+├──────────────────────────────────────────────┴───────────────────────────────────────────────────┤
+│  Cancel                                                       Apply — 12 files ›                  │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Anatomy — two-pane (pre-2026-09-23, superseded — kept for history).** Left pane in its old **educate** mode;
+the next drawing shows the old whole-pane **preview** mode it flipped to on hover. Right rows carry the three
+per-row axis toggles (§4.5.1):
 
 ```
 ┌──────────────────────────────────────────────────────────────────────────────────────────────────┐
@@ -317,6 +349,28 @@ Optionally a third block, **"Details"**, behind a `Disclosure` chevron
 (`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/Disclosure.tsx`) for the
 technical specifics (the exact file list, CIDs, sizes, the command we'd run). Hidden by default —
 progressive disclosure ([use_cases.mdx](./use_cases.mdx) §2).
+
+#### 4.2.1 Two-pane popups: ONE sentence + a chevron, the rest on request (REVISED 2026-09-23, LOCKED)
+
+In the **two-pane** layout (§4.0) the left pane is shared with the options and the preview, so the educate
+copy must not eat it. The rule:
+
+* **At rest, one sentence.** The left pane opens with **one plain-English sentence** that says what was
+  found and what the user is choosing — the popup's `summary` (§8). When a warning has no `summary`, its
+  banner `sub` line is used. No headings, no bullets at rest.
+* **A down chevron expands the rest.** Right after the sentence sits a small **"More info ▾"** button
+  (`aria-expanded`). Clicking it expands, in place and above the options, the full **What this is**,
+  **Why it matters**, and (if any) **Details** blocks from §4.2; the chevron flips to **"Less ▴"** and
+  collapses them again. The state is per-open (every popup opens collapsed).
+* **Options never move below the fold because of copy.** Collapsed is the default precisely so the options
+  and the preview (§4.5.2) are visible without scrolling.
+* **Single-pane popups are unchanged** — they have no subjects list or preview competing for room, so they
+  keep the full §4.2 copy at rest.
+* Content authors still write all three blocks; `whatThisIs` / `whyItMatters` stay mandatory (§8). The
+  summary is an extra, not a replacement.
+
+The collapsed-summary + chevron lives in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`explainOpen` state, the "More info" toggle).
 
 ### 4.3 Options — the apply/fix choices (zero or more)
 Between education and the footer, the popup renders the warning's **options** (from its registry entry,
@@ -519,7 +573,43 @@ The three axes, left→right:
 The per-row axes reuse the shared decision-toggle component (extended with the compress axis) in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/components/decision/DecisionToggles.tsx` — `DecisionToggle` (axis `"ipfs" | "ignore" | "compress"`); the popup composes them per row in `WarningPopup.tsx` — `SubjectRow`.
 
-### 4.5.2 The left pane doubles as a full-size media PREVIEW (LOCKED)
+### 4.5.2 The left pane doubles as a full-size media PREVIEW (REVISED 2026-09-23, LOCKED)
+
+> **Revision 2026-09-23 — click to select, preview BELOW the options, click to play.** This revision
+> **amends** the locked rules below wherever they conflict:
+>
+> * **Where.** The preview renders in the left pane **below** the summary (§4.2.1) and the options (§4.3).
+>   It **never replaces** them — the user can see the Add to IPFS / Add to git ignore choices and the file
+>   at the same time.
+> * **Which row.** The previewed row is the one the user **clicked** in the right list (a click anywhere on
+>   the row — the name, size, or path). The selected row is highlighted. ↑/↓ still move the selection
+>   (§4.5.3). **Hover no longer changes the preview** — hover-swapping made the pane jump while the pointer
+>   crossed the list.
+> * **Opens already showing something.** When the popup opens, the **first visible media row** is selected,
+>   so the preview area is never an empty box the user has to discover. If the list has no media rows the
+>   preview area is not drawn at all.
+> * **Clicking a row's checkbox/toggle still only flips that box** — selecting for preview is read-only and
+>   never changes a decision; toggling a box never changes a decision other than that box's.
+> * **Video = poster, then click to play.** A video shows its **poster frame** (from the cached
+>   `/api/media/poster` endpoint, which also renders formats the browser can't decode natively — HEVC, ProRes)
+>   with a large **▶** overlay. **Clicking the video** starts playback in place with native controls
+>   (`autoplay`, sound on); from then on the controls pause/seek. Space does the same (§4.5.3). Switching to
+>   another row stops the old video.
+> * **Image** shows the image itself; if the browser can't decode it (HEIC, TIFF), it falls back to the
+>   poster endpoint's JPEG render. **Audio** shows a compact player.
+> * **Size.** The preview is aspect-fit (`object-contain`) inside the left pane's remaining width and at most
+>   **~45vh** tall, so a tall portrait video never pushes the caption off screen.
+> * **Bytes come from a media grant.** A target declares `preview: { kind, url: "" }`; the popup resolves the
+>   URL lazily (only for the selected row) through the warning's own `popup.resolvePreviewUrl` or the host's
+>   `resolvePreviewUrl` prop — for one-repo warnings that is `api.mediaGrant(<repo path>/<relative path>)`.
+>   The popup itself never imports the media API.
+>
+> Implemented in: the selection state, the below-options placement, and the click-to-play video.
+> `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup` (`previewId`, `selectPreview`) + `PreviewPane` (`playing` state, poster overlay).
+> The one-repo preview resolver and the media `preview` on each target:
+> `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `repoFileTarget()` / `repoPreviewResolver()`.
+>
+> *The original locked text follows; where it says "hover" or "the entire left pane", read the revision above.*
 
 The left pane is **dual-purpose**. At rest it shows the educate copy + options (§4.2/§4.3). The instant
 the user **hovers — or keyboard-focuses — a media row** (image / video / audio) in the right list, the
@@ -555,7 +645,8 @@ The hover/focus→preview state and the aspect-fit preview element live in code:
 While the file list is focused:
 
 * **↑ / ↓** move a **preview cursor** up/down the rows — the left pane previews whichever row the cursor
-  is on (same as hovering), so the whole list is reviewable **without the mouse**.
+  is on (same as clicking it, §4.5.2 revision 2026-09-23), so the whole list is reviewable **without the
+  mouse**. The selected row scrolls into view.
 * **Space** — when the previewed file is a **video** (or audio), **Space plays / pauses** it in the
   preview, exactly like the native transport in the [media viewer](./media_viewer.mdx#5-media-viewer-shortcuts-image--video--audio)
   (Space = play/pause). When the focus is on a **row toggle** (a checkbox) Space keeps its normal meaning
@@ -842,9 +933,13 @@ type WarningDef = {
   sub?: string;
   // POPUP (§4). Omit entirely = informational-only (no arrow button).
   popup?: {
-    whatThisIs: ReactNode;              // "What this is" education
-    whyItMatters: ReactNode;            // "Why it matters" bullets
+    summary?: ReactNode;                // §4.2.1 — the ONE sentence a two-pane popup shows at rest (else `sub`)
+    whatThisIs: ReactNode;              // "What this is" education (behind "More info ▾" in two-pane)
+    whyItMatters: ReactNode;            // "Why it matters" bullets (behind "More info ▾" in two-pane)
     details?: ReactNode;                // optional Disclosure content
+    // §4.5.2 — lazy URL for the SELECTED row's preview bytes when its `preview.url` is "" (a media grant).
+    // The host's `resolvePreviewUrl` prop wins when both are given.
+    resolvePreviewUrl?: (target: WarningTarget) => Promise<string | null>;
     options?: WarningOption[];          // left-column radios/checkboxes (§4.3); [] = no options
     // THE SUBJECTS LIST (§4.5) — the actual files/directories, rendered right-pane with checkboxes.
     // Present ⇒ two-pane, wide (≤ 80vw) layout; absent ⇒ single-pane one-click fix.
@@ -1271,7 +1366,7 @@ Every repo answers "am I OK?" through one **RepoVerdict** banner on the One-Repo
 
 **(A) Detect it & all conditions.** `detail.counts.undecided > 0` (and no worse cause). A file is "undecided" when there is **no entry in `cfg.decisions[path]`** (`Decision` defaults to `"undecided"`); `countDecisions()` increments `undecided` for every such file, and `rollupStatus()` maps `undecided > 0` (when not error/pinning/behind) to `"needs_review"`. *Computed in:* frontend `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `RepoVerdict` undecided branch (lines 386–389), summary strip (line 256, undecided highlighted); list `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/ReposPage.tsx` undecided column (lines 122–123, `text-[var(--lfb-primary)]`); backend `~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/units.service.ts` — `composeFileRows()` decision default undecided (line 208), `countDecisions()` (lines 230–241), `rollupStatus()` `needs_review` (line 260).
 
-**(B) The popup.** *What this is:* LFBridge found big files it doesn't yet have instructions for. The user chooses, on **two independent axes**, what to do with them ([decisions.mdx §1](./decisions.mdx)): **Add to IPFS (pin)** = back them up across your computers via IPFS, and **Add to git ignore** = keep Git from committing these big bytes. *Why it matters:* nothing is remembered for undecided files, so your backup is **incomplete** and Git may try to commit big files, until each is decided. *Options — TWO CHECKBOXES, not radios* ([§4.3](#43-options--the-applyfix-choices-zero-or-more), [decisions.mdx §1](./decisions.mdx)): **☑ Add them to IPFS** (helper: "back them up across your computers over IPFS") and **☑ Add to git ignore** (helper: "keep Git from committing these big files"). Both default **checked** (the recommended git-ignore-**and**-pin outcome that a single Pin-XOR-Ignore radio could never express). The user may turn **either or both off**; **both-off is a valid, sticky "reviewed — leave it" decision** — so this popup is the one place the "a required radio must be picked" gate (§5.2) does **not** apply (`canApply` is always true). There is no correct auto-decision, so the popup presents the choice rather than picking. *Action button:* "Apply — {n} files".
+**(B) The popup.** *Summary (the one sentence shown at rest, §4.2.1):* "{n} large files here have no decision yet — pin them over IPFS, git-ignore them, or both." Everything below sits behind **More info ▾**. *Preview (§4.5.2, 2026-09-23):* every image/video/audio row carries a `preview`; the first media row is selected on open and its poster/image shows **below** the two checkboxes; clicking another row previews it; clicking the video plays it. *What this is:* LFBridge found big files it doesn't yet have instructions for. The user chooses, on **two independent axes**, what to do with them ([decisions.mdx §1](./decisions.mdx)): **Add to IPFS (pin)** = back them up across your computers via IPFS, and **Add to git ignore** = keep Git from committing these big bytes. *Why it matters:* nothing is remembered for undecided files, so your backup is **incomplete** and Git may try to commit big files, until each is decided. *Options — TWO CHECKBOXES, not radios* ([§4.3](#43-options--the-applyfix-choices-zero-or-more), [decisions.mdx §1](./decisions.mdx)): **☑ Add them to IPFS** (helper: "back them up across your computers over IPFS") and **☑ Add to git ignore** (helper: "keep Git from committing these big files"). Both default **checked** (the recommended git-ignore-**and**-pin outcome that a single Pin-XOR-Ignore radio could never express). The user may turn **either or both off**; **both-off is a valid, sticky "reviewed — leave it" decision** — so this popup is the one place the "a required radio must be picked" gate (§5.2) does **not** apply (`canApply` is always true). There is no correct auto-decision, so the popup presents the choice rather than picking. *Action button:* "Apply — {n} files".
 
 **(C) The fix.** Writes a decision **record** per checked file to the repo-level `decisions.yaml` ledger — in **Local Storage** at `~/T/_large_files_bridge/repos/<repoKey>/decisions.yaml` (shared across the user's computers via the company sync repo when enabled, never in the working repo — [artifact_placement_policy.mdx](./artifact_placement_policy.mdx)) ([decisions.mdx §3/§4](./decisions.mdx)) — stamping `asked: true`, the two axes (`ipfs`, `gitignore`), `decided_by` (the authenticated allow-listed email), `decided_at`, and `sid` (the Storage ID) — then **reconciles** ([decisions.mdx §7](./decisions.mdx)): the IPFS axis is projected onto the machine-local `cfg.decisions[p]` frozen enum (`ipfs:true → "sync"`, `ipfs:false → "ignore"`; the `sync` literal is never renamed) and the git-ignore axis is applied through the [git_ignore.mdx](./git_ignore.mdx) engine. `PATCH /api/repos/:repoId/files {paths, ipfs?, gitignore?}`. **`paths` must be repo-RELATIVE** — the ledger and `cfg.decisions` are keyed by relative path and `composeFileRows()` reads them back by relative path, so the popup's `targets[].id` (what `apply` hands the write) is `f.path`, not the absolute path. *(Bugfix per §5.3.1 case 1: ids were absolute, so decisions landed under a key the detector never reads — the file stayed `undecided` and this banner persisted verbatim after a "fixed" toast.)* **Async (§5.2/§5.3):** from the warning popup the fix runs as a background job — the popup's `progress` metadata uses a `kind` reflecting the chosen axes ("pin" when IPFS is on, else "ignore"/"configure"), `target:` the repo name, `doneLabel:` "N files decided", and invalidates `["repo", repoId]`; on success `onWarningApplied` also runs `refetchUntilResolved` (§5.3.1 case 2) so the banner re-derives in a burst and leaves the page — **for good**, because the shared record is now the durable "we asked" state (§10.2.7 note) — as soon as the decisions are written. *Fix in:* `~/repos/LargeFileBridge/code/packages/backend/src/modules/repos/repos.router.ts` — `PATCH /:repoId/files`; `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()` / `reconcile()`; frontend `OneRepoPage.tsx` `RepoVerdict` `repo-files-need-decision` popup (two `kind:"checkbox"` options) + the relative-path `targets`, dispatched by `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` `doApply()`.
 
