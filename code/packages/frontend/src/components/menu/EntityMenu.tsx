@@ -26,6 +26,7 @@ import {
   Captions,
   Sparkles,
   TextSelect,
+  Fingerprint as FingerprintIcon,
 } from "lucide-react";
 import type { EntityView, Decision } from "@lfb/shared";
 import { mediaKindForName, viewerRouteForName, isPdfName } from "@lfb/shared";
@@ -34,6 +35,7 @@ import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { openTranscribeBatch, openDescribeBatch, openOcrBatch } from "@/lib/batchPopup";
 import { confirmModal, promptModal } from "@/lib/modals";
 import { openCompressInside } from "@/lib/compressInside";
+import { openFingerprints } from "@/lib/fingerprints";
 import { copyText } from "@/lib/clipboard";
 import { clientLog } from "../../lib/clientLog.js";
 
@@ -408,6 +410,12 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
         disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined,
         onSelect: () => openOcrBatch({ paths: [v.path] }) });
     }
+    // One file's perceptual fingerprint (perceptual_fingerprint.mdx §FD.6) — runs at once, shows the value.
+    if (mkind === "image" || mkind === "video") {
+      a.push({ id: "calc-fingerprint", label: "Calculate fingerprint", group: "Create", icon: <FingerprintIcon className="h-4 w-4" />,
+        disabled: remoteOnly, title: remoteOnly ? ABSENT_BYTES : undefined,
+        onSelect: () => openFingerprints({ paths: [v.path] }) });
+    }
     // Move… — guarded rename of the file (media_viewer.mdx §4.4). Explicit; relocates real bytes — so there
     // must BE bytes: a remote-only file has nothing here to rename.
     a.push({ id: "move", label: "Move…", group: "Work", icon: <Move className="h-4 w-4" />,
@@ -434,6 +442,10 @@ function buildActions(v: EntityView, ctx: Ctx): Action[] {
       onSelect: () => openDescribeBatch({ root: v.path }) });
     a.push({ id: "create-ocr-text", label: "Create OCR text", group: "Create", icon: <TextSelect className="h-4 w-4" />,
       onSelect: () => openOcrBatch({ root: v.path }) });
+    // Power option (perceptual_fingerprint.mdx §FD.6): PDQ fingerprints for every image/video in this subtree,
+    // saved to Postgres, with a CSV at the end. Its own dialog — Images/Videos/recursive — never a confirm().
+    a.push({ id: "calc-fingerprints", label: "Calculate fingerprints…", group: "Create", icon: <FingerprintIcon className="h-4 w-4" />,
+      onSelect: () => openFingerprints({ root: v.path }) });
   }
 
   // Sticky flags (menus.mdx §6.6) — same on file and directory.

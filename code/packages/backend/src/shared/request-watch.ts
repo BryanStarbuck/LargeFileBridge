@@ -56,7 +56,11 @@ let sweep: NodeJS.Timeout | null = null;
 /** Streams are SUPPOSED to stay open — an NDJSON/SSE response is long-lived by design, and reporting one
  *  as "stuck" every sweep would bury the requests that really are hung. Matched on the path, because that
  *  is what we have before the handler has decided anything. */
-const LONG_LIVED = /\/(stream|events)(\/|$)/;
+//
+// The fingerprint routes are long-lived by CONTRACT too (apis.mdx §6.2): compute/scan/compare and a job
+// status with `wait_ms` deliberately hold the request open up to 55 s while the work finishes, then answer
+// (or hand back a job to poll). A WARN/ERROR per call would flood error.err with the design working.
+const LONG_LIVED = /\/(stream|events)(\/|$)|^\/api\/fingerprints\/(compute|scan|compare|jobs\/[^/]+)$/;
 
 /** One line describing the requests open right now, oldest first. Empty when nothing is in flight.
  *  Used by loop-watch: the requests open ACROSS a stall are the pages the user watched spin. */

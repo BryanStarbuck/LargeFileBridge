@@ -39,6 +39,8 @@ import { tableViewsRouter } from "./modules/store-model/table-views.router.js";
 import { debugRouter } from "./modules/debug/debug.router.js";
 import { filesQueryRouter } from "./modules/files-query/files-query.router.js";
 import { videosRouter } from "./modules/videos/videos.router.js";
+import { fingerprintsRouter } from "./modules/fingerprints/fingerprint.router.js";
+import { stopPdqSidecar } from "./modules/fingerprints/pdq-sidecar.js";
 import { ensureApiSecret } from "./config/credentials-file.js";
 import * as ipfs from "./modules/ipfs/ipfs.service.js";
 import { reconcileWorkerSchedules, ensureDeviceWorkerDefaultOn } from "./modules/schedule/schedule.service.js";
@@ -88,7 +90,12 @@ async function bootstrapState(): Promise<void> {
   try {
     ensureApiSecret();
   } catch (e) {
-    log.warn("main", `CLI API secret provisioning failed: ${(e as Error).message}`);
+    logError({
+      file: "main.ts",
+      operation: "ensureApiSecret at boot",
+      expected: "a readable ~/.credentials/large_files_bridge.json (the file was left untouched)",
+      error: e,
+    });
   }
   // Sweep abandoned transcode temporaries (compression.mdx §8, BUG-9). A compress run that is killed,
   // crashes, or is OOM-reaped mid-transcode leaves its candidate in `<state>/tmp/` forever, and nothing
@@ -292,6 +299,7 @@ async function main(): Promise<void> {
     // `closePool` is idempotent and swallows its own failure).
     void closePool();
     stopWatcher(); // idempotent — a no-op when the watcher never started (signal during boot)
+    stopPdqSidecar(); // close the fingerprint engine's stdin so it exits with us (never orphaned)
     flushLogs();
     if (!server) process.exit(0); // still booting — nothing listening, nothing to drain
     server.close(() => process.exit(0));
@@ -503,6 +511,7 @@ async function main(): Promise<void> {
   app.use("/api/table-views", tableViewsRouter); // per-user remembered table sort/filters/columns (tables.mdx)
   app.use("/api/debug", debugRouter); // Export Debug Information: the per-computer debug.yaml state dump (debug.mdx)
   app.use("/api/files", filesQueryRouter); // CLI "get file list": category-grouped file query (cli.mdx §4)
+  app.use("/api/fingerprints", fingerprintsRouter); // PDQ perceptual fingerprints: compute/scan/jobs/lookup/compare (apis.mdx §7)
   app.use("/api/videos", videosRouter); // Videos review screens: duplicates + subsets lists, status, scans (videos.mdx)
 
   // Global error handler -> error.err.

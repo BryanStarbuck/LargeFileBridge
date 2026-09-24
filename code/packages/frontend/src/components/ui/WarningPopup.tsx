@@ -12,7 +12,7 @@
 //     (§4.5.4); a LIVE count (§4.6) tracks that set in the list header AND the button label.
 // Footer (both layouts): Cancel HYPERLINK left + blue action button (white text + right chevron) right.
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ChevronDown, ChevronRight, ChevronUp, CircleSlash, Film, Image as ImageIcon, Music, Pin, Play, Search, Shrink } from "lucide-react";
+import { ChevronDown, ChevronRight, ChevronUp, CircleSlash, ExternalLink, FileText, Film, Image as ImageIcon, Music, Pin, Play, Search, Shrink } from "lucide-react";
 import { healthColor, healthIcon } from "./health.js";
 import { Disclosure } from "./Disclosure.js";
 import { useProgress } from "../../progress/progress-context.js";
@@ -881,6 +881,8 @@ export function WarningPopup({
                             <Film className="h-3.5 w-3.5" />
                           ) : t.preview.kind === "audio" ? (
                             <Music className="h-3.5 w-3.5" />
+                          ) : t.preview.kind === "pdf" ? (
+                            <FileText className="h-3.5 w-3.5" />
                           ) : (
                             <ImageIcon className="h-3.5 w-3.5" />
                           )}
@@ -1059,6 +1061,10 @@ function PreviewPane({
             </button>
           )}
         </div>
+      ) : p.kind === "pdf" ? (
+        // §4.5.2 rev 2026-09-24 — the browser's own inline PDF viewer (scrollable, first page on top), same
+        // ≤45vh box. The raw route serves .pdf as application/pdf + inline, so the frame renders the document.
+        <iframe key={url} src={url} title={target.label} className="h-[45vh] w-full rounded border border-black/10 bg-white" />
       ) : (
         <div className="flex w-full flex-col items-center gap-3 px-6">
           <Music className="h-12 w-12 text-black/30" aria-hidden />
@@ -1073,7 +1079,21 @@ function PreviewPane({
         </div>
       )}
       <div className="w-full text-center text-xs text-black/60">
-        <div className="truncate">{caption}</div>
+        <div className="flex items-center justify-center gap-2">
+          <span className="truncate">{caption}</span>
+          {/* §4.5.2 rev 2026-09-24 — the full viewer, in a NEW tab so the popup and its checkboxes survive. */}
+          {p.openHref && (
+            <a
+              href={p.openHref}
+              target="_blank"
+              rel="noopener"
+              title="Open in the full viewer (new tab)"
+              className="inline-flex shrink-0 items-center gap-0.5 text-[var(--lfb-primary)] hover:underline"
+            >
+              Open <ExternalLink className="h-3 w-3" aria-hidden />
+            </a>
+          )}
+        </div>
         {p.kind === "video" && !playing && url != null && (
           <div className="mt-0.5 text-black/40">Click the video (or press Space) to play ▸</div>
         )}

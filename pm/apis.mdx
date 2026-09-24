@@ -1,0 +1,382 @@
+---
+title: LargeFileBridge — The REST API for machine callers (fingerprints first)
+description: The plan and contract for the localhost REST API that Large File Bridge's machine callers use — the Claude Code MCP server (mcp.mdx), the lfb CLI (cli.mdx), and the web app itself. It opens with the security model: one local API key in the 0600 file ~/.credentials/large_files_bridge.json, created by the web app (backend boot, or Settings → Local API key), sent as X-LFB-Api-Key, honored only from loopback with a loopback Host header (DNS-rebinding defense), compared length-independently (SHA-256 then timingSafeEqual), failure-throttled, never logged or displayed, rotatable from the web app, and never overwritten when the file is broken. Then the perceptual-fingerprint surface (/api/fingerprints/*) — compute for explicit files, scan a directory, job status with long-poll, cancel, CSV export into the state root, lookup of stored values with validity, and compare (Hamming for images; duplicate vs subset with a time range for videos). The central design decision is the HYBRID synchronous/asynchronous contract — every request becomes a job and the call waits up to wait_ms (default 20 s, max 55 s): finished work comes back in the same response (200), unfinished work comes back as a job to poll (202) and keeps running — justified by measured performance (an image ≈ 10–40 ms; video ≈ 1–3 s per 1080p minute, 2.6 s for 3.5 min of 4K; a directory of thousands takes minutes). Error handling: every failure is a typed result or a JSON error with a stable code, and every failure that is ours lands in error.err.
+---
+
+# LargeFileBridge — The REST API for machine callers
+
+Large File Bridge's backend already serves the web app over REST. This spec plans the part of that API that
+**machine callers** use (the MCP server for Claude Code, and the `lfb` CLI), starting with the perceptual
+fingerprint surface. Related specs:
+
+* [perceptual_fingerprint.mdx §FD](./perceptual_fingerprint.mdx) — which engine computes the fingerprints
+  and why (PDQ via ajdnik/imghash; per-frame PDQ for video), and where they are stored.
+* [mcp.mdx](./mcp.mdx) — the MCP server that is this API's main consumer.
+* [cli.mdx §3](./cli.mdx) — the CLI's use of the same local key.
+* [security.mdx](./security.mdx) — the human sign-in and allow-list this machine channel sits beside.
+
+---
+
+## 1. Consumers and the rule they share
+
+| Consumer | How it authenticates | Notes |
+| --- | --- | --- |
+| Web app (browser) | Signed-in session (Bearer token, allow-listed Google account) | Uses the same routes for the right-click power option. |
+| MCP server (`mcp/`) | Local API key, `X-LFB-Client: mcp` | Spawned by Claude Code over stdio; see mcp.mdx. |
+| CLI (`cli/`) | Local API key, `X-LFB-Client: cli` (the default) | cli.mdx. |
+
+**The rule:** machine callers never compute answers themselves. Every fingerprint, every category, every
+decision is computed by the backend. The MCP server and the CLI are thin clients over this API.
+
+---
+
+## 2. Base, envelope, errors
+
+* **Base:** `http://127.0.0.1:8787/api` (`BE_PORT` overrides the port). Machine callers always use a
+  loopback address, never a hostname.
+* **Envelope:** success is `{ "ok": true, "data": … }`. Failure is `{ "ok": false, "code": "…", "error": "…" }`
+  with a matching status.
+* **Status codes:** 200 done · 202 accepted, still running (the hybrid contract, §6) · 400 bad arguments ·
+  401 not authenticated · 403 not allowed · 404 no such file / directory / job · 422 a file could not be
+  fingerprinted (compare) · 429 throttled · 500 our bug (always also in `error.err`).
+* **Per-file failures are data, not HTTP errors.** Fingerprinting 1,000 files where 3 are corrupt is a 200
+  with 3 results that say `ok: false` and a stable `code`: `not_found`, `not_a_file`, `not_media`,
+  `too_large`, `decode_failed`, `ffmpeg_missing`, `pdq_unavailable`, `timeout`, `cancelled` or `internal`.
+
+---
+
+## 3. Security — the local API key
+
+### 3.1 Where it lives
+
+* **File:** `~/.credentials/large_files_bridge.json` (override: `LFB_CREDENTIALS_FILE`). It is the same file
+  that holds the Google OAuth block.
+* **Key:** `large_files_bridge.api.secret_key`, 32 random bytes as 64 hex characters, plus
+  `large_files_bridge.api.created`.
+* **Permissions:** the file is mode `0600` and the directory `0700`.
+  * The backend self-heals a looser file mode to 600 (it owns the file) and logs a WARN.
+  * The MCP server **refuses** to read a key from a file other users can read, and says `chmod 600 <file>`.
+    A key anyone on the machine can read is not a secret.
+
+The file read, create, rotate and status logic, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/config/credentials-file.ts` — `loadApiSecret()`, `ensureApiSecret()`, `rotateApiSecret()`, `apiSecretStatus()`.
+
+### 3.2 Who creates it — the web app
+
+* **At backend boot.** If there is no key yet, the backend creates one. This is the normal path; the user
+  never types anything.
+* **From the web app.** Settings → **Local API key (CLI + MCP)** shows whether the key exists, where the
+  file is, its mode, when the key was created, and a **fingerprint** (`sha256:xxxxxxxx`), **never the key**.
+  * **Create key** when there is none.
+  * **Rotate key** (after a confirm modal). Rotation has no grace window: the old key stops working at once,
+    because rotation is what you do after a leak. The CLI and the MCP server re-read the file on every call,
+    so neither needs a restart.
+* **The CLI** can also create the key when it runs first (cli.mdx §3.1). **The MCP server never creates
+  one**; it only reads.
+* **Only a person can manage the key.** Create and rotate require an allow-listed **admin in a browser
+  session**. A caller authenticated **by the key itself** (CLI or MCP) gets 403: the key cannot manage the
+  key.
+
+The status, create and rotate routes, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/security/security.router.ts` — `GET /api-key`, `POST /api-key/create`, `POST /api-key/rotate`, `browserAdminOnly()`.
+
+The settings section, in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `LocalApiKeySection`.
+
+### 3.3 Never overwrite a broken file (fixed defect)
+
+The old `ensureApiSecret()` (backend **and** CLI copies) treated a file that **would not parse** the same as
+a file that **did not exist**. It wrote a fresh document holding only the key, which **silently deleted the
+Google OAuth credentials** next to it whenever a hand edit left a stray comma.
+
+Now:
+
+* Only `ENOENT` (or an empty file) starts a fresh document.
+* An unparseable file **throws**, and the error goes to `error.err` and names the file.
+* The file is left **byte-for-byte untouched**.
+
+This is covered by `api-key.spec.ts`.
+
+### 3.4 How a caller sends it
+
+* `X-LFB-Api-Key: <key>` on every request.
+* `X-LFB-Client: mcp | cli` names the caller for audit lines. It is taken from a fixed list, so it can
+  label a request but never elevate one.
+* The key is never put in a URL, never logged, and never returned in a response. Logs show only the
+  fingerprint.
+
+### 3.5 How the backend verifies it
+
+On each request, the machine channel in the `identify` middleware is honored **only if all** of these hold.
+Otherwise it falls through to normal sign-in, and a data route answers 401.
+
+1. The TCP peer is loopback (`socket.remoteAddress`, never `X-Forwarded-For`).
+2. The **Host header is loopback**: `127.0.0.1`, `localhost` or `[::1]` (the DNS-rebinding defense, §3.7).
+3. The app is in `server.mode: local` (the shared-file trick is a same-machine mechanism only).
+4. The caller's address is not currently throttled: more than 20 bad keys in a minute and its key is ignored
+   until the window resets. Only the first 3 mismatches and the 20th are logged, so `error.err` cannot be
+   flooded.
+5. The key matches, compared **length-independently**: SHA-256 of both sides, then `timingSafeEqual`.
+
+A match produces a principal with the first allow-listed email, `roles: ["admin"]`, and the name
+"Large File Bridge MCP" or "Large File Bridge CLI". Its visibility is the same as the local user's browser
+session and no more.
+
+The verification, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/auth/identify.ts` — `apiKeyUser()`, `secretsMatch()`, `loopbackHost()`.
+
+### 3.6 Research notes — how local MCP servers are expected to authenticate
+
+* **Prefer stdio for the MCP server itself.** A stdio server can only be reached by the client process that
+  spawned it. A localhost HTTP listener can be reached by any local process, and by web pages via DNS
+  rebinding. Our MCP server is stdio only and opens no listener.
+  ([MCP Security Best Practices](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices))
+* **Authorize every request, even on localhost, and never trust a session alone.** Our backend checks the
+  key on every call.
+  ([MCP Security Best Practices](https://modelcontextprotocol.io/docs/2026-07-28/tutorials/security/security_best_practices))
+* **Validate Host/Origin against DNS rebinding.** Localhost HTTP servers have repeatedly been exposed this
+  way ([TypeScript SDK advisory GHSA-w48q-cv73-mx4w](https://github.com/modelcontextprotocol/typescript-sdk/security/advisories/GHSA-w48q-cv73-mx4w),
+  [Apollo MCP advisory](https://github.com/apollographql/apollo-mcp-server/security/advisories/GHSA-wqrj-vp8w-f8vh)).
+  We validate Host on the machine channel.
+* **The sister apps agree:**
+  * `~/BGit/all/app` keeps a per-install token in a 0600 credentials file, refuses loose file modes, and
+    burns a dummy compare on length mismatch.
+  * `~/BGit/act3/we_citizens` SHA-256s both sides before `timingSafeEqual`, throttles failures, and
+    returns a constant 401 body.
+  * We adopted the stronger of each.
+
+### 3.7 Threat model
+
+| Threat | Outcome |
+| --- | --- |
+| Another computer on the network calls `:8787` with a stolen key | Refused: the peer is not loopback. |
+| A web page uses DNS rebinding to reach `127.0.0.1:8787` | Refused twice over: it cannot read the 0600 key file, and its Host header is not loopback. The custom header also forces a CORS preflight, which our CORS policy fails. |
+| A local process run by **another** OS user | It cannot read the 0600 file. |
+| Something guesses the key by brute force | 2^256 keyspace; throttled after 20 failures a minute. |
+| The key leaks (pasted into a chat, committed) | Settings → Rotate: the old key is dead at once. |
+| An AI is asked to print the key | The MCP playbook forbids it, and no tool returns it; `lfb_whoami` shows only the fingerprint. |
+| A hand-edited credentials file is broken | Nothing overwrites it (§3.3); callers get a clear error naming the file. |
+
+---
+
+## 4. Data model
+
+Shared types, in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/fingerprints.ts` — `Fingerprint`, `FingerprintResult`, `FingerprintJob`, `FingerprintJobResponse`, the request schemas.
+
+* **Fingerprint.**
+  * **Identity and freshness:** `path`, `kind` (`image` | `video`), `algo` (`pdq` | `pdq-frames`),
+    `algo_version`, `size_bytes`, `mtime_ms`.
+  * **The value:** `value` (64 hex; for a video, its highest-quality frame), `value_alt` (the
+    black-background hash of a transparent image, else null), `quality` (0–100).
+  * **Video only:** `frame_count`, `frames` (on request: `{ n, h, q, ts }`), `duration_s`, `strategy`.
+  * **Bookkeeping:** `compute_ms`, `computed_at`.
+* **FingerprintResult.** `path`, `ok`, plus either `fingerprint`, `source` (`computed` | `memory` |
+  `postgres`) and `stored`, or a failure `code` and `error`.
+* **FingerprintJob.**
+  * `id` and `status` (`queued` | `running` | `done` | `cancelled` | `failed`).
+  * `scope`: an explicit list of paths, or a directory.
+  * Counters: `total`, `discovering`, `done`, `ok`, `failed`, `cached`, `images`, `videos`.
+  * Timing and outcome: `elapsed_ms`, `eta_ms`, `error`, `csv_path`.
+
+---
+
+## 5. Storage
+
+Fingerprints are stored in Postgres `lfb.perceptual_fp`, plus a bounded memory tier. A stored fingerprint is
+**valid only while the file's size and modification time, and the engine version, are unchanged**. Whenever
+a caller asks again for an unchanged file, the stored value is returned in milliseconds. The full rule is in
+[perceptual_fingerprint.mdx §FD.4](./perceptual_fingerprint.mdx).
+
+Every finished job also writes its CSV to
+`~/T/_large_files_bridge/fingerprints/exports/fingerprints_<job>.csv`. The results survive a restart even
+though the job record itself does not.
+
+---
+
+## 6. The hybrid synchronous / asynchronous contract (the key decision)
+
+### 6.1 The problem
+
+* **Pure synchronous:** a directory of 10,000 photos takes minutes. Claude Code MCP tool calls, browser
+  requests and proxies all have timeouts, and a request cut off by a timeout is work thrown away (and a
+  retry starts it over).
+* **Pure asynchronous (always enqueue, always poll):** one image takes ~15 ms. Making every caller do
+  "start, poll, fetch" for a 15 ms answer triples the round trips, and it makes the MCP conversation slower
+  and chattier for the most common request.
+
+### 6.2 The contract
+
+* **Every request becomes a job.** `POST /compute` and `POST /scan` create a job and then **wait up to
+  `wait_ms`**: default **20,000**, maximum **55,000**, and `0` means "return at once".
+  * **Finished within the budget** → `200` with `pending: false` and **every result** in the same response.
+    This is the synchronous path, and for one file or a few dozen it is the only thing a caller ever sees.
+  * **Not finished** → `202` with `pending: true`, the job, and the results finished so far. **The work keeps
+    going.** Nothing is cut off, and nothing needs to be retried.
+* **Polling is a long-poll, not a spin.** `GET /jobs/:id?wait_ms=…` blocks until the job finishes or the
+  budget passes, so a poller makes one call per ~50 s instead of one per second.
+* **The budgets are chosen to fit their callers.**
+  * The MCP server asks for 20 s by default and allows up to 50 s; its own HTTP timeout is 75 s, so the
+    server, not the socket, decides when to return.
+  * The web app asks for 1.5 s (directory) or 15 s (files), then long-polls every 2 s to draw its progress
+    bar.
+* **Never re-issue on pending.** A second identical request starts a second job over the same files.
+  Callers poll the first job. The MCP playbook says so explicitly.
+* **The slow-request alarms know about this.** The backend's request watch would otherwise log every
+  deliberate wait as a SLOW WARN, or as a STILL OPEN ERROR after 10 s. These routes are listed as
+  long-lived by contract, so `error.err` stays reserved for real faults.
+
+The job runner, the wait, and the walk that runs in parallel with hashing, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.jobs.ts` — `startJob()`, `waitForJob()`, `walk()`, `record()`.
+
+The long-lived route exemption, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/shared/request-watch.ts` — `LONG_LIVED`.
+
+---
+
+## 7. Endpoint catalogue — `/api/fingerprints`
+
+All routes require an allow-listed principal: a browser session, or the local API key.
+
+The routes, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.router.ts` — `fingerprintsRouter`.
+
+### 7.1 `GET /info`
+
+Reports:
+
+* the engine (algorithms, the sidecar binary and whether it is present or running, the version);
+* the match thresholds (32 / strict 24) and the quality floor (50);
+* the concurrency (images and videos);
+* storage: whether Postgres is reachable, its row count, the memory-tier size, and the exports directory;
+* the default wait budget;
+* the caller's name.
+
+### 7.2 `POST /compute` — explicit files
+
+Body: `{ paths: string[1..5000], force?, include_frames?, wait_ms? }`.
+
+* Paths are absolute; `~` is expanded. Duplicate paths in one request count once.
+* `force` recomputes even when a valid stored value exists.
+* The reply is §6.2: 200 or 202 with `{ job, results, results_offset, results_total, pending }`.
+
+### 7.3 `POST /scan` — a directory
+
+Body: `{ dir, recursive? = true, kinds? = [image, video], max_files? = 50000 (≤ 500000), force?, include_frames?, wait_ms? }`.
+
+* The walk skips `.git`, `node_modules`, hidden directories, macOS bundles (`.app`, `.photoslibrary`, …),
+  symlinks, and everything in `HARD_SKIP`.
+* `/` is refused.
+* Workers start hashing while the walk is still discovering files (`discovering: true`, and `total` keeps
+  growing).
+* The reply is §6.2.
+
+### 7.4 `GET /jobs` and `GET /jobs/:id`
+
+* `/jobs` lists recent jobs, newest first. The 25 most recent finished jobs are kept in memory.
+* `/jobs/:id?wait_ms=&offset=&limit=&include_frames=` returns the status and one page of results (default
+  1000, maximum 5000).
+* A 404 means the job is unknown. Jobs do not survive a restart, but their fingerprints (Postgres) and CSVs
+  (state root) do.
+
+### 7.5 `POST /jobs/:id/cancel`
+
+No new files are handed out. Files already in progress finish, and the rest are recorded as `cancelled`.
+
+### 7.6 `GET /jobs/:id/csv[?save=true][&include_frames=true]`
+
+* **Without `save`:** a `text/csv` download. The web app fetches it as a Blob, because the request needs the
+  Bearer header.
+* **With `save=true`:** writes the file into the exports directory and returns `{ csv_path, rows, pending }`.
+  This is what the MCP uses, because Claude Code then reads the file directly.
+* **Columns:** `path, ok, kind, algo, value, value_alt, quality, frame_count, duration_s, strategy, size_bytes,
+  file_modified, computed_at, compute_ms, source, stored, error_code, error`, plus `frames` (entries of
+  `ts:hex:quality` joined by `|`) with `include_frames`.
+* **Formula-injection guard:** cells that begin `= + - @` (and are not numbers) are prefixed with `'`.
+
+The CSV writer, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.csv.ts` — `resultsToCsv()`, `csvCell()`, `writeCsvExport()`.
+
+### 7.7 `GET /lookup` — stored values only, never computing
+
+* **`?path=`:** returns `{ found, valid, reason, tier, fingerprint }`. `valid` is false once the file changed
+  after its fingerprint was computed.
+* **`?dir=&limit=[&format=csv][&save=true]`:** every stored row under the directory (a Postgres prefix scan).
+
+### 7.8 `POST /compare`
+
+Body: `{ a, b, strict? }`. Each side is a path (fingerprinted or recalled first) or a 64-hex value.
+
+* **Images:** `distance` (Hamming, 0–256; the nearest combination of `value` / `value_alt` on each side),
+  `threshold` (32, or 24 when strict), `same_content`.
+* **Two videos:** also
+  * `shared_fraction`: matched frames both ways; ≥ 0.8 means a **duplicate**;
+  * `longest_run`: which side is shorter, where the run starts in each video, where it ends in the longer
+    one, and its coverage. A coverage of ≥ 0.7 means the shorter video is a **subset**.
+  * `note` says which of the two it is.
+* **A match is a signal only.** No endpoint ever deletes or moves a file because of a match.
+
+---
+
+## 8. Performance research (the measurements behind §6)
+
+Measured 2026-09-24 on a 24-core Apple Silicon desktop, with Postgres absent (compute path only):
+
+| Work | Time | Throughput |
+| --- | ---: | ---: |
+| One image, sidecar already warm | 8–20 ms | — |
+| First request after backend start (spawns the sidecar) | +0.5 s once | — |
+| 229 PNG screenshots, 12-way | 3.7 s | **61 images/s** (16 ms each) |
+| 230 JPEG camera photos, 12-way | 1.8 s | **130 images/s** (7.7 ms each; JPEG shrinks on load) |
+| 11 s video clip | 0.8 s | — |
+| 39 s 1080p 10-bit HEVC video | 0.5–0.6 s | ~70× realtime |
+| 205 s 4K H.264 video | 2.6–2.8 s | ~75× realtime |
+| A repeat request, file unchanged | < 1 ms (memory) · a few ms (Postgres) | — |
+| Mixed folder, 28 images + 6 videos | well under the 20 s budget (one synchronous MCP call) | — |
+
+What this means:
+
+* **Single files and small folders** fit inside the default 20 s wait, so the caller gets its answer
+  synchronously.
+* **A video is almost always synchronous.** A 10-minute 4K video is about 8 s. Only a long,
+  keyframe-sparse video that needs the full-decode plan can take longer than 20 s, and then it simply
+  becomes a job.
+* **Directories of hundreds to thousands of files become jobs.** At 60–130 images/s, 10,000 images take
+  about 1.5–3 minutes on first run and seconds afterwards (cached).
+* **Concurrency limits.** Images run up to 12 at a time; videos up to 3 at a time (each already runs
+  ffmpeg on many threads plus a hash pool). Both limits are derived from the core count and shared by
+  every caller, so an MCP job and a web-app job cannot together oversubscribe the machine.
+
+---
+
+## 9. Error handling and logging
+
+* **The backend.**
+  * Every handler catches its own failures: an unexpected one is a 500 **and** a `logError` line in
+    `error.err`.
+  * Engine faults (sidecar missing, crashed, timed out, ffmpeg missing) are `logError`.
+  * A user file that will not decode is a WARN, because it is data, not our bug.
+  * Each finished job with failures writes **one** grouped WARN (counts per code and one example), not one
+    line per file.
+  * Postgres problems go through `tryDb()`: throttled WARNs, never a failed request.
+* **The MCP server.**
+  * WARN and ERROR lines are appended to the same `~/T/_large_files_bridge/error.err`, in the backend's line
+    format and tagged `[mcp:…]`. They also go to stderr, which Claude Code keeps in its MCP log.
+  * Nothing is ever written to stdout except JSON-RPC.
+* **The web app dialog.** Failures go through `clientLog` → `/api/client-log` → `error.err`.
+
+---
+
+## 10. Acceptance criteria
+
+1. The local API key is created by the web app (backend boot, or Settings → Create). It is shown only as a
+   fingerprint, is rotatable from Settings, and is never overwritten when the file is broken.
+2. The machine channel is honored only from a loopback peer with a loopback Host header, in local mode,
+   with a length-independent compare and a failure throttle.
+3. `/api/fingerprints` follows the hybrid contract. A request that finishes inside `wait_ms` returns every
+   result synchronously; one that does not returns a job that keeps running and can be long-polled.
+4. Results are stored in Postgres and reused while the file is unchanged. A modified file is recomputed.
+5. A CSV of any job, or of the stored rows under a directory, can be written into the state root and its
+   path returned.
+6. Every failure is either a typed per-file result or a JSON error with a stable code, and every failure
+   that is ours is in `error.err`.

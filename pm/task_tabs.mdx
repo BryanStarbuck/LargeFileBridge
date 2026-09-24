@@ -356,6 +356,14 @@ the left-bar hover-info panel (§3) carries the one-sentence explanation, and cl
 educate-and-fix popup a banner's arrow button would have opened (§2.4). This keeps the top of the page
 quiet — a wall of narrow tiles, mostly green zeros — instead of a stack of banners.
 
+* **Every tab's popup previews the same way (2026-09-24).** Whichever tab the panel sits on — All, IPFS,
+  Compress, Transcribe, AI descriptions, OCR — its popup lists the files on the right, and **clicking a row
+  previews it bottom-left**, below the options (image, video click-to-play, audio, PDF; **Open ↗** to the
+  full viewer). Only remote-only rows (Pull Down, deleted here) have nothing local to show.
+  ([warnings.mdx §4.5.2](./warnings.mdx), revision 2026-09-24.)
+  Every tab's file rows get their preview kind and lazy media grant from:
+  `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `repoFileTarget()` / `repoPreviewResolver()` (both delegate to `lib/popupPreview.ts`).
+
 * **No StatusBanner / RepoVerdict on this page.** The old worst-first diagnosis banner (IPFS down →
   pinned-but-no-peers → undecided → pending) is **removed**; each file-work condition now reads off its
   own panel (`Pending`, `Not Backed Up`, `Add to IPFS`, `Git Ignore`, `Pull Down`) and opens its own popup.

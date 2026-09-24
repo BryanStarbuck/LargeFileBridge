@@ -127,3 +127,6 @@ Thumbs.db
 # NOTE: The manifest that records the ignored large files (paths + IPFS CIDs /
 # content hashes) is INTENTIONALLY tracked by Git. Do not add it here.
 # ----------------------------------------------------------------------------
+
+# --- PDQ sidecar build output (code/sidecars/pdq — rebuilt by `just build-pdq`) ---
+code/sidecars/pdq/bin/

@@ -18,9 +18,21 @@ interface CredsShape {
   large_files_bridge?: { api?: { secret_key?: string; created?: string } } & Record<string, unknown>;
 }
 
+/**
+ * Parse the credentials file. `{}` ONLY when the file does not exist. A file that exists but will not parse
+ * THROWS: the old behaviour (treat it like an empty file) let ensureApiSecret() write a fresh document over
+ * it and silently delete the Google OAuth block beside the key. A broken secrets file is a human's to fix.
+ */
 function readDoc(p: string): CredsShape {
+  let raw: string;
   try {
-    const raw = fs.readFileSync(p, "utf8");
+    raw = fs.readFileSync(p, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code === "ENOENT") return {};
+    throw new Error(`cannot read ${p}: ${(e as Error).message}`);
+  }
+  if (raw.trim() === "") return {};
+  try {
     // Tolerate the invisible-whitespace corruption a hand-edited secrets file picks up (same repair
     // the backend applies): strip zero-width chars, normalize NBSP-like spaces, then parse.
     try {
@@ -31,13 +43,19 @@ function readDoc(p: string): CredsShape {
         .replace(/[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g, " ");
       return JSON.parse(cleaned) as CredsShape;
     }
-  } catch {
-    return {};
+  } catch (e) {
+    throw new Error(`${p} is not valid JSON (${(e as Error).message}) — fix it by hand; Large File Bridge will not overwrite it`);
   }
 }
 
 export function loadApiSecret(): string | null {
-  const key = readDoc(credsFilePath()).large_files_bridge?.api?.secret_key;
+  let doc: CredsShape;
+  try {
+    doc = readDoc(credsFilePath());
+  } catch {
+    return null; // ensureApiSecret() re-reads and surfaces the real error instead of overwriting
+  }
+  const key = doc.large_files_bridge?.api?.secret_key;
   return typeof key === "string" && key.length >= 32 ? key : null;
 }
 

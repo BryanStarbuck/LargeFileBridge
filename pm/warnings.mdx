@@ -609,7 +609,43 @@ The per-row axes reuse the shared decision-toggle component (extended with the c
 > The one-repo preview resolver and the media `preview` on each target:
 > `~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/metricWarningDefs.tsx` — `repoFileTarget()` / `repoPreviewResolver()`.
 >
-> *The original locked text follows; where it says "hover" or "the entire left pane", read the revision above.*
+> **Revision 2026-09-24 — across the board: every popup, every tab.** The click-a-row-on-the-right →
+> preview-bottom-left behavior above is **not** a feature of one popup. It is the rule for **every**
+> two-pane popup whose rows are **local files**, whichever tab or entry point opened it. This revision
+> **amends** the rules above and below wherever they conflict:
+>
+> * **Every host, same behavior.** All of these open the same `WarningPopup` and all of them must carry a
+>   `preview` on each image / video / audio / PDF row **and** a resolver for its bytes:
+>   * the one-repo **metric tiles** on every task tab (All · IPFS · Compress · Transcribe — task_tabs.mdx),
+>     the header **View recommendation ›** primary, and the blue **arrow button** (they share
+>     `metricWarningDefs`);
+>   * the **batch-confirm popup** that the page action links (Create Transcriptions / Create AI
+>     descriptions / Create OCR text) and the ⋮ / right-click menu open on the File System, Full Paths and
+>     One-repo pages ([dialogs.mdx §5](./dialogs.mdx)). *Before this revision these rows had no `preview`
+>     at all — the left pane stayed empty however many rows the user clicked. That was the gap this revision
+>     closes;*
+>   * the **To-Do batch popup** ([to_do.mdx §6](./to_do.mdx)).
+> * **ONE helper builds a previewable row.** Hosts never hand-roll `preview: { kind, url: "" }` or their own
+>   `api.mediaGrant` try/catch. The row's preview kind and its "open in viewer" link come from one function,
+>   and the lazy grant from one resolver factory, so a new popup can't forget either half.
+> * **PDFs preview too.** A PDF row (an OCR subject, ocr.mdx) previews as the **browser's own inline PDF
+>   viewer** in the same ≤ ~45vh box — scrollable, first page on top. The raw media route serves `.pdf` as
+>   `application/pdf` so the frame renders instead of downloading. Space does nothing for a PDF.
+> * **Open in viewer ↗.** Under every preview the caption carries a small **Open ↗** link to the full
+>   [media viewer](./media_viewer.mdx) for that file. It opens in a **new tab**, so the popup — and every
+>   checkbox the user has already unticked — is still there when they come back.
+> * **Remote-only rows stay non-media.** Pull-down rows (bytes on another computer) and deleted-here rows
+>   (bytes gone) carry **no** `preview`; selecting one hides the preview area. Previewing must never fetch
+>   (§ remote-only rule below and to_do.mdx §6.3).
+>
+> Implemented in: the shared preview-row helper + grant resolver used by every host.
+> `~/repos/LargeFileBridge/code/packages/frontend/src/lib/popupPreview.ts` — `previewForPath()` / `grantPreviewResolver()`.
+> The batch-confirm popups (transcribe / describe / OCR) carry previews via that helper.
+> `~/repos/LargeFileBridge/code/packages/frontend/src/lib/batchPopup.ts` — `openTranscribeBatch()` / `openDescribeBatch()` / `openOcrBatch()` (`planTarget()`).
+> The PDF frame and the Open ↗ link in the preview.
+> `~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `PreviewPane` (`p.kind === "pdf"`, `p.openHref`).
+>
+> *The original locked text follows; where it says "hover" or "the entire left pane", read the revisions above.*
 
 The left pane is **dual-purpose**. At rest it shows the educate copy + options (§4.2/§4.3). The instant
 the user **hovers — or keyboard-focuses — a media row** (image / video / audio) in the right list, the
@@ -901,11 +937,12 @@ type WarningTargetAxes = {
   compress?: AxisOpenState;  // Compress — only when the file looks compressible & uncompressed
 };
 
-// Media the left pane previews when this row is hovered/focused (§4.5.2). Absent ⇒ non-media row (no
-// preview; hovering it just restores the educate copy).
+// Media the left pane previews when this row is CLICKED / arrow-selected (§4.5.2). Absent ⇒ non-media row
+// (selecting it hides the preview area). Built by previewForPath() — never hand-rolled (revision 2026-09-24).
 type WarningTargetPreview = {
-  kind: "image" | "video" | "audio";
-  url: string;               // the media-serving URL (same endpoint the media viewer uses)
+  kind: "image" | "video" | "audio" | "pdf"; // pdf = inline browser PDF frame (revision 2026-09-24)
+  url: string;               // the media-serving URL, or "" = resolved lazily via a media grant
+  openHref?: string;         // the full media viewer for this file — the caption's "Open ↗" (new tab)
   width?: number; height?: number; // pixel dimensions for the caption ("3840×2160")
 };
 
@@ -921,7 +958,7 @@ type WarningTarget = {
   defaultChecked?: boolean; // SINGLE-checkbox model (§4.5 model 2): default true; false opts row OUT at open
   axes?: WarningTargetAxes; // PER-ROW TOGGLES model (§4.5.1, model 1): present ⇒ row leads with up-to-3
                             // axis toggles pre-set to these open states; row is "included" when ≥1 axis ON
-  preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews on hover/focus
+  preview?: WarningTargetPreview; // §4.5.2 — media the left pane previews when the row is clicked
 };
 
 type WarningDef = {

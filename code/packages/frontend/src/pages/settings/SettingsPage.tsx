@@ -18,6 +18,7 @@ import { Disclosure } from "../../components/ui/Disclosure.js";
 import { healthColor } from "../../components/ui/health.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { confirmModal } from "../../lib/modals.js";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -258,8 +259,83 @@ export function SettingsPage() {
 
       <AiProvidersSection />
 
+      <LocalApiKeySection />
       <PowerToolsSection />
     </div>
+  );
+}
+
+// ── Local API key (apis.mdx §3) — the machine key the `lfb` CLI and the MCP server use ────────────────
+// The key itself never reaches the browser: both machine callers read it from the 0600 credentials file
+// on this computer. Here a person sees WHETHER it exists, when it was made and a short fingerprint, and can
+// create or rotate it. Rotating cuts off every CLI/MCP process using the old key at once (on purpose).
+function LocalApiKeySection() {
+  const qc = useQueryClient();
+  const { data, error } = useQuery({ queryKey: ["apiKeyStatus"], queryFn: api.apiKeyStatus });
+  const act = useMutation({
+    mutationFn: async (kind: "create" | "rotate") => {
+      if (kind === "rotate") {
+        const ok = await confirmModal({
+          title: "Rotate the local API key?",
+          body: "The CLI and the MCP server pick up the new key on their next call. Anything still holding the old key stops working at once.",
+          confirmLabel: "Rotate",
+          danger: true,
+        });
+        if (!ok) return null;
+        return api.apiKeyRotate();
+      }
+      return api.apiKeyCreate();
+    },
+    onSuccess: (d) => {
+      if (!d) return;
+      qc.setQueryData(["apiKeyStatus"], d);
+      toast.success(`Local API key ready (${d.fingerprint})`);
+    },
+    onError: (e: Error) => {
+      clientLog.error("Settings.apiKey", e);
+      toast.error(e.message);
+    },
+  });
+  return (
+    <Section
+      title="Local API key (CLI + MCP)"
+      subtitle="The secret the lfb command line and the Claude Code MCP server use to call this app on this computer. It never leaves this machine and is never shown here."
+      collapsible
+      defaultOpen={false}
+    >
+      {error && <p className="text-sm text-[var(--lfb-bad)]">{(error as Error).message}</p>}
+      {data && (
+        <div className="space-y-1 text-sm text-black/70">
+          <div>
+            File: <span className="font-mono text-xs">{data.path}</span>
+            {data.mode && data.mode !== "600" && (
+              <span className="ml-2 text-[var(--lfb-bad)]">mode {data.mode} — should be 600</span>
+            )}
+          </div>
+          <div>
+            {data.exists ? (
+              <>
+                Key <span className="font-mono text-xs">{data.fingerprint}</span>
+                {data.created && <> · created {new Date(data.created).toLocaleString()}</>}
+              </>
+            ) : (
+              <span className="text-[var(--lfb-bad)]">No key yet — the CLI and MCP server cannot connect.</span>
+            )}
+          </div>
+          <div className="pt-2">
+            {data.exists ? (
+              <button className="lfb-btn lfb-btn-secondary" disabled={act.isPending} onClick={() => act.mutate("rotate")}>
+                Rotate key
+              </button>
+            ) : (
+              <button className="lfb-btn lfb-btn-primary" disabled={act.isPending} onClick={() => act.mutate("create")}>
+                Create key
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+    </Section>
   );
 }
 

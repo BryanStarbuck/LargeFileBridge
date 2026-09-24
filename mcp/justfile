@@ -1,0 +1,32 @@
+# Large File Bridge MCP server — task runner (pm/mcp.mdx §2). Same portability rules as the root justfile:
+# node / pnpm / just only, no comment lines inside recipes, no shebang recipes.
+
+set shell := ["bash", "-uc"]
+set windows-shell := ["cmd.exe", "/d", "/c"]
+
+code := justfile_directory() / "code"
+pdq := justfile_directory() / ".." / "scripts/dev/pdq.mjs"
+
+default:
+    @just --list
+
+# Install deps + build the single bundled server (code/dist/index.js), regenerating its instructions.
+build:
+    pnpm -C "{{code}}" install
+    pnpm -C "{{code}}" build
+
+# Typecheck only.
+typecheck:
+    pnpm -C "{{code}}" typecheck
+
+# Run the server on stdio by hand (normally Claude Code spawns it).
+run: build
+    node "{{code}}/dist/index.js" serve
+
+# Spawn the built server as Claude Code would and exercise its tools (optional: dir fileA fileB).
+probe *args: build
+    node "{{code}}/scripts/probe.mjs" {{args}}
+
+# Print (default) or `apply` the `claude mcp add` registration.
+register mode="print":
+    @node "{{pdq}}" mcp-register {{ if mode == "apply" { "--apply" } else { "" } }}

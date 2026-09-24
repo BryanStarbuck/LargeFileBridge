@@ -1,0 +1,205 @@
+---
+title: LargeFileBridge — The MCP server (`lfb`) for Claude Code
+description: The spec for Large File Bridge's Model Context Protocol server, the way Claude Code drives the local web app. It is a stdio server (no network listener) living in the top-level mcp/ directory, a peer of pm/ and cli/. Its implementation is under mcp/code/ and it builds to ONE bundled file, mcp/code/dist/index.js. Like the CLI it is a THIN client: every answer is computed by the backend over the localhost REST API (apis.mdx), authenticated with the web app's local API key read from the 0600 ~/.credentials/large_files_bridge.json (never created, never printed, re-read per call so a rotation needs no restart; a world-readable file is refused). Ten lfb_-prefixed tools cover perceptual fingerprints: whoami (diagnostics); fingerprint files; fingerprint a directory; job status with long-poll and paging; CSV export into the state root; lookup of stored values with validity; compare (duplicate vs subset for videos); cancel; list jobs; plus the CLI's category file list. Every tool returns one JSON envelope ({ok,data} or {ok:false,code,message,hint} with isError). Results are byte-capped with a pointer to the CSV export. The server's instructions come from the playbook ai/lfb_mcp.md, compiled into the bundle at build time. Errors go to stderr and to the app's error.err. just build-mcp builds it; just mcp-register prints (or with `apply` runs) the `claude mcp add` line.
+---
+
+# LargeFileBridge — The MCP server (`lfb`)
+
+The MCP server lets **Claude Code** use Large File Bridge from a chat. For example: *"get the perceptual
+fingerprints for everything in ~/Videos/2026 as a CSV"*, *"is this clip part of that longer video?"*, or
+*"which of these photos are the same picture?"*. It runs on the same computer as the web app, talks only
+to it, and computes nothing itself.
+
+* API it calls: [apis.mdx](./apis.mdx).
+* What a fingerprint is, and the engine behind it: [perceptual_fingerprint.mdx §FD](./perceptual_fingerprint.mdx).
+* The sibling thin client: [cli.mdx](./cli.mdx).
+
+---
+
+## 1. Placement (charter amendment)
+
+```
+LargeFileBridge/
+├── ai/lfb_mcp.md   # the MCP playbook — served to Claude Code as the server's instructions
+├── mcp/            # the MCP server — a peer of pm/ and cli/
+│   ├── justfile    # build / run / register
+│   └── code/       # ALL implementation: src/, scripts/, package.json, tsup.config.ts
+├── cli/            # the CLI (cli.mdx)
+├── code/           # the web app — still owns ALL functionality
+│   └── sidecars/pdq/   # the Go PDQ fingerprint engine (perceptual_fingerprint.mdx §FD.3)
+└── pm/
+```
+
+* **`mcp/code/` is the third sanctioned code location**, after `code/` and `cli/code/`. It follows the same
+  rule as the CLI: it may hold **MCP wrapper code only** (tool schemas, HTTP calls, result shaping, the stdio
+  lifecycle). Anything that computes an answer about files belongs in the backend as a REST endpoint first.
+* **`ai/`** holds prompt files an AI reads. `ai/lfb_mcp.md` is the source of truth for the server's
+  instructions.
+
+---
+
+## 2. Registering it with Claude Code
+
+* **Build:** `just build-mcp` (root justfile), or `just build` in `mcp/`. The output is **one** bundled,
+  executable file, `mcp/code/dist/index.js`, with the MCP SDK inside it. Claude Code spawns the server by
+  absolute path from an unrelated working directory, so nothing may depend on resolving `node_modules`.
+* **Register:** `just mcp-register` prints the line, and `just mcp-register apply` runs it:
+
+```
+claude mcp add --scope user lfb -- node ~/repos/LargeFileBridge/mcp/code/dist/index.js serve
+```
+
+* **Checks:** `claude mcp list` should show `lfb … ✓ Connected`. In a session, `lfb_whoami` confirms the
+  backend, the key and the engine.
+* **Hand probe (no Claude Code needed):** `node mcp/code/scripts/probe.mjs [dir] [fileA] [fileB]`. It spawns
+  the built server over stdio exactly as Claude Code does, and runs whoami, files, compare, a directory job,
+  the CSV export and two error cases.
+
+---
+
+## 3. Transport and lifecycle
+
+* **stdio only.** There is no HTTP listener, so no DNS-rebinding surface of its own
+  ([apis.mdx §3.6](./apis.mdx)).
+* **Nothing is ever written to stdout except JSON-RPC.** A single stray line desynchronizes the transport
+  and Claude Code just shows a dead server. All logging goes to stderr and `error.err` (§7).
+* **Startup makes no network call.** `tools/list` answers with the backend down; a server that probed first
+  would look "failed to start" whenever the web app is merely stopped.
+* **Argv:** the only command is `serve`. Anything else prints usage to stderr and exits 1.
+* **Shutdown** on SIGINT, SIGTERM or stdin EOF: in-flight calls get up to 8 s to finish, then the process
+  exits.
+
+The entry point, in code:
+`~/repos/LargeFileBridge/mcp/code/src/index.ts` — `main()`.
+
+---
+
+## 4. Authentication
+
+* The server reads `large_files_bridge.api.secret_key` from `~/.credentials/large_files_bridge.json`
+  (`LFB_CREDENTIALS_FILE` overrides). It re-reads the file **on every call**, so a rotation in the web app
+  takes effect immediately.
+* It **never creates** the key. Creating it is the web app's job (backend boot, or Settings → Local API key),
+  and the server says so when the key is missing.
+* It **refuses** a credentials file that other users can read (`credentials_mode`, fix: `chmod 600`).
+* Each call carries `X-LFB-Api-Key` and `X-LFB-Client: mcp` to `http://127.0.0.1:<BE_PORT|8787>/api`. The
+  host is fixed to loopback, and there is no setting to change it.
+* The key is never logged or returned; `lfb_whoami` shows only `sha256:xxxxxxxx`.
+
+The key reader, in code:
+`~/repos/LargeFileBridge/mcp/code/src/credentials.ts` — `readApiKey()`, `keyFingerprint()`.
+
+The HTTP client and its error codes, in code:
+`~/repos/LargeFileBridge/mcp/code/src/http.ts` — `api()`, `ApiError`.
+
+---
+
+## 5. Tools
+
+Every tool name starts with `lfb_`, so it cannot be confused with another server's tools. Input schemas are
+zod, published as JSON Schema. Relative paths resolve against the directory Claude Code was started in, and
+`~` is home.
+
+| Tool | Calls | Use it when |
+| --- | --- | --- |
+| `lfb_whoami` | reads the key file, then `GET /fingerprints/info` | First, whenever anything fails. Reports the backend up or down, whether the key is present and authenticated, the engine built or missing, and whether Postgres is storing results. |
+| `lfb_fingerprint_files` | `POST /fingerprints/compute` | The user names files (up to 5,000). |
+| `lfb_fingerprint_directory` | `POST /fingerprints/scan` | The user names a folder or repo. |
+| `lfb_fingerprint_job` | `GET /fingerprints/jobs/:id` | A result came back `pending`. `wait_seconds` (≤ 50) long-polls; `offset` and `limit` page the results. |
+| `lfb_fingerprint_export_csv` | `GET /jobs/:id/csv?save=true` or `GET /lookup?dir=…&format=csv&save=true` | Any CSV or spreadsheet request, or more than ~50 files. Returns `csv_path` in the state root. |
+| `lfb_fingerprint_lookup` | `GET /fingerprints/lookup` | "What is already stored?" Never computes, and reports whether each stored value is still valid. |
+| `lfb_fingerprint_compare` | `POST /fingerprints/compare` | "Are these the same?" For videos it also says duplicate vs subset, and the time range. |
+| `lfb_fingerprint_cancel` | `POST /jobs/:id/cancel` | Stop a running job. |
+| `lfb_list_jobs` | `GET /fingerprints/jobs` | Find a job after a timeout, before starting it again. |
+| `lfb_files_list` | `GET /files/list` | The CLI's task-category listing (compressible, gitignore, transcribable, …). |
+
+The tool definitions, in code:
+`~/repos/LargeFileBridge/mcp/code/src/tools/fingerprints.ts` — `fingerprintFiles`, `fingerprintDirectory`, `fingerprintJob`, `exportCsv`, `lookup`, `compare`, `cancel`, `listJobs`.
+
+The diagnostics and the file list, in code:
+`~/repos/LargeFileBridge/mcp/code/src/tools/orientation.ts` — `whoami`, `filesList`.
+
+**Job-shaped replies** (files, directory, job) are condensed for the model:
+
+* `job_id`, `pending`, `status`;
+* `progress`: done, total, discovering, eta_seconds;
+* `summary`: counts per outcome, such as `ok_image`, `ok_video_cached` and `failed_decode_failed`;
+* `next`: one sentence saying what to call next;
+* then the results.
+
+---
+
+## 6. Response contract
+
+* **One text block per call, holding JSON.**
+  * Success: `{"ok":true,"data":…}`.
+  * Failure: `{"ok":false,"code","message","hint"}` with `isError: true`.
+  * A failure the user can act on is a **result**, never a thrown protocol error. A thrown error reads to
+    the model as "the tool is broken"; a result reads as "here is what to do".
+* **Error codes the playbook teaches:** `backend_down`, `unauthorized`, `credentials_missing`,
+  `credentials_mode`, `credentials_invalid`, `timeout`, `bad_request` / `bad_arguments`, `not_found`,
+  `http_error`, `unknown_tool` and `internal`. Per-file codes are listed in apis.mdx §2.
+* **Byte cap:** a reply over 200 KB (`LFB_MCP_MAX_BYTES`, up to 2 MB) drops trailing results and says so,
+  with `truncated: { shown, of, hint }` pointing at the CSV export. The model never receives a
+  context-flooding reply.
+* **No automatic retries.** Every fingerprint request is a job, so a blind retry would start a second job.
+* **The timeout comes from the environment, never from a tool argument.** `LFB_MCP_TIMEOUT_MS` defaults to
+  75 s, which is more than the longest server-side wait (50 s), so the backend decides when to hand back a
+  job. A tool argument that could stretch a timeout or redirect the URL would be an injection surface.
+
+The envelope, argument validation and bug logging, in code:
+`~/repos/LargeFileBridge/mcp/code/src/server.ts` — `McpServerHost.call()`.
+
+The byte cap and the summaries, in code:
+`~/repos/LargeFileBridge/mcp/code/src/tools/shape.ts` — `capResults()`, `summarize()`, `resolveUserPath()`.
+
+---
+
+## 7. Errors and logs
+
+* **WARN and ERROR** go to stderr, which Claude Code keeps in its MCP log, **and** are appended to the app's
+  fault trail `~/T/_large_files_bridge/error.err`, in the backend's line format, tagged `[mcp:<context>]`.
+  There is **one place** to look for every Large File Bridge failure. Rotation stays the backend's job; the
+  MCP server only appends whole lines.
+* **Uncaught exceptions and unhandled rejections** are logged to `error.err` as well; neither takes the
+  server down.
+* **Values are sanitized.** Control characters are stripped from logged values (file names, server
+  messages), so nothing can forge a log line.
+
+The logger, in code:
+`~/repos/LargeFileBridge/mcp/code/src/logger.ts` — `log`, `logError()`.
+
+---
+
+## 8. The playbook (server instructions)
+
+* **Source:** `ai/lfb_mcp.md`.
+* **Contents:**
+  1. what the server is;
+  2. every tool and when to use it;
+  3. the sync-then-job behavior and "never re-issue on pending";
+  4. reading results (thresholds, quality, strategy, failure codes; a match is a signal only);
+  5. the CSV workflow;
+  6. what to do per error code;
+  7. a NEVER list (never print or ask for the key, never act on a match, never scan `/` or home without
+     confirming).
+* **Build.** `mcp/code/scripts/build-instructions.mjs` substitutes the `{API_BASE}`, `{CREDENTIALS_FILE}`,
+  `{EXPORTS_DIR}` and `{ERROR_LOG}` variables, **fails the build on an unknown variable** or an empty file,
+  and writes `src/instructions.ts`. That file is generated; edit the `.md` and rebuild.
+
+---
+
+## 9. Acceptance criteria
+
+1. `just build-mcp` produces one executable bundle. `claude mcp add … serve` registers it, and
+   `tools/list` works with the backend down.
+2. With the web app running, `lfb_whoami` reports the backend up, the key authenticated, and the PDQ
+   engine present.
+3. Fingerprinting files and a directory works end to end:
+   * small work returns synchronously;
+   * large work returns a job that `lfb_fingerprint_job` long-polls to completion;
+   * `lfb_fingerprint_export_csv` returns a CSV path that exists.
+4. The key is never printed; a loose credentials file is refused with the `chmod` fix; a rotated key works
+   on the next call without a restart.
+5. Every failure is an `isError` result with a stable code, and every WARN/ERROR is also in `error.err`.
+6. Nothing but JSON-RPC ever reaches stdout.

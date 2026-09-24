@@ -24,6 +24,7 @@ set windows-shell := ["cmd.exe", "/d", "/c"]
 
 code := justfile_directory() / "code"
 cli := justfile_directory() / "cli"
+pdq := justfile_directory() / "scripts/dev/pdq.mjs"
 dev := justfile_directory() / "scripts/dev/dev.mjs"
 db := justfile_directory() / "scripts/dev/db.mjs"
 
@@ -55,8 +56,27 @@ build-cli:
     @node "{{dev}}" install --cli
     pnpm -C "{{cli}}/code" build
 
-# Typecheck / build every package (and the CLI — cli.mdx §1.3).
-build: setup build-cli
+# The perceptual-fingerprint engine (perceptual_fingerprint.mdx §FD): a Go binary over ajdnik/imghash (PDQ).
+# Needs Go; without it this prints how to install Go and exits 0 — everything else still builds and runs.
+#
+# Build the PDQ fingerprint sidecar (code/sidecars/pdq/bin/lfb-pdq).
+build-pdq:
+    @node "{{pdq}}" build
+
+# The MCP server for Claude Code (pm/mcp.mdx): one bundled file at mcp/code/dist/index.js.
+#
+# Build the Large File Bridge MCP server.
+build-mcp:
+    @node "{{pdq}}" mcp-build
+
+# `just mcp-register` prints the `claude mcp add` line; `just mcp-register apply` runs it (user scope).
+#
+# Register the MCP server with Claude Code.
+mcp-register mode="print":
+    @node "{{pdq}}" mcp-register {{ if mode == "apply" { "--apply" } else { "" } }}
+
+# Typecheck / build every package (and the CLI — cli.mdx §1.3, the PDQ engine, the MCP server).
+build: setup build-cli build-pdq build-mcp
     pnpm -C "{{code}}" -r build
 
 # Typecheck every package (no build output).
@@ -73,7 +93,7 @@ test:
 # boot, so a FOREIGN process on :2222 is stepped around rather than killed.
 #
 # Start backend (:8787) + web app (:2222, collision-resolved) in the background.
-run: setup build-cli
+run: setup build-cli build-pdq
     @node "{{dev}}" run
 
 # Foreground dev (both packages, watch mode).

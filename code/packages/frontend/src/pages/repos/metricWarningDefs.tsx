@@ -11,6 +11,7 @@ import type { RepoDetail, FileRow } from "@lfb/shared";
 import { formatBytes, mediaKindForName } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { grantPreviewResolver, previewForPath } from "../../lib/popupPreview.js";
 import { relativeTime, timeUntil } from "../../lib/format.js";
 import { withOcrReady } from "../../lib/ocr.js";
 import { withModelReady } from "../../lib/transcribe.js";
@@ -29,29 +30,21 @@ function basename(p: string): string {
 /** One subjects-list row for a file in this repo (warnings.mdx §4.5). Media rows carry a `preview` whose URL
  *  is resolved lazily — only for the row the user selects — by `repoPreviewResolver()` (§4.5.2). `id` is what
  *  apply() receives: repo-relative for decision writes, absolute for the analysis/compress queues. */
-function repoFileTarget(f: FileRow, id: string): WarningTarget {
-  const kind = mediaKindForName(f.path);
+function repoFileTarget(detail: RepoDetail, f: FileRow, id: string): WarningTarget {
   return {
     id,
     label: f.path,
     name: basename(f.path),
     sizeText: formatBytes(f.sizeBytes),
     pathText: f.path,
-    preview: kind ? { kind, url: "" } : undefined,
+    preview: previewForPath(`${detail.path}/${f.path}`),
   };
 }
 
 /** §4.5.2 — mint a short-lived media grant for the selected row. Every repo target's `label` is its
  *  repo-relative path, so the absolute path is always `<repo path>/<label>`, whatever the row's `id`. */
 function repoPreviewResolver(detail: RepoDetail): (t: WarningTarget) => Promise<string | null> {
-  return async (t) => {
-    try {
-      return (await api.mediaGrant(`${detail.path}/${t.label}`)).url;
-    } catch (e) {
-      clientLog.error("metricWarningDefs.preview", e as Error);
-      return null;
-    }
-  };
+  return grantPreviewResolver((t) => `${detail.path}/${t.label}`, "metricWarningDefs.preview");
 }
 
 /** True when the repo has never been scanned, or its last scan is older than the 2-week staleness window. */
@@ -432,7 +425,7 @@ export function buildAddToIpfsWarning(detail: RepoDetail, repoId: string): Warni
         },
       ],
       canApply: () => true,
-      targets: undecidedFiles.map((f) => repoFileTarget(f, f.path)),
+      targets: undecidedFiles.map((f) => repoFileTarget(detail, f, f.path)),
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Apply",
@@ -493,7 +486,7 @@ export function buildGitIgnoreWarning(detail: RepoDetail, repoId: string): Warni
         },
       ],
       canApply: () => true,
-      targets: files.map((f) => repoFileTarget(f, f.path)),
+      targets: files.map((f) => repoFileTarget(detail, f, f.path)),
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Git-ignore",
@@ -541,7 +534,7 @@ export function buildTranscribeWarning(detail: RepoDetail, repoId: string): Warn
       whatThisIs: `Large File Bridge found ${n} audio/video file${n === 1 ? "" : "s"} in this repo with no transcript yet. It can transcribe ${n === 1 ? "it" : "them"} on this computer with a local, offline engine — no file ever leaves your machine.`,
       whyItMatters:
         "A transcript makes a recording searchable, quotable, and readable without scrubbing the timeline. It runs in the background and, when done, is saved per your repo's transcription placement setting. Review the list on the right and uncheck any you want to skip.",
-      targets: files.map((f) => repoFileTarget(f, absPath(detail, f))),
+      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Transcribe",
@@ -597,7 +590,7 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
         "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the File types filter to narrow the list, and uncheck any you want to skip.",
-      targets: files.map((f) => repoFileTarget(f, absPath(detail, f))),
+      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Describe",
@@ -651,7 +644,7 @@ export function buildOcrWarning(detail: RepoDetail, repoId: string): WarningDef 
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo whose on-screen text hasn't been read yet. It reads the words visible in the pixels — a screenshot's error message, a slide's figures, a sign — so you can search for them later.`,
       whyItMatters:
         "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded, and no API key is needed. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the File types filter to narrow the list, and uncheck any you want to skip.",
-      targets: files.map((f) => repoFileTarget(f, absPath(detail, f))),
+      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "OCR",
@@ -719,7 +712,7 @@ export function buildCompressWarning(
       whatThisIs: `Large File Bridge found ${n} ${noun}${n === 1 ? "" : "s"} that look uncompressed and could be made smaller with no meaningful quality loss. Compression runs on this computer; the original moves to the recoverable Large File Bridge trash.`,
       whyItMatters:
         "Uncompressed media wastes disk and slows every sync over IPFS. Compressing reclaims space while keeping the same resolution. Review the list on the right and uncheck any you want to leave as-is.",
-      targets: files.map((f) => repoFileTarget(f, absPath(detail, f))),
+      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: noun,
       actionLabel: "Compress",

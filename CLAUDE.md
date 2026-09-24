@@ -134,7 +134,10 @@ With AI, these days, people often use GIThub to share/backup their files across 
 
 ```
 LargeFileBridge/
-├── code/        # Application code (web app: frontend + backend)
+├── code/        # Application code (web app: frontend + backend; code/sidecars/pdq = Go PDQ fingerprint engine)
+├── cli/         # The `lfb` CLI — thin REST wrapper (pm/cli.mdx)
+├── mcp/         # The `lfb` MCP server for Claude Code — thin REST wrapper (pm/mcp.mdx)
+├── ai/          # Prompt files an AI reads (ai/lfb_mcp.md = the MCP server's instructions)
 ├── pm/          # Project management: goals, to-dos, decisions
 ├── README.md
 └── CLAUDE.md    # This charter

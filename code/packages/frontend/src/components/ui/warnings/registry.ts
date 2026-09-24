@@ -56,10 +56,11 @@ export const AXIS_ORDER = ["ipfs", "ignore", "compress"] as const;
 export type AxisId = (typeof AXIS_ORDER)[number];
 
 // Media the left pane previews when this row is clicked/arrow-selected (warnings.mdx §4.5.2). Absent ⇒
-// a non-media row (selecting it hides the preview area).
+// a non-media row (selecting it hides the preview area). Build it with lib/popupPreview previewForPath().
 export type WarningTargetPreview = {
-  kind: "image" | "video" | "audio";
-  url: string; // media-serving URL (same /api/media endpoint the media viewer uses)
+  kind: "image" | "video" | "audio" | "pdf"; // pdf = the browser's inline PDF frame (§4.5.2 rev 2026-09-24)
+  url: string; // media-serving URL (same /api/media endpoint the media viewer uses); "" = resolve lazily
+  openHref?: string; // the full media viewer for this file — the caption's "Open ↗" (new tab)
   width?: number; // pixel dimensions for the caption ("3840×2160")
   height?: number;
 };

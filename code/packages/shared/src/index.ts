@@ -5,3 +5,4 @@ export * from "./schemas.js";
 export * from "./media.js";
 export * from "./device-naming.js";
 export * from "./videos.js";
+export * from "./fingerprints.js";

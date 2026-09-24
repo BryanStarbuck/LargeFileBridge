@@ -254,19 +254,45 @@ export function loadApiSecret(): string | null {
  * Ensure the shared API secret exists, creating it (crypto.randomBytes(32) → 64 hex chars) when
  * missing. MERGES into the existing JSON — other keys in the file (google creds, unrelated apps'
  * blocks) are never clobbered. Atomic write (temp + rename), file mode 0600, dir mode 0700.
+ *
+ * REFUSES to write when the file EXISTS but cannot be parsed. The old code treated "unparseable" like
+ * "absent" and wrote a fresh document holding only the api block — silently destroying the Google OAuth
+ * credentials in a file that a single stray comma had made invalid. A broken secrets file is a human's to
+ * fix; we say exactly where, and never overwrite it.
  */
 export function ensureApiSecret(): string {
   const existing = loadApiSecret();
-  if (existing) return existing;
+  if (existing) {
+    tightenCredsMode();
+    return existing;
+  }
+  return writeApiSecret("created");
+}
+
+/**
+ * Replace the shared API secret with a new one (Settings → Security → "Rotate local API key", apis.mdx §3.4).
+ * Every CLI / MCP process picks the new key up on its next call (both read the file per call), and the
+ * old key stops working at once — no grace window, on purpose: rotation is what you do after a leak.
+ */
+export function rotateApiSecret(): string {
+  return writeApiSecret("rotated");
+}
+
+function writeApiSecret(verb: "created" | "rotated"): string {
   const p = credsFilePath();
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
   let doc: ApiSecretShape = {};
+  let raw: string | null = null;
   try {
-    const { data } = parseCredsJson(fs.readFileSync(p, "utf8"));
+    raw = fs.readFileSync(p, "utf8");
+  } catch (e) {
+    if ((e as NodeJS.ErrnoException).code !== "ENOENT") throw e;
+  }
+  if (raw !== null && raw.trim() !== "") {
+    const { data } = parseCredsJson(raw); // throws on invalid JSON — the caller logs it; the file is untouched
     if (data && typeof data === "object") doc = data as ApiSecretShape;
-  } catch {
-    /* absent or unreadable → start fresh (merge target stays {}) */
+    else throw new Error(`${p} is not a JSON object — fix it by hand; refusing to overwrite it`);
   }
   const secret = crypto.randomBytes(32).toString("hex");
   doc.large_files_bridge = {
@@ -276,13 +302,47 @@ export function ensureApiSecret(): string {
   const tmp = `${p}.tmp-${process.pid}`;
   fs.writeFileSync(tmp, JSON.stringify(doc, null, 2) + "\n", { mode: 0o600 });
   fs.renameSync(tmp, p);
-  try {
-    fs.chmodSync(p, 0o600);
-  } catch {
-    /* best-effort — rename preserved the tmp file's 0600 already */
-  }
-  log.info("auth", `Created shared API secret for the Large File Bridge CLI at ${p}.`);
+  tightenCredsMode();
+  log.info("auth", `${verb === "created" ? "Created" : "Rotated"} the local API secret (CLI + MCP) at ${p}.`);
   // Invalidate the mtime-keyed Google-creds cache — the file just changed under it.
   fileCredsCache = null;
   return secret;
+}
+
+/** The credentials file must be 0600 (owner-only). Self-heal a loose mode — we own the file — and say so. */
+function tightenCredsMode(): void {
+  if (process.platform === "win32") return;
+  const p = credsFilePath();
+  try {
+    const mode = fs.statSync(p).mode & 0o777;
+    if ((mode & 0o077) !== 0) {
+      fs.chmodSync(p, 0o600);
+      log.warn("auth", `${p} was readable by other users (mode ${mode.toString(8)}) — tightened to 600`);
+    }
+  } catch (e) {
+    log.warn("auth", `could not check/tighten the mode of ${p}: ${(e as Error).message}`);
+  }
+}
+
+/** A safe-to-show description of the secret: never the key itself (apis.mdx §3.5). */
+export function apiSecretStatus(): { path: string; exists: boolean; created: string | null; fingerprint: string | null; mode: string | null } {
+  const p = credsFilePath();
+  let created: string | null = null;
+  let mode: string | null = null;
+  try {
+    const { data } = parseCredsJson(fs.readFileSync(p, "utf8"));
+    created = (data as ApiSecretShape).large_files_bridge?.api?.created ?? null;
+    mode = (fs.statSync(p).mode & 0o777).toString(8);
+  } catch {
+    /* absent or unreadable */
+  }
+  const key = loadApiSecret();
+  return {
+    path: p,
+    exists: key !== null,
+    created,
+    // First 4 hex of the key's SHA-256 + length — enough to tell two keys apart, useless to an attacker.
+    fingerprint: key ? `sha256:${crypto.createHash("sha256").update(key).digest("hex").slice(0, 8)}` : null,
+    mode,
+  };
 }

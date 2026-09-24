@@ -1,0 +1,29 @@
+{
+  "name": "@lfb/mcp",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Large File Bridge MCP server (lfb) — drives the local Large File Bridge web app's REST API from Claude Code over stdio (pm/mcp.mdx). Perceptual fingerprints (PDQ) for images and videos, jobs, CSV export, compare.",
+  "engines": { "node": ">=20" },
+  "main": "./dist/index.js",
+  "bin": { "lfb-mcp": "dist/index.js" },
+  "scripts": {
+    "gen:instructions": "node scripts/build-instructions.mjs",
+    "build": "node scripts/build-instructions.mjs && tsup",
+    "dev": "tsx src/index.ts serve",
+    "start": "node dist/index.js serve",
+    "typecheck": "node scripts/build-instructions.mjs && tsc --noEmit",
+    "test": "node scripts/build-instructions.mjs && vitest run"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "^4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "tsup": "^8.5.1",
+    "tsx": "^4.23.1",
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.10"
+  }
+}

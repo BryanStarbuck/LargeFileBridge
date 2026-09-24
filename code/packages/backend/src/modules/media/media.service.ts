@@ -87,6 +87,9 @@ const MIME: Record<string, string> = {
   ".mp3": "audio/mpeg", ".wav": "audio/wav", ".flac": "audio/flac", ".aac": "audio/aac",
   ".m4a": "audio/mp4", ".ogg": "audio/ogg", ".oga": "audio/ogg", ".opus": "audio/ogg",
   ".aiff": "audio/aiff", ".aif": "audio/aiff", ".wma": "audio/x-ms-wma",
+  // The two-pane popup previews an OCR subject PDF in an inline frame (warnings.mdx §4.5.2 rev 2026-09-24);
+  // octet-stream would make the browser download it instead of rendering it.
+  ".pdf": "application/pdf",
 };
 
 export function mimeFor(abs: string): string {

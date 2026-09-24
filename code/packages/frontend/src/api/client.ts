@@ -105,6 +105,13 @@ import type {
   TodoApplyResult,
   TranscribeScanResult,
 } from "@lfb/shared";
+import type {
+  FingerprintComputeBody,
+  FingerprintScanBody,
+  FingerprintJob,
+  FingerprintJobResponse,
+  FingerprintCompareResult,
+} from "@lfb/shared";
 import { http, unwrap } from "./axios.js";
 
 // The shared per-repo decision policy payload the repo router returns (decisions.mdx §9/§14): the policy
@@ -127,6 +134,15 @@ export interface DecisionPolicyResult {
 // The loose body the table sends when persisting its view — every field optional so a partial change
 // (just a sort, just a column toggle) is a valid patch; the backend re-parses it through the schema.
 export type TableViewPatch = Partial<Omit<TableView, "updated_at">>;
+
+/** GET /api/security/api-key — never the key itself. */
+export interface ApiKeyStatus {
+  path: string;
+  exists: boolean;
+  created: string | null;
+  fingerprint: string | null;
+  mode: string | null;
+}
 
 export const api = {
   me: () => unwrap<CurrentUser>(http.get("/auth/me")),
@@ -345,6 +361,35 @@ export const api = {
   // directory's media and returns the plan immediately; the batch drains in the background.
   compressInside: (req: CompressInsideRequest) =>
     unwrap<CompressInsidePlan>(http.post("/compress/inside", req)),
+  // Perceptual fingerprints (apis.mdx §7). compute/scan are HYBRID: the server waits up to wait_ms, then
+  // answers with the finished results (200) or a still-running job to poll (202). The web app passes a
+  // short wait so the dialog shows progress at once instead of holding a request open.
+  fingerprintCompute: (body: FingerprintComputeBody) =>
+    unwrap<FingerprintJobResponse>(http.post("/fingerprints/compute", body)),
+  fingerprintScan: (body: FingerprintScanBody) =>
+    unwrap<FingerprintJobResponse>(http.post("/fingerprints/scan", body)),
+  fingerprintJob: (id: string, opts: { waitMs?: number; offset?: number; limit?: number } = {}) =>
+    unwrap<FingerprintJobResponse>(
+      http.get(`/fingerprints/jobs/${encodeURIComponent(id)}`, {
+        params: { wait_ms: opts.waitMs ?? 0, offset: opts.offset ?? 0, limit: opts.limit ?? 200 },
+      }),
+    ),
+  fingerprintCancel: (id: string) =>
+    unwrap<FingerprintJob>(http.post(`/fingerprints/jobs/${encodeURIComponent(id)}/cancel`, {})),
+  /** The job's CSV as a Blob (a plain <a href> cannot carry the Bearer token). */
+  fingerprintCsvBlob: async (id: string): Promise<Blob> => {
+    const r = await http.get(`/fingerprints/jobs/${encodeURIComponent(id)}/csv`, { responseType: "blob" });
+    return r.data as Blob;
+  },
+  fingerprintCompare: (a: string, b: string, strict?: boolean) =>
+    unwrap<FingerprintCompareResult>(http.post("/fingerprints/compare", { a, b, strict })),
+  // The local machine key the CLI + MCP use (apis.mdx §3). Status only ever carries a fingerprint.
+  apiKeyStatus: () =>
+    unwrap<ApiKeyStatus>(http.get("/security/api-key")),
+  apiKeyCreate: () =>
+    unwrap<ApiKeyStatus>(http.post("/security/api-key/create", {})),
+  apiKeyRotate: () =>
+    unwrap<ApiKeyStatus>(http.post("/security/api-key/rotate", {})),
   // Git Ignore (git_ignore.mdx §6). plan → the exact anchored .gitignore lines the dialog previews;
   // apply → writes them into each owning repo's .gitignore (synchronous — a few lines of text). The
   // dialog invalidates the fs/entity queries on apply so the new "I" git-ignored badge appears.

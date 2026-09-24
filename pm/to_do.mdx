@@ -1,6 +1,6 @@
 ---
 title: LargeFileBridge — To Do (the left-bar page of batch slugs)
-description: The To Do page (left-bar item "To Do", route /todo) is the single place that shows the user everything LargeFileBridge recommends doing, bundled per storage as TO DO Batches. It renders each batch that has work as a SLUG — a compact ~5-row card laid out in up-to-three columns (left/center/right) with a horizontal divider between slugs, a right-side blue "open" chevron button that opens the full batch popup, and a small red trash button to dismiss/deprioritize the batch. Only batches with work show (30 repos, 3 with work → 3 slugs). Slug LAYOUT is chosen by the batch's pattern (compress / git-ignore / pull-down / pin / transcribe / mixed). A top-of-page "Show what could be transcribed" action link runs the What-Can-Be-Transcribed Calc Engine and adds transcribe slugs. The batch popup is the evolved warnings dialog — a wide ~80% two-pane dialog whose left pane educates and flips to a full-size media preview on hover, and whose right pane is the file list with up-to-three per-row action toggles (pin / git-ignore / compress) + an Apply button. Sibling of to_do_batches.mdx (data), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (producers), warnings.mdx (the same popup, surfaced on pages), decision_toggles.mdx (the per-row toggles), left_bar.mdx (the nav item), and processing.mdx (where applied work runs).
+description: The To Do page (left-bar item "To Do", route /todo) is the single place that shows the user everything LargeFileBridge recommends doing, bundled per storage as TO DO Batches. It renders each batch that has work as a SLUG — a compact ~5-row card laid out in up-to-three columns (left/center/right) with a horizontal divider between slugs, a right-side blue "open" chevron button that opens the full batch popup, and a small red trash button to dismiss/deprioritize the batch. Only batches with work show (30 repos, 3 with work → 3 slugs). Slug LAYOUT is chosen by the batch's pattern (compress / git-ignore / pull-down / pin / transcribe / mixed). A top-of-page "Show what could be transcribed" action link runs the What-Can-Be-Transcribed Calc Engine and adds transcribe slugs. The batch popup is the evolved warnings dialog — a wide ~80% two-pane dialog whose left pane shows a one-line summary, the options, and a preview of the row clicked on the right, and whose right pane is the file list with up-to-three per-row action toggles (pin / git-ignore / compress) + an Apply button. Sibling of to_do_batches.mdx (data), to_do_batch_calc_engine.mdx + transcribe_calc_engine.mdx (producers), warnings.mdx (the same popup, surfaced on pages), decision_toggles.mdx (the per-row toggles), left_bar.mdx (the nav item), and processing.mdx (where applied work runs).
 ---
 
 # LargeFileBridge — To Do
@@ -189,11 +189,14 @@ here. It is **no longer titled "warnings"**; it is the batch's action dialog:
 
 * **Wide two-pane, ~80% of the screen** ([warnings.mdx §4.0](./warnings.mdx#40-size--layout--one-pane-or-two-locked)) —
   it overlays the left nav and takes the room: **right pane = the batch's file list**, **left pane =
-  educate that flips to a full-size media preview** the moment a media row is hovered/focused
-  ([warnings.mdx §4.5.2](./warnings.mdx#452-the-left-pane-doubles-as-a-full-size-media-preview-locked)).
+  a one-line summary, the options, and — below them — a preview of the row the user CLICKED** on the right
+  ([warnings.mdx §4.5.2](./warnings.mdx#452-the-left-pane-doubles-as-a-full-size-media-preview-locked),
+  revisions 2026-09-23 and 2026-09-24: click, not hover; below the options, never replacing them; the same
+  on every popup).
 * **Header** — the storage name + what this batch is (e.g. "Pull down · charlie-kirk").
 * **Educate** — one short paragraph on *why* (e.g. "These files live on your other computers via IPFS.
-  Pulling them down copies them here and keeps them backed up.") — shown until a media row is previewed.
+  Pulling them down copies them here and keeps them backed up.") — a one-line summary with a More info ▾
+  chevron; it stays put while a row is previewed below the options.
 * **The file list** — the batch's **files**, one row each, showing size and, to the left of each row, the
   **up-to-three per-row action toggles** — **pin / git-ignore / compress** —
   ([decision_toggles.mdx §7](./decision_toggles.mdx#7-in-the-warning--to-do-batch-popups-locked),
@@ -201,7 +204,8 @@ here. It is **no longer titled "warnings"**; it is the batch's action dialog:
   **pre-checked where the calc engine recommends the action** (RECOMMENDED/dashed where it is less sure).
   The user confirms or overrides **per file, per axis**; a column header sets a whole axis. Columns render
   only when relevant (a pull-down batch of non-compressible files shows two columns, not three).
-* **Preview & keyboard** — hover or **↑/↓** to preview a file full-size in the left pane; **Space** plays
+* **Preview & keyboard** — **click** a row or use **↑/↓** to preview it bottom-left (the first media row is
+  selected on open; images, videos, audio, and PDFs; **Open ↗** opens the full viewer in a new tab); **Space** plays
   a previewed video ([warnings.mdx §4.5.3](./warnings.mdx#453-keyboard--space-plays-the-previewed-video-arrows-move-the-preview-locked)).
 * **Live count** — the count of rows with **≥1 axis still ON** updates as toggles change
   ([warnings.mdx §4.6](./warnings.mdx#46-the-live-count-the-6-that-updates)).
@@ -281,7 +285,7 @@ transcribe slugs** to the list:
 * The link shows a brief **"Looking…"** state while the (opt-in, heavier) scan runs; it is cancelable.
 * A transcribe slug's chevron opens the **transcribe popup** — the same wide **~80% of the screen**
   two-pane dialog: a **default-checked** file list on the right and, on the left, the educate copy that
-  flips to a **full-size preview** of the hovered video/audio (**Space** plays it, §4.5.2/§4.5.3) so the
+  shows, below the options, a **preview** of the **clicked** video/audio (**Space** plays it, §4.5.2/§4.5.3) so the
   user can spot-check *which* clip before transcribing — with an **"Transcribe N files"** Apply that
   enqueues **background** transcription jobs watchable on [Processing](./processing.mdx)
   ([transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx#4-the-transcribe-slug--popup-locked)).
@@ -318,7 +322,7 @@ The To-Do page and [warnings](./warnings.mdx) are **two views of one model**:
 4. Each slug has a **blue chevron** "open" button (opens the batch popup) and a **red trash** "dismiss"
    button (sets `dismissed`, hides the slug, **never** deletes files/bytes).
 5. The **batch popup** reuses the improved warning popup: a **wide ~80% two-pane** dialog whose **left pane
-   educates and flips to a full-size media preview on hover/focus** (Space plays a previewed video), and
+   summarizes, shows the options, and previews the clicked row below them** (Space plays a previewed video), and
    whose **right pane** is the files list with **up-to-three per-row action toggles** (pin / git-ignore /
    compress) **pre-checked where recommended** (columns shown only when relevant), a live count, and an
    **Apply** button whose label spells out the checked axes **with a per-axis count**; Apply writes

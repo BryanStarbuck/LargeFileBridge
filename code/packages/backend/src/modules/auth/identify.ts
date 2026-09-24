@@ -13,34 +13,103 @@ import { isLoopback } from "../../shared/loopback.js";
 import { log } from "../../shared/logging.js";
 
 /**
- * The CLI's machine-caller channel (cli.mdx §3.2): X-LFB-Api-Key verified against the shared secret
- * in ~/.credentials/large_files_bridge.json. Localhost-ONLY by construction — a non-loopback caller
- * presenting the header is ignored (falls through to real auth), never honored. Constant-time
- * comparison; possession of the same-user 0600 file is the proof of identity, so the fabricated
- * principal maps to the first allow-listed email (same visibility as the browser session — no
- * privilege beyond what the local user already has).
+ * The machine-caller channel for the CLI and the MCP server (cli.mdx §3.2, mcp.mdx §6): X-LFB-Api-Key
+ * verified against the shared secret in ~/.credentials/large_files_bridge.json. Localhost-ONLY by
+ * construction — a non-loopback caller presenting the header is ignored (falls through to real auth), never
+ * honored. Possession of the same-user 0600 file is the proof of identity, so the fabricated principal maps
+ * to the first allow-listed email (same visibility as the browser session — no privilege beyond what the
+ * local user already has).
+ *
+ * Hardening (apis.mdx §3, learned from the sister apps):
+ *   * LENGTH-INDEPENDENT compare: both sides are SHA-256'd first, then timingSafeEqual — a wrong-length key
+ *     takes the same path as a wrong key, so timing leaks nothing about the secret's length.
+ *   * FAILURE THROTTLE: more than MAX_KEY_FAILURES bad keys per minute from one address and the header is
+ *     ignored for the rest of the window — a runaway script cannot grind the secret or flood error.err.
+ *   * The caller may NAME itself with `X-LFB-Client: cli | mcp` so audit lines say who acted. The name is
+ *     taken from a fixed list — it can label a request, never elevate one.
  */
+const MAX_KEY_FAILURES = 20;
+const KEY_FAILURE_WINDOW_MS = 60_000;
+const keyFailures = new Map<string, { count: number; resetAt: number }>();
+
+function keyThrottled(addr: string): boolean {
+  const cur = keyFailures.get(addr);
+  return !!cur && Date.now() < cur.resetAt && cur.count >= MAX_KEY_FAILURES;
+}
+
+function noteKeyFailure(addr: string): number {
+  const now = Date.now();
+  const cur = keyFailures.get(addr);
+  if (!cur || now >= cur.resetAt) {
+    if (keyFailures.size > 1000) keyFailures.clear();
+    keyFailures.set(addr, { count: 1, resetAt: now + KEY_FAILURE_WINDOW_MS });
+    return 1;
+  }
+  cur.count += 1;
+  return cur.count;
+}
+
+/** Constant-time equality that does not leak length (sha256 both sides, then compare the digests). */
+export function secretsMatch(presented: string, secret: string): boolean {
+  if (!presented || !secret) return false;
+  const a = crypto.createHash("sha256").update(presented, "utf8").digest();
+  const b = crypto.createHash("sha256").update(secret, "utf8").digest();
+  return crypto.timingSafeEqual(a, b);
+}
+
+const MACHINE_CLIENTS: Record<string, { name: string; sessionId: string }> = {
+  cli: { name: "Large File Bridge CLI", sessionId: "cli" },
+  mcp: { name: "Large File Bridge MCP", sessionId: "mcp" },
+};
+
+/**
+ * DNS-rebinding defense (apis.mdx §3.7): a page on evil.example that re-resolves its own name to 127.0.0.1
+ * reaches our port FROM loopback, but its requests still say `Host: evil.example`. The machine channel only
+ * ever comes from our own CLI/MCP, which always address 127.0.0.1 / localhost / [::1] — so any other Host
+ * is refused outright.
+ */
+export function loopbackHost(host: string | undefined): boolean {
+  if (!host) return false;
+  const name = host.replace(/:\d+$/, "").toLowerCase();
+  return name === "127.0.0.1" || name === "localhost" || name === "[::1]" || name === "::1";
+}
+
 function apiKeyUser(req: Request): AuthUser | null {
   const presented = req.header("x-lfb-api-key");
   if (!presented || !isLoopback(req)) return null;
-  if (getAppConfig().server.mode !== "local") return null; // shared-file trick is a same-machine mechanism only
-  const secret = loadApiSecret();
-  if (!secret) return null;
-  const a = Buffer.from(presented, "utf8");
-  const b = Buffer.from(secret, "utf8");
-  if (a.length !== b.length || !crypto.timingSafeEqual(a, b)) {
-    log.warn("auth", `Rejected X-LFB-Api-Key call (${req.method} ${req.path}): key mismatch`);
+  if (!loopbackHost(req.header("host"))) {
+    log.warn("auth", `Ignored X-LFB-Api-Key call with non-loopback Host "${String(req.header("host")).slice(0, 80)}" (${req.method} ${req.path}) — possible DNS rebinding`);
     return null;
   }
+  if (getAppConfig().server.mode !== "local") return null; // shared-file trick is a same-machine mechanism only
+  const addr = req.socket.remoteAddress ?? "unknown";
+  if (keyThrottled(addr)) return null;
+  const secret = loadApiSecret();
+  if (!secret) {
+    log.warn("auth", `X-LFB-Api-Key presented (${req.method} ${req.path}) but no API secret exists yet — restart the backend to create it`);
+    return null;
+  }
+  if (!secretsMatch(presented, secret)) {
+    const n = noteKeyFailure(addr);
+    if (n <= 3 || n === MAX_KEY_FAILURES) {
+      log.warn(
+        "auth",
+        `Rejected X-LFB-Api-Key call (${req.method} ${req.path}): key mismatch` +
+          (n === MAX_KEY_FAILURES ? ` — ${n} failures in a minute, ignoring this caller's key until the window resets` : ""),
+      );
+    }
+    return null;
+  }
+  const client = MACHINE_CLIENTS[(req.header("x-lfb-client") ?? "cli").trim().toLowerCase()] ?? MACHINE_CLIENTS.cli;
   const email = getAppConfig().access.allowed_emails[0] || "cli@localhost";
   return {
     authenticated: true,
     email,
-    name: "Large File Bridge CLI",
+    name: client.name,
     roles: ["admin"],
     permissions: [],
     allowListed: true,
-    sessionId: "cli",
+    sessionId: client.sessionId,
   };
 }
 

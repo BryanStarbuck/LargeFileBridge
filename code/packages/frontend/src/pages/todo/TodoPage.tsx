@@ -6,7 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { ChevronRight, Trash2, ListTodo, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import type { TodoBatchSummary, TodoBatchDetail, TodoBatchItem, TodoCategory } from "@lfb/shared";
-import { formatBytes, mediaKindForName } from "@lfb/shared";
+import { formatBytes } from "@lfb/shared";
 import { api } from "../../api/client.js";
 import { PageHeader } from "../../components/ui/PageHeader.js";
 import { PageSkeleton } from "../../components/ui/PageSkeleton.js";
@@ -14,6 +14,7 @@ import { WarningPopup } from "../../components/ui/WarningPopup.js";
 import type { WarningDef, WarningTarget, WarningTargetAxes } from "../../components/ui/warnings/registry.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
+import { grantPreviewResolver, previewForPath } from "../../lib/popupPreview.js";
 
 const SCOPE_LABEL: Record<string, string> = {
   repo: "repo",
@@ -263,7 +264,7 @@ function axesForItem(it: TodoBatchItem): WarningTargetAxes | undefined {
 
 // The To-Do batch popup (to_do.mdx §6/§7) — the wide two-pane WarningPopup: right pane = the file list
 // with per-row action toggles (pin/ignore/compress) pre-checked where recommended; left pane educates and
-// flips to a full-size media preview on hover (Space plays a previewed video, §4.5.2/§4.5.3).
+// previews the row the user CLICKS, below the options (Space plays a previewed video, §4.5.2/§4.5.3).
 function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
   const { data: batch, isLoading } = useQuery<TodoBatchDetail>({
@@ -271,11 +272,11 @@ function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
     queryFn: () => api.todoBatch(id),
   });
 
+  const root = batch?.storageRoot.replace(/\/+$/, "") ?? "";
   const warning = useMemo<WarningDef | null>(() => {
     if (!batch) return null;
     const isTranscribe = batch.kind === "transcribe";
     const targets: WarningTarget[] = batch.items.map((it) => {
-      const kind = mediaKindForName(it.path);
       return {
         id: it.path,
         label: it.path,
@@ -284,7 +285,7 @@ function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
         pathText: `${it.path} · ${recommendLabel(it)}`,
         // Transcribe is a single action → single include checkbox; every other batch → per-row toggles.
         axes: isTranscribe ? undefined : axesForItem(it),
-        preview: kind ? { kind, url: "" } : undefined, // url resolved lazily via mediaGrant on hover
+        preview: previewForPath(`${root}/${it.path}`), // url resolved lazily via a media grant on click
       };
     });
     return {
@@ -325,20 +326,11 @@ function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
     );
   }
 
-  const root = batch.storageRoot.replace(/\/+$/, "");
   return (
     <WarningPopup
       warning={warning}
       onClose={onClose}
-      resolvePreviewUrl={async (t) => {
-        try {
-          const g = await api.mediaGrant(`${root}/${t.id}`);
-          return g.url;
-        } catch (e) {
-          clientLog.error("TodoPage.preview", e as Error);
-          return null;
-        }
-      }}
+      resolvePreviewUrl={grantPreviewResolver((t) => `${root}/${t.id}`, "TodoPage.preview")}
     />
   );
 }

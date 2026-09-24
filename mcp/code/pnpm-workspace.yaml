@@ -1,0 +1,4 @@
+packages: []
+allowBuilds:
+  # tsup bundles with esbuild, whose postinstall fetches the platform binary it needs to run.
+  esbuild: true

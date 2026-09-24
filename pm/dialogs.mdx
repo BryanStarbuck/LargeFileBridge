@@ -184,7 +184,9 @@ It is the **`WarningPopup`** ([warnings.mdx §4](./warnings.mdx)) fed a **transc
 `WarningDef` whose `targets` are the candidate files:
 
 * **Two-pane, ~80% of screen** ([warnings.mdx §4.0](./warnings.mdx), [transcribe_calc_engine.mdx §4](./transcribe_calc_engine.mdx)):
-  left = the "what this is / why it matters" education + the media preview on row hover; right = the
+  left = the one-line summary (More info ▾), the options, then a preview of the row the user **clicks** on the
+  right — image, video (click to play), audio, or PDF — per [warnings.mdx §4.5.2](./warnings.mdx) revision
+  2026-09-24 (every row carries a `preview` built by `previewForPath()`; bytes come from a lazy media grant); right = the
   **candidate checklist, every row checked at open**.
 * **Live count in the confirm button.** The solid-blue button reads **"Transcribe N files"** /
   **"Describe N files"** where **N is the live checked count** (`actionLabel` "Transcribe" + the popup's

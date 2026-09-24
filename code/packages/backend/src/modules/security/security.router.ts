@@ -6,7 +6,10 @@ import { z } from "zod";
 import { getPublicSecurityConfig, completeSetup, SecurityError } from "./security.service.js";
 import { rebuildAuthFrontend } from "../auth/auth-frontend.js";
 import { isLoopback } from "../../shared/loopback.js";
-import { log } from "../../shared/logging.js";
+import { log, logError } from "../../shared/logging.js";
+import { requireAllowListed } from "../auth/identify.js";
+import { currentUser } from "../auth/current-user.js";
+import { apiSecretStatus, ensureApiSecret, rotateApiSecret } from "../../config/credentials-file.js";
 
 export const securityRouter = Router();
 
@@ -52,5 +55,57 @@ securityRouter.post("/setup", loopbackOnly, async (req, res) => {
     // Unexpected failure (config write / auth rebuild) — record it with context before it bubbles up.
     log.error("security", `First-run setup failed: ${(e as Error).message}`);
     throw e;
+  }
+});
+
+// ── The local machine key (CLI + MCP) — apis.mdx §3 ──────────────────────────────────────────────────
+// The web app is where a person SEES and MANAGES the key the CLI and the MCP server use: whether it
+// exists, when it was made, a fingerprint (never the key), and buttons to create or rotate it. The key
+// itself never crosses HTTP — both machine callers read it from the 0600 file on this computer.
+
+/** Rotate/create must come from a person in the browser, never from a machine caller using the key itself. */
+function browserAdminOnly(req: Request, res: Response, next: NextFunction): void {
+  const user = currentUser(req);
+  if (!user.allowListed || !user.roles.includes("admin")) {
+    res.status(403).json({ ok: false, error: "Admin only", code: "forbidden" });
+    return;
+  }
+  if (user.sessionId === "cli" || user.sessionId === "mcp") {
+    res.status(403).json({ ok: false, error: "The API key cannot be managed with the API key — use the web app.", code: "forbidden" });
+    return;
+  }
+  next();
+}
+
+// GET /api/security/api-key — status only (allow-listed).
+securityRouter.get("/api-key", requireAllowListed, (_req, res) => {
+  try {
+    res.json({ ok: true, data: apiSecretStatus() });
+  } catch (e) {
+    logError({ file: "security.router.ts", operation: "GET /api-key", error: e });
+    res.status(500).json({ ok: false, error: (e as Error).message, code: "internal" });
+  }
+});
+
+// POST /api/security/api-key/create — create the key if it does not exist yet (idempotent).
+securityRouter.post("/api-key/create", requireAllowListed, browserAdminOnly, (req, res) => {
+  try {
+    ensureApiSecret();
+    res.json({ ok: true, data: apiSecretStatus() });
+  } catch (e) {
+    logError({ file: "security.router.ts", operation: "POST /api-key/create", error: e, data: { by: currentUser(req).email } });
+    res.status(500).json({ ok: false, error: (e as Error).message, code: "internal" });
+  }
+});
+
+// POST /api/security/api-key/rotate — new key now; the old one stops working at once.
+securityRouter.post("/api-key/rotate", requireAllowListed, browserAdminOnly, (req, res) => {
+  try {
+    rotateApiSecret();
+    log.info("security", `Local API key rotated by ${currentUser(req).email}`);
+    res.json({ ok: true, data: apiSecretStatus() });
+  } catch (e) {
+    logError({ file: "security.router.ts", operation: "POST /api-key/rotate", error: e, data: { by: currentUser(req).email } });
+    res.status(500).json({ ok: false, error: (e as Error).message, code: "internal" });
   }
 });

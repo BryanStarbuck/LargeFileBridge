@@ -1,0 +1,6 @@
+github.com/ajdnik/imghash/v2 v2.5.2 h1:cSsyLWlYkJbYD1811AQqtYWidIHsgug2xTMeEj5+1W8=
+github.com/ajdnik/imghash/v2 v2.5.2/go.mod h1:tt/jlL3nO2+U4dJaQTooZEolGeEbXTHif1J1QvuYsG0=
+golang.org/x/image v0.46.0 h1:b1+oYj0Jbp6K5MDT4i4/eZpYlk3V8SJhhDKh6LBHAyQ=
+golang.org/x/image v0.46.0/go.mod h1:3B3W05VGVQyuXucLINLjXKrqISASfi4Xj+iCVkLMwew=
+gonum.org/v1/gonum v0.17.0 h1:VbpOemQlsSMrYmn7T2OUvQ4dqxQXU+ouZFQsZOx50z4=
+gonum.org/v1/gonum v0.17.0/go.mod h1:El3tOrEuMpv2UdMrbNlKEh9vd86bmQ6vqIcDwxEOc1E=

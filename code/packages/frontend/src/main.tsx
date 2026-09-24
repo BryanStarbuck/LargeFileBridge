@@ -17,6 +17,7 @@ import { FirstTimeStorageWizardProvider } from "./components/FirstTimeStorageWiz
 import { TranscribeModelConsentProvider } from "./components/TranscribeModelConsentDialog.js";
 import { CompressInsideProvider } from "./components/compress/CompressInsideProvider.js";
 import { GitIgnoreProvider } from "./components/gitignore/GitIgnoreProvider.js";
+import { FingerprintProvider } from "./components/fingerprints/FingerprintProvider.js";
 import { ModalHost } from "./components/ui/ModalHost.js";
 import { BatchPopupHost } from "./components/ui/BatchPopupHost.js";
 import { HoverInfoProvider } from "./components/hoverinfo/HoverInfoContext.js";
@@ -241,6 +242,9 @@ function Root() {
         {/* The "Git ignore" pop-over dialog (git_ignore.mdx §4): opens when a page "Git ignore" link or a
             file/dir/repo ⋮ item fires openGitIgnore. */}
         <GitIgnoreProvider />
+        {/* The "Calculate perceptual fingerprints" dialog (perceptual_fingerprint.mdx §FD.6): opens when a
+            directory or image/video right-click/⋮ item fires openFingerprints. */}
+        <FingerprintProvider />
         {/* In-app HTML confirm/prompt modals (dialogs.mdx §2.3): the host any imperative handler reaches via
             confirmModal()/promptModal() — the app NEVER calls window.confirm/alert/prompt. */}
         <ModalHost />

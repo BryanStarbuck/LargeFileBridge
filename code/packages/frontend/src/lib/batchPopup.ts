@@ -10,10 +10,11 @@ import type { PreviewPlan } from "@lfb/shared";
 import { formatBytes, fileTypeForName } from "@lfb/shared";
 import { api } from "../api/client.js";
 import { clientLog } from "./clientLog.js";
+import { grantPreviewResolver, previewForPath } from "./popupPreview.js";
 import { withOcrReady } from "./ocr.js";
 import { requestStorageSetup } from "./setupWizard.js";
 import { withModelReady } from "./transcribe.js";
-import type { WarningDef } from "../components/ui/warnings/registry.js";
+import type { WarningDef, WarningTarget } from "../components/ui/warnings/registry.js";
 
 // The page's set for an action (page_actions.mdx §1.1): a non-empty `paths` = the CHECKED subset; otherwise
 // `root` is walked recursively. Callers pass one or the other. (Same shape as lib/pageActions ActionScope.)
@@ -133,6 +134,23 @@ function basename(p: string): string {
   return p.split("/").pop() || p;
 }
 
+/** One subjects-list row for a plan candidate. The plan's paths are ABSOLUTE, so the row's `id` is exactly
+ *  what apply() queues and exactly what the preview grant needs. Every image/video/audio/PDF row carries a
+ *  preview, so clicking it on the right previews it bottom-left (warnings.mdx §4.5.2 rev 2026-09-24). */
+function planTarget(abs: string, sizeText: string): WarningTarget {
+  return {
+    id: abs,
+    label: labelForPath(abs),
+    name: basename(abs),
+    sizeText,
+    pathText: labelForPath(abs),
+    preview: previewForPath(abs),
+  };
+}
+
+/** The lazy media grant for the selected row — `id` is the absolute path (see planTarget). */
+const planPreviewResolver = grantPreviewResolver((t) => t.id, "batchPopup.preview");
+
 /**
  * The "already have one — excluded" clause for the popup's sub line (dialogs.mdx §5.2). The /plan preview
  * ALREADY drops files that carry a finished artifact, but the popup used to show only the remainder — so a
@@ -194,13 +212,8 @@ export async function openTranscribeBatch(scope: BatchScope): Promise<void> {
           : `Large File Bridge found ${n} audio/video file${n === 1 ? "" : "s"} with no transcript yet. It can transcribe ${n === 1 ? "it" : "them"} on this computer with a local, offline engine — no file ever leaves your machine.`,
       whyItMatters:
         "A transcript makes a recording searchable, quotable, and readable without scrubbing the timeline. It runs in the background and is saved per your transcription placement setting. Review the list on the right and uncheck any you want to skip.",
-      targets: plan.files.map((f) => ({
-        id: f.path,
-        label: labelForPath(f.path),
-        name: basename(f.path),
-        sizeText: formatBytes(f.sizeBytes),
-        pathText: labelForPath(f.path),
-      })),
+      targets: plan.files.map((f) => planTarget(f.path, formatBytes(f.sizeBytes))),
+      resolvePreviewUrl: planPreviewResolver,
       targetNoun: "file",
       actionLabel: "Transcribe",
       canApply: () => n > 0,
@@ -281,13 +294,8 @@ export async function openDescribeBatch(scope: BatchScope): Promise<void> {
           : `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
         "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the File types filter to narrow the list, and uncheck any you want to skip.",
-      targets: plan.files.map((f) => ({
-        id: f.path,
-        label: labelForPath(f.path),
-        name: basename(f.path),
-        sizeText: formatBytes(f.sizeBytes),
-        pathText: labelForPath(f.path),
-      })),
+      targets: plan.files.map((f) => planTarget(f.path, formatBytes(f.sizeBytes))),
+      resolvePreviewUrl: planPreviewResolver,
       targetNoun: "file",
       actionLabel: "Describe",
       canApply: () => n > 0,
@@ -371,22 +379,19 @@ export async function openOcrBatch(scope: BatchScope): Promise<void> {
         // The frame count the plan resolved for a video row (ocr.mdx §9.2) — the one field OCR's plan has
         // that its siblings' don't. It is WHY one row is expensive, shown before the user commits to it.
         const frames = f.frames;
-        return {
-          id: f.path,
-          label: labelForPath(f.path),
-          name: basename(f.path),
-          // The frame count rides ROW 1's right-hand slot, beside the size. It CANNOT go in `sublabel`:
-          // that is a LEGACY fallback the row only reads when `pathText` is absent (registry.ts's
-          // `rowPath()` = `pathText ?? sublabel`), and this row always sets `pathText` — so the hint
-          // rendered nowhere at all. §9.2's whole point is that the user sees WHY a row is expensive
-          // BEFORE committing to it, and a hint that never paints does not say anything.
-          sizeText:
-            kind === "video" && frames
-              ? `${formatBytes(f.sizeBytes)} · ${frames} frame${frames === 1 ? "" : "s"}`
-              : formatBytes(f.sizeBytes),
-          pathText: labelForPath(f.path),
-        };
+        // The frame count rides ROW 1's right-hand slot, beside the size. It CANNOT go in `sublabel`:
+        // that is a LEGACY fallback the row only reads when `pathText` is absent (registry.ts's
+        // `rowPath()` = `pathText ?? sublabel`), and this row always sets `pathText` — so the hint
+        // rendered nowhere at all. §9.2's whole point is that the user sees WHY a row is expensive
+        // BEFORE committing to it, and a hint that never paints does not say anything.
+        return planTarget(
+          f.path,
+          kind === "video" && frames
+            ? `${formatBytes(f.sizeBytes)} · ${frames} frame${frames === 1 ? "" : "s"}`
+            : formatBytes(f.sizeBytes),
+        );
       }),
+      resolvePreviewUrl: planPreviewResolver,
       targetNoun: "file",
       actionLabel: "OCR",
       canApply: () => n > 0,
