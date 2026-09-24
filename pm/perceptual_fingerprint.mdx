@@ -1,9 +1,25 @@
 ---
 title: LargeFileBridge — Perceptual Content Fingerprint (PhotoDNA-style, local-only)
-description: The spec for LargeFileBridge's transform-robust content fingerprint — a "perceptual hash" that recognizes when two media files are FUNDAMENTALLY THE SAME CONTENT even after the file was resized to a lower pixel resolution, re-compressed, re-encoded to a different codec, frame-rate changed, or format-converted (e.g. PNG→JPEG with heavy lossy compression). This is the capability PhotoDNA is famous for, but with a HARD non-negotiable constraint from the charter: it must run ENTIRELY LOCALLY with NO network access of any kind — it must never phone home, call an external service, or send file bytes or fingerprints anywhere, and LargeFileBridge is explicitly NOT a reporting service. Opens with two RANKED comparisons — 40 open-source image options and 39 open-source video options (visual, audio and temporal-aligner), each with a computed 1–10 priority score — followed by the goal (a persistable text fingerprint resilient to downscale/recompress/convert, subset-aware for video, fast to compare 1-vs-100k in TypeScript), the assessment criteria (hard gates: open source, no phone-home, copyleft must not reach our code incl. a legal assessment of GPL/LGPL/AGPL integration modes; 12 weighted criteria with 1–10 calibration anchors) and the scoring equation; proprietary / phone-home / contaminating options (PhotoDNA, NeuralHash, cloud APIs, pHash, AGPL VDF, CC-BY-NC weights) are moved to an Excluded appendix at the very bottom. Then the LOCKED design, the chosen algorithm, the 256-bit fingerprint stored per file, Hamming-distance matching with thresholds, how it is wired into the TypeScript/Node app with zero network, and how it complements (never replaces) the exact content hash. Sibling of compression.mdx (which captures a before/after fingerprint around every compress/convert), repo_tracking_scheme.mdx (the per-file <name>.yaml sidecar that stores the fingerprint), files.mdx (per-file identity), and the charter's "Perceptual / content-fingerprint matching (PhotoDNA-style) — local only" requirement.
+description: The spec for LargeFileBridge's transform-robust content fingerprint — a "perceptual hash" that recognizes when two media files are FUNDAMENTALLY THE SAME CONTENT even after the file was resized to a lower pixel resolution, re-compressed, re-encoded to a different codec, frame-rate changed, or format-converted (e.g. PNG→JPEG with heavy lossy compression). This is the capability PhotoDNA is famous for, but with a HARD non-negotiable constraint from the charter: it must run ENTIRELY LOCALLY with NO network access of any kind — it must never phone home, call an external service, or send file bytes or fingerprints anywhere, and LargeFileBridge is explicitly NOT a reporting service. Opens with two RANKED comparisons — 40 open-source image options and 39 open-source video options (visual, audio and temporal-aligner), each with a computed 1–10 priority score — followed by the goal (a persistable text fingerprint resilient to downscale/recompress/convert, subset-aware for video, fast to compare 1-vs-100k in TypeScript), the assessment criteria (hard gates: open source, no phone-home, copyleft must not reach our code incl. a legal assessment of GPL/LGPL/AGPL integration modes; 12 weighted criteria with 1–10 calibration anchors) and the scoring equation; proprietary / phone-home / contaminating options (PhotoDNA, NeuralHash, cloud APIs, pHash, AGPL VDF, CC-BY-NC weights) are moved to an Excluded appendix at the very bottom. Then the LOCKED design, the chosen algorithm, the 256-bit fingerprint stored per file, Hamming-distance matching with thresholds, how it is wired into the TypeScript/Node app with zero network, and how it complements (never replaces) the exact content hash. Sibling of compression.mdx (which captures a before/after fingerprint around every compress/convert), repo_tracking_scheme.mdx (the per-file <name>.yaml sidecar that stores the fingerprint), files.mdx (per-file identity), and the charter's "Perceptual / content-fingerprint matching (PhotoDNA-style) — local only" requirement. It opens with a short description of what Large File Bridge does, and a shared section explaining how perceptual_fingerprint.mdx (the engine), apis.mdx (the REST API) and mcp.mdx (the Claude Code server) fit together, with one owner for every number they share. §FD.8 adds the bulk directory scan: the Go binary walks a directory and fingerprints every file in-process on ~80% of the cores (native image decode within a few bits of sharp, identical video values), measured against the per-file path.
 ---
 
 # LargeFileBridge — Perceptual Content Fingerprint
+
+## About Large File Bridge
+
+Large File Bridge is a local-first web app (TypeScript on Node; UI at http://localhost:2222/, REST backend
+at http://localhost:8787/) that keeps the **big, git-ignored files** in a person's repos and folders —
+videos, large images, audio and other large binaries — **in sync across their own computers by pinning them
+on IPFS**, while git carries the small text files and the record of what exists. It scans repos and
+directories for large files, nudges the ones that should be git-ignored (never ignoring anything on its
+own), tracks each file with a content hash and per-file metadata, and pins and fetches those files so every
+computer holds the same copy; a 15-minute `launchd` job keeps that going in the background. Around that
+core it helps people take care of the media itself: it finds files that are needlessly uncompressed and
+compresses them only when asked, writes transcripts, AI visual descriptions and OCR text beside them, and
+— the subject of this spec family — **recognizes when two files are the same content** even after a
+resize, re-compression, re-encode or format change. Everything runs on the user's own machine: sign-in is
+Google through OpenAuthFederated for allow-listed accounts only, the computer never acts as a public IPFS
+gateway or relay, and the fingerprint features never touch the network.
 
 LargeFileBridge needs to know when two files are **fundamentally the same file** even after they have
 been **reduced in pixel resolution, compressed, re-encoded to a different codec, changed in frame rate,
@@ -41,13 +57,90 @@ This spec builds on the siblings and does not repeat them:
 
 ---
 
+## The three fingerprint specs, and how they work together
+
+Perceptual fingerprints are specified in three files. Each one owns one layer, and each layer talks only to
+the layer below it. **You are reading perceptual_fingerprint.mdx, the engine layer.**
+
+```
+  Claude Code (chat)              Web app (browser)                Terminal
+        │ stdio, JSON-RPC               │ signed-in session              │
+        ▼                               │                                ▼
+  lfb MCP server ── mcp.mdx             │                     lfb CLI ── cli.mdx
+        │ X-LFB-Api-Key, loopback only  │                                │ X-LFB-Api-Key
+        └───────────────────┬───────────┴────────────────────────────────┘
+                            ▼
+  REST API  /api/fingerprints/*  ── apis.mdx
+  local API key · hybrid 200/202 jobs · lookup · compare · CSV export
+                            │
+                            ▼
+  Fingerprint engine  ── perceptual_fingerprint.mdx §FD
+  fingerprint.service → lfb-pdq Go sidecar (PDQ) + the user's own ffmpeg for video frames
+                            │
+                            ▼
+  Postgres lfb.perceptual_fp + memory tier · CSVs in ~/T/_large_files_bridge/fingerprints/exports/
+```
+
+The CLI shares the same key and base URL, but today it calls `/api/files/list`, not the fingerprint routes.
+
+| Spec | The question it answers | What it owns | What it leaves to the others |
+| --- | --- | --- | --- |
+| [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) ◀ **this spec** | *What is a fingerprint, and what computes it?* | The research and the algorithm choice (PDQ for images, PDQ per frame for video); the match thresholds, quality floor and the video duplicate / subset rule; storage and the validity rule; the no-network guarantee. | How programs reach it (apis.mdx) and how Claude Code presents it (mcp.mdx). |
+| [apis.mdx](./apis.mdx) | *How does any program ask for one?* | The local API key and machine-channel security; the endpoints; the hybrid sync/async job contract and its wait budgets; the error codes; the measured timings that justify the contract. | What a fingerprint means and when two match (perceptual_fingerprint.mdx); the Claude Code tools (mcp.mdx). |
+| [mcp.mdx](./mcp.mdx) | *How does Claude Code ask for one?* | The eleven `lfb_` tools; the stdio transport; reply shaping (summaries, byte cap, pointer to the CSV); the playbook `ai/lfb_mcp.md`; registration with Claude Code. | Every answer (computed by the backend, apis.mdx) and creating the key (apis.mdx §3.2). |
+
+**One request, end to end.** The user asks Claude Code: *"is clip.mp4 part of long.mp4?"*
+
+1. Claude calls `lfb_fingerprint_compare` (mcp.mdx §5).
+2. The MCP server re-reads the key from `~/.credentials/large_files_bridge.json` and sends
+   `POST /api/fingerprints/compare` to `127.0.0.1:8787` (mcp.mdx §4).
+3. The backend honors the key only from a loopback peer with a loopback Host header (apis.mdx §3.5).
+4. For each file it reuses the stored fingerprint if the size, modification time and engine version are
+   unchanged, or computes a new one through the `lfb-pdq` sidecar (perceptual_fingerprint.mdx §FD.3–§FD.4).
+5. It compares the two frame lists. A shared fraction ≥ 0.8 is a **duplicate**; otherwise a longest matching
+   run covering ≥ 0.7 of the shorter video is a **subset**, returned with its time range
+   (perceptual_fingerprint.mdx §4, apis.mdx §7.8).
+6. The MCP server wraps the answer in its JSON envelope (mcp.mdx §6), and Claude reports it as a
+   **signal**. Nothing is deleted or moved because of a match.
+
+**Where a change starts.**
+
+* **A different algorithm, threshold or storage rule** → perceptual_fingerprint.mdx first. The API and the
+  MCP server only carry the new values through.
+* **A new capability for callers** → a backend endpoint in apis.mdx first, then an MCP tool that wraps it.
+  The MCP server holds wrapper code only (mcp.mdx §1), so a tool can never be the first place something is
+  computed.
+* **How Claude Code behaves** (tool wording, reply size, what to do on an error) → mcp.mdx and
+  `ai/lfb_mcp.md` only.
+
+**A number used in more than one spec has one owner.** The others cite it; if they ever disagree, the
+owner wins and the others are corrected.
+
+| Number | Value | Owner |
+| --- | --- | --- |
+| Image match threshold (normal / strict) | Hamming ≤ 32 / ≤ 24 of 256 bits | perceptual_fingerprint.mdx §4 |
+| PDQ quality floor | 50 (of 100) | perceptual_fingerprint.mdx §4 |
+| Video duplicate / subset | shared fraction ≥ 0.8 / longest-run coverage ≥ 0.7 | perceptual_fingerprint.mdx §4 |
+| When a stored value is still valid | same size, modification time and engine version | perceptual_fingerprint.mdx §FD.4 |
+| Server wait budget (`wait_ms`) | default 20 s, maximum 55 s | apis.mdx §6.2 |
+| MCP wait cap / MCP HTTP timeout | 50 s / 75 s | mcp.mdx §6 |
+| MCP reply byte cap | 200 KB (up to 2 MB) | mcp.mdx §6 |
+
+The shared threshold constants, in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/fingerprints.ts` — `PDQ_MATCH_THRESHOLD`, `PDQ_MATCH_THRESHOLD_STRICT`, `PDQ_QUALITY_FLOOR`.
+
+---
+
 ## Table of contents
 
+* [About Large File Bridge](#about-large-file-bridge)
+* [The three fingerprint specs, and how they work together](#the-three-fingerprint-specs-and-how-they-work-together)
 * [§A. Best options for **images** — ranked comparison](#a-best-options-for-images--ranked-comparison)
 * [§B. Best options for **video** — ranked comparison](#b-best-options-for-video--ranked-comparison)
 * [§FD. **Final decision** — what ships (images + video)](#fd-final-decision--what-ships-images--video)
   * §FD.1 Images (PDQ via ajdnik/imghash) · §FD.2 Video speed shoot-out (#1 wins) · §FD.3 The engine ·
-    §FD.4 Postgres storage + validity · §FD.5 Sync vs async · §FD.6 Where people reach it · §FD.7 Not yet changed
+    §FD.4 Postgres storage + validity · §FD.5 Sync vs async · §FD.6 Where people reach it · §FD.7 Not yet changed ·
+    §FD.8 The bulk directory scan (in-process, ~80% of the cores)
 * [§C. Goal](#c-goal)
 * [§D. Assessment criteria and the priority-score math](#d-assessment-criteria-and-the-priority-score-math)
   * §D.1 Hard gates (pass / fail) · §D.2 The legal assessment of copyleft · §D.3 Scored criteria and
@@ -483,7 +576,8 @@ the measured table are in [apis.mdx §6 and §8](./apis.mdx).
   if the dialog is closed and stays visible in the progress dock. At the end it offers **Download CSV**
   and shows the CSV's path in the state root. On a single **image or video**, **Calculate fingerprint**
   runs at once and shows the value.
-* **REST API:** `/api/fingerprints/*` ([apis.mdx §7](./apis.mdx)).
+* **REST API:** `/api/fingerprints/*` ([apis.mdx §7](./apis.mdx)). A whole directory to a CSV, fast:
+  `POST /api/fingerprints/directory-csv` ([apis.mdx §7.9](./apis.mdx), engine in §FD.8).
 * **Claude Code:** the `lfb` MCP server ([mcp.mdx](./mcp.mdx)), which covers files, directories, jobs,
   CSV export, lookup and compare.
 * **Settings → Local API key:** create or rotate the machine key the CLI and the MCP server use
@@ -502,6 +596,105 @@ rows are `pdq` / `pdq-frames`.
 
 Moving those three consumers onto the `lfb-pdq` engine is the follow-up: one swap inside
 `perceptual.service.ts`, plus a one-time recompute of their caches.
+
+### FD.8 The bulk directory scan — in-process, on ~80% of the cores
+
+**Added 2026-09-24.** The ask: *give it a directory, get back a CSV with one row per file, holding the full
+path and the fingerprint, and be a lot faster.* The per-file path (§FD.3) answers one file per request, and
+its gates allow 12 images and **3 videos** at a time. On the Charlie Kirk media sync (6,888 files, about
+70 GB) it ran at about **5 files a second**: 5,000 files took 1,026 s. The videos set the pace.
+
+**The design.** The fingerprint library (ajdnik/imghash) is Go, so the code that drives it is Go too, in the
+same binary and the same process:
+
+1. **One process per scan.** The backend starts `lfb-pdq --scan` and writes one JSON request to its stdin:
+   the directory, recursive or not, the extension filter, which directories to skip, the worker count, and
+   the stored values it already holds.
+2. **The walk comes first.** Go walks the directory before it hashes anything. It never follows a symlink.
+   It skips hidden folders, macOS bundles, and the skip lists the backend passes (the same `HARD_SKIP` every
+   other walk uses, or a smaller set when the caller asks). It keeps only files whose extension passes the
+   filter. A 2,000-file tree walks in about 0.1 s, so the total is exact from the start.
+3. **The longest work goes first.** Before hashing, Go probes every video's duration with ffprobe, in
+   parallel, at a few ms each. Videos then run **longest first**, followed by images, largest first. It is
+   duration, not bytes: ordered by size, an 80-minute talk of only 0.38 GB started late and was the whole
+   tail of the run (430 s against 375 s ordered by duration).
+4. **The worker count is a share of the cores.** The default is **80% of the logical cores**: 19 on the
+   24-core tower. A caller can set `cpu_percent` or an exact `workers` count instead. Each worker takes the
+   next file and calls the PDQ library in-process on its own goroutine.
+   * **Images** are decoded in the same process (`image_native.go`), with the same steps as the per-file
+     path: a 128×128 fill resample using premultiplied area averaging, EXIF orientation, then flattening
+     on white (`value`) and, for a transparent image, on black (`value_alt`). The Go decoders read jpeg,
+     png, gif, still webp, bmp and tiff.
+   * **HEIC, AVIF, animated WebP**, and anything else the Go decoders reject are **deferred**. The backend
+     sends them through the per-file sharp path after the scan, in the same job, so no file loses its
+     fingerprint.
+   * **Videos** use the same ffmpeg keyframes-first sampler as the per-file path (`video.go`). Only
+     ffmpeg's thread count changes. Each video gets threads in proportion to its share of all the video
+     duration, never fewer than `cores / workers`. A full decode (keyframes too sparse) gets **half the
+     cores**, because it is always the tail. Giving it every core measured worse (446 s against 375 s for
+     the mirror), because the extra threads only add contention.
+5. **The bytes decide the pipeline.** The same 16-byte sniff as `media-sniff.ts` runs on every file, so a
+   JPEG named `.mp4` is hashed as an image.
+6. **Results stream back.** Each file produces one NDJSON line. The backend turns each line into an ordinary
+   result, stores it in L1 and Postgres (§FD.4), and writes the job's CSV when the scan ends.
+7. **Stored values are reused.** Files whose stored value is still valid (same size, modification time and
+   engine version) are listed in the request. Go answers them from that list without opening them.
+8. **Online-only cloud files are left alone.** A Dropbox or iCloud placeholder (macOS `SF_DATALESS`) is
+   reported as `not_downloaded` and never opened, because reading it would force a download. A caller can
+   opt in to reading them.
+9. **One scan at a time.** Each scan already uses about 80% of the machine, so a second scan waits for
+   the first to finish (`waiting_for_slot`). Callers should scan several directories one after another,
+   never in parallel.
+
+**Same values, not merely similar ones** (measured 2026-09-24 on the Charlie Kirk mirror):
+
+* **Videos: identical.** 324 of 324 videos gave the same representative value and the same frame
+  count as the per-file path. Both paths run the same Go sampler, and ffmpeg's thread count never changes
+  the decoded pixels. The 100-video benchmark set matched frame for frame at 2 and at 12 threads.
+* **Images: the same family, a few bits apart.** Across 1,672 JPEG, PNG, WebP and GIF files the Go decoder
+  was a median of **2 bits** from sharp's value (p90 6, p99 10, max 16, out of 256). 422 were exactly
+  equal, and **none** was farther than the strict 24-bit threshold. Both decoders gave `value_alt` to exactly the
+  same images. So both carry the **same** `algo_version` (`… image:fill128+alpha2`), and either one's stored
+  value is valid for the other. A value's `strategy` tells them apart: `go-area` for the Go decoder, blank
+  for sharp.
+
+**Measured speed** (the 24-core tower, while other sessions were also using it):
+
+| Work | Per-file path (before) | Bulk scan (after) |
+| --- | ---: | ---: |
+| 1,672 mirror images | 6.5 s (259/s) | 6.4 s (262/s) |
+| 100 mirror videos, 2.6 GB (90 keyframe passes, 10 full decodes) | 116.8 s | **62.9 s** (1.9×) |
+| The whole mirror, 1,997 files, 22 GB | 550.1 s | **375.5 s (1.47×)** |
+
+What the numbers say:
+
+* **Images were never the bottleneck.** sharp's shrink-on-load keeps the per-file path at about 260
+  images a second, and the Go decoder matches it.
+* **The gain is in videos:** 19 at a time instead of 3, the largest first, and more ffmpeg threads for the
+  tail.
+* **The hardware decoder does not limit it.** On the 100-video set, VideoToolbox-first took 69.8 s and
+  software-only took 73.1 s at 19 workers.
+* **Fewer workers is not better.** 8 workers took 72.1 s.
+* **Past 80% of the cores, workers only fight.** 24 software workers took 92.2 s.
+* **The floor is the slowest single video.** On the mirror, the four slowest were long 1080p AV1 files with
+  sparse keyframes, from 32 to 80 minutes. The M2 has no AV1 hardware decoder, so each needs a full
+  software decode of every frame. The slowest was a 70-minute file at about 374 s. The old path decoded
+  it in 164 s, because it had the machine nearly to itself; the bulk scan finishes everything else in
+  the same window. A 14-minute AV1 talk alone took 28 s at 12 threads, 45 s at 4, and 37 s at 24.
+* **Next speedup, not done:** fewer frames to decode for sparse-keyframe AV1. That would change which
+  frames are sampled, so it needs an engine version bump and a recompute. It is not a scheduling change.
+
+The scan protocol, the walk, the scheduler and the thread plan, in code:
+`~/repos/LargeFileBridge/code/sidecars/pdq/scan.go` — `runScan()`, `walkScan()`, `videoThreadPlan()`, `hashOne()`.
+
+The native image decode (area resample, EXIF orientation, alpha flatten) and the byte sniff, in code:
+`~/repos/LargeFileBridge/code/sidecars/pdq/image_native.go` — `hashImageNative()`, `areaResample()`, `jpegOrientation()`, `sniffKind()`.
+
+Spawning the scan, turning its events into stored results, and the one-scan-at-a-time slot, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.native-scan.ts` — `runNativeScan()`, `buildGoRequest()`, `acquireNativeSlot()`, `fingerprintFromEvent()`.
+
+The job around it (the store reuse, the deferred images, the CSV), in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.jobs.ts` — `runNative()`.
 
 ---
 
@@ -808,8 +1001,9 @@ things, and the two specs say so on purpose ([to_fix.mdx §3.4](./to_fix.mdx)):
   a **user's file** must never lose resolution.
 * The row above is the opposite direction: it is the **input variety** the fingerprint must **survive** —
   someone *else's* 1080p export of our 4K master must still match.
-* The fingerprint's **own** downscale is **internal to its decode** — `sharp.resize(512, 512, { fit:
-  "inside" })` shrinks a throwaway pixel buffer purely to bound what we hash. It **writes no file**,
+* The fingerprint's **own** downscale is **internal to its decode** — in the older blockhash path,
+  `sharp.resize(512, 512, { fit: "inside" })`; in the PDQ fingerprint service, a 128×128 fill (§FD.1).
+  Either way it shrinks a throwaway pixel buffer purely to bound what we hash. It **writes no file**,
   **touches no output**, and is **invisible to the user**; resize-invariance (the row above) is precisely
   what makes hashing the shrunken copy legitimate.
 
@@ -897,11 +1091,22 @@ The algorithm choice and matcher are isolated behind one module so the fallback�
 * **Compare by Hamming distance** over the 256-bit fingerprints (count of differing bits). Smaller =
   more similar; identical content → 0.
 * **Image threshold:** treat Hamming **≤ 32 / 256** as "same content"; expose a stricter **≤ 24** for
-  high-precision de-dup. Always gate on the PDQ **quality** score — drop flat/low-quality images from
-  automatic matching to avoid false hits.
+  high-precision de-dup. Always gate on the PDQ **quality** score — the floor is **50 of 100**; flat or
+  low-quality images below it are dropped from automatic matching to avoid false hits.
 * **Video threshold:** a video pair is "the same content" when the **fraction of frames** whose PDQ
   matches within the image threshold exceeds a high bar (vPDQ's shared-frame logic), which naturally
-  survives codec/fps/resize changes.
+  survives codec/fps/resize changes. The shipped values:
+  * **Duplicate:** the shared-frame fraction, measured in both directions, is **≥ 0.8**.
+  * **Subset:** not a duplicate, but the longest run of matching frames covers **≥ 0.7** of the shorter
+    video. The run gives the time range: where it starts in each video and where it ends in the longer one.
+* **This section owns these numbers.** The API ([apis.mdx §7.1, §7.8](./apis.mdx)) and the MCP playbook
+  report them; they do not set them.
+
+The thresholds and quality floor, in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/fingerprints.ts` — `PDQ_MATCH_THRESHOLD`, `PDQ_MATCH_THRESHOLD_STRICT`, `PDQ_QUALITY_FLOOR`.
+
+The duplicate / subset decision for two videos, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.router.ts` — `POST /compare`, using `symmetricSharedFraction()` and `longestSharedRun()` from `modules/videos/vpdq.service.ts`.
 * **Never auto-act on a perceptual match.** Consistent with the charter, a fingerprint match is a
   **signal** LFB surfaces (e.g. "this looks like the same content as X"); it never deletes, replaces, or
   alters a file on its own.
@@ -909,6 +1114,11 @@ The algorithm choice and matcher are isolated behind one module so the fallback�
 ---
 
 ## 5. Storage — per file, in the sidecar (LOCKED)
+
+**Two stores, two jobs.** This section is the **tracked, per-file record** that travels with a repo's
+tracking state. The PDQ fingerprint service's **Postgres cache** (§FD.4) is a different thing: a path-keyed
+cache that answers API and MCP calls quickly and never travels. Moving the older consumers onto PDQ (§FD.7)
+is also when the sidecar's `fingerprint` field switches from `blockhash` to `pdq` values.
 
 The fingerprint is stored per file in the `<name>.yaml` sidecar
 ([repo_tracking_scheme.mdx §3](./repo_tracking_scheme.mdx)) and referenced from `files.yaml`. Both the
@@ -962,8 +1172,8 @@ Guaranteeing the perceptual path never performs network I/O (no client imported;
 1. LFB computes a **transform-robust perceptual fingerprint** for **image and video** files that survives
    resize, re-compression, codec re-encode, frame-rate change, and format conversion (§1).
 2. The chosen algorithm is **PDQ (256-bit) for images** and **vPDQ (per-frame PDQ) for video**, with a
-   **blockhash-core + sharp-phash** no-native-build fallback; **Microsoft PhotoDNA is explicitly not used**
-   for the reasons in §2.
+   **blockhash-core + sharp-phash** no-native-build fallback that remains only in the older consumers
+   (§FD.7); **Microsoft PhotoDNA is explicitly not used** for the reasons in §2.
 3. Everything runs **entirely locally with no network access** — no phone-home, no external service, no
    sending bytes or fingerprints anywhere; the only external process is the **user-installed ffmpeg** for frame
    sampling (§6). A guard test enforces this.

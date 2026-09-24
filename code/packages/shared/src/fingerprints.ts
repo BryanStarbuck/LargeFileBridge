@@ -63,6 +63,9 @@ export type FingerprintErrorCode =
   | "pdq_unavailable"
   | "timeout"
   | "cancelled"
+  /** A cloud placeholder (Dropbox/iCloud "online-only"): reading it would force a download, so the bulk
+   *  directory scan leaves it alone unless the caller passes include_online_only. */
+  | "not_downloaded"
   | "internal";
 
 export type FingerprintJobStatus = "queued" | "running" | "done" | "cancelled" | "failed";
@@ -71,7 +74,17 @@ export interface FingerprintJob {
   id: string;
   status: FingerprintJobStatus;
   /** What was asked: an explicit path list, or a directory walk. */
-  scope: { kind: "paths"; count: number } | { kind: "directory"; dir: string; recursive: boolean };
+  scope:
+    | { kind: "paths"; count: number }
+    | {
+        kind: "directory";
+        dir: string;
+        recursive: boolean;
+        /** "native" = the bulk Go scan (POST /directory-csv, apis.mdx §7.9); absent = the per-file walk. */
+        engine?: "native";
+        /** The extension filter the caller passed (lowercase, no dot), or null for every media extension. */
+        extensions?: string[] | null;
+      };
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
@@ -93,6 +106,14 @@ export interface FingerprintJob {
   error: string | null;
   /** Absolute path of the CSV export, once one has been written. */
   csv_path: string | null;
+  /** Native scans only: worker threads the Go engine ran, of how many cores. */
+  workers?: number | null;
+  cores?: number | null;
+  /** Native scans only: images the Go decoder handed back to the per-file sharp path (HEIC/AVIF, …). */
+  deferred?: number;
+  /** Native scans only: waiting behind another native scan (one runs at a time — each already uses ~80% of
+   *  the cores, so two at once would only fight). */
+  waiting_for_slot?: boolean;
 }
 
 // ── request bodies ──────────────────────────────────────────────────────────
@@ -130,6 +151,52 @@ export const FingerprintScanBodySchema = z.object({
   wait_ms: z.number().int().min(0).max(FINGERPRINT_WAIT_MS_MAX).optional(),
 });
 export type FingerprintScanBody = z.infer<typeof FingerprintScanBodySchema>;
+
+/** Default share of the logical cores the bulk directory scan uses (apis.mdx §7.9). */
+export const FINGERPRINT_NATIVE_CPU_PERCENT_DEFAULT = 80;
+
+const extensionItem = z
+  .string()
+  .trim()
+  .min(1)
+  .max(16)
+  .transform((e) => e.replace(/^\./, "").toLowerCase())
+  .refine((e) => /^[a-z0-9]+$/.test(e), "an extension is letters and digits, e.g. \"mp4\" or \".jpg\"");
+
+/**
+ * POST /api/fingerprints/directory-csv — the BULK directory scan (apis.mdx §7.9). One Go process walks the
+ * directory and fingerprints every matching file in-process on ~80% of the cores; the answer is a CSV file.
+ */
+export const FingerprintDirectoryCsvBodySchema = z.object({
+  dir: absPath,
+  /** Default true. */
+  recursive: z.boolean().optional(),
+  /** Only files with one of these extensions ("mp4", ".JPG" — case and dot ignored). Default: every image and
+   *  video extension Large File Bridge knows. Extensions that are not image/video are rejected. */
+  extensions: z.array(extensionItem).min(1).max(64).optional(),
+  kinds: z.array(z.enum(["image", "video"])).min(1).optional(),
+  /** Directories never entered: a bare name ("build") matches at any depth; a path is relative to `dir`
+   *  ("site/build") or absolute. */
+  exclude_dirs: z.array(z.string().trim().min(1)).max(200).optional(),
+  /** Default true: also skip generated/dependency folders (build, dist, out, coverage, .venv, … — the
+   *  scanner's HARD_SKIP). false keeps only the always-skipped set (.git, node_modules, .Trash, .claude,
+   *  cloud-sync metadata), hidden folders, and macOS bundles. */
+  skip_generated_dirs: z.boolean().optional(),
+  /** Default false: online-only cloud placeholders are reported as not_downloaded instead of being read
+   *  (reading one forces Dropbox/iCloud to download it). */
+  include_online_only: z.boolean().optional(),
+  /** Worker threads. Default: cpu_percent of the logical cores. */
+  workers: z.number().int().min(1).max(256).optional(),
+  /** Share of the logical cores to use when `workers` is not given. Default 80. */
+  cpu_percent: z.number().int().min(10).max(100).optional(),
+  force: z.boolean().optional(),
+  include_frames: z.boolean().optional(),
+  max_files: z.number().int().min(1).max(FINGERPRINT_MAX_DIR_FILES_MAX).optional(),
+  wait_ms: z.number().int().min(0).max(FINGERPRINT_WAIT_MS_MAX).optional(),
+  /** Results returned inline (0–5000). Default 0: the CSV file is the answer. */
+  results_limit: z.number().int().min(0).max(FINGERPRINT_MAX_PATHS).optional(),
+});
+export type FingerprintDirectoryCsvBody = z.infer<typeof FingerprintDirectoryCsvBodySchema>;
 
 export const FingerprintCompareBodySchema = z.object({
   a: z.string().min(1),

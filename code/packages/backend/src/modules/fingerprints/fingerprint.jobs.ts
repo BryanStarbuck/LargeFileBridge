@@ -22,8 +22,17 @@ import { mediaKindForName } from "@lfb/shared";
 import { log, logError } from "../../shared/logging.js";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import * as progress from "../progress/progress.registry.js";
-import { fingerprintPath, expandPath, IMAGE_CONCURRENCY, VIDEO_CONCURRENCY } from "./fingerprint.service.js";
+import { fingerprintPath, expandPath, IMAGE_CONCURRENCY, VIDEO_CONCURRENCY, pdqEngineVersion, versionFor, shapeFingerprint, VIDEO_INTERVAL_S, VIDEO_MAX_FRAMES, VIDEO_TIMEOUT_S } from "./fingerprint.service.js";
 import { resultsToCsv, writeCsvExport } from "./fingerprint.csv.js";
+import { getStored, listStoredUnder, putStored } from "./fingerprint.store.js";
+import {
+  acquireNativeSlot,
+  fingerprintFromEvent,
+  nativeErrorCode,
+  runNativeScan,
+  type NativeEvent,
+  type NativeScanRequest,
+} from "./fingerprint.native-scan.js";
 
 const FILE = "fingerprint.jobs.ts";
 const KEEP_FINISHED_JOBS = 25;
@@ -58,6 +67,23 @@ export interface StartDirJob {
   force?: boolean;
   includeFrames?: boolean;
 }
+/** The bulk directory scan (apis.mdx §7.9): the whole job runs in one Go process (fingerprint.native-scan.ts). */
+export interface StartNativeDirJob {
+  kind: "native-directory";
+  dir: string;
+  recursive?: boolean;
+  extensions?: string[];
+  kinds?: FingerprintKind[];
+  excludeDirs?: string[];
+  skipGeneratedDirs?: boolean;
+  includeOnlineOnly?: boolean;
+  workers?: number;
+  cpuPercent?: number;
+  maxFiles?: number;
+  force?: boolean;
+  includeFrames?: boolean;
+}
+type StartSpec = StartPathsJob | StartDirJob | StartNativeDirJob;
 
 function newJob(scope: FingerprintJob["scope"]): FingerprintJob {
   return {
@@ -104,11 +130,13 @@ class WorkQueue {
   }
 }
 
-export function startJob(spec: StartPathsJob | StartDirJob): FingerprintJob {
+export function startJob(spec: StartSpec): FingerprintJob {
   const scope: FingerprintJob["scope"] =
     spec.kind === "paths"
       ? { kind: "paths", count: spec.paths.length }
-      : { kind: "directory", dir: expandPath(spec.dir), recursive: spec.recursive !== false };
+      : spec.kind === "native-directory"
+        ? { kind: "directory", dir: expandPath(spec.dir), recursive: spec.recursive !== false, engine: "native", extensions: spec.extensions ?? null }
+        : { kind: "directory", dir: expandPath(spec.dir), recursive: spec.recursive !== false };
   const job = newJob(scope);
   const state: JobState = {
     job,
@@ -122,7 +150,7 @@ export function startJob(spec: StartPathsJob | StartDirJob): FingerprintJob {
   };
   jobs.set(job.id, state);
   pruneJobs();
-  state.finished = run(state, spec).catch((e) => {
+  state.finished = (spec.kind === "native-directory" ? runNative(state, spec) : run(state, spec)).catch((e) => {
     // run() handles its own failures; reaching here is a bug, and it must not become an unhandled rejection.
     logError({ file: FILE, operation: "job runner crashed", error: e, data: { job: job.id } });
     job.status = "failed";
@@ -176,7 +204,12 @@ async function run(state: JobState, spec: StartPathsJob | StartDirJob): Promise<
   };
 
   await Promise.all([producer, ...Array.from({ length: WORKERS }, worker)]);
+  await finishJob(state);
+}
 
+/** Close out a job: final status, progress end, the CSV in the state root, and one summary log line. */
+async function finishJob(state: JobState): Promise<void> {
+  const { job } = state;
   job.eta_ms = 0;
   job.elapsed_ms = Date.now() - state.t0;
   job.finished_at = new Date().toISOString();
@@ -206,6 +239,134 @@ async function run(state: JobState, spec: StartPathsJob | StartDirJob): Promise<
     "fingerprints",
     `job ${job.id} ${job.status}: ${job.ok} ok, ${job.failed} failed, ${job.cached} cached of ${job.total} in ${job.elapsed_ms} ms`,
   );
+}
+
+// ── the bulk (native) directory scan ────────────────────────────────────────────
+async function runNative(state: JobState, spec: StartNativeDirJob): Promise<void> {
+  const { job } = state;
+  const dir = expandPath(spec.dir);
+  // One bulk scan at a time: each already uses ~80% of the cores.
+  job.waiting_for_slot = true;
+  const release = await acquireNativeSlot(state.abort.signal);
+  job.waiting_for_slot = false;
+  if (!release) {
+    job.discovering = false;
+    return finishJob(state);
+  }
+  try {
+    job.status = "running";
+    job.started_at = new Date().toISOString();
+    state.t0 = Date.now();
+    state.progressId = progress.begin("fingerprint", path.basename(dir) || dir);
+    job.deferred = 0;
+
+    const engine = await pdqEngineVersion();
+    const imageVersion = versionFor("image", engine);
+    const videoVersion = versionFor("video", engine);
+
+    // Still-valid stored values under this directory: Go answers them without opening the file. Validity is
+    // size + mtime (checked by Go against its own stat) + engine version (checked here).
+    const known = spec.force
+      ? []
+      : (await listStoredUnder(dir, false, 500_000))
+          .filter((fp) => fp.algo_version === (fp.kind === "video" ? videoVersion : imageVersion))
+          .map((fp) => ({ path: fp.path, size: fp.size_bytes, mtime_ms: fp.mtime_ms }));
+
+    const req: NativeScanRequest = {
+      dir,
+      recursive: spec.recursive !== false,
+      extensions: spec.extensions ?? null,
+      kinds: spec.kinds ?? ["image", "video"],
+      excludeDirs: spec.excludeDirs ?? [],
+      skipGeneratedDirs: spec.skipGeneratedDirs !== false,
+      includeOnlineOnly: spec.includeOnlineOnly === true,
+      workers: spec.workers,
+      cpuPercent: spec.cpuPercent ?? 80,
+      maxFiles: spec.maxFiles ?? 50_000,
+      video: { intervalS: VIDEO_INTERVAL_S, maxFrames: VIDEO_MAX_FRAMES, timeoutS: VIDEO_TIMEOUT_S },
+      known,
+    };
+
+    const deferred: string[] = [];
+    const pendingWrites: Promise<void>[] = [];
+    const onEvent = (ev: NativeEvent): void => {
+      switch (ev.t) {
+        case "start":
+          job.workers = ev.workers ?? null;
+          job.cores = ev.cores ?? null;
+          log.info("fingerprints", `bulk scan ${job.id}: ${dir} on ${ev.workers} workers of ${ev.cores} cores`);
+          return;
+        case "walk":
+          job.total = ev.total ?? 0;
+          job.discovering = false;
+          if (ev.truncated) log.warn("fingerprints", `bulk scan of ${dir} stopped at max_files=${req.maxFiles}`);
+          if (ev.unreadable_dirs) log.warn("fingerprints", `bulk scan of ${dir}: ${ev.unreadable_dirs} directories were unreadable`);
+          return;
+        case "file": {
+          const fp = fingerprintFromEvent(ev, ev.kind === "video" ? videoVersion : imageVersion);
+          pendingWrites.push(
+            (async () => {
+              // A torn read (the file changed while Go read it) is returned but never stored.
+              const stored = ev.stable === true ? await putStored(fp) : false;
+              if (ev.stable !== true) log.warn("fingerprints", `${fp.path} changed while it was being fingerprinted — result returned, not stored`);
+              record(state, { path: fp.path, ok: true, fingerprint: shapeFingerprint(fp, state.includeFrames), source: "computed", stored });
+            })(),
+          );
+          return;
+        }
+        case "known":
+          pendingWrites.push(
+            (async () => {
+              const hit = await getStored(ev.path!, state.includeFrames);
+              if (hit) record(state, { path: ev.path!, ok: true, fingerprint: shapeFingerprint(hit.fp, state.includeFrames), source: hit.tier, stored: hit.tier === "postgres" ? true : undefined });
+              else deferred.push(ev.path!); // evicted from memory since the walk: compute it the per-file way
+            })(),
+          );
+          return;
+        case "defer":
+          job.deferred = (job.deferred ?? 0) + 1;
+          deferred.push(ev.path!);
+          return;
+        case "fail":
+          record(state, { path: ev.path!, ok: false, code: nativeErrorCode(ev.code), error: ev.error ?? "failed" });
+          return;
+        case "error":
+          job.error = ev.error ?? "the bulk scan failed";
+          return;
+        default:
+          return;
+      }
+    };
+
+    try {
+      await runNativeScan(req, { onEvent }, state.abort.signal);
+    } catch (e) {
+      job.error = (e as Error).message;
+      logError({ file: FILE, operation: "bulk scan", error: e, data: { job: job.id, dir } });
+    }
+    await Promise.all(pendingWrites);
+
+    // Images Go could not decode (HEIC/AVIF, animated WebP, …) go through the per-file sharp path now.
+    if (deferred.length > 0 && !state.abort.signal.aborted) {
+      log.info("fingerprints", `bulk scan ${job.id}: ${deferred.length} files handed to the per-file path`);
+      let i = 0;
+      const worker = async (): Promise<void> => {
+        while (i < deferred.length) {
+          const p = deferred[i++];
+          if (state.abort.signal.aborted) {
+            record(state, { path: p, ok: false, code: "cancelled", error: "cancelled" });
+            continue;
+          }
+          record(state, await fingerprintPath(p, { force: state.force, includeFrames: state.includeFrames, signal: state.abort.signal }));
+        }
+      };
+      await Promise.all(Array.from({ length: IMAGE_CONCURRENCY }, worker));
+    }
+    job.discovering = false;
+    await finishJob(state);
+  } finally {
+    release();
+  }
 }
 
 function record(state: JobState, r: FingerprintResult): void {

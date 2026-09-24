@@ -19,6 +19,10 @@ const AUDIO_EXT = new Set([
   ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".oga", ".opus", ".aiff", ".aif", ".wma",
 ]);
 
+/** The video / image extension lists (lowercase, no dot) — what the bulk fingerprint scan hands its Go walker. */
+export const VIDEO_EXTENSIONS: readonly string[] = [...VIDEO_EXT].map((e) => e.slice(1));
+export const IMAGE_EXTENSIONS: readonly string[] = [...IMAGE_EXT].map((e) => e.slice(1));
+
 /** Lowercased extension incl. the dot (".mp4"), or "" when the name has none. */
 export function fileExt(name: string): string {
   // Isomorphic + untyped callers (File System cell clicks, JSON payloads) can hand us a non-string;

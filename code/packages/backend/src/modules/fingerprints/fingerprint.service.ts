@@ -34,7 +34,7 @@ const MAX_DECODE_PIXELS = 64_000_000;
 /** Video sampling knobs. Part of the version string: change one and every stored video row goes stale. */
 export const VIDEO_INTERVAL_S = 1;
 export const VIDEO_MAX_FRAMES = 3600;
-const VIDEO_TIMEOUT_S = 900;
+export const VIDEO_TIMEOUT_S = 900;
 
 // ── concurrency (shared by every caller: API, jobs, MCP, web app) ────────────────
 // Images: sharp is pinned to one libvips thread per pipeline (sharp-runtime.ts), so parallelism comes from
@@ -87,7 +87,9 @@ export function pdqEngineVersion(): Promise<string> {
   return engineVersion;
 }
 
-function versionFor(kind: FingerprintKind, engine: string): string {
+/** The algo_version stored beside a value. The bulk scan's Go decoder uses the SAME image tag: measured
+ *  within a few bits of sharp's (perceptual_fingerprint.mdx §FD.8); its `strategy` says "go-area". */
+export function versionFor(kind: FingerprintKind, engine: string): string {
   return kind === "image"
     ? `${engine} image:fill${HASH_EDGE}+alpha2`
     : `${engine} video:interval=${VIDEO_INTERVAL_S},max=${VIDEO_MAX_FRAMES}`;
@@ -376,6 +378,10 @@ export async function fingerprintPath(input: string, opts: FingerprintOptions = 
 }
 
 /** Frames are large; they travel only when the caller asked for them. */
+export function shapeFingerprint(fp: Fingerprint, includeFrames?: boolean): Fingerprint {
+  return shape(fp, includeFrames);
+}
+
 function shape(fp: Fingerprint, includeFrames?: boolean): Fingerprint {
   if (includeFrames || !fp.frames) return fp;
   const { frames: _drop, ...rest } = fp;

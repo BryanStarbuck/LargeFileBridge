@@ -9,6 +9,9 @@
 //	response: {"id":7,"hash":"<64 hex = 256 bits>","quality":87,"ms":1.4}
 //	          {"id":8,"error":"..."}
 //
+// A second mode, `lfb-pdq --scan`, is the BULK DIRECTORY SCAN (scan.go): one process walks a directory and
+// fingerprints every matching file in-process on ~80% of the cores, streaming one NDJSON event per file.
+//
 // The backend always sends "raw": sharp already decodes every format we care about (HEIC included) at a
 // bounded size (perceptual.service.ts decodeForHash, the to_fix.mdx §3.3 memory gate), so the sidecar
 // never has to read a user's file. "path" exists for hand-testing: `lfb-pdq FILE...` prints one line per
@@ -62,6 +65,10 @@ type request struct {
 	MaxFrames int     `json:"max_frames,omitempty"` // cap on samples (default 3600)
 	TimeoutS  int     `json:"timeout_s,omitempty"`  // hard kill for ffmpeg (default 900)
 	NoHW      bool    `json:"no_hw,omitempty"`      // skip the VideoToolbox attempt
+	FFThreads int     `json:"ff_threads,omitempty"` // cap ffmpeg decoder threads (0 = ffmpeg default)
+	// Decoder threads for the software-full plan only (0 = FFThreads). A full decode is the one plan whose
+	// cost is minutes, and it is the tail of a bulk scan, so the scan gives it a bigger share.
+	FullThreads int `json:"full_threads,omitempty"`
 }
 
 type response struct {
@@ -79,9 +86,13 @@ type response struct {
 
 var hasher imghash.PDQ
 
+type imghashPDQ = imghash.PDQ
+
+func newPDQ() (imghash.PDQ, error) { return imghash.NewPDQ() }
+
 func main() {
 	var err error
-	hasher, err = imghash.NewPDQ()
+	hasher, err = newPDQ()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "lfb-pdq: cannot build PDQ hasher:", err)
 		os.Exit(2)
@@ -90,6 +101,9 @@ func main() {
 	if len(args) == 1 && (args[0] == "--version" || args[0] == "-v") {
 		fmt.Println(version)
 		return
+	}
+	if len(args) >= 1 && args[0] == "--scan" {
+		os.Exit(scanMain(args[1:]))
 	}
 	if len(args) >= 2 && args[0] == "--video" {
 		oneShotVideo(args[1:])

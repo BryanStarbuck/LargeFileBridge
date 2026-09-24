@@ -1,19 +1,107 @@
 ---
 title: LargeFileBridge — The REST API for machine callers (fingerprints first)
-description: The plan and contract for the localhost REST API that Large File Bridge's machine callers use — the Claude Code MCP server (mcp.mdx), the lfb CLI (cli.mdx), and the web app itself. It opens with the security model: one local API key in the 0600 file ~/.credentials/large_files_bridge.json, created by the web app (backend boot, or Settings → Local API key), sent as X-LFB-Api-Key, honored only from loopback with a loopback Host header (DNS-rebinding defense), compared length-independently (SHA-256 then timingSafeEqual), failure-throttled, never logged or displayed, rotatable from the web app, and never overwritten when the file is broken. Then the perceptual-fingerprint surface (/api/fingerprints/*) — compute for explicit files, scan a directory, job status with long-poll, cancel, CSV export into the state root, lookup of stored values with validity, and compare (Hamming for images; duplicate vs subset with a time range for videos). The central design decision is the HYBRID synchronous/asynchronous contract — every request becomes a job and the call waits up to wait_ms (default 20 s, max 55 s): finished work comes back in the same response (200), unfinished work comes back as a job to poll (202) and keeps running — justified by measured performance (an image ≈ 10–40 ms; video ≈ 1–3 s per 1080p minute, 2.6 s for 3.5 min of 4K; a directory of thousands takes minutes). Error handling: every failure is a typed result or a JSON error with a stable code, and every failure that is ours lands in error.err.
+description: The plan and contract for the localhost REST API that Large File Bridge's machine callers use — the Claude Code MCP server (mcp.mdx), the lfb CLI (cli.mdx), and the web app itself. It opens with the security model: one local API key in the 0600 file ~/.credentials/large_files_bridge.json, created by the web app (backend boot, or Settings → Local API key), sent as X-LFB-Api-Key, honored only from loopback with a loopback Host header (DNS-rebinding defense), compared length-independently (SHA-256 then timingSafeEqual), failure-throttled, never logged or displayed, rotatable from the web app, and never overwritten when the file is broken. Then the perceptual-fingerprint surface (/api/fingerprints/*) — compute for explicit files, scan a directory, job status with long-poll, cancel, CSV export into the state root, lookup of stored values with validity, and compare (Hamming for images; duplicate vs subset with a time range for videos). The central design decision is the HYBRID synchronous/asynchronous contract — every request becomes a job and the call waits up to wait_ms (default 20 s, max 55 s): finished work comes back in the same response (200), unfinished work comes back as a job to poll (202) and keeps running — justified by measured performance (an image ≈ 10–40 ms; video ≈ 1–3 s per 1080p minute, 2.6 s for 3.5 min of 4K; a directory of thousands takes minutes). Error handling: every failure is a typed result or a JSON error with a stable code, and every failure that is ours lands in error.err. It opens with a short description of what Large File Bridge does, and a shared section explaining how perceptual_fingerprint.mdx (the engine), apis.mdx (the REST API) and mcp.mdx (the Claude Code server) fit together, with one owner for every number they share. It also specifies POST /api/fingerprints/directory-csv (§7.9), the bulk scan: one native Go process walks a directory recursively, keeps only the requested file extensions, fingerprints every file in-process on 80% of the CPU cores, and answers with a CSV (full path + 64-hex fingerprint per row); one bulk scan runs at a time.
 ---
 
 # LargeFileBridge — The REST API for machine callers
 
+## About Large File Bridge
+
+Large File Bridge is a local-first web app (TypeScript on Node; UI at http://localhost:2222/, REST backend
+at http://localhost:8787/) that keeps the **big, git-ignored files** in a person's repos and folders —
+videos, large images, audio and other large binaries — **in sync across their own computers by pinning them
+on IPFS**, while git carries the small text files and the record of what exists. It scans repos and
+directories for large files, nudges the ones that should be git-ignored (never ignoring anything on its
+own), tracks each file with a content hash and per-file metadata, and pins and fetches those files so every
+computer holds the same copy; a 15-minute `launchd` job keeps that going in the background. Around that
+core it helps people take care of the media itself: it finds files that are needlessly uncompressed and
+compresses them only when asked, writes transcripts, AI visual descriptions and OCR text beside them, and
+— the subject of this spec family — **recognizes when two files are the same content** even after a
+resize, re-compression, re-encode or format change. Everything runs on the user's own machine: sign-in is
+Google through OpenAuthFederated for allow-listed accounts only, the computer never acts as a public IPFS
+gateway or relay, and the fingerprint features never touch the network.
+
 Large File Bridge's backend already serves the web app over REST. This spec plans the part of that API that
 **machine callers** use (the MCP server for Claude Code, and the `lfb` CLI), starting with the perceptual
-fingerprint surface. Related specs:
+fingerprint surface. The engine below this API and the MCP server above it are described in the next
+section. Two more related specs:
 
-* [perceptual_fingerprint.mdx §FD](./perceptual_fingerprint.mdx) — which engine computes the fingerprints
-  and why (PDQ via ajdnik/imghash; per-frame PDQ for video), and where they are stored.
-* [mcp.mdx](./mcp.mdx) — the MCP server that is this API's main consumer.
 * [cli.mdx §3](./cli.mdx) — the CLI's use of the same local key.
 * [security.mdx](./security.mdx) — the human sign-in and allow-list this machine channel sits beside.
+
+---
+
+## The three fingerprint specs, and how they work together
+
+Perceptual fingerprints are specified in three files. Each one owns one layer, and each layer talks only to
+the layer below it. **You are reading apis.mdx, the API layer in the middle.**
+
+```
+  Claude Code (chat)              Web app (browser)                Terminal
+        │ stdio, JSON-RPC               │ signed-in session              │
+        ▼                               │                                ▼
+  lfb MCP server ── mcp.mdx             │                     lfb CLI ── cli.mdx
+        │ X-LFB-Api-Key, loopback only  │                                │ X-LFB-Api-Key
+        └───────────────────┬───────────┴────────────────────────────────┘
+                            ▼
+  REST API  /api/fingerprints/*  ── apis.mdx
+  local API key · hybrid 200/202 jobs · lookup · compare · CSV export
+                            │
+                            ▼
+  Fingerprint engine  ── perceptual_fingerprint.mdx §FD
+  fingerprint.service → lfb-pdq Go sidecar (PDQ) + the user's own ffmpeg for video frames
+                            │
+                            ▼
+  Postgres lfb.perceptual_fp + memory tier · CSVs in ~/T/_large_files_bridge/fingerprints/exports/
+```
+
+The CLI shares the same key and base URL, but today it calls `/api/files/list`, not the fingerprint routes.
+
+| Spec | The question it answers | What it owns | What it leaves to the others |
+| --- | --- | --- | --- |
+| [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) | *What is a fingerprint, and what computes it?* | The research and the algorithm choice (PDQ for images, PDQ per frame for video); the match thresholds, quality floor and the video duplicate / subset rule; storage and the validity rule; the no-network guarantee. | How programs reach it (apis.mdx) and how Claude Code presents it (mcp.mdx). |
+| [apis.mdx](./apis.mdx) ◀ **this spec** | *How does any program ask for one?* | The local API key and machine-channel security; the endpoints; the hybrid sync/async job contract and its wait budgets; the error codes; the measured timings that justify the contract. | What a fingerprint means and when two match (perceptual_fingerprint.mdx); the Claude Code tools (mcp.mdx). |
+| [mcp.mdx](./mcp.mdx) | *How does Claude Code ask for one?* | The eleven `lfb_` tools; the stdio transport; reply shaping (summaries, byte cap, pointer to the CSV); the playbook `ai/lfb_mcp.md`; registration with Claude Code. | Every answer (computed by the backend, apis.mdx) and creating the key (apis.mdx §3.2). |
+
+**One request, end to end.** The user asks Claude Code: *"is clip.mp4 part of long.mp4?"*
+
+1. Claude calls `lfb_fingerprint_compare` (mcp.mdx §5).
+2. The MCP server re-reads the key from `~/.credentials/large_files_bridge.json` and sends
+   `POST /api/fingerprints/compare` to `127.0.0.1:8787` (mcp.mdx §4).
+3. The backend honors the key only from a loopback peer with a loopback Host header (apis.mdx §3.5).
+4. For each file it reuses the stored fingerprint if the size, modification time and engine version are
+   unchanged, or computes a new one through the `lfb-pdq` sidecar (perceptual_fingerprint.mdx §FD.3–§FD.4).
+5. It compares the two frame lists. A shared fraction ≥ 0.8 is a **duplicate**; otherwise a longest matching
+   run covering ≥ 0.7 of the shorter video is a **subset**, returned with its time range
+   (perceptual_fingerprint.mdx §4, apis.mdx §7.8).
+6. The MCP server wraps the answer in its JSON envelope (mcp.mdx §6), and Claude reports it as a
+   **signal**. Nothing is deleted or moved because of a match.
+
+**Where a change starts.**
+
+* **A different algorithm, threshold or storage rule** → perceptual_fingerprint.mdx first. The API and the
+  MCP server only carry the new values through.
+* **A new capability for callers** → a backend endpoint in apis.mdx first, then an MCP tool that wraps it.
+  The MCP server holds wrapper code only (mcp.mdx §1), so a tool can never be the first place something is
+  computed.
+* **How Claude Code behaves** (tool wording, reply size, what to do on an error) → mcp.mdx and
+  `ai/lfb_mcp.md` only.
+
+**A number used in more than one spec has one owner.** The others cite it; if they ever disagree, the
+owner wins and the others are corrected.
+
+| Number | Value | Owner |
+| --- | --- | --- |
+| Image match threshold (normal / strict) | Hamming ≤ 32 / ≤ 24 of 256 bits | perceptual_fingerprint.mdx §4 |
+| PDQ quality floor | 50 (of 100) | perceptual_fingerprint.mdx §4 |
+| Video duplicate / subset | shared fraction ≥ 0.8 / longest-run coverage ≥ 0.7 | perceptual_fingerprint.mdx §4 |
+| When a stored value is still valid | same size, modification time and engine version | perceptual_fingerprint.mdx §FD.4 |
+| Server wait budget (`wait_ms`) | default 20 s, maximum 55 s | apis.mdx §6.2 |
+| MCP wait cap / MCP HTTP timeout | 50 s / 75 s | mcp.mdx §6 |
+| MCP reply byte cap | 200 KB (up to 2 MB) | mcp.mdx §6 |
+
+The shared threshold constants, in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/fingerprints.ts` — `PDQ_MATCH_THRESHOLD`, `PDQ_MATCH_THRESHOLD_STRICT`, `PDQ_QUALITY_FLOOR`.
 
 ---
 
@@ -23,7 +111,7 @@ fingerprint surface. Related specs:
 | --- | --- | --- |
 | Web app (browser) | Signed-in session (Bearer token, allow-listed Google account) | Uses the same routes for the right-click power option. |
 | MCP server (`mcp/`) | Local API key, `X-LFB-Client: mcp` | Spawned by Claude Code over stdio; see mcp.mdx. |
-| CLI (`cli/`) | Local API key, `X-LFB-Client: cli` (the default) | cli.mdx. |
+| CLI (`cli/`) | Local API key, `X-LFB-Client: cli` (the default) | cli.mdx. Uses `/api/files/list` today; it has no fingerprint commands yet. |
 
 **The rule:** machine callers never compute answers themselves. Every fingerprint, every category, every
 decision is computed by the backend. The MCP server and the CLI are thin clients over this API.
@@ -220,11 +308,42 @@ though the job record itself does not.
     server, not the socket, decides when to return.
   * The web app asks for 1.5 s (directory) or 15 s (files), then long-polls every 2 s to draw its progress
     bar.
+  * Every caller's budget is **below its own transport timeout**. That is what guarantees the server always
+    answers (200 or 202) before a socket gives up.
 * **Never re-issue on pending.** A second identical request starts a second job over the same files.
   Callers poll the first job. The MCP playbook says so explicitly.
 * **The slow-request alarms know about this.** The backend's request watch would otherwise log every
   deliberate wait as a SLOW WARN, or as a STILL OPEN ERROR after 10 s. These routes are listed as
   long-lived by contract, so `error.err` stays reserved for real faults.
+
+### 6.3 What the two answers look like
+
+A small request finishes inside the budget (abridged):
+
+```
+POST /api/fingerprints/compute   { "paths": ["~/Pictures/a.jpg"] }
+→ 200 { "ok": true, "data": { "pending": false,
+        "job": { "id": "<job-uuid>", "status": "done", "total": 1, "done": 1, … },
+        "results": [ { "path": "/Users/…/a.jpg", "ok": true, "source": "computed", "stored": true,
+                       "fingerprint": { "kind": "image", "algo": "pdq", "value": "<64 hex>", "quality": 100, … } } ],
+        "results_offset": 0, "results_total": 1 } }
+```
+
+A large directory does not, so the caller gets the job and long-polls it:
+
+```
+POST /api/fingerprints/scan      { "dir": "~/Videos/2026" }
+→ 202 { "ok": true, "data": { "pending": true,
+        "job": { "id": "<job-uuid>", "status": "running", "discovering": true, "done": 412, "total": 1880, "eta_ms": 61000, … },
+        "results": [ …the 412 finished so far… ] } }
+
+GET  /api/fingerprints/jobs/<job-uuid>?wait_ms=50000&offset=412
+→ 200 { "ok": true, "data": { "pending": false, … } }   when it finishes inside the wait
+→ 200 { "ok": true, "data": { "pending": true,  … } }   with the next page, if the wait passes first
+```
+
+The job route always answers `200` and uses `pending` to say whether to poll again. Only `POST /compute`
+and `POST /scan` use `202`, because they are the calls that created the job.
 
 The job runner, the wait, and the walk that runs in parallel with hashing, in code:
 `~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.jobs.ts` — `startJob()`, `waitForJob()`, `walk()`, `record()`.
@@ -316,6 +435,70 @@ Body: `{ a, b, strict? }`. Each side is a path (fingerprinted or recalled first)
   * `note` says which of the two it is.
 * **A match is a signal only.** No endpoint ever deletes or moves a file because of a match.
 
+### 7.9 `POST /directory-csv` — a whole directory to a CSV, fast (the bulk scan)
+
+**Added 2026-09-24**, because the per-file path (§7.3) is too slow for whole media trees. It manages
+about 5 files a second, because it runs only 3 videos at a time. This route hands the directory to **one
+native Go process** that walks it and fingerprints every matching file in-process, on **80% of the CPU
+cores** by default. The engine is described in
+[perceptual_fingerprint.mdx §FD.8](./perceptual_fingerprint.mdx).
+
+Body:
+
+```
+{ dir,                          absolute; ~ allowed; "/" refused
+  extensions?: ["mp4", ".JPG"], only these; case and leading dot ignored; must be image/video types
+                                (default: every image and video extension Large File Bridge knows)
+  recursive?: true,
+  kinds?: ["image","video"],
+  exclude_dirs?: ["site/build", "backup"],   a bare name matches at any depth; a path is under dir (or absolute)
+  skip_generated_dirs?: true,   also skip HARD_SKIP's generated folders (build, dist, out, coverage, .venv…)
+  include_online_only?: false,  read Dropbox/iCloud placeholders (forces a download)
+  workers?: 1..256,             default: cpu_percent of the logical cores
+  cpu_percent?: 10..100,        default 80
+  max_files?: ≤ 500000,         default 50000
+  force?, include_frames?, wait_ms?,
+  results_limit?: 0..5000 }     results returned inline; default 0 — the CSV is the answer
+```
+
+* **The answer is a CSV.** When the job finishes, `job.csv_path` (repeated at `data.csv_path`) is a file in
+  `~/T/_large_files_bridge/fingerprints/exports/`. It has one row per file: the full path in `path`, the
+  64-hex fingerprint in `value`, and the rest of the §7.6 columns. For images, `strategy` is `go-area`
+  (the native decoder) or blank (the per-file sharp decoder, used for HEIC and AVIF).
+* **It uses the same hybrid contract (§6).** The reply is `200` if the scan finished inside `wait_ms`,
+  otherwise `202` with the job. Poll `GET /jobs/:id?wait_ms=50000&limit=1`. The `csv_path` appears in the
+  job when it is done. Cancel with §7.5; that stops the Go process and its ffmpeg children.
+* **Walk rules.**
+  * It never follows symlinks.
+  * It always skips hidden folders, `.git`, `node_modules`, `.Trash`, `.claude`, cloud-sync metadata, and
+    macOS bundles.
+  * With `skip_generated_dirs` (the default) it also skips the rest of `HARD_SKIP`.
+  * Pass `skip_generated_dirs: false` plus `exclude_dirs` to walk exactly the tree you mean.
+* **Reuse.** Files whose stored value is still valid are answered from the store without being read
+  (`source: memory | postgres`, counted in `job.cached`).
+* **Online-only cloud files** come back as `ok: false, error_code: not_downloaded`, unless
+  `include_online_only` is set.
+* **One at a time.** Only one bulk scan runs at a time, because each already uses about 80% of the
+  machine. A second request is accepted and waits (`job.waiting_for_slot: true`, status `queued`). Callers
+  with several directories should run them **one after another**. Running them in parallel is never
+  faster.
+* **Extra job fields:** `workers`, `cores`, `deferred` (images handed to the sharp path), and
+  `waiting_for_slot`.
+* **Errors (400):** an extension that is not an image or video type is rejected, and the message lists
+  the supported ones.
+* **Measured.** On the whole mirror (1,997 files, 22 GB) it took 375.5 s (1.47×), against 550.1 s for
+  §7.3. On 100 videos (2.6 GB) it took 62.9 s against 116.8 s. The per-file images were already fast, at
+  about 260 a second on both paths. The full table is in
+  [perceptual_fingerprint.mdx §FD.8](./perceptual_fingerprint.mdx).
+
+The route, the job, and the process bridge, in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.router.ts` — the `POST /directory-csv` handler;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.jobs.ts` — `runNative()`;
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/fingerprints/fingerprint.native-scan.ts` — `runNativeScan()`, `acquireNativeSlot()`.
+
+The request body schema, in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/fingerprints.ts` — `FingerprintDirectoryCsvBodySchema`.
+
 ---
 
 ## 8. Performance research (the measurements behind §6)
@@ -346,6 +529,10 @@ What this means:
 * **Concurrency limits.** Images run up to 12 at a time; videos up to 3 at a time (each already runs
   ffmpeg on many threads plus a hash pool). Both limits are derived from the core count and shared by
   every caller, so an MCP job and a web-app job cannot together oversubscribe the machine.
+* **Whole trees go to the bulk scan (§7.9).** A real 7,000-file media tree (6,000 images and 1,000 videos)
+  ran at about 5 files a second on this per-file path: 5,000 files took 1,026 s. The videos set the pace,
+  at 3 at a time. The bulk scan runs 19 videos at a time on the tower, largest first, and gives the
+  slowest ones more decoder threads. It exists for exactly this case.
 
 ---
 
@@ -378,5 +565,9 @@ What this means:
 4. Results are stored in Postgres and reused while the file is unchanged. A modified file is recomputed.
 5. A CSV of any job, or of the stored rows under a directory, can be written into the state root and its
    path returned.
+5a. `POST /directory-csv` fingerprints a whole directory (recursive, filtered by extension) in one native
+   process on 80% of the cores by default, returns a CSV with one row per file, and is measurably
+   faster than `/scan` on the same tree. Only one runs at a time. Its video values are identical to the
+   per-file path's, and its image values are within the strict threshold of them (§7.9).
 6. Every failure is either a typed per-file result or a JSON error with a stable code, and every failure
    that is ours is in `error.err`.

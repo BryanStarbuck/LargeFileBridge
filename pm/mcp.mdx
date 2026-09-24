@@ -1,18 +1,107 @@
 ---
 title: LargeFileBridge — The MCP server (`lfb`) for Claude Code
-description: The spec for Large File Bridge's Model Context Protocol server, the way Claude Code drives the local web app. It is a stdio server (no network listener) living in the top-level mcp/ directory, a peer of pm/ and cli/. Its implementation is under mcp/code/ and it builds to ONE bundled file, mcp/code/dist/index.js. Like the CLI it is a THIN client: every answer is computed by the backend over the localhost REST API (apis.mdx), authenticated with the web app's local API key read from the 0600 ~/.credentials/large_files_bridge.json (never created, never printed, re-read per call so a rotation needs no restart; a world-readable file is refused). Ten lfb_-prefixed tools cover perceptual fingerprints: whoami (diagnostics); fingerprint files; fingerprint a directory; job status with long-poll and paging; CSV export into the state root; lookup of stored values with validity; compare (duplicate vs subset for videos); cancel; list jobs; plus the CLI's category file list. Every tool returns one JSON envelope ({ok,data} or {ok:false,code,message,hint} with isError). Results are byte-capped with a pointer to the CSV export. The server's instructions come from the playbook ai/lfb_mcp.md, compiled into the bundle at build time. Errors go to stderr and to the app's error.err. just build-mcp builds it; just mcp-register prints (or with `apply` runs) the `claude mcp add` line.
+description: The spec for Large File Bridge's Model Context Protocol server, the way Claude Code drives the local web app. It is a stdio server (no network listener) living in the top-level mcp/ directory, a peer of pm/ and cli/. Its implementation is under mcp/code/ and it builds to ONE bundled file, mcp/code/dist/index.js. Like the CLI it is a THIN client: every answer is computed by the backend over the localhost REST API (apis.mdx), authenticated with the web app's local API key read from the 0600 ~/.credentials/large_files_bridge.json (never created, never printed, re-read per call so a rotation needs no restart; a world-readable file is refused). Ten lfb_-prefixed tools cover perceptual fingerprints: whoami (diagnostics); fingerprint files; fingerprint a directory; job status with long-poll and paging; CSV export into the state root; lookup of stored values with validity; compare (duplicate vs subset for videos); cancel; list jobs; plus the CLI's category file list. Every tool returns one JSON envelope ({ok,data} or {ok:false,code,message,hint} with isError). Results are byte-capped with a pointer to the CSV export. The server's instructions come from the playbook ai/lfb_mcp.md, compiled into the bundle at build time. Errors go to stderr and to the app's error.err. just build-mcp builds it; just mcp-register prints (or with `apply` runs) the `claude mcp add` line. It opens with a short description of what Large File Bridge does, and a shared section explaining how perceptual_fingerprint.mdx (the engine), apis.mdx (the REST API) and mcp.mdx (the Claude Code server) fit together, with one owner for every number they share. It adds lfb_fingerprint_directory_csv, the fast whole-folder-to-CSV tool, to be called for one directory at a time.
 ---
 
 # LargeFileBridge — The MCP server (`lfb`)
+
+## About Large File Bridge
+
+Large File Bridge is a local-first web app (TypeScript on Node; UI at http://localhost:2222/, REST backend
+at http://localhost:8787/) that keeps the **big, git-ignored files** in a person's repos and folders —
+videos, large images, audio and other large binaries — **in sync across their own computers by pinning them
+on IPFS**, while git carries the small text files and the record of what exists. It scans repos and
+directories for large files, nudges the ones that should be git-ignored (never ignoring anything on its
+own), tracks each file with a content hash and per-file metadata, and pins and fetches those files so every
+computer holds the same copy; a 15-minute `launchd` job keeps that going in the background. Around that
+core it helps people take care of the media itself: it finds files that are needlessly uncompressed and
+compresses them only when asked, writes transcripts, AI visual descriptions and OCR text beside them, and
+— the subject of this spec family — **recognizes when two files are the same content** even after a
+resize, re-compression, re-encode or format change. Everything runs on the user's own machine: sign-in is
+Google through OpenAuthFederated for allow-listed accounts only, the computer never acts as a public IPFS
+gateway or relay, and the fingerprint features never touch the network.
 
 The MCP server lets **Claude Code** use Large File Bridge from a chat. For example: *"get the perceptual
 fingerprints for everything in ~/Videos/2026 as a CSV"*, *"is this clip part of that longer video?"*, or
 *"which of these photos are the same picture?"*. It runs on the same computer as the web app, talks only
 to it, and computes nothing itself.
 
-* API it calls: [apis.mdx](./apis.mdx).
-* What a fingerprint is, and the engine behind it: [perceptual_fingerprint.mdx §FD](./perceptual_fingerprint.mdx).
-* The sibling thin client: [cli.mdx](./cli.mdx).
+The API it calls and the engine behind that API are described in the next section. The sibling thin
+client is the `lfb` CLI ([cli.mdx](./cli.mdx)).
+
+---
+
+## The three fingerprint specs, and how they work together
+
+Perceptual fingerprints are specified in three files. Each one owns one layer, and each layer talks only to
+the layer below it. **You are reading mcp.mdx, the Claude Code layer at the top.**
+
+```
+  Claude Code (chat)              Web app (browser)                Terminal
+        │ stdio, JSON-RPC               │ signed-in session              │
+        ▼                               │                                ▼
+  lfb MCP server ── mcp.mdx             │                     lfb CLI ── cli.mdx
+        │ X-LFB-Api-Key, loopback only  │                                │ X-LFB-Api-Key
+        └───────────────────┬───────────┴────────────────────────────────┘
+                            ▼
+  REST API  /api/fingerprints/*  ── apis.mdx
+  local API key · hybrid 200/202 jobs · lookup · compare · CSV export
+                            │
+                            ▼
+  Fingerprint engine  ── perceptual_fingerprint.mdx §FD
+  fingerprint.service → lfb-pdq Go sidecar (PDQ) + the user's own ffmpeg for video frames
+                            │
+                            ▼
+  Postgres lfb.perceptual_fp + memory tier · CSVs in ~/T/_large_files_bridge/fingerprints/exports/
+```
+
+The CLI shares the same key and base URL, but today it calls `/api/files/list`, not the fingerprint routes.
+
+| Spec | The question it answers | What it owns | What it leaves to the others |
+| --- | --- | --- | --- |
+| [perceptual_fingerprint.mdx](./perceptual_fingerprint.mdx) | *What is a fingerprint, and what computes it?* | The research and the algorithm choice (PDQ for images, PDQ per frame for video); the match thresholds, quality floor and the video duplicate / subset rule; storage and the validity rule; the no-network guarantee. | How programs reach it (apis.mdx) and how Claude Code presents it (mcp.mdx). |
+| [apis.mdx](./apis.mdx) | *How does any program ask for one?* | The local API key and machine-channel security; the endpoints; the hybrid sync/async job contract and its wait budgets; the error codes; the measured timings that justify the contract. | What a fingerprint means and when two match (perceptual_fingerprint.mdx); the Claude Code tools (mcp.mdx). |
+| [mcp.mdx](./mcp.mdx) ◀ **this spec** | *How does Claude Code ask for one?* | The eleven `lfb_` tools; the stdio transport; reply shaping (summaries, byte cap, pointer to the CSV); the playbook `ai/lfb_mcp.md`; registration with Claude Code. | Every answer (computed by the backend, apis.mdx) and creating the key (apis.mdx §3.2). |
+
+**One request, end to end.** The user asks Claude Code: *"is clip.mp4 part of long.mp4?"*
+
+1. Claude calls `lfb_fingerprint_compare` (mcp.mdx §5).
+2. The MCP server re-reads the key from `~/.credentials/large_files_bridge.json` and sends
+   `POST /api/fingerprints/compare` to `127.0.0.1:8787` (mcp.mdx §4).
+3. The backend honors the key only from a loopback peer with a loopback Host header (apis.mdx §3.5).
+4. For each file it reuses the stored fingerprint if the size, modification time and engine version are
+   unchanged, or computes a new one through the `lfb-pdq` sidecar (perceptual_fingerprint.mdx §FD.3–§FD.4).
+5. It compares the two frame lists. A shared fraction ≥ 0.8 is a **duplicate**; otherwise a longest matching
+   run covering ≥ 0.7 of the shorter video is a **subset**, returned with its time range
+   (perceptual_fingerprint.mdx §4, apis.mdx §7.8).
+6. The MCP server wraps the answer in its JSON envelope (mcp.mdx §6), and Claude reports it as a
+   **signal**. Nothing is deleted or moved because of a match.
+
+**Where a change starts.**
+
+* **A different algorithm, threshold or storage rule** → perceptual_fingerprint.mdx first. The API and the
+  MCP server only carry the new values through.
+* **A new capability for callers** → a backend endpoint in apis.mdx first, then an MCP tool that wraps it.
+  The MCP server holds wrapper code only (mcp.mdx §1), so a tool can never be the first place something is
+  computed.
+* **How Claude Code behaves** (tool wording, reply size, what to do on an error) → mcp.mdx and
+  `ai/lfb_mcp.md` only.
+
+**A number used in more than one spec has one owner.** The others cite it; if they ever disagree, the
+owner wins and the others are corrected.
+
+| Number | Value | Owner |
+| --- | --- | --- |
+| Image match threshold (normal / strict) | Hamming ≤ 32 / ≤ 24 of 256 bits | perceptual_fingerprint.mdx §4 |
+| PDQ quality floor | 50 (of 100) | perceptual_fingerprint.mdx §4 |
+| Video duplicate / subset | shared fraction ≥ 0.8 / longest-run coverage ≥ 0.7 | perceptual_fingerprint.mdx §4 |
+| When a stored value is still valid | same size, modification time and engine version | perceptual_fingerprint.mdx §FD.4 |
+| Server wait budget (`wait_ms`) | default 20 s, maximum 55 s | apis.mdx §6.2 |
+| MCP wait cap / MCP HTTP timeout | 50 s / 75 s | mcp.mdx §6 |
+| MCP reply byte cap | 200 KB (up to 2 MB) | mcp.mdx §6 |
+
+The shared threshold constants, in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/fingerprints.ts` — `PDQ_MATCH_THRESHOLD`, `PDQ_MATCH_THRESHOLD_STRICT`, `PDQ_QUALITY_FLOOR`.
 
 ---
 
@@ -85,6 +174,9 @@ The entry point, in code:
 * Each call carries `X-LFB-Api-Key` and `X-LFB-Client: mcp` to `http://127.0.0.1:<BE_PORT|8787>/api`. The
   host is fixed to loopback, and there is no setting to change it.
 * The key is never logged or returned; `lfb_whoami` shows only `sha256:xxxxxxxx`.
+* The full threat model (another computer, DNS rebinding, another OS user, a leaked key, an AI asked to
+  print the key) is in [apis.mdx §3.7](./apis.mdx). This server adds no attack surface of its own: it opens
+  no listener and has no setting that points it anywhere but loopback.
 
 The key reader, in code:
 `~/repos/LargeFileBridge/mcp/code/src/credentials.ts` — `readApiKey()`, `keyFingerprint()`.
@@ -104,17 +196,18 @@ zod, published as JSON Schema. Relative paths resolve against the directory Clau
 | --- | --- | --- |
 | `lfb_whoami` | reads the key file, then `GET /fingerprints/info` | First, whenever anything fails. Reports the backend up or down, whether the key is present and authenticated, the engine built or missing, and whether Postgres is storing results. |
 | `lfb_fingerprint_files` | `POST /fingerprints/compute` | The user names files (up to 5,000). |
-| `lfb_fingerprint_directory` | `POST /fingerprints/scan` | The user names a folder or repo. |
+| `lfb_fingerprint_directory_csv` | `POST /fingerprints/directory-csv` | **The fast default for a folder, a repo, or several locations**, and for any "fingerprint this folder as a CSV" request. One native process fingerprints the whole tree on ~80% of the cores, filtered by `extensions`; the answer is `csv_path`. **One call at a time:** for several directories, call it for one, wait for that job to finish, then call it for the next. Never call it in parallel or from several agents (apis.mdx §7.9). |
+| `lfb_fingerprint_directory` | `POST /fingerprints/scan` | The older per-file directory walk (about 5 files/s). Only when results are wanted paged inline rather than as a CSV. |
 | `lfb_fingerprint_job` | `GET /fingerprints/jobs/:id` | A result came back `pending`. `wait_seconds` (≤ 50) long-polls; `offset` and `limit` page the results. |
-| `lfb_fingerprint_export_csv` | `GET /jobs/:id/csv?save=true` or `GET /lookup?dir=…&format=csv&save=true` | Any CSV or spreadsheet request, or more than ~50 files. Returns `csv_path` in the state root. |
+| `lfb_fingerprint_export_csv` | `GET /fingerprints/jobs/:id/csv?save=true` or `GET /fingerprints/lookup?dir=…&format=csv&save=true` | Any CSV or spreadsheet request, or more than ~50 files. Returns `csv_path` in the state root. |
 | `lfb_fingerprint_lookup` | `GET /fingerprints/lookup` | "What is already stored?" Never computes, and reports whether each stored value is still valid. |
 | `lfb_fingerprint_compare` | `POST /fingerprints/compare` | "Are these the same?" For videos it also says duplicate vs subset, and the time range. |
-| `lfb_fingerprint_cancel` | `POST /jobs/:id/cancel` | Stop a running job. |
+| `lfb_fingerprint_cancel` | `POST /fingerprints/jobs/:id/cancel` | Stop a running job. |
 | `lfb_list_jobs` | `GET /fingerprints/jobs` | Find a job after a timeout, before starting it again. |
 | `lfb_files_list` | `GET /files/list` | The CLI's task-category listing (compressible, gitignore, transcribable, …). |
 
 The tool definitions, in code:
-`~/repos/LargeFileBridge/mcp/code/src/tools/fingerprints.ts` — `fingerprintFiles`, `fingerprintDirectory`, `fingerprintJob`, `exportCsv`, `lookup`, `compare`, `cancel`, `listJobs`.
+`~/repos/LargeFileBridge/mcp/code/src/tools/fingerprints.ts` — `fingerprintFiles`, `fingerprintDirectory`, `fingerprintDirectoryCsv`, `fingerprintJob`, `exportCsv`, `lookup`, `compare`, `cancel`, `listJobs`.
 
 The diagnostics and the file list, in code:
 `~/repos/LargeFileBridge/mcp/code/src/tools/orientation.ts` — `whoami`, `filesList`.
@@ -125,7 +218,32 @@ The diagnostics and the file list, in code:
 * `progress`: done, total, discovering, eta_seconds;
 * `summary`: counts per outcome, such as `ok_image`, `ok_video_cached` and `failed_decode_failed`;
 * `next`: one sentence saying what to call next;
-* then the results.
+* `csv_path`: the job's CSV once it has finished (every finished job writes one);
+* then the results. `lfb_fingerprint_directory_csv` returns none inline; its CSV is the answer. It also
+  returns `engine` (workers, cores, waiting_for_slot).
+
+### 5.1 Typical flows
+
+* **A few files** — *"fingerprint these three photos."* One call to `lfb_fingerprint_files` comes back with
+  `pending: false` and every value. Done in one round trip.
+* **A big folder** — *"fingerprint everything in ~/Videos/2026 as a CSV."*
+  1. `lfb_fingerprint_directory_csv` (with `extensions` if the user named file types) returns
+     `pending: true`, a `job_id`, progress, and `next`.
+  2. `lfb_fingerprint_job` with `wait_seconds: 50` and `limit: 1`, repeated until `pending: false`. Each
+     call blocks on the server, so this is a handful of calls, not a spin.
+  3. The finished job's `csv_path` is the CSV. Claude Code reads that file directly instead of pulling
+     thousands of rows through the chat.
+* **Several locations** — *"fingerprint my mirror, Dropbox and the repo."* Run the big-folder flow for the
+  first location, wait until its job finishes, then start the next. Each job already uses about 80% of the
+  cores, so running them in parallel or through agents is never faster. The server also queues a
+  second bulk scan until the first ends.
+* **Same or not** — *"is this clip part of that longer video?"* One `lfb_fingerprint_compare`. The reply's
+  `note` says duplicate, subset (with `longest_run` giving the time range) or different. The model reports
+  it; it never deletes or moves anything because of it.
+* **A tool timed out or the chat was interrupted** — `lfb_list_jobs` first, then resume the existing job
+  with `lfb_fingerprint_job`. Starting the request again would start a second job over the same files.
+* **Anything fails** — `lfb_whoami` first. It separates "the web app is not running", "the key is missing or
+  wrong", and "the PDQ engine is not built" in one call.
 
 ---
 
@@ -198,7 +316,9 @@ The logger, in code:
 3. Fingerprinting files and a directory works end to end:
    * small work returns synchronously;
    * large work returns a job that `lfb_fingerprint_job` long-polls to completion;
-   * `lfb_fingerprint_export_csv` returns a CSV path that exists.
+   * `lfb_fingerprint_export_csv` returns a CSV path that exists;
+   * `lfb_fingerprint_directory_csv` on a folder returns a job whose finished `csv_path` has one row per
+     matching file (path + 64-hex value), filtered by `extensions`.
 4. The key is never printed; a loose credentials file is refused with the `chmod` fix; a rotated key works
    on the next call without a restart.
 5. Every failure is an `isError` result with a stable code, and every WARN/ERROR is also in `error.err`.

@@ -10,6 +10,10 @@ import { Router, type Request, type Response } from "express";
 import {
   FingerprintCompareBodySchema,
   FingerprintComputeBodySchema,
+  FingerprintDirectoryCsvBodySchema,
+  IMAGE_EXTENSIONS,
+  VIDEO_EXTENSIONS,
+  FINGERPRINT_NATIVE_CPU_PERCENT_DEFAULT,
   FingerprintScanBodySchema,
   FINGERPRINT_WAIT_MS_DEFAULT,
   PDQ_MATCH_THRESHOLD,
@@ -150,6 +154,58 @@ fingerprintsRouter.post("/scan", async (req, res) => {
     res.status(finished ? 200 : 202).json({ ok: true, data: body });
   } catch (e) {
     internal(res, req, "POST /scan", e);
+  }
+});
+
+// POST /api/fingerprints/directory-csv — the BULK directory scan (apis.mdx §7.9). One Go process walks the
+// directory (recursive by default), keeps the files whose extension was asked for, and fingerprints them
+// in-process on ~80% of the cores. The answer is a CSV file (job.csv_path) — one row per file, the path in
+// one column and the 64-hex fingerprint in another. Same hybrid contract as /scan: 200 when it finished
+// inside wait_ms, else 202 with a job to poll.
+fingerprintsRouter.post("/directory-csv", async (req, res) => {
+  try {
+    const parsed = FingerprintDirectoryCsvBodySchema.safeParse(req.body);
+    if (!parsed.success) return badRequest(res, parsed.error.issues.map((i) => `${i.path.join(".")}: ${i.message}`).join("; "));
+    const b = parsed.data;
+    const dir = expandPath(b.dir);
+    try {
+      const st = await fsp.stat(dir);
+      if (!st.isDirectory()) return badRequest(res, `${dir} is not a directory`);
+    } catch {
+      return res.status(404).json({ ok: false, code: "not_found", error: `${dir} does not exist` });
+    }
+    if (dir === "/") return badRequest(res, "refusing to fingerprint the whole filesystem root — name a directory");
+    const media = new Set([...IMAGE_EXTENSIONS, ...VIDEO_EXTENSIONS]);
+    const unsupported = (b.extensions ?? []).filter((e) => !media.has(e));
+    if (unsupported.length > 0) {
+      return badRequest(
+        res,
+        `extensions ${unsupported.join(", ")} are not image or video types. Supported: ${[...VIDEO_EXTENSIONS, ...IMAGE_EXTENSIONS].join(", ")}`,
+      );
+    }
+    const job = startJob({
+      kind: "native-directory",
+      dir,
+      recursive: b.recursive,
+      extensions: b.extensions ? [...new Set(b.extensions)] : undefined,
+      kinds: b.kinds,
+      excludeDirs: b.exclude_dirs,
+      skipGeneratedDirs: b.skip_generated_dirs,
+      includeOnlineOnly: b.include_online_only,
+      workers: b.workers,
+      cpuPercent: b.cpu_percent ?? FINGERPRINT_NATIVE_CPU_PERCENT_DEFAULT,
+      maxFiles: b.max_files,
+      force: b.force,
+      includeFrames: b.include_frames,
+    });
+    log.info("fingerprints", `bulk directory-csv job ${job.id} queued for ${dir} by ${currentUser(req).name}`);
+    const finished = await waitForJob(job.id, b.wait_ms ?? FINGERPRINT_WAIT_MS_DEFAULT);
+    const body = jobResponse(job.id, 0, b.results_limit ?? 0, b.include_frames === true)!;
+    // limit 0 still reports results_total; the CSV is the answer.
+    if ((b.results_limit ?? 0) === 0) body.results = [];
+    res.status(finished ? 200 : 202).json({ ok: true, data: { ...body, csv_path: body.job.csv_path } });
+  } catch (e) {
+    internal(res, req, "POST /directory-csv", e);
   }
 });
 

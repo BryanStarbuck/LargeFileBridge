@@ -9,7 +9,7 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const SIDECAR = path.resolve(HERE, "../../../../../sidecars/pdq");
 
 // The router is the ONE file allowed to speak HTTP — it is the server side of the API, not a client.
-const TS_FILES = ["pdq-sidecar.ts", "fingerprint.service.ts", "fingerprint.store.ts", "fingerprint.jobs.ts", "fingerprint.csv.ts"];
+const TS_FILES = ["pdq-sidecar.ts", "fingerprint.service.ts", "fingerprint.store.ts", "fingerprint.jobs.ts", "fingerprint.csv.ts", "fingerprint.native-scan.ts"];
 
 test("no TypeScript file in the fingerprint engine imports a network client", () => {
   const networkImport =

@@ -68,9 +68,12 @@ const MAC_PACKAGE_EXT = new Set([
   ".app", ".framework", ".bundle", ".plugin", ".kext", ".xpc", ".prefpane", ".qlgenerator",
   ".mdimporter", ".component", ".dSYM", ".pkg", ".mpkg", ".appex", ".systemextension",
   // media / library packages that also hold many nested asset files as one opaque document
-  ".photoslibrary", ".fcpbundle", ".imovielibrary", ".tvlibrary", ".aplibrary", ".migbundle",
+  ".photoslibrary", ".fcpbundle", ".imovielibrary", ".tvlibrary", ".aplibrary", ".migbundle", ".band",
   ".rtfd", ".scptd", ".download",
 ]);
+
+/** The bundle extensions above, as a list (the bulk fingerprint scan hands them to its Go walker). */
+export const MAC_PACKAGE_EXTENSIONS: readonly string[] = [...MAC_PACKAGE_EXT];
 
 /** True when `dirName` is a macOS package/bundle directory that must be treated as an opaque unit. */
 export function isMacPackageDir(dirName: string): boolean {

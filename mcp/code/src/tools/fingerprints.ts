@@ -14,7 +14,10 @@ const waitSeconds = z
   .describe("How long to wait for the job before returning pending (default 20, max 50). 0 returns at once.");
 
 interface JobResponse {
-  job: { id: string; status: string; total: number; done: number; ok: number; failed: number; cached: number; eta_ms: number | null; csv_path: string | null; discovering: boolean };
+  job: {
+    id: string; status: string; total: number; done: number; ok: number; failed: number; cached: number; eta_ms: number | null;
+    csv_path: string | null; discovering: boolean; workers?: number | null; cores?: number | null; waiting_for_slot?: boolean; deferred?: number;
+  };
   results: Array<{ ok: boolean; code?: string; source?: string; fingerprint?: { kind?: string } }>;
   results_offset: number;
   results_total: number;
@@ -28,6 +31,8 @@ function shapeJob(r: JobResponse) {
     pending,
     status: job.status,
     progress: { done: job.done, total: job.total, discovering: job.discovering, eta_seconds: job.eta_ms == null ? null : Math.round(job.eta_ms / 1000) },
+    // Set once the job finishes (every job writes one); bulk directory-csv callers read it from here.
+    csv_path: job.csv_path,
     summary: summarize(r.results),
     next: pending
       ? `Still running. Call lfb_fingerprint_job with job_id "${job.id}" and wait_seconds 50 to wait for it.`
@@ -90,10 +95,76 @@ export const fingerprintDirectory = defineTool({
   },
 });
 
+export const fingerprintDirectoryCsv = defineTool({
+  name: "lfb_fingerprint_directory_csv",
+  description:
+    "FASTEST way to fingerprint a whole folder into a CSV. One native engine walks the directory (recursive by default), keeps only the " +
+    "file extensions you pass (e.g. [\"mp4\",\"jpg\"]; default every image and video type), and fingerprints them in parallel on ~80% of the " +
+    "CPU cores. The answer is csv_path: one row per file, the full path in one column and the 64-hex PDQ fingerprint in another. " +
+    "Usually returns pending + job_id — poll lfb_fingerprint_job with wait_seconds 50 and limit 1, then read csv_path from it. " +
+    "Each call already uses most of the machine: call it for ONE directory at a time, never several in parallel (extra calls just queue). " +
+    "Runs 100% locally.",
+  schema: z.object({
+    dir: z.string().min(1).describe("Absolute directory path (~ allowed)."),
+    extensions: z
+      .array(z.string().min(1))
+      .min(1)
+      .max(64)
+      .optional()
+      .describe("Only these file extensions, case and leading dot ignored, e.g. [\"mp4\",\"mov\",\"jpg\"]. Must be image or video types. Default: all of them."),
+    recursive: z.boolean().optional().describe("Default true."),
+    exclude_dirs: z
+      .array(z.string().min(1))
+      .max(200)
+      .optional()
+      .describe("Folders never entered: a bare name (\"backup\") matches at any depth; a path is relative to dir (\"site/build\") or absolute."),
+    skip_generated_dirs: z
+      .boolean()
+      .optional()
+      .describe("Default true: also skip build/dist/out/coverage/.venv and similar generated folders. Pass false to walk exactly what is on disk (then use exclude_dirs)."),
+    include_online_only: z
+      .boolean()
+      .optional()
+      .describe("Default false: Dropbox/iCloud online-only files are reported as not_downloaded instead of being downloaded to read them."),
+    workers: z.number().int().min(1).max(256).optional().describe("Worker threads. Default: 80% of the CPU cores."),
+    cpu_percent: z.number().int().min(10).max(100).optional().describe("Share of the cores when workers is not given. Default 80."),
+    max_files: z.number().int().min(1).max(500000).optional().describe("Stop after this many files (default 50,000)."),
+    force: z.boolean().optional().describe("Recompute even files with a valid stored fingerprint. Only when the user asks."),
+    include_frames: z.boolean().optional().describe("Add each video's per-frame list (a frames column in the CSV). Large. Default false."),
+    wait_seconds: waitSeconds,
+  }),
+  async run(a) {
+    const { data } = await api<JobResponse & { csv_path: string | null }>("POST", "/fingerprints/directory-csv", {
+      dir: resolveUserPath(a.dir),
+      extensions: a.extensions,
+      recursive: a.recursive,
+      exclude_dirs: a.exclude_dirs,
+      skip_generated_dirs: a.skip_generated_dirs,
+      include_online_only: a.include_online_only,
+      workers: a.workers,
+      cpu_percent: a.cpu_percent,
+      max_files: a.max_files,
+      force: a.force,
+      include_frames: a.include_frames,
+      wait_ms: (a.wait_seconds ?? 20) * 1000,
+      results_limit: 0,
+    });
+    const shaped = shapeJob(data);
+    return {
+      ...shaped,
+      csv_path: data.job.csv_path,
+      engine: { workers: data.job.workers ?? null, cores: data.job.cores ?? null, waiting_for_slot: data.job.waiting_for_slot === true },
+      next: data.pending
+        ? `Still running. Call lfb_fingerprint_job with job_id "${data.job.id}", wait_seconds 50, limit 1 until pending is false; its job.csv_path is the CSV.`
+        : `Finished. The CSV is ${data.job.csv_path}.`,
+    };
+  },
+});
+
 export const fingerprintJob = defineTool({
   name: "lfb_fingerprint_job",
   description:
-    "Status and results of a fingerprint job started by lfb_fingerprint_files or lfb_fingerprint_directory. " +
+    "Status and results of a fingerprint job started by lfb_fingerprint_files, lfb_fingerprint_directory, or lfb_fingerprint_directory_csv. " +
     "wait_seconds makes the server wait for the job (up to 50 s) instead of answering at once — use it instead of polling fast. " +
     "Page long result lists with offset/limit.",
   schema: z.object({
@@ -212,4 +283,4 @@ export const listJobs = defineTool({
   },
 });
 
-export const FINGERPRINT_TOOLS = [fingerprintFiles, fingerprintDirectory, fingerprintJob, exportCsv, lookup, compare, cancel, listJobs];
+export const FINGERPRINT_TOOLS = [fingerprintFiles, fingerprintDirectory, fingerprintDirectoryCsv, fingerprintJob, exportCsv, lookup, compare, cancel, listJobs];

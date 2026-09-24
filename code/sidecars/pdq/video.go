@@ -69,6 +69,10 @@ type plan struct {
 
 var ptsRe = regexp.MustCompile(`pts_time:\s*(-?[0-9.]+)`)
 
+// baseCtx parents every ffprobe/ffmpeg this process starts. The NDJSON server leaves it at Background; the
+// bulk scan (scan.go) swaps in a context that SIGTERM cancels, so cancelling a scan kills its decoders too.
+var baseCtx = context.Background()
+
 // vtRefused remembers the (codec, pixel format) pairs VideoToolbox could not decode in this process, so a
 // folder full of the same kind of file pays for the failed attempt once, not once per file.
 var (
@@ -193,10 +197,18 @@ func hashVideo(req request) (res response) {
 			res.Tried = append(res.Tried, p.name+": skipped, timeout reached")
 			break
 		}
-		frames, why := runPlan(ffmpeg, path, p, maxFrames, deadline, pr.startTime)
+		if baseCtx.Err() != nil {
+			res.Error = "cancelled"
+			return
+		}
+		threads := req.FFThreads
+		if !p.sparse && req.FullThreads > threads {
+			threads = req.FullThreads
+		}
+		frames, why := runPlan(ffmpeg, path, p, maxFrames, deadline, pr.startTime, threads)
 		if why != "" {
 			res.Tried = append(res.Tried, p.name+": "+why)
-			if p.hw && why != "timed out" && codec != "" {
+			if p.hw && why != "timed out" && why != "cancelled" && codec != "" {
 				noteVTRefused(vtKey, shortWhy(why))
 			}
 			continue
@@ -218,6 +230,10 @@ func hashVideo(req request) (res response) {
 		if len(frames) > 0 {
 			res.Quality = bestQuality(frames)
 		}
+		return
+	}
+	if baseCtx.Err() != nil {
+		res.Error = "cancelled"
 		return
 	}
 	if res.Error == "" {
@@ -295,7 +311,7 @@ func probe(ffprobe, path string) probeResult {
 	if ffprobe == "" {
 		return pr
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	ctx, cancel := context.WithTimeout(baseCtx, 20*time.Second)
 	defer cancel()
 	out, err := exec.CommandContext(ctx, ffprobe, "-v", "error", "-protocol_whitelist", "file",
 		"-select_streams", "v:0", "-show_entries", "format=duration,start_time:stream=codec_name,pix_fmt",
@@ -337,10 +353,17 @@ func shortWhy(why string) string {
 
 // runPlan runs one ffmpeg decode plan and hashes its frames as they stream in. It returns the frames, or a
 // short reason the plan failed (never both).
-func runPlan(ffmpeg, path string, p plan, maxFrames int, deadline time.Time, startTime float64) ([]videoFrame, string) {
-	ctx, cancel := context.WithDeadline(context.Background(), deadline)
+//
+// ffThreads > 0 caps ffmpeg's decoder threads. The bulk scan runs many videos at once and sets it so the
+// ffmpeg processes together fit the scan's core budget; 0 keeps ffmpeg's own default (one video at a time).
+// Thread count never changes the decoded pixels, so it never changes a fingerprint.
+func runPlan(ffmpeg, path string, p plan, maxFrames int, deadline time.Time, startTime float64, ffThreads int) ([]videoFrame, string) {
+	ctx, cancel := context.WithDeadline(baseCtx, deadline)
 	defer cancel()
 	args := []string{"-nostdin", "-hide_banner", "-loglevel", "info", "-protocol_whitelist", "file,pipe"}
+	if ffThreads > 0 {
+		args = append(args, "-threads", strconv.Itoa(ffThreads))
+	}
 	args = append(args, p.pre...)
 	args = append(args, "-i", "file:"+path, "-map", "0:v:0", "-an", "-sn", "-dn",
 		"-vf", p.vf, "-fps_mode", "passthrough", "-frames:v", strconv.Itoa(maxFrames),
@@ -431,6 +454,9 @@ func runPlan(ffmpeg, path string, p plan, maxFrames int, deadline time.Time, sta
 
 	if ctx.Err() == context.DeadlineExceeded {
 		return nil, "timed out"
+	}
+	if ctx.Err() != nil {
+		return nil, "cancelled"
 	}
 	if waitErr != nil && n == 0 {
 		return nil, "ffmpeg failed: " + lastLines(tail)
