@@ -41,6 +41,11 @@ Siblings this builds on and does not repeat:
 
 ## 1. Principles (LOCKED)
 
+> **Hidden unless the user turns compression on.** Every compression surface this spec describes (the Compress tab, status icon, action links, popups, dialog, badges) is shown only when the signed-in user has
+> checked **Settings → Compression → "Show compression features"** (per user, **default off**). Context menus
+> are the one exception and keep their Compress items. Full rules:
+> [compression_visibility.mdx](./compression_visibility.mdx).
+
 1. **Never automatic.** LFBridge never compresses on its own. The user clicks **Compress** on a file, or
    selects several / a whole table filter and clicks compress. Charter §6.1.
 2. **Medium quality — the MIDDLE of the range — prefer lossless.** We target the **middle** of the

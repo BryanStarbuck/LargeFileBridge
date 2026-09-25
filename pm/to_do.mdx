@@ -48,6 +48,11 @@ Design tenets:
 
 ## 2. The left-bar item (LOCKED)
 
+> **Hidden unless the user turns compression on.** A compress batch (and the compress items and Compress column of a mixed batch) is shown only when the signed-in user has
+> checked **Settings → Compression → "Show compression features"** (per user, **default off**). Context menus
+> are the one exception and keep their Compress items. Full rules:
+> [compression_visibility.mdx](./compression_visibility.mdx).
+
 **To Do** is a nav item in the app bar ([left_bar.mdx §3](./left_bar.mdx#3-the-app-bar-main-navigation)):
 
 * Label **"To Do"**, icon lucide `ListTodo`, route **`/todo`**.

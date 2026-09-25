@@ -18,6 +18,7 @@ import { relativeTime, absoluteTime, middleTruncate } from "@/lib/format";
 import { clientLog } from "@/lib/clientLog";
 import { useLiveRefresh, repoTopic } from "@/lib/useLiveRefresh";
 import { copyText } from "@/lib/clipboard";
+import { useCompressionEnabled } from "@/api/useUserPrefs";
 
 export function ViewOneFilePage() {
   const { path } = useSearch({ strict: false }) as { path?: string };
@@ -32,6 +33,8 @@ export function ViewOneFilePage() {
   // A backbone pull or batch settle can change this entity while the page sits open (performance.mdx
   // Aspect 6b).
   useLiveRefresh([v?.repo ? repoTopic(v.repo.repoId) : null, "jobs"], [["entity", path]]);
+  // The Compression card only for a user who shows compression (compression_visibility.mdx §2 row 14).
+  const compressionOn = useCompressionEnabled();
 
   const decide = useMutation({
     mutationFn: (d: Decision) => api.setEntityDecision(path!, d),
@@ -128,7 +131,7 @@ export function ViewOneFilePage() {
           )}
         </Card>
 
-        <Card title="Compression">
+        {compressionOn && (<Card title="Compression">
           {v.compressible ? (
             <div className="flex items-center justify-between text-sm">
               <span className="capitalize text-black/70">
@@ -140,7 +143,7 @@ export function ViewOneFilePage() {
           ) : (
             <span className="text-sm text-black/50">Not a compressible media file.</span>
           )}
-        </Card>
+        </Card>)}
 
         <Card title="File">
           <div className="text-sm text-black/70">

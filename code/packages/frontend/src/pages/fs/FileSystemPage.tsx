@@ -26,6 +26,8 @@ import { useWindowedRows } from "@/components/table/useWindowedRows";
 import { setOptionPreviewTarget } from "@/components/preview/OptionImagePreview";
 import { formatBytes, middleTruncate } from "@/lib/format";
 import { FsTabs } from "./FsTabs";
+import { useCompressionEnabled } from "@/api/useUserPrefs";
+import { visibleBadges } from "@/lib/compressionVisibility";
 
 const FSROW_H = 28; // fixed column-row height the windowing math relies on (px).
 // content-visibility lets the browser skip layout+paint for rows just outside the windowed slice
@@ -168,10 +170,11 @@ export default function FileSystemPage() {
     return currentDir ? { root: currentDir } : {};
   }, [selectedFile, currentDir]);
 
+  const pageCompressionOn = useCompressionEnabled();
   const fsActions: Action[] = [
     ...producingActions(() => (currentDir ? { root: currentDir } : {})),
-    compressAllVideos(currentDir),
-    compressAllImages(currentDir),
+    // Compress links only for a user who shows compression (compression_visibility.mdx §2 row 5).
+    ...(pageCompressionOn ? [compressAllVideos(currentDir), compressAllImages(currentDir)] : []),
     gitIgnoreBig(resolveGitIgnoreTarget()),
     trackPinDir(),
   ];
@@ -326,6 +329,8 @@ const FsRow = memo(function FsRow({
   // (name + up to three lines: size, an interest hint, and the modified date or path) FOLLOWED BY one
   // code-key block per badge on this entry. Combines with the CSS `group` hover (kebab reveal) — spreading
   // the mouse/focus handlers doesn't disturb :hover.
+  // No C / c code-key blocks for a user who hides compression (compression_visibility.mdx §2 row 11).
+  const compressionOn = useCompressionEnabled();
   const hoverPayload = useMemo<HoverInfo>(() => {
     const lines: string[] = [];
     if (entry.sizeBytes != null) lines.push(formatBytes(entry.sizeBytes));
@@ -342,7 +347,7 @@ const FsRow = memo(function FsRow({
     return {
       blocks: [
         { kind: "detail", title: entry.name, lines: lines.slice(0, 3) },
-        ...entry.badges.map((b) => {
+        ...visibleBadges(entry.badges, compressionOn).map((b) => {
           const m = BADGE_META[b];
           return {
             kind: "code" as const,
@@ -353,7 +358,7 @@ const FsRow = memo(function FsRow({
         }),
       ],
     };
-  }, [entry]);
+  }, [entry, compressionOn]);
   const hover = useHoverInfoSource(hoverPayload);
 
   // Option-key floating image preview (option_image_preview.mdx §5 / file_system.mdx §5.4): an image

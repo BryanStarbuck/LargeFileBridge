@@ -93,6 +93,11 @@ one option per value. That control is wrong for this product on three counts:
 
 ### 2.1 A facet is its values, each with a checkbox, all checked by default (LOCKED)
 
+> **Hidden unless the user turns compression on.** The §2.11 **Compressible videos / images / audio** filter fields is shown only when the signed-in user has
+> checked **Settings → Compression → "Show compression features"** (per user, **default off**). Context menus
+> are the one exception and keep their Compress items. Full rules:
+> [compression_visibility.mdx](./compression_visibility.mdx).
+
 Every categorical (enum / boolean / toggle) filter is a **facet**: the flat list of the values that
 column can hold, **each with its own checkbox**, and **every box starts checked**.
 

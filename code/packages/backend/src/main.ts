@@ -36,6 +36,7 @@ import { internalRouter } from "./modules/internal/internal.router.js";
 import { setShutdownHook } from "./modules/internal/shutdown-hook.js";
 import { clientLogRouter } from "./modules/clientlog/clientlog.router.js";
 import { tableViewsRouter } from "./modules/store-model/table-views.router.js";
+import { userPrefsRouter } from "./modules/store-model/user-prefs.router.js";
 import { debugRouter } from "./modules/debug/debug.router.js";
 import { filesQueryRouter } from "./modules/files-query/files-query.router.js";
 import { videosRouter } from "./modules/videos/videos.router.js";
@@ -509,6 +510,7 @@ async function main(): Promise<void> {
   app.use("/api/internal", internalRouter);
   app.use("/api/client-log", clientLogRouter); // browser fault trail -> shared logger -> error.err
   app.use("/api/table-views", tableViewsRouter); // per-user remembered table sort/filters/columns (tables.mdx)
+  app.use("/api/user-prefs", userPrefsRouter); // per-user feature visibility, e.g. "Show compression features" (compression_visibility.mdx)
   app.use("/api/debug", debugRouter); // Export Debug Information: the per-computer debug.yaml state dump (debug.mdx)
   app.use("/api/files", filesQueryRouter); // CLI "get file list": category-grouped file query (cli.mdx §4)
   app.use("/api/fingerprints", fingerprintsRouter); // PDQ perceptual fingerprints: compute/scan/jobs/lookup/compare (apis.mdx §7)

@@ -16,6 +16,7 @@ import { relativeTime } from "@/lib/format";
 import { confirmModal } from "@/lib/modals";
 import { clientLog, errMessage } from "@/lib/clientLog";
 import { useLiveRefresh, repoTopic } from "@/lib/useLiveRefresh";
+import { useCompressionEnabled } from "@/api/useUserPrefs";
 
 interface RollupRow {
   id: string;
@@ -36,6 +37,9 @@ export function ViewOneDirectoryPage() {
     enabled: !!path,
   });
   useLiveRefresh([v?.repo ? repoTopic(v.repo.repoId) : null, "jobs"], [["entity", path]]);
+  // "Show compression features" off (the default) drops the two compressible rollup rows and the
+  // "Compress all…" link; the ⋯ More menu keeps its compress items (compression_visibility.mdx §2–§3).
+  const compressionOn = useCompressionEnabled();
 
   if (!path) return <p className="text-black/60">No directory selected.</p>;
   if (isLoading) return <SkeletonPage />;
@@ -45,8 +49,12 @@ export function ViewOneDirectoryPage() {
   const r = v.rollup;
   const rows: RollupRow[] = r
     ? [
-        { id: "videos", category: "Videos that can be compressed", count: r.videosToCompress, action: "compress", hidden: v.flags.noCompress },
-        { id: "images", category: "Images that can be compressed", count: r.imagesToCompress, action: "compress", hidden: v.flags.noCompress },
+        ...(compressionOn
+          ? ([
+              { id: "videos", category: "Videos that can be compressed", count: r.videosToCompress, action: "compress", hidden: v.flags.noCompress },
+              { id: "images", category: "Images that can be compressed", count: r.imagesToCompress, action: "compress", hidden: v.flags.noCompress },
+            ] satisfies RollupRow[])
+          : []),
         { id: "big-open", category: "Big files not git-ignored", count: r.bigNotIgnored, action: "ignore", hidden: false },
         { id: "big-ignored", category: "Big files git-ignored, not tracked", count: r.bigIgnoredNotTracked, action: "track", hidden: v.flags.neverIpfs },
       ]
@@ -67,6 +75,8 @@ export function ViewOneDirectoryPage() {
   };
   const dirPageActions: Action[] = [
     ...producingActions(() => ({ root: v.path })),
+  ];
+  if (compressionOn) dirPageActions.push(
     {
       id: "compress-all",
       label: "Compress all…",
@@ -80,7 +90,7 @@ export function ViewOneDirectoryPage() {
       },
       onSelect: compressDirConfirmed,
     },
-  ];
+  );
 
   // The folder-level sticky flags — same state as the strip switches (directories.mdx §8.1).
   const toggleFlag = async (patch: { neverIpfs?: boolean; noCompress?: boolean }) => {

@@ -1,0 +1,168 @@
+---
+title: LargeFileBridge — Compression Visibility (the per-user "Show compression features" setting)
+description: A per-user setting, OFF by default, that decides whether the compression feature is VISIBLE anywhere in the web app. When it is off (the default), every compression entry point and every compression indicator is hidden — the One-repo Compress tab, the compressible / compressed metric tiles, the Compress status-icon column, the "Compress videos / Compress images / Compress all…" page action links, the bulk "Compress selected" button, the header-primary "Compress ›" recommendation, the Compress axis and the Compress option in educate-and-fix popups, the compress batches on the To Do page, the compressible filter fields in every Filter ⛛ dropdown, the C / c code badges and their legend rows, the View-one-directory compressible rollup rows, the View-one-file Compression card, the media viewer's Compress button, hotkey and property cell, the "Do not compress" flag switch, and the codec controls of the Settings → Compression section. The ONE exception is context menus — the row ⋮ kebab, the right-click menu, and a single-entity page's own More ▾ menu keep their Compress items whatever the setting says, so a user who knows about compression can still reach it for one file or one directory. The setting persists in the per-user users/<email>/config.yaml under features.compression (default false). It only changes what the UI SHOWS — it never changes what the backend computes, stops a running compress job, or deletes any compression record.
+---
+
+# LargeFileBridge — Compression Visibility
+
+Compression is a real, careful feature ([compression.mdx](./compression.mdx)) — but it is also the one feature
+in Large File Bridge that **rewrites a user's own bytes**. Most people install Large File Bridge to keep big
+files out of Git and synced across their computers; they never asked to have their videos re-encoded. Showing
+them a "Compress" tab, orange "could be compressed" icons on every row, and a header button that says
+**Compress ›** makes the product look like it wants to change their files.
+
+So the compression feature is **hidden by default**, per user. A user who wants it goes out of their way to
+turn it on in Settings; from then on every compression surface appears for them.
+
+Siblings: [settings.mdx §4.5](./settings.mdx) (the control) ·
+[storage_local.mdx §4](./storage_local.mdx#4-per-logged-in-user-storage--the-per-user-requirement) (where it
+persists) · [compression.mdx](./compression.mdx) (the engine this hides) · [menus.mdx](./menus.mdx) (the
+exception).
+
+---
+
+## 1. The setting (LOCKED)
+
+* **Name in the UI:** **"Show compression features"** — a checkbox at the top of the **Compression** section
+  of the Settings page (`/settings`).
+* **Scope: per user.** It belongs to the signed-in person, not the computer. Two teammates on one server-mode
+  install each see their own choice.
+* **Default: OFF.** A fresh user, a user with no `users/<email>/config.yaml` yet, and a user whose file has
+  no `features:` block all read back **off**.
+* **Turning it on is deliberate.** It is a single checkbox, but it lives only in Settings — there is no
+  "turn on compression" nudge, banner, or popup anywhere else in the product.
+* **Changes apply at once.** Toggling the checkbox updates every open surface in that browser without a
+  reload (the shared query cache is written in place).
+
+### 1.1 Where it persists
+
+```yaml
+# ~/T/_large_files_bridge/users/<email>/config.yaml  (excerpt)
+features:
+  compression: false     # "Show compression features" — default false (hidden)
+```
+
+The per-user `features:` block is read and written through its own small REST pair:
+
+| Call | What it does |
+| --- | --- |
+| `GET /api/user-prefs` | `{ features: { compression } }` for the signed-in user. A user with no file reads back the defaults (off) — never an error, never a write. |
+| `PATCH /api/user-prefs` | A patch: `{ features: { compression: true } }`. Merged onto the stored block, re-parsed through the schema, returns the full prefs. |
+
+Reading and writing the per-user `features` block is handled in code:
+`~/repos/LargeFileBridge/code/packages/backend/src/modules/store-model/user-prefs.service.ts` — `loadUserPrefs()` / `saveUserPrefs()`, served by `user-prefs.router.ts` — `userPrefsRouter`
+
+The schema default (`features.compression = false`) is defined in code:
+`~/repos/LargeFileBridge/code/packages/shared/src/schemas.ts` — `UserFeaturesSchema` (inside `UserConfigSchema.features`)
+
+The browser reads it once per session and shares it across every surface in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/api/useUserPrefs.ts` — `useCompressionEnabled()` / `useSetCompressionEnabled()`
+
+**While the value is still loading, compression is treated as OFF.** Off is the default, so a user who never
+turned it on never sees a flash of compression UI; a user who did turn it on sees it appear a moment later.
+
+---
+
+## 2. What it hides — the complete surface inventory (LOCKED)
+
+When the setting is **off**, every row below is **not rendered** — not disabled, not greyed, **absent**. When
+it is **on**, each renders exactly as its own spec describes.
+
+| # | Surface | What is hidden when off | Owning spec |
+| --- | --- | --- | --- |
+| 1 | One-repo **task tab strip** | The **Compress** tab. If the Compress tab was active when the setting went off, the page falls back to **All**. | [task_tabs.mdx §1](./task_tabs.mdx) |
+| 2 | One-repo **metric tiles** | **Compressible videos**, **Compressible images**, **Compressed** (on every tab that lists them). | [task_tabs.mdx §2](./task_tabs.mdx) |
+| 3 | One-repo **Compress status-icon column** | The `compress` column (it only exists on the Compress tab, so hiding the tab hides it). | [task_tabs.mdx §4.3 / §6](./task_tabs.mdx) |
+| 4 | One-repo **header primary** | The **"Compress ›"** recommendation. The ranking skips the compress step and falls through to OCR. | [one_repo.mdx §3.1](./one_repo.mdx) |
+| 5 | Page **action-links rows** | **Compress videos**, **Compress images** (One repo, File System, Full paths, Storage detail) and **Compress all…** (View one directory). | [page_actions.mdx §4](./page_actions.mdx) |
+| 6 | One-repo **bulk selection menu** | **Compress selected**. | [one_repo.mdx](./one_repo.mdx) |
+| 7 | One-repo **hover-info summary** | The "could be compressed" / "already compressed" phrase in a file's one-line summary. | [task_tabs.mdx §3](./task_tabs.mdx) |
+| 8 | **Filter ⛛ dropdowns** (every file table) | The **Compressible videos / images / audio** fields. A saved expression that still names one of them stops applying (the clause bar shows it cannot be parsed) until the user clears it or turns compression back on. | [tables.mdx §2.11](./tables.mdx) |
+| 9 | **Educate-and-fix popups** | The per-row **Compress** axis column, and any popup option named **Compress** (e.g. the Pull-down popup's "Compress once the bytes arrive"). A row whose only action was Compress is dropped from the list. | [warnings.mdx §4.5.1](./warnings.mdx) |
+| 10 | **To Do** page | Compress batches (`compress_video` / `compress_image`) and their counts, "reclaimable" headline and sentence. A batch that held only compress items disappears; a mixed batch loses its compress items and re-titles itself from what is left. | [to_do.mdx](./to_do.mdx) |
+| 11 | **Code badges** (File System, Full paths, View one file / directory, media viewer) | The **C** (compress) and **c** (compressed) chips, their hover-info blocks, and their two rows in "What do these letters mean?". | [directories.mdx §3.3](./directories.mdx) |
+| 12 | **View one directory** — "What's inside" | The **Videos that can be compressed** and **Images that can be compressed** rollup rows (and their row actions). | [directories.mdx §8](./directories.mdx) |
+| 13 | **Sticky flag switches** (View one file / directory) | The **Do not compress** switch. (The **Never IPFS** switch stays.) | [menus.mdx §6.6](./menus.mdx) |
+| 14 | **View one file** | The **Compression** card. | [files.mdx](./files.mdx) |
+| 15 | **Media viewer** (image / video) | The **Compress…** action-bar button, the **k** hotkey, and the **Compress** property cell. | [media_viewer.mdx §4.1](./media_viewer.mdx) |
+| 16 | **Settings → Compression** | The codec / quality / conversion / size-floor controls. Only the **Show compression features** checkbox and one sentence explaining it remain. | [settings.mdx §4.1](./settings.mdx) |
+
+The one-repo surfaces (rows 1–4, 6–7) are gated in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx` — `OneRepoPage` (with `TaskTabs.tsx` — `TaskTabs`, and `metricWarningDefs.tsx` — `topRecommendation()`)
+
+The shared, pure rules every surface uses (which tabs, metrics, filter fields, badges, popup axes and To Do categories count as compression) live in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/lib/compressionVisibility.ts` — `isCompressionMetric()`, `withoutCompressionFields()`, `visibleBadges()`, `stripCompressionFromPopup()`, `todoBatchWithoutCompression()`
+
+The Filter-dropdown fields (row 8) are dropped centrally for every table in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx` — `DataTable` (and `FullPathsPage.tsx` for its own filter panel)
+
+The popup axis and options (row 9) are stripped centrally in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx` — `WarningPopup`
+
+The badge chips (row 11) are filtered centrally in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/fs/Badges.tsx` — `Badges` (and `BadgeLegend.tsx` — `BadgeLegend`)
+
+---
+
+## 3. The exception — context menus keep their Compress items (LOCKED)
+
+**Context menus are exempt.** Whatever the setting says, these keep every compression item they carry today:
+
+* the **row ⋮ kebab** on every file and directory row,
+* the **right-click** menu on a file or directory,
+* a single-entity page's **own More ▾ / ⋯ menu** (View one file, View one directory, the media viewer).
+
+The items that stay: **Compress…** (one file), **Compress videos/images inside…** (one directory, opening the
+Compress-inside dialog), and the **Do not compress** flag toggle.
+
+Why the exception: a context menu is something the user deliberately opens on one specific thing. An item in
+it does not advertise compression to someone browsing — it is only found by a user who went looking. That is
+the "go out of their way" path the setting protects, so it stays open.
+
+In the media viewer, where Compress is normally both an action-bar button and a More-menu entry, turning the
+setting off removes the **button** and keeps the **More ▾ entry**.
+
+The context-menu catalog (unchanged by this setting) is built in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/components/menu/EntityMenu.tsx` — `buildActions()` file / directory catalogs
+
+The media viewer moves Compress from its bar into the More ▾ extras when the setting is off, in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/entity/MediaViewer.tsx` — `ActionBar`
+
+---
+
+## 4. What it does NOT do (LOCKED)
+
+* **It never changes the backend.** Scans still compute `compressState`, `FileRow.compress`, the rollup
+  counts, and the To Do compress categories. The CLI and the MCP server are unaffected. Hiding is purely a
+  presentation decision in the browser.
+* **It never cancels or hides running work.** A compress job already queued keeps running, and the Progress
+  dock and the Processing page keep showing it — those are records of work, not invitations to start more.
+* **It never deletes anything.** Compression records, `LFBcompressed` markers, `declined` refusals and the
+  "Do not compress" flags stay exactly as they are. Turning the setting back on restores every surface as it
+  was.
+* **It does not hide the codec-repair offer.** The media viewer's **"Convert to H.264 (MP4)…"** button only
+  appears when a video cannot be played at all ([codecs.mdx §6](./codecs.mdx)); it is a playback fix, not a
+  space-saving offer, so it stays.
+* **It does not hide the word "compression" in explanatory text** (the Parallelism subtitle, the Tools page's
+  "used for" column, the Processing page subtitle). Those describe what the machine can do; they are not
+  entry points.
+
+---
+
+## 5. Acceptance criteria
+
+1. A new user, and a user whose `users/<email>/config.yaml` has no `features:` block, sees **no** compression
+   entry point anywhere except context menus (§2 rows 1–16 all absent).
+2. Settings → Compression shows a **"Show compression features"** checkbox, **unchecked by default**. With it
+   unchecked, the rest of the Compression section is hidden.
+3. Checking it writes `features.compression: true` to that user's `users/<email>/config.yaml` and makes every
+   §2 surface appear without a page reload. Unchecking it hides them again.
+4. The setting is **per user**: another allow-listed user on the same install still sees their own value.
+5. With the setting off, the row ⋮ kebab and the right-click menu on a compressible file still offer
+   **Compress…**, and on a directory still offer **Compress videos/images inside…** and **Do not compress**.
+6. With the setting off, the One-repo page shows no Compress tab, no compressible/compressed tiles, and its
+   header primary never reads **Compress ›**.
+7. With the setting off, the To Do page shows no compress batch, and a mixed batch's popup has no Compress
+   column.
+8. Turning the setting off never stops a queued or running compress job, and never removes any compression
+   record or flag.

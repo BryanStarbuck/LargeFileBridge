@@ -281,6 +281,12 @@ The word-plus-chevron, blue-text, border-less trigger is implemented in code:
 
 ## 5. The per-entity action catalogs (LOCKED)
 
+> **Context menus ignore the "Show compression features" setting.** Every other compression surface is hidden
+> while a user has that per-user setting off (the default), but the row ⋮ kebab, the right-click menu, and a
+> single-entity page's own More ▾ keep **Compress…**, **Compress videos/images inside…** and **Do not
+> compress** exactly as catalogued below. A context menu is opened on purpose on one thing, so it does not
+> advertise compression — it is how a user who went looking still reaches it. Full rules: [compression_visibility.mdx](./compression_visibility.mdx) §3.
+
 Four entities, four catalogs (§5.1–§5.4), plus the **pin catalog** (§5.5) for pinned-CID rows that
 don't resolve to a local entity. Each is used verbatim by that entity's **row kebab** (§3) **and** its
 **page more-menu** (§4). Order and grouping are as shown; **destructive items are last and separated**.

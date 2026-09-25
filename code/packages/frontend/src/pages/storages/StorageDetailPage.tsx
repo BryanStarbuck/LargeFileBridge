@@ -24,11 +24,13 @@ import { taskRowValue } from "@/components/table/fileFilter";
 import { relativeTime, absoluteTime } from "@/lib/format";
 import { useLiveRefresh } from "@/lib/useLiveRefresh";
 import { clientLog } from "@/lib/clientLog";
+import { useCompressionEnabled } from "@/api/useUserPrefs";
 
 export function StorageDetailPage() {
   const { storageId } = useParams({ strict: false }) as { storageId: string };
   const navigate = useNavigate();
   const qc = useQueryClient();
+  const compressionOn = useCompressionEnabled(); // "Show compression features" (compression_visibility.mdx)
   const { data, isLoading } = useQuery({ queryKey: ["storage", storageId], queryFn: () => api.storageDetail(storageId) });
   useLiveRefresh(["storages"], [["storage", storageId]]);
 
@@ -95,7 +97,8 @@ export function StorageDetailPage() {
   // Re-index files. Index files stays the header primary.
   const storageActions: Action[] = [
     ...producingActions(() => (s ? { root: s.root } : {})),
-    compressAllVideos(s?.root),
+    // Only for a user who shows compression (compression_visibility.mdx §2 row 5).
+    ...(compressionOn ? [compressAllVideos(s?.root)] : []),
     {
       id: "transcribe-scan",
       label: transcribeScan.isPending ? "Looking…" : "Show what could be transcribed",

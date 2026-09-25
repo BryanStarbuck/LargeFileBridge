@@ -528,6 +528,12 @@ The right-pane file list, its per-row toggle columns, and the hover→preview wi
 
 ### 4.5.1 The per-row action toggles — up to THREE checkboxes per file (LOCKED)
 
+> **The Compress axis is hidden unless the user turns compression on** (Settings → Compression → "Show
+> compression features", per user, default **off**). While off, the popup drops the Compress column, drops any
+> option named **Compress** (e.g. the Pull-down popup's "Compress once the bytes arrive"), and drops rows
+> whose only action was Compress — so the popups render with two axes (Pin · Ignore). Stripped centrally in
+> `WarningPopup` via `stripCompressionFromPopup()`. Full rules: [compression_visibility.mdx](./compression_visibility.mdx).
+
 The heart of the improved popup: rather than one "include this file?" checkbox, each file row can carry
 **up to three independent action toggles**, one per **axis** of work LFBridge can do to that file — and
 **each is pre-checked exactly where LFBridge recommends the action**, so the common case is *"these all

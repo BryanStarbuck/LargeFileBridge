@@ -46,6 +46,8 @@ import { refetchUntilResolved } from "../../components/ui/warnings/resolveRefetc
 import { relativeTime, absoluteTime, middleTruncate } from "../../lib/format.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { copyText } from "@/lib/clipboard";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { isCompressionMetric } from "../../lib/compressionVisibility.js";
 
 // "sync" is the FROZEN wire value for the Add-to-IPFS (pin) decision; it renders as "Add to IPFS (pin)".
 const DECISIONS: Decision[] = ["sync", "ignore", "undecided"];
@@ -69,8 +71,9 @@ const ABSENT_BYTES_REASON = "The bytes aren't on this computer yet — pull it d
 // compressible_videos / _images / _audio filter fields.
 const rowFileType = (f: FileRow) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
 
-/** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state. */
-function fileSummary(f: FileRow): string {
+/** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state.
+ *  The compress phrase only appears when the user shows compression (compression_visibility.mdx §2 row 7). */
+function fileSummary(f: FileRow, compressionOn: boolean): string {
   const name = f.path.slice(f.path.lastIndexOf("/") + 1);
   // A remote-only row leads with WHERE it is: that sentence is the entire actionable content of the row,
   // and it outranks any task state (which is `na` on all four axes anyway).
@@ -80,8 +83,8 @@ function fileSummary(f: FileRow): string {
   if (kind) bits.push(kind);
   if (f.transcribe === "could") bits.push("no transcript yet — could be transcribed");
   else if (f.transcribe === "done") bits.push("transcript ready");
-  if (f.compress === "could") bits.push("could be compressed");
-  else if (f.compress === "done") bits.push("already compressed");
+  if (compressionOn && f.compress === "could") bits.push("could be compressed");
+  else if (compressionOn && f.compress === "done") bits.push("already compressed");
   if (f.describe === "could") bits.push("no AI description yet — could be described");
   else if (f.describe === "done") bits.push("AI description ready");
   return bits.join(" · ");
@@ -174,7 +177,13 @@ export function OneRepoPage() {
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [bulkOpen, setBulkOpen] = useState(false);
   // The active task tab (task_tabs.mdx §1.3) — ephemeral view state, default "all", never persisted.
-  const [activeTab, setActiveTab] = useState<TaskTabId>("all");
+  const [chosenTab, setActiveTab] = useState<TaskTabId>("all");
+  // "Show compression features" (compression_visibility.mdx). Off (the default) hides the Compress tab, its
+  // tiles and column, the compress action links, "Compress selected" and the "Compress ›" header primary.
+  // Turning it off while on the Compress tab falls back to All rather than showing a tab that isn't there.
+  const compressionOn = useCompressionEnabled();
+  const activeTab: TaskTabId = !compressionOn && chosenTab === "compress" ? "all" : chosenTab;
+  const summary = (f: FileRow): string => fileSummary(f, compressionOn);
   // The educate-and-fix popup the header "View recommendation" primary opens (one_repo.mdx §3.1). The
   // metric tiles host their own popup inside MetricsStrip; this is the header button's separate host.
   const [headerWarning, setHeaderWarning] = useState<WarningDef | null>(null);
@@ -513,8 +522,7 @@ export function OneRepoPage() {
   };
   const repoActions: Action[] = [
     ...producingActions(pageScope),
-    compressAllVideos(detail?.path),
-    compressAllImages(detail?.path),
+    ...(compressionOn ? [compressAllVideos(detail?.path), compressAllImages(detail?.path)] : []),
     gitIgnoreBig(pageScope()),
     // Selection-aware like every other action on this row (page_actions.mdx §1.1): checked rows pin exactly
     // those files, nothing checked pins the whole repo. It used to always send `undefined` — so checking a
@@ -612,7 +620,7 @@ export function OneRepoPage() {
                         ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
                         : "Synced (pinned) on this computer — click to stop syncing this file"
             }
-            extraHover={fileSummary(f)}
+            extraHover={summary(f)}
             // ONE axis per click (decision_toggles.mdx §2): the git-ignore axis is left as-is rather than
             // re-asserted — except for a remote-only row, whose only meaningful action is to fetch the bytes.
             onActivate={() =>
@@ -666,7 +674,7 @@ export function OneRepoPage() {
             busy={busyPaths.has(f.path)}
             disabled={!known || locked || remoteOnly}
             title={title}
-            extraHover={fileSummary(f)}
+            extraHover={summary(f)}
             // GIT-IGNORE ONLY. Sending `ipfs: f.decision === "sync"` alongside meant every click on an
             // UNDECIDED file also recorded "do not add this to IPFS" — the file left the Add-to-IPFS tile
             // (which counts undecided files) and Pin now, which pins `sync` files only, skipped it forever.
@@ -686,7 +694,7 @@ export function OneRepoPage() {
       cell: (f) => (
         <TaskIconCell kind="transcribe" state={f.transcribe ?? "na"}
           title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          extraHover={fileSummary(f)} onActivate={() => onTranscribeActivate(f)} />
+          extraHover={summary(f)} onActivate={() => onTranscribeActivate(f)} />
       ),
     },
     {
@@ -698,7 +706,7 @@ export function OneRepoPage() {
       cell: (f) => (
         <TaskIconCell kind="describe" state={f.describe ?? "na"}
           title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          extraHover={fileSummary(f)} onActivate={() => onDescribeActivate(f)} />
+          extraHover={summary(f)} onActivate={() => onDescribeActivate(f)} />
       ),
     },
     {
@@ -710,7 +718,7 @@ export function OneRepoPage() {
       cell: (f) => (
         <TaskIconCell kind="ocr" state={f.ocr ?? "na"}
           title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          extraHover={fileSummary(f)} onActivate={() => onOcrActivate(f)} />
+          extraHover={summary(f)} onActivate={() => onOcrActivate(f)} />
       ),
     },
     {
@@ -726,7 +734,7 @@ export function OneRepoPage() {
             // The ROW tooltip (one_repo.mdx §4.10): a remote-only row leads with "On {device} — not on this
             // computer yet." above its path, so hovering the row's own name says where the file actually is.
             title={f.presence === "remote-only" ? `${remoteOnlyTooltip(f)}\n${f.path}` : f.path}
-            onMouseEnter={() => setHoverInfo(fileSummary(f))}
+            onMouseEnter={() => setHoverInfo(summary(f))}
             onMouseLeave={() => setHoverInfo(null)}
           >
             <span className="text-black/40">{middleTruncate(dir, 30)}</span>
@@ -783,7 +791,7 @@ export function OneRepoPage() {
           // type") is wrong for a remote-only .mp4 — it IS one, its bytes just aren't here (§4.10).
           title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
           onActivate={() => onCompressActivate(f)}
-          onMouseEnter={() => setHoverInfo(fileSummary(f))}
+          onMouseEnter={() => setHoverInfo(summary(f))}
           onMouseLeave={() => setHoverInfo(null)}
         />
       ),
@@ -803,7 +811,7 @@ export function OneRepoPage() {
   // count is > 0 and the metric has an educate-and-fix popup, clicking the panel opens it (§2.4); otherwise
   // the panel re-tunes the view to the acting tab.
   const metricViews: MetricView[] = detail
-    ? tab.metrics.map((id) => {
+    ? tab.metrics.filter((id) => compressionOn || !isCompressionMetric(id)).map((id) => {
         const def = METRIC_CATALOG[id];
         const count = metricCount(id, detail);
         const warning = count > 0 ? buildMetricWarning(id, detail, repoId) : null;
@@ -828,7 +836,7 @@ export function OneRepoPage() {
   // The header primary is a RANKING across every metric ("what is the single most important thing here?"),
   // so it cannot be answered from subtotals — a half-composed repo could nominate a recommendation the
   // finished one would not. It waits for the walk to finish; the tiles themselves count up meanwhile.
-  const topRec = detail && !detail.partial && !scanDue ? topRecommendation(detail, repoId) : null;
+  const topRec = detail && !detail.partial && !scanDue ? topRecommendation(detail, repoId, { compression: compressionOn }) : null;
   // The header primary's label is per-metric (one_repo.mdx §3.1): a content-work recommendation names its
   // verb ("Transcribe ›" / "Describe ›" / "Compress ›") so the button says exactly what it will do; the
   // triage recommendations (undecided / pull-down / ipfs-down) keep the generic "View recommendation ›".
@@ -1012,11 +1020,13 @@ export function OneRepoPage() {
                     onClick={() => { void pinNowScoped(); setBulkOpen(false); }}>
                     Pin now ({selected.size} selected)
                   </button>
-                  <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
-                    disabled={compressBatch.isPending}
-                    onClick={() => { compressSelected(); setBulkOpen(false); }}>
-                    Compress selected
-                  </button>
+                  {compressionOn && (
+                    <button className="block w-full px-3 py-1.5 text-left text-sm hover:bg-slate-100"
+                      disabled={compressBatch.isPending}
+                      onClick={() => { compressSelected(); setBulkOpen(false); }}>
+                      Compress selected
+                    </button>
+                  )}
                 </div>
               )}
             </div>

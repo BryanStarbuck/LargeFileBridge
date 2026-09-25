@@ -11,10 +11,14 @@ import { api } from "@/api/client";
 import { copyText } from "@/lib/clipboard";
 import { patchEntityBadges } from "@/lib/patchEntityBadges";
 import { clientLog } from "../../lib/clientLog.js";
+import { useCompressionEnabled } from "@/api/useUserPrefs";
 
 /** The two labeled sticky-flag switches — Never IPFS & Do not compress (menus.mdx §6.6). */
 export function FlagSwitches({ view }: { view: EntityView }) {
   const qc = useQueryClient();
+  // "Do not compress" only for a user who shows compression; the flag stays in the context menu
+  // (compression_visibility.mdx §2 row 13 / §3).
+  const compressionOn = useCompressionEnabled();
   const m = useMutation({
     mutationFn: (patch: { neverIpfs?: boolean; noCompress?: boolean }) =>
       api.setEntityFlags(view.path, patch),
@@ -38,11 +42,13 @@ export function FlagSwitches({ view }: { view: EntityView }) {
         on={view.flags.neverIpfs}
         onToggle={() => m.mutate({ neverIpfs: !view.flags.neverIpfs })}
       />
-      <Switch
-        label="Do not compress"
-        on={view.flags.noCompress}
-        onToggle={() => m.mutate({ noCompress: !view.flags.noCompress })}
-      />
+      {compressionOn && (
+        <Switch
+          label="Do not compress"
+          on={view.flags.noCompress}
+          onToggle={() => m.mutate({ noCompress: !view.flags.noCompress })}
+        />
+      )}
     </div>
   );
 }

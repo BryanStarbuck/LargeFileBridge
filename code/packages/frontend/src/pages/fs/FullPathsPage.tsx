@@ -66,6 +66,8 @@ import { FileFilterClauseBar, FileFilterPanel } from "../../components/table/Fil
 import { Popover } from "../../components/table/Popover.js";
 import { setOptionPreviewTarget } from "../../components/preview/OptionImagePreview.js";
 import { FsTabs } from "./FsTabs.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { withoutCompressionFields } from "../../lib/compressionVisibility.js";
 
 const ROW_H = 41; // fixed body-row height the windowing math relies on (px).
 // content-visibility lets the browser skip layout+paint for rows scrolled just out of the windowed
@@ -141,7 +143,11 @@ export function FullPathsPage() {
   // controls and the clause bar are two views of it, and it persists per user as
   // tables.views["fs-paths"].file_filter. Invalid text keeps the LAST VALID expression applied.
   const [fileFilterText, setFileFilterText] = useState("");
-  const ffParsed = useMemo(() => parseFileFilter(fileFilterText, FS_PATHS_FF_FIELDS), [fileFilterText]);
+  // "Show compression features" off (the default) drops the Compressible fields from this page's own
+  // filter panel and the Compress videos link (compression_visibility.mdx §2 rows 5 + 8).
+  const compressionOn = useCompressionEnabled();
+  const ffFields = useMemo(() => withoutCompressionFields(FS_PATHS_FF_FIELDS, compressionOn), [compressionOn]);
+  const ffParsed = useMemo(() => parseFileFilter(fileFilterText, ffFields), [fileFilterText, ffFields]);
   const [ffApplied, setFfApplied] = useState<FilterNode | null>(null);
   useEffect(() => {
     if (ffParsed.ok) setFfApplied(ffParsed.ast);
@@ -152,8 +158,8 @@ export function FullPathsPage() {
   );
   const setFfField = useCallback(
     (field: FileFilterFieldId, value: string) =>
-      setFileFilterText((t) => setFieldInExpr(t, field, value, FS_PATHS_FF_FIELDS)),
-    [],
+      setFileFilterText((t) => setFieldInExpr(t, field, value, ffFields)),
+    [ffFields],
   );
   // Persistence (tables.mdx §2.11.5) — this page renders its own table (not the shared DataTable), so
   // it hydrates/saves the same per-user tables.views record directly. The hydrated gate keeps the
@@ -359,7 +365,7 @@ export function FullPathsPage() {
     ...producingActions((): ActionScope =>
       selected.size > 0 ? { paths: [...selected] } : root ? { root } : {},
     ),
-    compressAllVideos(root ?? undefined),
+    ...(compressionOn ? [compressAllVideos(root ?? undefined)] : []),
     gitIgnoreBig(selected.size > 0 ? { paths: [...selected] } : root ? { root } : {}),
     {
       id: "ipfs-pin",
@@ -503,7 +509,7 @@ export function FullPathsPage() {
         <Popover wide onClose={() => setShowFilter(false)} showApply>
           {/* The §2.11 file filter — the segmented All/Not-yet/Done rows. The boolean clause bar sits
               at the very bottom of the dropdown, right above Clear filters. */}
-          <FileFilterPanel fields={FS_PATHS_FF_FIELDS} selections={ffSelections} onSelect={setFfField} />
+          <FileFilterPanel fields={ffFields} selections={ffSelections} onSelect={setFfField} />
           <div className="my-1 border-t border-[var(--lfb-border)]" />
           <div className="flex items-center gap-2 px-3 py-1.5 text-sm">
             <span className="w-24 shrink-0 text-black/70">Min size (MB)</span>

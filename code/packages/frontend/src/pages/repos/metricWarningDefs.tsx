@@ -766,6 +766,9 @@ export function buildMetricWarning(id: MetricId, detail: RepoDetail, repoId: str
 export function topRecommendation(
   detail: RepoDetail,
   repoId: string,
+  // "Show compression features" (compression_visibility.mdx §2 row 4): off skips the compress step, so the
+  // header primary never reads "Compress ›" for a user who hasn't turned compression on.
+  opts: { compression: boolean } = { compression: true },
 ): { metricId?: MetricId; warning: WarningDef } | null {
   // FIRST, above even a down engine: a truncated scan means the numbers behind every other recommendation
   // are an under-report (scan.mdx §4.5). A truncated census must never be presented as authoritative.
@@ -804,7 +807,7 @@ export function topRecommendation(
   if (transcribe) return { metricId: "transcribable", warning: transcribe };
   const describe = buildDescribeWarning(detail, repoId);
   if (describe) return { metricId: "describable", warning: describe };
-  const compress = buildCompressWarning(detail, repoId);
+  const compress = opts.compression ? buildCompressWarning(detail, repoId) : null;
   if (compress) return { metricId: "compressibleVideos", warning: compress };
   const ocr = buildOcrWarning(detail, repoId);
   if (ocr) return { metricId: "ocrable", warning: ocr };

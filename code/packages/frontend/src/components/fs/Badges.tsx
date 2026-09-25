@@ -10,6 +10,8 @@ import { memo, useMemo } from "react";
 import type { FsBadge } from "@lfb/shared";
 import { Tooltip } from "../ui/Tooltip.js";
 import { useHoverInfoSource, type HoverInfo } from "../hoverinfo/HoverInfoContext.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { visibleBadges } from "../../lib/compressionVisibility.js";
 
 interface BadgeMeta {
   letter: string;
@@ -129,7 +131,10 @@ function BadgeChip({ b }: { b: FsBadge }) {
 
 // Memoized — the badge array for a row only changes identity when that row's data changes, so a table
 // re-render (scroll/keystroke/selection) doesn't rebuild every row's chips (performance.mdx P-12).
-export const Badges = memo(function Badges({ badges }: { badges: FsBadge[] }) {
+// The C / c compress chips render only for a user who shows compression (compression_visibility.mdx §2
+// row 11) — filtered here, once, so every surface that draws badges agrees.
+export const Badges = memo(function Badges({ badges: all }: { badges: FsBadge[] }) {
+  const badges = visibleBadges(all, useCompressionEnabled());
   if (!badges.length) return null;
   return (
     <span className="flex items-center gap-0.5">

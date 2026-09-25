@@ -275,6 +275,11 @@ carries the complete catalog.
 
 ### 4.1 Overflow & priority (how the bar decides what to show)
 
+> **Hidden unless the user turns compression on.** The **Compress…** action-bar button, its **k** hotkey, and the **Compress** property cell (the More ▾ entry stays) is shown only when the signed-in user has
+> checked **Settings → Compression → "Show compression features"** (per user, **default off**). Context menus
+> are the one exception and keep their Compress items. Full rules:
+> [compression_visibility.mdx](./compression_visibility.mdx).
+
 Every action carries a **priority**. When the row is too narrow for all of them, the **lowest-priority**
 items overflow into **More** first, so the most important actions stay visible the longest. A hidden
 mirror row measures each button's natural width off-screen and a `ResizeObserver` tracks the available

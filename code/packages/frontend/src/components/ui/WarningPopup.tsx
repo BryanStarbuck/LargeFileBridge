@@ -42,6 +42,8 @@ import {
   type WarningSelection,
   type WarningTarget,
 } from "./warnings/registry.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { stripCompressionFromPopup } from "../../lib/compressionVisibility.js";
 
 // §4.5.1 — the glyph + human label for each per-row action axis. Same pin / ⊘ marks as the table
 // decision toggles (decision_toggles.mdx §1); Compress adds the "shrink" glyph (hotkey K).
@@ -148,7 +150,11 @@ export function WarningPopup({
   // Falls back to the warning's own `popup.resolvePreviewUrl`.
   resolvePreviewUrl?: (target: WarningTarget) => Promise<string | null>;
 }) {
-  const popup = warning.popup!;
+  // "Show compression features" off (the default) strips the Compress axis, compress-only rows and any
+  // "Compress" option here, once, for every popup host (compression_visibility.mdx §2 row 9). Memoized so
+  // the state initializers below see one stable spec.
+  const compressionOn = useCompressionEnabled();
+  const popup = useMemo(() => stripCompressionFromPopup(warning.popup!, compressionOn), [warning, compressionOn]);
   const resolveUrl = resolvePreviewUrl ?? popup.resolvePreviewUrl;
   const targets = popup.targets ?? [];
   const hasTargets = targets.length > 0;

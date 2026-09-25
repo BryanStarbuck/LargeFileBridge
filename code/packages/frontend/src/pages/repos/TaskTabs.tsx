@@ -8,9 +8,10 @@
 // moves the rest — always taking from the RIGHT — into a trailing "⌄" overflow menu. The chevron renders
 // ONLY when something actually overflows; when every tab fits there is no extra chrome at all. An active
 // tab that lands in the overflow is pulled back into the visible set so the current tab is always shown.
-import { useLayoutEffect, useRef, useState } from "react";
+import { useLayoutEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown } from "lucide-react";
-import { TASK_TABS, TASK_TAB_ORDER, type TaskTabId } from "./taskTabs.config.js";
+import { TASK_TABS, TASK_TAB_ORDER as ALL_TABS, type TaskTabId } from "./taskTabs.config.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
 
 export function TaskTabs({
   active,
@@ -19,10 +20,13 @@ export function TaskTabs({
   active: TaskTabId;
   onChange: (id: TaskTabId) => void;
 }) {
+  // The Compress tab exists only for a user who shows compression (compression_visibility.mdx §2 row 1).
+  const compressionOn = useCompressionEnabled();
+  const order = useMemo(() => (compressionOn ? ALL_TABS : ALL_TABS.filter((id) => id !== "compress")), [compressionOn]);
   const wrapRef = useRef<HTMLDivElement>(null);
   const measureRefs = useRef<(HTMLButtonElement | null)[]>([]);
   const chevronRef = useRef<HTMLSpanElement | null>(null);
-  const [visibleCount, setVisibleCount] = useState(TASK_TAB_ORDER.length);
+  const [visibleCount, setVisibleCount] = useState(order.length);
   const [open, setOpen] = useState(false);
 
   // Width-measured split, the same technique the page action-links row uses (PageActions §3.1): a hidden
@@ -31,7 +35,7 @@ export function TaskTabs({
   useLayoutEffect(() => {
     const fit = () => {
       const wrap = wrapRef.current;
-      const n = TASK_TAB_ORDER.length;
+      const n = order.length;
       if (!wrap) return;
       const avail = wrap.clientWidth;
       const rightEdge = (i: number) => {
@@ -56,10 +60,10 @@ export function TaskTabs({
     const ro = new ResizeObserver(fit);
     if (wrapRef.current) ro.observe(wrapRef.current);
     return () => ro.disconnect();
-  }, []);
+  }, [order]);
 
-  let shown = TASK_TAB_ORDER.slice(0, visibleCount);
-  let hidden = TASK_TAB_ORDER.slice(visibleCount);
+  let shown = order.slice(0, visibleCount);
+  let hidden = order.slice(visibleCount);
   // The active tab is always visible (task_tabs.mdx §1.3) — if it overflowed, swap it with the last
   // visible tab so the underline is never hidden inside the menu.
   if (hidden.includes(active)) {
@@ -72,7 +76,7 @@ export function TaskTabs({
     <div ref={wrapRef} className="relative min-w-0 flex-1" role="tablist" aria-label="Repo task tabs">
       {/* Hidden measurement layer — every tab + a chevron sample, same markup as the visible strip. */}
       <div aria-hidden className="pointer-events-none invisible absolute left-0 top-0 flex items-center gap-1">
-        {TASK_TAB_ORDER.map((id, i) => {
+        {order.map((id, i) => {
           const t = TASK_TABS[id];
           const Icon = t.icon;
           return (

@@ -4,6 +4,8 @@
 import { Badges, BADGE_META } from "./Badges.js";
 import { Disclosure } from "../ui/Disclosure.js";
 import type { FsBadge } from "@lfb/shared";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { visibleBadges } from "../../lib/compressionVisibility.js";
 
 // The legend rows reuse the SAME name/desc as the hover tooltips (Badges.tsx → BADGE_META), so the two
 // explanations of the letters can never drift. `repo_ancestor` shares the `r` glyph with repo_descendant,
@@ -11,11 +13,13 @@ import type { FsBadge } from "@lfb/shared";
 const LEGEND_BADGES: FsBadge[] = ["repo_root", "repo_descendant", "pin", "compress", "compressed", "ipfs", "git_ignored"];
 
 export function BadgeLegend({ className }: { className?: string }) {
+  // No C / c rows for a user who hides compression — the chips never appear for them (compression_visibility.mdx).
+  const legend = visibleBadges(LEGEND_BADGES, useCompressionEnabled());
   return (
     <div className={className}>
       <Disclosure label="What do these letters mean?">
         <ul className="space-y-1.5">
-          {LEGEND_BADGES.map((b) => {
+          {legend.map((b) => {
             const m = BADGE_META[b];
             return (
               <li key={b} className="flex items-center gap-2 text-sm text-black/70">

@@ -21,6 +21,7 @@ import type {
   FsListing,
   FileSystemView,
   TableView,
+  UserPrefs,
   FlatFileListing,
   EntityView,
   AuthConfig,
@@ -319,6 +320,11 @@ export const api = {
   tableViews: () => unwrap<Record<string, TableView>>(http.get("/table-views")),
   saveTableView: (tableId: string, view: TableViewPatch) =>
     unwrap<TableView | null>(http.put(`/table-views/${encodeURIComponent(tableId)}`, view)),
+  // Per-user prefs (compression_visibility.mdx §1.1) — today just `features.compression`, the "Show
+  // compression features" setting. Read once per session via useUserPrefs; PATCH merges a partial.
+  userPrefs: () => unwrap<UserPrefs>(http.get("/user-prefs")),
+  setUserPrefs: (patch: { features?: Partial<UserPrefs["features"]> }) =>
+    unwrap<UserPrefs>(http.patch("/user-prefs", patch)),
   // OS hand-off (os_open.mdx) — the host platform label + whether "Open on {label}" is possible here,
   // and the localhost-only action that opens a local file/folder in the desktop OS default handler.
   platform: () => unwrap<PlatformInfo>(http.get("/fs/platform")),

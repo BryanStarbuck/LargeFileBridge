@@ -332,6 +332,11 @@ Measuring the available width, splitting the actions into an inline set + an ove
 
 ## 4. The per-page action catalog (LOCKED)
 
+> **Compress links are hidden unless the user turns compression on.** **Compress videos**, **Compress
+> images** and **Compress all…** below render only when the signed-in user has checked Settings →
+> Compression → "Show compression features" (per user, default **off**). Every other link on each row is
+> unaffected. Full rules: [compression_visibility.mdx](./compression_visibility.mdx).
+
 Which links appear in the row is per-page. Every **file-list** page carries the two **producing** actions;
 pages then add their own domain actions. Producing actions obey §1–§2; the others are the existing
 page-level operations, now shown as inline links (they already run through the progress dock,

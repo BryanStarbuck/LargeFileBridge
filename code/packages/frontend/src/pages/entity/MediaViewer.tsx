@@ -39,6 +39,7 @@ import { EntityHeaderMissing } from "./entityShared";
 import { relativeTime, absoluteTime } from "@/lib/format";
 import { useLiveRefresh, repoTopic } from "@/lib/useLiveRefresh";
 import { clientLog } from "../../lib/clientLog.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
 
 /** The viewer route for a media kind (media_viewer.mdx §1). */
 function routeForKind(kind: MediaKind): "/image" | "/video" | "/audio" {
@@ -210,6 +211,9 @@ function ActionBar({
   navigate: ReturnType<typeof useNavigate>;
 }) {
   const qc = useQueryClient();
+  // "Show compression features" off (the default): no Compress button, no `k` hotkey — the Compress… entry
+  // moves into the More ▾ extras instead, since the entity's own menu is exempt (compression_visibility.mdx §3).
+  const compressionOn = useCompressionEnabled();
   const parent = v.path.replace(/[/\\][^/\\]*$/, "") || v.path;
   const canOs = platform?.canOpenInOS ?? false;
   const osLabel = platform?.label ?? "Mac";
@@ -343,7 +347,7 @@ function ActionBar({
     ...(grantUrl ? [{ keys: "o", label: "Open raw in browser", run: openRawInBrowser }] : []),
     { keys: "y", label: "Copy path", run: copyPath },
     ...(canToggleIpfs ? [{ keys: "p", label: ipfsPin ? "Remove from IPFS" : "Add to IPFS", run: () => decide.mutate(ipfsPin ? "ignore" : "sync") }] : []),
-    ...((kind === "image" || kind === "video") && canOfferCompress(v) ? [{ keys: "k", label: "Compress…", run: onCompress }] : []),
+    ...(compressionOn && (kind === "image" || kind === "video") && canOfferCompress(v) ? [{ keys: "k", label: "Compress…", run: onCompress }] : []),
     ...((kind === "audio" || kind === "video") ? [{ keys: "t", label: transcript ? "Re-transcribe" : "Transcribe", run: () => transcribe.run(!!transcript) }] : []),
     { keys: "m", label: "Move…", run: onMove },
     { keys: "b", label: "Back", run: () => history.back() },
@@ -365,7 +369,8 @@ function ActionBar({
   }
 
   // Compress — image + video only (charter; audio out of scope). Offer, confirm-gated.
-  if ((kind === "image" || kind === "video") && canOfferCompress(v)) {
+  const offerCompress = (kind === "image" || kind === "video") && canOfferCompress(v);
+  if (compressionOn && offerCompress) {
     items.push({
       key: "compress", priority: 90,
       bar: <Btn tone="warn" icon={<Zap className="h-4 w-4" />} label="Compress…" onClick={onCompress} disabled={compress.isPending} />,
@@ -462,6 +467,9 @@ function ActionBar({
   // Extras — never buttons; always live in the "More" menu (media_viewer.mdx §4.1 / §5).
   const extras: Action[] = [
     { id: "never-ipfs", group: "Flag", label: "Never publish via IPFS", icon: <Ban className="h-4 w-4" />, checked: v.flags.neverIpfs, onSelect: () => flags.mutate({ neverIpfs: !v.flags.neverIpfs }) },
+    ...(!compressionOn && offerCompress
+      ? [{ id: "compress", group: "Work", label: "Compress…", icon: <Zap className="h-4 w-4" />, onSelect: onCompress }]
+      : []),
     { id: "no-compress", group: "Flag", label: "Do not compress", icon: <Ban className="h-4 w-4" />, checked: v.flags.noCompress, onSelect: () => flags.mutate({ noCompress: !v.flags.noCompress }) },
     ...(v.cid ? [{ id: "copy-cid", group: "Copy", label: "Copy CID", icon: <Copy className="h-4 w-4" />, onSelect: () => { void copyText(v.cid!, "CID", "MediaViewer.copyCid"); } }] : []),
     { id: "delete", group: "Danger", label: "Delete…", danger: true, icon: <Trash2 className="h-4 w-4" />, onSelect: onDelete },
@@ -883,6 +891,7 @@ function PropertyGrid({
   duration: number | null;
   navigate: ReturnType<typeof useNavigate>;
 }) {
+  const compressionOn = useCompressionEnabled(); // the Compress cell (compression_visibility.mdx §2 row 15)
   const dims = probe?.width && probe?.height ? `${probe.width}×${probe.height}` : null;
   const codec = probe?.codec && probe?.container ? `${probe.codec} · ${probe.container}`
     : probe?.codec ?? probe?.container ?? null;
@@ -910,7 +919,7 @@ function PropertyGrid({
   if (v.decision) cells.push({ label: "Decision", node: v.decision === "sync" ? <span>Add to IPFS (pin)</span> : <span className="capitalize">{v.decision}</span> });
   cells.push({ label: "Modified", node: <span title={absoluteTime(v.modifiedAt)}>{relativeTime(v.modifiedAt)}</span> });
   cells.push({ label: "Created", node: v.createdAt ? absoluteTime(v.createdAt) : "—" });
-  if (kind !== "audio" && v.compressible) {
+  if (compressionOn && kind !== "audio" && v.compressible) {
     cells.push({ label: "Compress", node: v.compressState === "done" ? "compressed" : v.flags.noCompress ? "off" : "looks uncompressed" });
   }
   if (v.badges.length) cells.push({ label: "Badges", node: <Badges badges={v.badges} /> });

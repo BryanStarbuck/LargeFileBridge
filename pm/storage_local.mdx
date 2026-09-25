@@ -411,6 +411,12 @@ ui:
   density: compact
   last_route: /scans         # restore the user where they left off
 
+# Per-user feature visibility. `compression` = "Show compression features" (Settings → Compression) —
+# default false, so every compression entry point except context menus is hidden until the user turns it
+# on. Presentation only; the backend computes the same thing either way. Spec: compression_visibility.mdx.
+features:
+  compression: false
+
 # Remembered per-table sort/filter, keyed by table id, saved on every change and restored on load.
 # The sort is an ORDERED list (multi-level): index 0 = primary, 1 = secondary, 2 = tertiary.
 # The default (Bookmarked-first) is applied in code and only WRITTEN here once the user changes it.
@@ -1103,6 +1109,7 @@ persisted file or key requires a row here.
 | Per-user defaults | `config.yaml → defaults` | app |
 | **Theme / density / last route** | `users/<email>/config.yaml → ui` | **per-user** |
 | **Remembered table sort/filter** | `users/<email>/config.yaml → tables.views` | **per-user** |
+| **Show compression features** | `users/<email>/config.yaml → features.compression` (default `false`) | **per-user** |
 | **Per-repo: pinned on/off + all settings** | `pin/r/<repo_name>/config.yaml` | pin unit (computer-wide) |
 | **Per-repo: which users participate** (shared repos) | `pin/r/<repo_name>/config.yaml → access` | pin unit |
 | **Per-repo: large-file manifest (path → CID + pin state)** | `pin/r/<repo_name>/manifest.yaml` (local cache) + the authoritative `repos/<repoKey>/manifest.yaml` (§2.2b; mirrored to `<syncRepo>/repos/<repoKey>/` when enabled — **never** the working repo) | pin unit |

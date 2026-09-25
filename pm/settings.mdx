@@ -169,7 +169,7 @@ concerns live. Each is specified elsewhere; the page groups them into sections:
 | Section | What | Spec |
 | --- | --- | --- |
 | **Big files** | The threshold (§1) + its unit. | this file |
-| **Compression** | Per-media (images / video / **audio**) codec **allow/deny** + quality; social-media-safe defaults. | [compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type) |
+| **Compression** | The per-user **Show compression features** checkbox (§4.5, default **off**), then — only when it is on — per-media (images / video / **audio**) codec **allow/deny** + quality; social-media-safe defaults. | [compression_visibility.mdx](./compression_visibility.mdx) · [compression.mdx §7](./compression.mdx#7-codec-preference-settings-per-media-type) |
 | **Parallelism** | The CPU-core budget (§4.3) — how much of the machine background compression & processing may use. | [parallelization.mdx §4](./parallelization.mdx) |
 | **Scan process** | The 4-hour discovery scan: installed / on-off / Rescan now. | [scan.mdx §7](./scan.mdx#7-the-transparency-contract-installed-vs-onoff) |
 | **Pin process** | The 15-min background pin: installed / on-off. | [storage_local.mdx §13](./storage_local.mdx#13-the-background-pin-process--the-transparency-contract) |
@@ -240,6 +240,23 @@ Reading and writing the per-user `users/<email>/config.yaml` (account/appearance
 
 The admin-gated allow-list editor surface (companies + individuals) is implemented in code:
 `~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/AllowListPage.tsx` — `AllowListPage` (backed by `settingsRouter` `PATCH /security`, gated by `requireAdmin()`)
+
+### 4.5 Show compression features — per user, OFF by default
+
+The **first** control in the Compression section is a single checkbox: **"Show compression features"**. It is
+**per user** (it writes `features.compression` to the signed-in user's `users/<email>/config.yaml`, not to the
+app `config.yaml`) and **defaults to off**.
+
+* **Off (default):** the Compression section shows only this checkbox and one sentence saying compression is
+  hidden, and every compression entry point across the app is hidden too — except context menus.
+* **On:** the codec / quality / conversion / size-floor controls of §4.1 appear below it, and every
+  compression surface in the app appears.
+
+The full list of what it hides, and the context-menu exception, live in
+[compression_visibility.mdx](./compression_visibility.mdx).
+
+The checkbox is rendered in code:
+`~/repos/LargeFileBridge/code/packages/frontend/src/pages/settings/SettingsPage.tsx` — `CompressionSettingsSection` (via `useCompressionEnabled()` / `useSetCompressionEnabled()` in `~/repos/LargeFileBridge/code/packages/frontend/src/api/useUserPrefs.ts`)
 
 ### 4.2 Page actions — verify & re-scan buttons (proposed)
 
@@ -345,6 +362,10 @@ Reporting the posture with its restart-pending state is handled in code:
     types"** toggle (`convert_types`, default **ON**) and a **"Compress all file types"** per-extension
     checkbox list (`skip_exts`, default **empty = all in**, an opt-OUT list). Apple's **`.heic → JPEG`** row
     is **ON by default**. Full behavior + the HEIC primary-image rule live in [images.mdx](./images.mdx).
+9b. The Compression section leads with a per-user **"Show compression features"** checkbox (§4.5,
+    `users/<email>/config.yaml → features.compression`, default **off**). While it is off the rest of the
+    section — and every compression entry point outside context menus — is hidden
+    ([compression_visibility.mdx](./compression_visibility.mdx)).
 9. The **Parallelism** section (§4.3) shows a single **percent** control — *"Use up to N% of CPU cores
    for background compression & processing"* — backed by `performance.max_core_fraction` (default
    **0.9 = 90%**), with the **live resolved core count** ("≈ 14 of 16 cores") shown beside it. It tunes

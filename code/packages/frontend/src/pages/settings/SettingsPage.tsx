@@ -19,6 +19,7 @@ import { healthColor } from "../../components/ui/health.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { confirmModal } from "../../lib/modals.js";
+import { useCompressionEnabled, useSetCompressionEnabled } from "../../api/useUserPrefs.js";
 
 export function SettingsPage() {
   const qc = useQueryClient();
@@ -498,14 +499,45 @@ const QUALITIES: CompressQuality[] = ["low", "medium", "high", "lossless"];
 
 function CompressionSettingsSection() {
   const qc = useQueryClient();
-  const { data: s } = useQuery({ queryKey: ["compress-settings"], queryFn: api.compressSettings });
-  const { data: tools } = useQuery({ queryKey: ["compress-tools"], queryFn: api.compressTools });
+  // The per-user "Show compression features" checkbox (settings.mdx §4.5, compression_visibility.mdx §1).
+  // OFF by default: the codec controls below — and every compression entry point outside context menus —
+  // stay hidden until the user turns it on here.
+  const compressionOn = useCompressionEnabled();
+  const setCompressionOn = useSetCompressionEnabled();
+  const { data: s } = useQuery({ queryKey: ["compress-settings"], queryFn: api.compressSettings, enabled: compressionOn });
+  const { data: tools } = useQuery({ queryKey: ["compress-tools"], queryFn: api.compressTools, enabled: compressionOn });
   const save = useMutation({
     mutationFn: (patch: Parameters<typeof api.setCompressSettings>[0]) => api.setCompressSettings(patch),
     onSuccess: (ns) => { qc.setQueryData(["compress-settings"], ns); toast.success("Compression settings saved"); },
     onError: (e: Error) => { clientLog.error("Settings.compress", e); toast.error(e.message); },
   });
-  if (!s) return null;
+  const toggle = (
+    <label className="flex items-start gap-2 text-sm" title="Per user. Off hides the Compress tab, compress tiles, icons, badges and buttons everywhere; the Compress item in a file's or folder's right-click / ⋮ menu always stays.">
+      <input
+        type="checkbox"
+        className="mt-0.5"
+        checked={compressionOn}
+        disabled={setCompressionOn.isPending}
+        onChange={(e) => setCompressionOn.mutate(e.target.checked)}
+      />
+      <span>
+        <span className="font-medium text-black/80">Show compression features</span>
+        <span className="block text-xs text-black/50">
+          {compressionOn
+            ? "Compression tabs, tiles, icons and buttons are shown across Large File Bridge."
+            : "Hidden. Large File Bridge won't offer to compress your files, except from a file's or folder's right-click / ⋮ menu."}
+        </span>
+      </span>
+    </label>
+  );
+  if (!compressionOn) {
+    return (
+      <Section title="Compression" subtitle="Large File Bridge can shrink videos and images to reclaim space — only when you ask.">
+        {toggle}
+      </Section>
+    );
+  }
+  if (!s) return <Section title="Compression">{toggle}</Section>;
   // Only the tools we genuinely cannot work without are worth nagging about. The image encoders now run
   // in-process, so oxipng / cwebp / cjpeg / jpegoptim being absent changes nothing — listing them as
   // "not installed" sent people to install things that were never used.
@@ -518,6 +550,7 @@ function CompressionSettingsSection() {
 
   return (
     <Section title="Compression" subtitle="Per-media codec preferences. Resolution — including colour resolution — is always preserved, and a lossless original is never turned into a lossy copy unless you ask.">
+      <div className="mb-3">{toggle}</div>
       {(["images", "video"] as const).map((m) => (
         <MediaPrefRow key={m} media={m} prefs={s[m]} onSave={(patch) => save.mutate({ [m]: { ...s[m], ...patch } })} />
       ))}

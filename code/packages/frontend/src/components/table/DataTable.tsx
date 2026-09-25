@@ -36,6 +36,8 @@ import {
   type FileFilterRowValue,
   type FilterNode,
 } from "./fileFilter.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { withoutCompressionFields } from "../../lib/compressionVisibility.js";
 import { FileFilterClauseBar, FileFilterPanel } from "./FileFilterPanel.js";
 import { Popover } from "./Popover.js";
 
@@ -219,10 +221,14 @@ export function DataTable<T>({
   // ONE expression string is the whole state: the segmented controls and the clause bar are two views
   // of it, it drives the row predicate, and it is what persists (§2.11.5). Invalid text keeps the LAST
   // VALID expression applied (§2.11.4) — `ffApplied` trails `ffParsed` only on successful parses.
-  const ffFieldIds = useMemo<FileFilterFieldId[]>(
-    () => (fileFilter ? fileFilter.fields.map((f) => f.id) : []),
-    [fileFilter],
+  // "Show compression features" off (the default) drops the Compressible videos/images/audio fields from
+  // every file table's Filter dropdown in this one place (compression_visibility.mdx §2 row 8).
+  const compressionOn = useCompressionEnabled();
+  const ffFields = useMemo(
+    () => (fileFilter ? withoutCompressionFields(fileFilter.fields, compressionOn) : []),
+    [fileFilter, compressionOn],
   );
+  const ffFieldIds = useMemo<FileFilterFieldId[]>(() => ffFields.map((f) => f.id), [ffFields]);
   const [fileFilterText, setFileFilterText] = useState(() => fileFilter?.defaultExpr ?? "");
   const ffParsed = useMemo(() => parseFileFilter(fileFilterText, ffFieldIds), [fileFilterText, ffFieldIds]);
   const [ffApplied, setFfApplied] = useState<FilterNode | null>(null);
@@ -242,8 +248,8 @@ export function DataTable<T>({
     [ffFieldIds],
   );
   const ffValueOf = useMemo(
-    () => new Map(fileFilter ? fileFilter.fields.map((f) => [f.id, f.valueOf] as const) : []),
-    [fileFilter],
+    () => new Map(ffFields.map((f) => [f.id, f.valueOf] as const)),
+    [ffFields],
   );
   const ffHasSize = ffFieldIds.includes("size");
   // Per-column enum selects duplicated by a §2.11 field are dropped from the popover's long tail —

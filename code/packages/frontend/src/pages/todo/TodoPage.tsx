@@ -15,6 +15,8 @@ import type { WarningDef, WarningTarget, WarningTargetAxes } from "../../compone
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
 import { clientLog } from "../../lib/clientLog.js";
 import { grantPreviewResolver, previewForPath } from "../../lib/popupPreview.js";
+import { useCompressionEnabled } from "../../api/useUserPrefs.js";
+import { todoBatchWithoutCompression } from "../../lib/compressionVisibility.js";
 
 const SCOPE_LABEL: Record<string, string> = {
   repo: "repo",
@@ -96,10 +98,17 @@ export function TodoPage() {
   const qc = useQueryClient();
   const [openId, setOpenId] = useState<string | null>(null);
 
-  const { data: batches = [], isLoading } = useQuery({
+  const { data: allBatches = [], isLoading } = useQuery({
     queryKey: ["todo", "batches"],
     queryFn: api.todoBatches,
   });
+  // "Show compression features" off (the default) removes compress batches and the compress half of a mixed
+  // batch (compression_visibility.mdx §2 row 10) — the server still computes them; we just don't offer them.
+  const compressionOn = useCompressionEnabled();
+  const batches = useMemo(
+    () => allBatches.flatMap((b) => todoBatchWithoutCompression(b, compressionOn) ?? []),
+    [allBatches, compressionOn],
+  );
   useLiveRefresh(["todo"], [["todo", "batches"]]);
 
   const dismiss = useMutation({
@@ -267,10 +276,16 @@ function axesForItem(it: TodoBatchItem): WarningTargetAxes | undefined {
 // previews the row the user CLICKS, below the options (Space plays a previewed video, §4.5.2/§4.5.3).
 function BatchPopup({ id, onClose }: { id: string; onClose: () => void }) {
   const qc = useQueryClient();
-  const { data: batch, isLoading } = useQuery<TodoBatchDetail>({
+  const { data: rawBatch, isLoading } = useQuery<TodoBatchDetail>({
     queryKey: ["todo", "batch", id],
     queryFn: () => api.todoBatch(id),
   });
+  // Same filter as the slug list, so the popup never lists (or applies) a compress item the user can't see.
+  const compressionOn = useCompressionEnabled();
+  const batch = useMemo(
+    () => (rawBatch ? (todoBatchWithoutCompression(rawBatch, compressionOn) ?? undefined) : undefined),
+    [rawBatch, compressionOn],
+  );
 
   const root = batch?.storageRoot.replace(/\/+$/, "") ?? "";
   const warning = useMemo<WarningDef | null>(() => {

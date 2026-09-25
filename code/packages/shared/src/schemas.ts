@@ -1143,6 +1143,20 @@ export const TableViewSchema = z.object({
 });
 export type TableView = z.infer<typeof TableViewSchema>;
 
+// Per-user feature visibility (compression_visibility.mdx §1). `compression` = Settings → Compression →
+// "Show compression features": default FALSE, so every compression entry point except context menus is
+// hidden until the user turns it on. Presentation only — the backend computes the same thing either way.
+export const UserFeaturesSchema = z.object({
+  compression: z.boolean().default(false),
+});
+export type UserFeatures = z.infer<typeof UserFeaturesSchema>;
+
+/** The per-user prefs the browser reads/writes via /api/user-prefs (compression_visibility.mdx §1.1). */
+export const UserPrefsSchema = z.object({
+  features: UserFeaturesSchema.prefault({}),
+});
+export type UserPrefs = z.infer<typeof UserPrefsSchema>;
+
 // ── per-user config.yaml (storage.mdx §4) ───────────────────────────────────
 export const UserConfigSchema = z.object({
   schema_version: z.number().default(1),
@@ -1163,6 +1177,8 @@ export const UserConfigSchema = z.object({
   // The File System page's persisted view state (directories.mdx §1.3). A fresh user with no block
   // reads back the schema defaults (empty columns/selection, all filters ON) — never an error.
   file_system: FileSystemViewSchema.prefault({}),
+  // Per-user feature visibility (compression_visibility.mdx). A user with no block reads back all-off.
+  features: UserFeaturesSchema.prefault({}),
   // Last 5 web sessions, newest first (sessions.mdx §4). At most one open (ended_at null), at index 0.
   sessions: z.array(SessionRecordSchema).default([]),
 });
