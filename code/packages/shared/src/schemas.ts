@@ -610,6 +610,12 @@ export const DecisionEventSchema = z.object({
   gitignore: z.boolean().default(false), // AXIS 2 — Add to git ignore
   decided_by: z.string().nullable().default(null), // allow-listed email of the deciding user
   decided_at: iso, // ISO-8601 UTC — also the fold tiebreaker
+  // WRITER PROVENANCE (backward_compatibility.md §3). Which Large File Bridge build, on which computer,
+  // CREATED this record. OPTIONAL and never defaulted: ABSENCE MEANS A LEGACY WRITER (a build before 7, or
+  // an older build that re-serialized the record and stripped fields it did not know). Never part of the
+  // record's identity and never read by the fold — it is evidence for "who is writing this", not data.
+  writer_build: z.number().int().optional(),
+  writer_device: z.string().optional(),
 });
 export type DecisionEvent = z.infer<typeof DecisionEventSchema>;
 
@@ -1203,6 +1209,8 @@ export const DeletionReceiptSchema = z.object({
   /** Derived .transcription/.ai_description/.ocr sidecars removed there (deletion.mdx §7.2 step 6). */
   sidecars: z.number().default(0),
   note: z.string().nullable().default(null),
+  /** Which build wrote this receipt (backward_compatibility.md §3). Absent = a legacy writer. */
+  writer_build: z.number().int().optional(),
 });
 export type DeletionReceipt = z.infer<typeof DeletionReceiptSchema>;
 
@@ -1234,6 +1242,12 @@ export const DeletionRecordSchema = z.object({
   undeleted_at: iso.nullable().default(null),
   undeleted_by: z.string().nullable().default(null),
   undelete_reason: z.string().nullable().default(null),
+  // WRITER PROVENANCE (backward_compatibility.md §3). Which Large File Bridge build, on which computer,
+  // CREATED this record. OPTIONAL and never defaulted: ABSENCE MEANS A LEGACY WRITER (a build before 7, or
+  // an older build that re-serialized the record and stripped fields it did not know). Never part of the
+  // record's identity and never read by the fold — it is evidence for "who is writing this", not data.
+  writer_build: z.number().int().optional(),
+  writer_device: z.string().optional(),
 });
 export type DeletionRecord = z.infer<typeof DeletionRecordSchema>;
 

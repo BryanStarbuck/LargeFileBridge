@@ -17,13 +17,12 @@ import {
   DecisionPolicyDocSchema,
   type DecisionPolicyDoc,
   type Manifest,
-  type ManifestFile,
 } from "@lfb/shared";
 import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
 // The fleet-deletion ledger merge (deletion.mdx §6). Imported from the pin module because the ledger's
 // semantics — append-only, widest scope wins, absence never lifts — belong with the feature, not with the
 // transport that happens to carry it.
-import { readDeletions, serializeDeletions, mergeDeletions } from "../pin/deletions.service.js";
+import { writeSharedIfDifferent } from "./sync-fight.js";
 import { repoUidFor, repoSlugFor } from "./repo-identity.js";
 import { namedKeyDir, isDirForKey } from "../../shared/store/keyed-dir.js";
 // THIS computer's device label — the identity a manifest's `pinned_by` is keyed by. Both directions of
@@ -32,15 +31,15 @@ import { computerLabel } from "../store-model/config.service.js";
 // The per-entry merge lives in a LEAF module so units.service can fold both manifests on the read path
 // without dragging this service (and its storage.service dependency) into an import cycle.
 import { mergeManifests, serializeManifest } from "./manifest-merge.js";
-import { supersededCid } from "../pin/superseded-cids.service.js";
+import { supersededCid, supersededPairs } from "../pin/superseded-cids.service.js";
 export { mergeManifests } from "./manifest-merge.js";
 // The decision-ledger union merge is a LEAF for the same reason — the ledger, like the manifest, is
 // SHARED state that must union, never last-writer-copy (decisions.mdx §5; the 2026-07-20 "not backed up:
 // 22 here / 0 there" defect where wholesale ledger copies erased events the copy source didn't know).
-import { unionLedgerEvents, parseLedgerBestEffort, serializeLedger, ledgerIsUnreadable } from "./ledger-merge.js";
+import { runMergeTask, readManifestChecked, fileId, sameIdentity, type MergeTask, type MergeResult, type FileId } from "./merge-tasks.js";
+import { runMergeOffloaded } from "./merge-offload.js";
 import { resolveOwnerDedicatedRepo, syncRepoAdmitsRemote } from "./artifact-placement.service.js";
 import { noteArtifactWritten } from "../pin/sync-trigger.service.js";
-import { normalizeManifestPaths } from "../pin/manifest-normalize.js";
 import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar-heal.js";
 // THE SYNC FENCE (database.mdx §2.2, migration 0012) — the only module in the app allowed to hold both a
 // Postgres handle and a designated serializer. Importing it here does NOT give this file a database: every
@@ -52,7 +51,6 @@ import { resolveStateDir } from "../../config/state-dir.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
 // logs. Both directions route through it, so neither leg can stamp over the other side's events.
 import { copyTrackedFile } from "./tracked-file-merge.js";
-import { parseYamlHealingUnionDamage } from "./union-damage.js";
 // The working-tree gate — a LEAF module (logging + path only), so no cycle with the git service.
 import { deferWhileBusy, busyRootFor } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
@@ -262,7 +260,7 @@ function isContentArtifactName(name: string): boolean {
  * `skip` applies at the TOP level only — the shared documents that are merged rather than copied
  * (`MERGED_NEVER_COPIED`, and the reconcile leg's own set). Nested paths are never named in it.
  */
-function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<string>): Generator<void, boolean, void> {
+function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<string>): Generator<void, boolean, unknown> {
   let entries: fs.Dirent[];
   let changed = false;
   try {
@@ -326,12 +324,33 @@ function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<s
 
 const NO_SKIP: ReadonlySet<string> = new Set<string>();
 
+// ── a pass is a generator of STEPS: a slice boundary, or a heavy merge to run off the loop ─────────────
+//
+// `yield` (no value) is a slice boundary, as it always was. `yield { merge: task }` is new (P-59): "this step
+// is a multi-megabyte parse + merge — run it wherever this driver runs heavy work, and hand me the result".
+// The SYNCHRONOUS driver answers `undefined`, and `mergeStep` then computes it inline — byte-for-byte the old
+// behaviour. The INTERRUPTIBLE drivers answer by running it on the merge worker thread, with the event loop
+// free the whole time. One generator, one merge implementation (merge-tasks.ts), two ways to run it.
+interface MergeEffect {
+  merge: MergeTask;
+}
+type PassStep = void | MergeEffect;
+type PassGen<T> = Generator<PassStep, T, MergeResult | undefined>;
+const isMergeEffect = (v: PassStep): v is MergeEffect => typeof v === "object" && v !== null && "merge" in v;
+
+/** Yield a heavy merge to the driver; compute it inline when the driver does not (the synchronous one). */
+function* mergeStep(task: MergeTask): PassGen<MergeResult> {
+  const r = yield { merge: task };
+  return r ?? runMergeTask(task);
+}
+
 /** Drain the walk synchronously — identical behaviour to the recursive function this replaced. Used by the
  *  write-path callers (`writeRepoStorage` → `mirrorToSyncRepo`), which are synchronous top to bottom and
- *  cannot await anything (worktree-gate.ts's header explains why that call chain is shaped that way). */
-function drainSync(gen: Generator<void, boolean, void>): boolean {
+ *  cannot await anything (worktree-gate.ts's header explains why that call chain is shaped that way). Merge
+ *  steps run inline here (see `mergeStep`). */
+function drainSync<T>(gen: PassGen<T>): T {
   let step = gen.next();
-  while (!step.done) step = gen.next();
+  while (!step.done) step = gen.next(undefined);
   return step.value;
 }
 
@@ -356,19 +375,28 @@ const handBackTheLoop = (): Promise<void> => new Promise<void>((resolve) => setI
  * never warns: 1.4 s taken in 8 ms slices is real CPU and belongs in the ranking, but it did not block
  * anything, and treating it like a stall would devalue the warnings that are one.
  */
-async function drainYielding<T>(label: string, detail: string, gen: Generator<void, T, void>): Promise<T> {
+async function drainYielding<T>(label: string, detail: string, gen: PassGen<T>): Promise<T> {
   const began = performance.now();
   let handedBack = 0;
   let sliceStarted = performance.now();
   let step = gen.next();
   while (!step.done) {
+    if (isMergeEffect(step.value)) {
+      // The heavy step runs on the merge worker; the loop is free until it answers (not billed as ours).
+      const pausedAt = performance.now();
+      const result = await runMergeOffloaded(step.value.merge);
+      handedBack += performance.now() - pausedAt;
+      sliceStarted = performance.now();
+      step = gen.next(result);
+      continue;
+    }
     if (performance.now() - sliceStarted >= SLICE_MS) {
       const pausedAt = performance.now();
       await handBackTheLoop();
       handedBack += performance.now() - pausedAt;
       sliceStarted = performance.now();
     }
-    step = gen.next();
+    step = gen.next(undefined);
   }
   recordCooperative(label, performance.now() - began - handedBack, detail);
   return step.value;
@@ -454,12 +482,14 @@ function driveMirrorBudgeted(key: string): boolean {
   const began = performance.now();
   let step = gen.next();
   while (!step.done) {
-    if (performance.now() - began >= MIRROR_SYNC_BUDGET_MS) {
+    // A heavy merge is never run on the caller's thread by this driver: it is exactly the multi-megabyte
+    // step the budget exists to keep off it. Hand the rest of the pass — starting with that merge — over.
+    if (isMergeEffect(step.value) || performance.now() - began >= MIRROR_SYNC_BUDGET_MS) {
       mirrorInFlight.set(key, { again: false });
-      void finishMirrorCooperatively(key, gen);
+      void finishMirrorCooperatively(key, gen, isMergeEffect(step.value) ? step.value : undefined);
       return false;
     }
-    step = gen.next();
+    step = gen.next(undefined);
   }
   return step.value;
 }
@@ -487,24 +517,43 @@ function driveMirrorBudgeted(key: string): boolean {
  * windows. Nothing is answered while this walk runs — not a request, not a stream chunk, not a timer — so
  * every one of those seconds is a second of blank spinner in the tab. See performance.mdx P-53.
  */
-async function finishMirrorCooperatively(key: string, gen: Generator<void, boolean, void>): Promise<void> {
+async function finishMirrorCooperatively(key: string, gen: PassGen<boolean>, pending?: MergeEffect): Promise<void> {
   const dst = resolveStateSyncRepo(key);
   let synchronousMs = 0;
+  // The destination went busy while we were away — abandon the pass and re-arm it whole (see above).
+  const abandonIfBusy = (): boolean => {
+    if (!(dst && busyRootFor(dst))) return false;
+    deferWhileBusy(dst, `mirror:${key}`, () => void mirrorToSyncRepo(key));
+    log.info("storage", `mirrorToSyncRepo(${key}): ${dst} entered a git cycle mid-pass — re-armed for when it releases`);
+    return true;
+  };
   try {
+    let step: IteratorResult<PassStep, boolean>;
+    if (pending) {
+      const result = await runMergeOffloaded(pending.merge);
+      if (abandonIfBusy()) return;
+      step = gen.next(result);
+    } else {
+      step = gen.next(undefined);
+    }
     let sliceStarted = performance.now();
-    let step = gen.next();
     while (!step.done) {
+      if (isMergeEffect(step.value)) {
+        synchronousMs += performance.now() - sliceStarted;
+        const result = await runMergeOffloaded(step.value.merge);
+        // The merge's WRITE happens when we resume the generator — the same gate as a slice boundary.
+        if (abandonIfBusy()) return;
+        sliceStarted = performance.now();
+        step = gen.next(result);
+        continue;
+      }
       if (performance.now() - sliceStarted >= SLICE_MS) {
         synchronousMs += performance.now() - sliceStarted;
         await handBackTheLoop();
-        if (dst && busyRootFor(dst)) {
-          deferWhileBusy(dst, `mirror:${key}`, () => void mirrorToSyncRepo(key));
-          log.info("storage", `mirrorToSyncRepo(${key}): ${dst} entered a git cycle mid-pass — re-armed for when it releases`);
-          return;
-        }
+        if (abandonIfBusy()) return;
         sliceStarted = performance.now();
       }
-      step = gen.next();
+      step = gen.next(undefined);
     }
     synchronousMs += performance.now() - sliceStarted;
   } catch (e) {
@@ -536,7 +585,7 @@ async function finishMirrorCooperatively(key: string, gen: Generator<void, boole
 // invalidated on every cycle by the very git merge this mirror was announcing (see the `noteArtifactWritten`
 // gate in `mirrorGen`), so the real pass was 0.8 s typical and 79 s at worst.
 
-function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
+function* mirrorGen(repoRoot: string): PassGen<boolean> {
   const dst = resolveStateSyncRepo(repoRoot);
   if (!dst) return false;
   // NEVER write into a working copy that git is mid-cycle in (worktree-gate.ts). This copy runs on the SCAN
@@ -609,28 +658,34 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
       // `incomingIsWire` is the other half: every OTHER computer's claim passes through FROM the mirror
       // rather than being re-unioned from our copy, so this machine can never re-publish a peer's
       // withdrawn claim (manifest-merge.ts).
-      changed = mergeManifestInto(JOB_MIRROR_MANIFEST, mirrorManifestFile, localManifestFile, mirrorManifestFile, repoRoot) || changed;
+      changed = (yield* manifestLeg(JOB_MIRROR_MANIFEST, mirrorManifestFile, localManifestFile, mirrorManifestFile, repoRoot)) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): manifest merge write failed: ${(e as Error).message}`);
     }
+    // Seam between atomic multi-megabyte merges (see the yield above): hand the loop back between legs.
+    yield;
     try {
       // The deletion ledger, OUT to the mirror (deletion.mdx §4). A throw here leaves BOTH copies untouched:
       // an unreadable ledger must never be published over a good one.
       changed =
-        mergeDeletionsInto(
+        (yield* deletionsLeg(
           JOB_MIRROR_DELETIONS,
           path.join(dst, "deletions.yaml"),
           path.join(localStateDir, "deletions.yaml"),
           path.join(dst, "deletions.yaml"),
-        ) || changed;
+        )) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): deletions merge failed: ${(e as Error).message}`);
     }
+    // Seam between atomic multi-megabyte merges (see the yield above): hand the loop back between legs.
+    yield;
     try {
-      changed = syncLedgerInto(mirrorLedgerFile, localLedgerFile, JOB_MIRROR_LEDGER, repoRoot) || changed;
+      changed = (yield* ledgerLeg(mirrorLedgerFile, localLedgerFile, JOB_MIRROR_LEDGER, repoRoot)) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): ledger union write failed: ${(e as Error).message}`);
     }
+    // Seam between atomic multi-megabyte merges (see the yield above): hand the loop back between legs.
+    yield;
     try {
       // The SHARED policy travels by FOLD, not copy (see `mergePolicyInto`). Same direction as the ledger:
       // local is the source, the mirror is the destination — but the rule is symmetric, so the reconcile
@@ -640,6 +695,7 @@ function* mirrorGen(repoRoot: string): Generator<void, boolean, void> {
           path.join(dst, "decisions_policy.yaml"),
           path.join(localStateDir, "decisions_policy.yaml"),
           JOB_MIRROR_POLICY,
+          true,
         ) || changed;
     } catch (e) {
       log.warn("storage", `mirrorToSyncRepo(${repoRoot}): policy merge write failed: ${(e as Error).message}`);
@@ -743,7 +799,7 @@ function projectRepoStorageToMirror(localFile: string, mirrorFile: string): bool
     }
     // Returns whether the mirror's bytes moved — the caller ORs it into the pass's answer, which is what
     // decides whether a git cycle is announced at all (see `mirrorGen`).
-    return writeIfDifferent(mirrorFile, YAML.stringify(parsed.data, { sortMapEntries: true }));
+    return writeSharedIfDifferent(mirrorFile, YAML.stringify(parsed.data, { sortMapEntries: true }));
   } catch {
     /* missing/unreadable local copy — nothing to project */
     return false;
@@ -775,35 +831,6 @@ function readManifestBestEffort(file: string, unit: Manifest["unit"]): Manifest 
  *
  * Absent or blank is NOT unreadable — there is nothing there to protect.
  */
-function readManifestChecked(file: string, unit: Manifest["unit"]): { manifest: Manifest; unreadable: boolean } {
-  const empty: Manifest = { schema_version: 1, unit, files: [] };
-  let raw: string;
-  try {
-    raw = fs.readFileSync(file, "utf8");
-  } catch {
-    return { manifest: empty, unreadable: false }; // absent — nothing to protect, nothing to merge
-  }
-  if (!raw.trim()) return { manifest: empty, unreadable: false };
-  try {
-    if (raw.includes("<<<<<<<")) return { manifest: empty, unreadable: true }; // conflict markers — half-merged
-    // Heal line-union damage before judging the document unreadable — `manifest.yaml` carries the same
-    // `merge=union` attribute as the ledger and fails the same way (union-damage.ts).
-    const parsed = parseYamlHealingUnionDamage(raw).doc as Partial<Manifest> | null;
-    if (!parsed || !Array.isArray(parsed.files)) return { manifest: empty, unreadable: true };
-    // Same POSIX-separator heal as the primary reader (manifest.service.ts): a Windows peer's mirrored
-    // copy carries `\` paths, and merging those unnormalized would re-introduce duplicate spellings of
-    // the same file into Local Storage on every reconcile.
-    return {
-      manifest: normalizeManifestPaths(
-        { schema_version: parsed.schema_version ?? 1, unit: parsed.unit ?? unit, files: parsed.files as ManifestFile[] },
-        file,
-      ),
-      unreadable: false,
-    };
-  } catch {
-    return { manifest: empty, unreadable: true }; // not YAML at all
-  }
-}
 
 /**
  * Reconcile a pulled sync-repo subtree back into Local Storage (artifact_placement_policy.mdx §5,
@@ -856,11 +883,6 @@ function writeIfDifferent(file: string, content: string): boolean {
 //
 // This is a cache of OUR OWN completed work, not of the data: any edit to either file on any path (a local
 // decision, a git merge, a peer's push landing in the mirror) changes its mtime and the union runs again.
-interface FileId {
-  ino: string;
-  size: string;
-  mtimeNs: string;
-}
 /** `job|dstFile|srcFile` -> the identities BOTH files had when that job last COMPLETED. */
 const workMemo = new Map<string, { dst: FileId | null; src: FileId | null }>();
 
@@ -871,14 +893,6 @@ const workMemo = new Map<string, { dst: FileId | null; src: FileId | null }>();
  * rewrite that lands in the same millisecond at the same size read as "unchanged", and a memo that answers
  * "unchanged" about a file that changed is silent data loss between the user's computers.
  */
-function fileId(file: string): FileId | null {
-  try {
-    const st = fs.statSync(file, { bigint: true });
-    return { ino: st.ino.toString(), size: st.size.toString(), mtimeNs: st.mtimeNs.toString() };
-  } catch {
-    return null;
-  }
-}
 const sameFileId = (a: FileId | null, b: FileId | null): boolean =>
   a != null && b != null && a.ino === b.ino && a.size === b.size && a.mtimeNs === b.mtimeNs;
 
@@ -994,17 +1008,65 @@ function forgetPair(job: string, dstFile: string, srcFile: string): void {
  * than replaced (see `refuseUnparseableMirror`). The reconcile direction writes to LOCAL Storage and passes
  * nothing, keeping its long-standing self-heal — an unreadable local copy IS repaired from the mirror.
  */
-function syncLedgerInto(dstFile: string, srcFile: string, job: string = JOB_LEDGER, guardDstFor?: string): boolean {
+function* ledgerLeg(dstFile: string, srcFile: string, job: string = JOB_LEDGER, guardDstFor?: string): PassGen<boolean> {
   if (pairSettled(job, dstFile, srcFile)) return false;
-  const dstRaw = readFileOrNull(dstFile);
-  if (guardDstFor !== undefined && refuseUnparseableMirror(dstFile, ledgerIsUnreadable(dstRaw), guardDstFor)) {
-    forgetPair(job, dstFile, srcFile); // a refusal is not a completion — re-announce it every pass
+  // The parse → union → semantic gate → serialize is merge-tasks.ts `ledger`, run wherever the driver runs
+  // heavy work (inline, or on the merge worker). Only the commit happens here.
+  const r = yield* mergeStep({ kind: "ledger", dstFile, srcFile, shared: guardDstFor !== undefined });
+  return commitMerge(job, dstFile, srcFile, r, {
+    shared: guardDstFor !== undefined,
+    onRefuse: () => guardDstFor !== undefined && refuseUnparseableMirror(dstFile, true, guardDstFor),
+  });
+}
+
+/** Synchronous form, for the callers outside a pass (the duplicate-subtree fold). */
+function syncLedgerInto(dstFile: string, srcFile: string, job: string = JOB_LEDGER, guardDstFor?: string): boolean {
+  return drainSync(ledgerLeg(dstFile, srcFile, job, guardDstFor));
+}
+
+/**
+ * THE COMMIT HALF of every heavy leg — on the main thread, after the merge ran (inline or on the worker).
+ *
+ * COMPARE-AND-SWAP ON FILE IDENTITY. The merge reported the (inode, size, mtime) of both inputs as it read
+ * them. If either has moved since — a decision clicked while the worker was parsing, a git merge landing in
+ * the mirror — the result describes bytes that no longer exist, and writing it would overwrite the newer
+ * ones. So it is discarded and the memo forgotten: the next pass merges what is actually there. Inline the
+ * identities cannot move, so this is exactly the old behaviour; offloaded, it is what makes offloading safe.
+ */
+function commitMerge(
+  job: string,
+  dstFile: string,
+  otherFile: string,
+  r: MergeResult,
+  opts: { shared: boolean; onRefuse?: () => void; failLabel?: string },
+): boolean {
+  if (r.outcome === "error") {
+    forgetPair(job, dstFile, otherFile);
+    log.warn("storage", `${opts.failLabel ?? job}: merge into ${dstFile} failed: ${r.message} — both copies left as they were`);
     return false;
   }
-  const merged = unionLedgerEvents(parseLedgerBestEffort(dstRaw, dstFile), parseLedgerBestEffort(readFileOrNull(srcFile), srcFile));
-  const changed = writeIfDifferent(dstFile, serializeLedger(merged));
+  if (r.outcome === "events" || r.outcome === "text") {
+    forgetPair(job, dstFile, otherFile); // not a merge answer at all — a wiring bug, never silently written
+    log.warn("storage", `${job}: merge into ${dstFile} returned a ${r.outcome} result — ignored`);
+    return false;
+  }
+  if (r.outcome === "refuse") {
+    opts.onRefuse?.();
+    forgetPair(job, dstFile, otherFile); // a refusal is not a completion — re-announce it every pass
+    return false;
+  }
+  if (!sameIdentity(r.ids.dst, fileId(dstFile)) || !sameIdentity(r.ids.other, fileId(otherFile))) {
+    forgetPair(job, dstFile, otherFile);
+    log.debug("storage", `${job}: ${dstFile} or its source moved while the merge ran — discarded, redone next pass`);
+    return false;
+  }
+  if (r.outcome === "settle") {
+    markPairSettled(job, dstFile, otherFile);
+    return false;
+  }
+  const changed = opts.shared ? writeSharedIfDifferent(dstFile, r.text) : writeIfDifferent(dstFile, r.text);
   // AFTER the write — the memo must describe the bytes now on disk, not the ones we started from.
-  markPairSettled(job, dstFile, srcFile);
+  markPairSettled(job, dstFile, otherFile);
   return changed;
 }
 
@@ -1064,14 +1126,17 @@ export function pickPolicy(mine: DecisionPolicyDoc | null, theirs: DecisionPolic
   return mine; // fully equal — keep what is already there so the write is skipped
 }
 
-function mergePolicyInto(dstFile: string, srcFile: string, job: string = JOB_POLICY): boolean {
+function mergePolicyInto(dstFile: string, srcFile: string, job: string = JOB_POLICY, shared = false): boolean {
   if (pairSettled(job, dstFile, srcFile)) return false;
   const winner = pickPolicy(
     parsePolicyBestEffort(readFileOrNull(dstFile)),
     parsePolicyBestEffort(readFileOrNull(srcFile)),
   );
   let changed = false;
-  if (winner) changed = writeIfDifferent(dstFile, YAML.stringify(winner, { sortMapEntries: true }));
+  if (winner) {
+    const text = YAML.stringify(winner, { sortMapEntries: true });
+    changed = shared ? writeSharedIfDifferent(dstFile, text) : writeIfDifferent(dstFile, text);
+  }
   // AFTER the write, for the same reason the ledger memo is stamped late.
   markPairSettled(job, dstFile, srcFile);
   return changed;
@@ -1090,35 +1155,30 @@ function mergePolicyInto(dstFile: string, srcFile: string, job: string = JOB_POL
  *
  * `guardDstFor` carries the same "refuse, never replace" rule as the ledger above, and for the same reason.
  */
-function mergeManifestInto(
+function* manifestLeg(
   job: string,
   dstFile: string,
   localFile: string,
   mirrorFile: string,
   guardDstFor?: string,
-): boolean {
+): PassGen<boolean> {
   // The destination is always one of the two inputs, so "neither input moved" is exactly "this (dst, the
   // OTHER one) pair has not moved" — one memo entry covers both.
   const other = dstFile === localFile ? mirrorFile : localFile;
   if (pairSettled(job, dstFile, other)) return false;
-  const localRead = readManifestChecked(localFile, "repo");
-  const mirrorRead = readManifestChecked(mirrorFile, "repo");
-  const local = localRead.manifest;
-  const mirror = mirrorRead.manifest;
-  if (guardDstFor !== undefined) {
-    const dstRead = dstFile === localFile ? localRead : mirrorRead;
-    if (refuseUnparseableMirror(dstFile, dstRead.unreadable, guardDstFor)) {
-      forgetPair(job, dstFile, other);
-      return false;
-    }
-  }
-  const merged = mergeManifests(local, mirror, computerLabel(), {
-    incomingIsWire: true, // the mirror is the SHARED copy — a peer's claim is ITS statement, not ours
-    supersededCid, // …but a wrapper CID we PROVED wrong must never ride back in from either side
+  const r = yield* mergeStep({
+    kind: "manifest",
+    dstFile,
+    localFile,
+    mirrorFile,
+    guard: guardDstFor !== undefined,
+    selfLabel: computerLabel(),
+    superseded: supersededPairs(), // a snapshot, so the worker applies the same corrections this thread would
   });
-  const changed = writeIfDifferent(dstFile, serializeManifest(merged));
-  markPairSettled(job, dstFile, other);
-  return changed;
+  return commitMerge(job, dstFile, other, r, {
+    shared: dstFile === mirrorFile,
+    onRefuse: () => guardDstFor !== undefined && refuseUnparseableMirror(dstFile, true, guardDstFor),
+  });
 }
 
 /**
@@ -1130,21 +1190,11 @@ function mergeManifestInto(
  * Writing a partially-understood deletion ledger is the one outcome that must never happen — every record
  * we fail to carry is a file that comes back on every computer.
  */
-function mergeDeletionsInto(job: string, dstFile: string, localFile: string, mirrorFile: string): boolean {
+function* deletionsLeg(job: string, dstFile: string, localFile: string, mirrorFile: string): PassGen<boolean> {
   const other = dstFile === localFile ? mirrorFile : localFile;
   if (pairSettled(job, dstFile, other)) return false;
-  const merged = mergeDeletions(readDeletions(localFile), readDeletions(mirrorFile));
-  // A UNIT WITH NO DELETIONS HAS NO FILE — not an empty list (deletion.mdx §4). Without this, every one of
-  // the ~105 repos on this machine gains a `deletions: []` stub on the first pass after upgrading, each one
-  // a new file committed and pushed to the backbone to say nothing at all. Absence of the file already IS
-  // absence of tombstones, and it is the only absence in this feature that means anything.
-  if (merged.deletions.length === 0 && !fs.existsSync(dstFile)) {
-    markPairSettled(job, dstFile, other);
-    return false;
-  }
-  const changed = writeIfDifferent(dstFile, serializeDeletions(merged));
-  markPairSettled(job, dstFile, other);
-  return changed;
+  const r = yield* mergeStep({ kind: "deletions", dstFile, localFile, mirrorFile });
+  return commitMerge(job, dstFile, other, r, { shared: dstFile === mirrorFile, failLabel: "deletions merge" });
 }
 
 /** TEST-ONLY: forget every memoized merge, in every direction — including the copy on disk, so a test that
@@ -1170,7 +1220,7 @@ export async function reconcileFromSyncRepoYielding(repoRoot: string): Promise<b
   return drainYielding("storage.reconcile.yielding", repoRoot, reconcileGen(repoRoot));
 }
 
-function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
+function* reconcileGen(repoRoot: string): PassGen<boolean> {
   const src = resolveStateSyncRepo(repoRoot);
   if (!src) return false;
   const dst = repoStateDir(repoRoot);
@@ -1186,7 +1236,7 @@ function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
       // the other just wrote (§6). No `guardDstFor`: the destination here is LOCAL Storage, and an
       // unreadable local copy is exactly the one that SHOULD be repaired from the mirror.
       changed =
-        mergeManifestInto(JOB_RECONCILE_MANIFEST, path.join(dst, "manifest.yaml"), path.join(dst, "manifest.yaml"), incomingManifest) ||
+        (yield* manifestLeg(JOB_RECONCILE_MANIFEST, path.join(dst, "manifest.yaml"), path.join(dst, "manifest.yaml"), incomingManifest)) ||
         changed;
     }
     // 2. the decision ledger — ALSO a merge, never a copy (decisions.mdx §5). A copy replaces the local
@@ -1194,24 +1244,28 @@ function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
     // the mirror by another writer's copy) would vanish, leaving frozen-cache decisions with no ledger
     // event that could ever travel — the "not backed up: 22 here / 0 there" defect. Union keeps both
     // sides; foldLedger resolves any conflict deterministically on read.
+    // Seam between atomic multi-megabyte merges (see the yield above): hand the loop back between legs.
+    yield;
     const incomingLedger = path.join(src, "decisions.yaml");
     if (fs.existsSync(incomingLedger)) {
-      changed = syncLedgerInto(path.join(dst, "decisions.yaml"), incomingLedger) || changed;
+      changed = (yield* ledgerLeg(path.join(dst, "decisions.yaml"), incomingLedger)) || changed;
     }
     // 1a. the FLEET DELETION ledger — a MERGE, never a copy (deletion.mdx §6). This is the leg that carries
     // another computer's deletion TO this one, and it is what makes `lfb delete` mean anything beyond the
     // machine it was typed on. A failure is logged and the local ledger left exactly as it was: enforcing a
     // stale-but-real set of tombstones is always safer than enforcing a half-read one.
+    // Seam between atomic multi-megabyte merges (see the yield above): hand the loop back between legs.
+    yield;
     const incomingDeletions = path.join(src, "deletions.yaml");
     if (fs.existsSync(incomingDeletions)) {
       try {
         changed =
-          mergeDeletionsInto(
+          (yield* deletionsLeg(
             JOB_RECONCILE_DELETIONS,
             path.join(dst, "deletions.yaml"),
             path.join(dst, "deletions.yaml"),
             incomingDeletions,
-          ) || changed;
+          )) || changed;
       } catch (e) {
         log.warn("storage", `reconcile: deletions merge failed for ${dst}: ${(e as Error).message}`);
       }
@@ -1219,6 +1273,8 @@ function* reconcileGen(repoRoot: string): Generator<void, boolean, void> {
     // 2a. the SHARED default-decision policy — a FOLD, for the same reason as the ledger. This is the leg
     // that used to lose intent: a copy on the way IN replaced a policy this computer had just set with
     // whatever the mirror happened to hold, with no comparison of which was newer (database.mdx §2.1).
+    // Seam between atomic multi-megabyte merges (see the yield above): hand the loop back between legs.
+    yield;
     const incomingPolicy = path.join(src, "decisions_policy.yaml");
     if (fs.existsSync(incomingPolicy)) {
       changed = mergePolicyInto(path.join(dst, "decisions_policy.yaml"), incomingPolicy) || changed;

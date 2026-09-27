@@ -14,7 +14,7 @@
 // collapse, and `foldLedger` (latest decided_at per path) resolves any conflict deterministically on read.
 import YAML from "yaml";
 import { parseYamlHealingUnionDamage } from "./union-damage.js";
-import { DecisionEventSchema, type DecisionEvent } from "@lfb/shared";
+import { DecisionEventSchema, DecisionsLedgerSchema, type DecisionEvent } from "@lfb/shared";
 import { healWindowsPath } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
 
@@ -32,7 +32,16 @@ function eventIdentity(e: DecisionEvent): string {
  *  ledger re-serializes deterministically (an unchanged log stays byte-identical). */
 export function unionLedgerEvents(a: DecisionEvent[], b: DecisionEvent[]): DecisionEvent[] {
   const byId = new Map<string, DecisionEvent>();
-  for (const e of [...a, ...b]) byId.set(eventIdentity(e), e);
+  for (const e of [...a, ...b]) {
+    const id = eventIdentity(e);
+    const prior = byId.get(id);
+    // The same event, twice — keep the copy that still carries its WRITER STAMP (backward_compatibility.md
+    // §3). An older build strips fields it does not know when it re-serializes, so the mirror can hold a
+    // stamp-less copy of an event this computer holds stamped. The stamp is not part of the identity (that
+    // would split one event into two and grow the log on every round trip), so the choice has to be made
+    // here, and it must be a TOTAL order so both computers keep the same copy whichever side arrives first.
+    if (!prior || stampRank(e) > stampRank(prior)) byId.set(id, e);
+  }
   return [...byId.values()].sort(
     (x, y) =>
       x.decided_at.localeCompare(y.decided_at) ||
@@ -40,6 +49,58 @@ export function unionLedgerEvents(a: DecisionEvent[], b: DecisionEvent[]): Decis
       x.path.localeCompare(y.path) ||
       (x.decided_by ?? "").localeCompare(y.decided_by ?? ""),
   );
+}
+
+/** Order two copies of one event by their writer stamp: stamped beats unstamped, higher build beats lower,
+ *  then the device name — a total order on the stamp alone, independent of arrival order. */
+function stampRank(e: DecisionEvent): string {
+  if (e.writer_build === undefined) return "";
+  return `${String(e.writer_build).padStart(6, "0")}\u0000${e.writer_device ?? ""}`;
+}
+
+/**
+ * The LATEST event per file — the fold rule every reader applies (decisions.mdx §5), in ONE place.
+ *
+ * `foldLedger` (decisions.service.ts) and the semantic write gate below must agree on this exactly: if they
+ * ever differed, the gate could decide "nothing changed" about a ledger whose folded answer did change, and
+ * a decision would silently stop travelling. So both call this. Keyed by the POSIX-healed path; the latest
+ * `decided_at` wins; ties break by `decided_by` so every computer folds identically.
+ */
+export function latestEventPerPath(events: DecisionEvent[]): Map<string, DecisionEvent> {
+  const latest = new Map<string, DecisionEvent>();
+  for (const e of events) {
+    const key = healWindowsPath(e.path);
+    const prev = latest.get(key);
+    if (
+      !prev ||
+      e.decided_at > prev.decided_at ||
+      (e.decided_at === prev.decided_at && (e.decided_by ?? "") > (prev.decided_by ?? ""))
+    ) {
+      latest.set(key, e);
+    }
+  }
+  return latest;
+}
+
+/**
+ * THE MEANING of a ledger: what every reader will conclude from it, and nothing else.
+ *
+ * The semantic write gate (backward_compatibility.md §4.2) compares two ledgers by THIS, not by bytes. Two
+ * ledgers with the same meaning differ only in things no reader consults — event order, compaction of
+ * repeated statements, writer stamps an older build stripped, superseded history — and rewriting a SHARED
+ * copy for any of those is how two builds end up rewriting each other's file forever: each pass produces a
+ * byte difference, a commit, a merge, and the other build's pass puts its own spelling back.
+ *
+ * Includes `decided_by`/`decided_at` of the winning event, because those ARE read (the UI shows who decided
+ * and when). A string, so equality is one comparison.
+ */
+export function ledgerMeaning(events: DecisionEvent[]): string {
+  const rows: string[] = [];
+  for (const [p, e] of latestEventPerPath(events)) {
+    rows.push([p, e.asked, e.ipfs, e.gitignore, e.decided_by ?? "", e.decided_at].join("\u0000"));
+  }
+  rows.sort();
+  return rows.join("\n");
 }
 
 /**
@@ -108,16 +169,32 @@ export function compactLedger(events: DecisionEvent[]): DecisionEvent[] {
  *  events are validated one at a time, so one bad record costs one record (`eventsOfLedgerDoc`). `file` is
  *  used only to name the document in the recovery WARN. */
 export function parseLedgerBestEffort(raw: string | null, file?: string): DecisionEvent[] {
-  if (!raw) return [];
-  if (/^(<{7}|={7}|>{7})(\s|$)/m.test(raw)) return [];
+  return parseLedgerDetailed(raw, file).events;
+}
+
+/**
+ * `parseLedgerBestEffort`, also saying whether the TEXT was damaged — repaired line-union damage, or records
+ * dropped. The semantic write gate needs the difference: a damaged shared copy must be written back healed
+ * even when its MEANING is intact, or every reader on every computer keeps re-healing it (and warning) on
+ * every read forever.
+ */
+export function parseLedgerDetailed(
+  raw: string | null,
+  file?: string,
+): { events: DecisionEvent[]; damaged: boolean; unreadable: boolean } {
+  if (!raw?.trim()) return { events: [], damaged: false, unreadable: false };
+  // `unreadable` is exactly `ledgerIsUnreadable`'s answer, from the same single parse — the mirror's refusal
+  // guard and the merge used to parse a multi-megabyte ledger twice to ask two questions about it.
+  if (/^(<{7}|={7}|>{7})(\s|$)/m.test(raw)) return { events: [], damaged: true, unreadable: true };
   // A ledger that was UNION-MERGED by git (`decisions.yaml merge=union`) can arrive with an item's `- `
   // leader dissolved, which makes the whole 3 MB document unparseable over one line. Healing it here is
   // what turns 12,511 recovered events into a union instead of a `[]` that quietly discards them all;
   // union-damage.ts explains the damage and why the repair is exactly its inverse.
   const { doc, repaired } = parseYamlHealingUnionDamage(raw);
-  if (doc === null) return [];
-  const { events, dropped } = eventsOfLedgerDoc(doc);
-  if (repaired !== null || dropped > 0) {
+  if (doc === null) return { events: [], damaged: true, unreadable: true };
+  const { events, dropped, shapeOk } = eventsOfLedgerDoc(doc);
+  const damaged = repaired !== null || dropped > 0;
+  if (damaged && file !== undefined) {
     // Say it once per read, with the numbers, because this is the line that tells the user their ledger
     // was damaged in transit AND that we recovered it. Silence here would make the heal invisible and the
     // one lost record look like a decision they never made.
@@ -129,7 +206,7 @@ export function parseLedgerBestEffort(raw: string | null, file?: string): Decisi
         `The repaired document is written back on this pass. See union-damage.ts.`,
     );
   }
-  return events;
+  return { events, damaged, unreadable: !shapeOk };
 }
 
 /**
@@ -198,5 +275,34 @@ export function ledgerIsUnreadable(raw: string | null): boolean {
  *  MIRROR, so a writer that compacted only its own copy would get every dropped re-stamp handed straight
  *  back on the next union. */
 export function serializeLedger(events: DecisionEvent[]): string {
-  return YAML.stringify({ schema_version: 1, events: unionLedgerEvents(compactLedger(events), []) });
+  return serializeCanonicalLedger(canonicalLedgerEvents(events));
+}
+
+/** The exact event list `serializeLedger` writes — compacted, deduped, in the document's total order. What a
+ *  fresh parse of the written file returns, so a cache seeded with it is indistinguishable from a re-read. */
+export function canonicalLedgerEvents(events: DecisionEvent[]): DecisionEvent[] {
+  return unionLedgerEvents(compactLedger(events), []);
+}
+
+/** Serialize an ALREADY-canonical list (skips re-compaction when the caller has just computed it). */
+export function serializeCanonicalLedger(canonical: DecisionEvent[]): string {
+  return YAML.stringify({ schema_version: 1, events: canonical });
+}
+
+/**
+ * The STRICT reader's parse, as a pure function of the text: whole-document schema validation, exactly what
+ * `readLedger` (decisions.service.ts) accepts. `ok:false` carries the reason; the caller that owns the file
+ * does the reporting and the quarantine. Lives here so the merge worker thread can run it.
+ */
+export function parseLedgerStrict(raw: string): { ok: true; events: DecisionEvent[] } | { ok: false; reason: "conflict" | "yaml" | "schema"; message: string } {
+  if (/^(<{7}|={7}|>{7})(\s|$)/m.test(raw)) return { ok: false, reason: "conflict", message: "git merge-conflict markers" };
+  let parsed: unknown;
+  try {
+    parsed = YAML.parse(raw) ?? {};
+  } catch (e) {
+    return { ok: false, reason: "yaml", message: (e as Error).message };
+  }
+  const result = DecisionsLedgerSchema.safeParse(parsed);
+  if (!result.success) return { ok: false, reason: "schema", message: result.error.message };
+  return { ok: true, events: result.data.events };
 }

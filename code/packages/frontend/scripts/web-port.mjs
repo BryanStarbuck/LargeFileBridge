@@ -115,6 +115,13 @@ export async function resolveWebPort(desired = desiredWebPort()) {
     if (!(await isPortInUse(port))) {
       return finish({ port, action: port === desired ? "free" : "moved", from: desired });
     }
+    // THE HOLDER IS THIS PROCESS: Vite is restarting in place (a `vite.config.ts` change). It evaluates the
+    // new config BEFORE it closes the old server, so the port is still bound — by us. Probing it over HTTP
+    // can fail mid-restart, which classified our own socket as "a foreign process" and moved the web app to
+    // :2223, leaving every open tab on :2222 dead (2026-09-27). Keep the port; Vite frees it before binding.
+    if (pidsOnPort(port).map(Number).includes(process.pid)) {
+      return finish({ port, action: "restart", from: desired });
+    }
     if (await isOurApp(port)) {
       // A duplicate of ourselves — take it down and reclaim the port.
       if (await freePort(port)) {

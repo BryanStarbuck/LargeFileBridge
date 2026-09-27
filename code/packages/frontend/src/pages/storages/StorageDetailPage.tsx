@@ -20,11 +20,32 @@ import type { LfbColumn } from "@/components/table/types";
 // The shared icon control-column kit (tables.mdx icon-columns) — the Transcribe / AI description / OCR
 // status icons, here derived from the storage index's analysis[] + the file's kind.
 import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, TASK_ICON, type TaskIconKind } from "@/components/table/taskIcons";
-import { taskRowValue } from "@/components/table/fileFilter";
+import { taskRowValue, type FileFilterFieldId, type FileFilterRowValue } from "@/components/table/fileFilter";
 import { relativeTime, absoluteTime } from "@/lib/format";
 import { useLiveRefresh } from "@/lib/useLiveRefresh";
 import { clientLog } from "@/lib/clientLog";
 import { useCompressionEnabled } from "@/api/useUserPrefs";
+
+// The row's three analysis statuses, derived from its analysis[] + name — shared by the icon columns and
+// the §2.11 filter fields.
+const rowAnalysis = (f: StorageFileRow) =>
+  analysisTaskStatuses(f.path.slice(f.path.lastIndexOf("/") + 1), f.analysis);
+
+// The §2.11 file filter (tables.mdx §2.11.6 — the Storage-detail subset): the three analysis axes derived
+// from analysis[] + the file's kind, and the compressible family from the index's compressible verdict. No
+// pin/git-ignore fields — a storage row has no per-file decision. Module-level so the prop has ONE identity
+// (an inline literal re-derived the table's filter state on every render).
+const STORAGE_FILE_FILTER: {
+  fields: { id: FileFilterFieldId; valueOf: (f: StorageFileRow) => FileFilterRowValue }[];
+} = {
+  fields: [
+    { id: "transcribe", valueOf: (f) => taskRowValue(rowAnalysis(f).transcribe) },
+    { id: "ai_description", valueOf: (f) => taskRowValue(rowAnalysis(f).describe) },
+    { id: "ocr", valueOf: (f) => taskRowValue(rowAnalysis(f).ocr) },
+    { id: "compressible_videos", valueOf: (f) => (f.compressible === "video" ? "yes" : "no") },
+    { id: "compressible_images", valueOf: (f) => (f.compressible === "image" ? "yes" : "no") },
+  ],
+};
 
 export function StorageDetailPage() {
   const { storageId } = useParams({ strict: false }) as { storageId: string };
@@ -133,11 +154,6 @@ export function StorageDetailPage() {
     else if (kind === "describe") runDescribeFile(abs, name, { onDone: refresh });
     else if (kind === "ocr") runOcrFile(abs, name, { onDone: refresh });
   };
-
-  // The row's three analysis statuses, derived once per call site from its analysis[] + name — shared by
-  // the icon columns and the §2.11 filter fields.
-  const rowAnalysis = (f: StorageFileRow) =>
-    analysisTaskStatuses(f.path.slice(f.path.lastIndexOf("/") + 1), f.analysis);
 
   // One narrow analysis icon column (Transcribe / AI description / OCR) — status derived from analysis[].
   const analysisIconCol = (kind: "transcribe" | "describe" | "ocr"): LfbColumn<StorageFileRow> => ({
@@ -261,18 +277,8 @@ export function StorageDetailPage() {
         fillHeight={false}
         data={data?.files ?? []}
         columns={columns}
-        // The §2.11 file filter (tables.mdx §2.11.6 — the Storage-detail subset): the three analysis
-        // axes derived from analysis[] + the file's kind, and the compressible family from the index's
-        // compressible verdict. No pin/git-ignore fields — a storage row has no per-file decision.
-        fileFilter={{
-          fields: [
-            { id: "transcribe", valueOf: (f) => taskRowValue(rowAnalysis(f).transcribe) },
-            { id: "ai_description", valueOf: (f) => taskRowValue(rowAnalysis(f).describe) },
-            { id: "ocr", valueOf: (f) => taskRowValue(rowAnalysis(f).ocr) },
-            { id: "compressible_videos", valueOf: (f) => (f.compressible === "video" ? "yes" : "no") },
-            { id: "compressible_images", valueOf: (f) => (f.compressible === "image" ? "yes" : "no") },
-          ],
-        }}
+        // The §2.11 file filter (tables.mdx §2.11.6 — the Storage-detail subset).
+        fileFilter={STORAGE_FILE_FILTER}
         searchKeys={(f) => f.path}
         getRowId={(f) => f.path}
         onRowClick={(f) => s && navigate({ to: "/file", search: { path: `${s.root}/${f.path}` } })}

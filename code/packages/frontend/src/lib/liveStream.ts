@@ -1,7 +1,7 @@
 // THE ONE live state-event connection per browser tab (performance.mdx Aspect 6b, storage_company.mdx §8.9).
 //
 // WHY THIS MODULE EXISTS — the bug it fixes. `useLiveRefresh` used to open its OWN `fetch` stream per call
-// site. A single tab mounts several of them at once (AppShell + ProgressContext + ScanProgressBar + the
+// site. A single tab mounts several of them at once (AppShell + ProgressContext + ProgressDock + the
 // routed page, and MediaViewer/child components on top), and each one holds a browser connection open
 // FOREVER. HTTP/1.1 allows only ~6 concurrent connections per origin, so four-plus permanent streams
 // starved everything else the tab needed: ordinary `/api` calls queued behind them and eventually failed
@@ -21,6 +21,16 @@
 //
 // It exposes a STATUS so the UI can say "live updates paused" out loud rather than silently showing stale
 // data — the whole point of the module is that a user never mistakes a dead stream for a quiet one.
+//
+// ONE CONNECTION PER BROWSER, NOT PER TAB (2026-09-27). "One per tab" was not enough: Chrome's ~6
+// connections-per-host pool is shared by EVERY tab on the origin, so six open Large File Bridge tabs held
+// six permanent `/events/stream` sockets and every other request from every tab — data queries, the
+// token mint, even perfWatch's own "page still spinning" report — queued inside the browser forever. The
+// backend saw nothing and answered curl in 1 ms while every tab spun (log.log: six "state stream opened"
+// lines within a second of each backend restart). Now the tabs elect ONE leader with the Web Locks API;
+// only the leader opens the stream and it relays every event and status change to the other tabs over a
+// BroadcastChannel. Closing the leader tab releases the lock and the next tab in line takes over
+// immediately, announcing a `reconnect` so every tab refetches whatever the handover gap missed.
 import { streamNdjson } from "./streamNdjson.js";
 import { clientLog } from "./clientLog.js";
 
@@ -124,6 +134,7 @@ function wakeNow(): void {
 function setStatus(next: LiveStatus): void {
   if (status === next) return;
   status = next;
+  if (isLeader) relay({ kind: "status", status: next });
   for (const fn of [...statusListeners]) {
     try {
       fn(next);
@@ -167,16 +178,111 @@ export function liveListenerCount(): number {
   return listeners.size;
 }
 
+// ---------------------------------------------------------------------------------------------------
+// Cross-tab leadership — one stream for the whole browser (see the header: the shared 6-socket pool).
+// ---------------------------------------------------------------------------------------------------
+
+const LEADER_LOCK = "lfb.liveStream.leader";
+const RELAY_CHANNEL = "lfb.liveStream";
+
+type RelayMessage =
+  | { kind: "event"; ev: StateStreamEvent }
+  | { kind: "status"; status: LiveStatus }
+  /** A tab that just started following asks the leader where things stand. */
+  | { kind: "ask-status" };
+
+/** True while THIS tab holds the leader lock and owns the one connection. */
+let isLeader = false;
+let channel: BroadcastChannel | null = null;
+
+function crossTabSupported(): boolean {
+  return (
+    typeof navigator !== "undefined" &&
+    typeof navigator.locks?.request === "function" &&
+    typeof BroadcastChannel !== "undefined"
+  );
+}
+
+function relay(msg: RelayMessage): void {
+  try {
+    channel?.postMessage(msg);
+  } catch (e) {
+    clientLog.warn("liveStream.relay", e);
+  }
+}
+
+function openChannel(): void {
+  if (channel) return;
+  const ch = new BroadcastChannel(RELAY_CHANNEL);
+  ch.onmessage = (e: MessageEvent<RelayMessage>) => {
+    const msg = e.data;
+    if (!msg || typeof msg !== "object") return;
+    if (msg.kind === "ask-status") {
+      if (isLeader) relay({ kind: "status", status });
+      return;
+    }
+    if (isLeader) return; // the leader is the source; it never takes relayed state from a stale peer
+    if (msg.kind === "status") {
+      if (msg.status === "live") connectedOnce = true;
+      setStatus(msg.status);
+    } else if (msg.kind === "event") {
+      connectedOnce = true;
+      setStatus("live");
+      emit(msg.ev);
+    }
+  };
+  channel = ch;
+  relay({ kind: "ask-status" });
+}
+
+function closeChannel(): void {
+  channel?.close();
+  channel = null;
+}
+
+/** Emit to this tab's subscribers and, when leading, to every other tab's. */
+function publish(ev: StateStreamEvent): void {
+  emit(ev);
+  if (isLeader) relay({ kind: "event", ev });
+}
+
 function ensureRunning(): void {
   if (loopAc) return;
   const ac = new AbortController();
   loopAc = ac;
-  void runLoop(ac);
+  if (!crossTabSupported()) {
+    void runLoop(ac);
+    return;
+  }
+  openChannel();
+  // Queue for the lock; while we wait, this tab follows the leader over the channel. The lock is released
+  // when the callback's promise settles (runLoop ends on stop()) or when the tab closes / is discarded.
+  navigator.locks
+    .request(LEADER_LOCK, { signal: ac.signal }, async () => {
+      if (ac.signal.aborted) return;
+      isLeader = true;
+      // Taking over from a previous leader: events may have been lost in the handover, so the first hello
+      // on our own connection is announced to every tab as a reconnect (they refetch once).
+      if (connectedOnce) droppedSinceLastHello = true;
+      try {
+        await runLoop(ac);
+      } finally {
+        isLeader = false;
+      }
+    })
+    .catch((e: unknown) => {
+      // AbortError = stop() ran while we were still queued: the design working, not a fault.
+      if ((e as { name?: string })?.name !== "AbortError") clientLog.warn("liveStream.leaderLock", e);
+    });
 }
 
 function stop(): void {
   const ac = loopAc;
   loopAc = null;
+  // Step down BEFORE the status change below, so other tabs are not told "reconnecting" by a tab that is
+  // simply leaving — the next leader reports its own status as soon as it connects.
+  isLeader = false;
+  closeChannel();
   wakeSleep?.();
   ac?.abort();
   // The next subscriber starts a fresh connection; don't leave a stale "reconnecting" behind it.
@@ -224,11 +330,14 @@ async function runLoop(ac: AbortController): Promise<void> {
 
           const ev = raw as StateStreamEvent;
           if (!ev || typeof ev !== "object") return;
+          // setStatus only relays a CHANGE; a tab that just took over may already read "live" from
+          // following, so re-assert it to the other tabs on every hello/heartbeat (cheap, ~1 per 25s).
+          if (isLeader && (ev.type === "hello" || ev.type === "heartbeat")) relay({ kind: "status", status });
           if (ev.type === "hello" && droppedSinceLastHello) {
             droppedSinceLastHello = false;
-            emit({ type: "reconnect" });
+            publish({ type: "reconnect" });
           }
-          emit(ev);
+          publish(ev);
         },
       });
       // A clean end means the server closed the stream (restart, shutdown). Reconnect — but count it as

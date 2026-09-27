@@ -7,6 +7,11 @@
 //  * P-03 the selection checkbox column is rendered by hand (leading cell), NOT baked into the TanStack
 //    column model, so `tanColumns` no longer depends on the unstable `selection` object.
 //  * P-05 the search box is debounced — filtering the dataset runs once per pause, not per keypress.
+//  * PROP-IDENTITY ROBUSTNESS — callers idiomatically pass `columns`, `fileFilter`, `fileTypeFacet` and
+//    `extraFacets` as inline literals (a new identity every render). Every memo below that used to key on
+//    those identities now keys on their STRUCTURE (column shape, field ids, facet vocabularies); the
+//    functions inside them (accessors, cells, valueOf) are read through refs at call time. Otherwise one
+//    parent render — a checkbox click, a stream frame — re-filtered and re-sorted every row twice.
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -19,6 +24,8 @@ import {
   type ColumnDef,
   type SortingState,
   type ColumnFiltersState,
+  type PaginationState,
+  type Updater,
 } from "@tanstack/react-table";
 import { Search, Filter, ArrowUpDown, Columns3, ChevronLeft, ChevronRight, X } from "lucide-react";
 import { useDebounced } from "../../lib/useDebounced.js";
@@ -165,6 +172,25 @@ const PAGE_SIZES = [100, 250, 500]; // P-01: no "All" (Number.MAX_SAFE_INTEGER) 
 // rendered row and uses that instead (performance.mdx P-38).
 const ROW_H = 33;
 
+/** A column's STRUCTURE — everything that shapes the column model or the layout, but none of its functions.
+ *  Two renders whose columns share this string are the same table; only their callbacks differ. */
+function columnSignature<T>(c: LfbColumn<T>): string {
+  return [
+    c.id,
+    c.header,
+    c.kind,
+    c.headerCell != null ? "h" : "",
+    c.tight ? "t" : "",
+    c.align ?? "",
+    c.sortable ?? "",
+    c.filterable ?? "",
+    c.width ?? "",
+    c.priority ?? "",
+    c.bounded ? "b" : "",
+    c.minWidth ?? "",
+  ].join("\u0001");
+}
+
 export function DataTable<T>({
   data,
   columns,
@@ -191,13 +217,27 @@ export function DataTable<T>({
   tableId,
   controlsPortal,
 }: DataTableProps<T>) {
+  // The LIVE column objects, by id — what every accessor / cell / header in the column model reads at call
+  // time. `stableColumns` is what the memos key on: the same array until the columns' STRUCTURE changes,
+  // so an inline `columns={[…]}` (or one closing over fresh state) re-renders cells without rebuilding the
+  // column model. Cells still see new closures: the row body calls through `liveCol` on every render.
+  const liveColsRef = useRef<Map<string, LfbColumn<T>>>(new Map());
+  liveColsRef.current = new Map(columns.map((c) => [c.id, c]));
+  const colSig = columns.map(columnSignature).join("\u0002");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const stableColumns = useMemo(() => columns, [colSig]);
+
   // Multi-level sort (tables.mdx §3): the TanStack `sorting` array IS the ordered primary/secondary/
   // tertiary list — index 0 = primary. The dropdown priority slots and header clicks both drive it.
   const [sorting, setSorting] = useState<SortingState>(() => defaultSort ?? []);
   const [columnFilters, setColumnFilters] = useState<ColumnFiltersState>([]);
   const [search, setSearch] = useState(""); // controlled input value (instant)
   const globalFilter = useDebounced(search, 200); // what the table actually filters on (P-05)
-  const [pageSize, setPageSize] = useState(500);
+  // Pagination is REAL state (default 500 per page — charter Tables). It used to be hard-coded to page 0
+  // with no change handler, so Prev/Next were no-ops and every row past the first 500 was unreachable.
+  const [pagination, setPagination] = useState<PaginationState>({ pageIndex: 0, pageSize: 500 });
+  const pageSize = pagination.pageSize;
+  const setPageSize = (n: number) => setPagination({ pageIndex: 0, pageSize: n });
   const [showSort, setShowSort] = useState(false);
   const [showFilter, setShowFilter] = useState(false);
   const [showColumns, setShowColumns] = useState(false);
@@ -224,16 +264,31 @@ export function DataTable<T>({
   // "Show compression features" off (the default) drops the Compressible videos/images/audio fields from
   // every file table's Filter dropdown in this one place (compression_visibility.mdx §2 row 8).
   const compressionOn = useCompressionEnabled();
-  const ffFields = useMemo(
-    () => (fileFilter ? withoutCompressionFields(fileFilter.fields, compressionOn) : []),
-    [fileFilter, compressionOn],
+  // Keyed on the field IDS, never the prop object: an inline `fileFilter={{…}}` is a new object on every
+  // parent render, and keying on it re-parsed the expression, re-applied it and re-filtered every row.
+  // The row readers (`valueOf`) are pure functions of the row, read through a ref at filter time.
+  const ffValueOfRef = useRef<Map<FileFilterFieldId, (row: T) => FileFilterRowValue>>(new Map());
+  ffValueOfRef.current = new Map((fileFilter?.fields ?? []).map((f) => [f.id, f.valueOf] as const));
+  const ffAllIdsKey = fileFilter ? fileFilter.fields.map((f) => f.id).join(",") : "";
+  const ffFieldIds = useMemo<FileFilterFieldId[]>(
+    () =>
+      ffAllIdsKey
+        ? withoutCompressionFields(
+            (ffAllIdsKey.split(",") as FileFilterFieldId[]).map((id) => ({ id })),
+            compressionOn,
+          ).map((f) => f.id)
+        : [],
+    [ffAllIdsKey, compressionOn],
   );
-  const ffFieldIds = useMemo<FileFilterFieldId[]>(() => ffFields.map((f) => f.id), [ffFields]);
   const [fileFilterText, setFileFilterText] = useState(() => fileFilter?.defaultExpr ?? "");
   const ffParsed = useMemo(() => parseFileFilter(fileFilterText, ffFieldIds), [fileFilterText, ffFieldIds]);
-  const [ffApplied, setFfApplied] = useState<FilterNode | null>(null);
-  useEffect(() => {
-    if (ffParsed.ok) setFfApplied(ffParsed.ast);
+  // The LAST VALID expression, derived in the same render (§2.11.4) — it used to trail in an effect, which
+  // cost a second full render + re-filter every time `ffParsed` changed identity. It only changes when the
+  // parse does, and the parse only when the text (or the field set) does.
+  const ffLastValidRef = useRef<FilterNode | null>(null);
+  const ffApplied = useMemo(() => {
+    if (ffParsed.ok) ffLastValidRef.current = ffParsed.ast;
+    return ffLastValidRef.current;
   }, [ffParsed]);
   // The segmented controls' highlights — from the current text when it parses, else the applied one.
   const ffSelections = useMemo(
@@ -246,10 +301,6 @@ export function DataTable<T>({
     (field: FileFilterFieldId, value: string) =>
       setFileFilterText((t) => setFieldInExpr(t, field, value, ffFieldIds)),
     [ffFieldIds],
-  );
-  const ffValueOf = useMemo(
-    () => new Map(ffFields.map((f) => [f.id, f.valueOf] as const)),
-    [ffFields],
   );
   const ffHasSize = ffFieldIds.includes("size");
   // Per-column enum selects duplicated by a §2.11 field are dropped from the popover's long tail —
@@ -264,34 +315,53 @@ export function DataTable<T>({
     [ffFieldIds],
   );
 
+  // The facets' row readers, through refs for the same reason as the file filter's: memos key on WHETHER a
+  // facet exists (and, for extra facets, its vocabulary), never on the prop object's identity.
+  const typeValueOfRef = useRef(fileTypeFacet?.valueOf);
+  typeValueOfRef.current = fileTypeFacet?.valueOf;
+  const hasTypeFacet = !!fileTypeFacet;
+  const extraFacetsRef = useRef(extraFacets);
+  extraFacetsRef.current = extraFacets;
+  const extraFacetsKey = extraFacets
+    ? JSON.stringify(extraFacets.map((f) => [f.id, f.label, f.values]))
+    : "";
+
   // The file-type classes actually present in the data — only these render as chips (tables.mdx §2.8/§2.10).
   const presentTypes = useMemo(() => {
-    if (!fileTypeFacet) return [] as string[];
+    const valueOf = typeValueOfRef.current;
+    if (!hasTypeFacet || !valueOf) return [] as string[];
     const seen = new Set<string>();
-    for (const r of data) seen.add(fileTypeFacet.valueOf(r));
+    for (const r of data) seen.add(valueOf(r));
     return FILE_TYPE_ORDER.filter((t) => seen.has(t));
-  }, [data, fileTypeFacet]);
+  }, [data, hasTypeFacet]);
 
   // Apply the two promoted rail controls BEFORE TanStack sees the rows (tables.mdx §2.9/§2.10): Large-only
   // hides the analysis-only rows; the file-type facet hides the unchecked classes. Everything downstream
   // (search, column filters, sort, windowing, count) then operates on this narrowed set.
+  const hasLargeOnly = !!largeOnly;
+  const largeOnlyRef = useRef(largeOnly);
+  largeOnlyRef.current = largeOnly;
+  const hasFileFilter = !!fileFilter;
   const shownData = useMemo(() => {
     let d = data;
-    if (largeOnly && largeOnlyOn) d = d.filter(largeOnly.rowIsLarge);
-    if (fileTypeFacet && hiddenTypes.size > 0)
-      d = d.filter((r) => !hiddenTypes.has(fileTypeFacet.valueOf(r)));
-    if (extraFacets) {
-      for (const f of extraFacets) {
-        const hidden = facetHidden[f.id];
-        if (hidden && hidden.size > 0) d = d.filter((r) => !hidden.has(f.valueOf(r)));
-      }
+    const lo = largeOnlyRef.current;
+    if (lo && largeOnlyOn) d = d.filter(lo.rowIsLarge);
+    const typeOf = typeValueOfRef.current;
+    if (typeOf && hiddenTypes.size > 0) d = d.filter((r) => !hiddenTypes.has(typeOf(r)));
+    for (const f of extraFacetsRef.current ?? []) {
+      const hidden = facetHidden[f.id];
+      if (hidden && hidden.size > 0) d = d.filter((r) => !hidden.has(f.valueOf(r)));
     }
     // The §2.11 file-filter expression (tables.mdx §2.11.4) — the last VALID expression, so a
     // half-typed clause in the bar never blanks the table.
-    if (fileFilter && ffApplied)
-      d = d.filter((r) => evalFileFilter(ffApplied, (fid) => ffValueOf.get(fid)?.(r) ?? "na"));
+    if (hasFileFilter && ffApplied) {
+      const valueOf = ffValueOfRef.current;
+      d = d.filter((r) => evalFileFilter(ffApplied, (fid) => valueOf.get(fid)?.(r) ?? "na"));
+    }
     return d;
-  }, [data, largeOnly, largeOnlyOn, fileTypeFacet, hiddenTypes, extraFacets, facetHidden, fileFilter, ffApplied, ffValueOf]);
+    // The ref-read readers are pure functions of the row; what can change the RESULT is listed here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [data, hasLargeOnly, largeOnlyOn, hasTypeFacet, hiddenTypes, extraFacetsKey, facetHidden, hasFileFilter, ffApplied]);
 
   // Toggle a file-type class, honoring the last-value rule (tables.mdx §2.1): the final CHECKED present
   // class can't be unchecked (that would only ever blank the table).
@@ -340,12 +410,26 @@ export function DataTable<T>({
     [],
   );
 
+  // The row's lower-cased search text, built once per row object and cached until `data` changes — the
+  // global filter used to rebuild and lower-case it for every row on every filter pass.
+  const searchKeysRef = useRef(searchKeys);
+  searchKeysRef.current = searchKeys;
+  const searchCache = useMemo(() => new WeakMap<object, string>(), [data]);
   const searchText = useCallback(
-    (row: T): string =>
-      typeof searchKeys === "function"
-        ? searchKeys(row)
-        : searchKeys.map((k) => String(row[k] ?? "")).join(" "),
-    [searchKeys],
+    (row: T): string => {
+      const keyable = typeof row === "object" && row !== null;
+      if (keyable) {
+        const hit = searchCache.get(row as object);
+        if (hit !== undefined) return hit;
+      }
+      const keys = searchKeysRef.current;
+      const text = (
+        typeof keys === "function" ? keys(row) : keys.map((k) => String(row[k] ?? "")).join(" ")
+      ).toLowerCase();
+      if (keyable) searchCache.set(row as object, text);
+      return text;
+    },
+    [searchCache],
   );
 
   // Toggle a column's manual visibility (charter Tables — Columns ⚏ dropdown). Honors a last-value rule
@@ -359,11 +443,11 @@ export function DataTable<T>({
           next.delete(id);
           return next;
         }
-        if (columns.length - next.size <= 1) return prev; // last visible column — refuse
+        if (stableColumns.length - next.size <= 1) return prev; // last visible column — refuse
         next.add(id);
         return next;
       }),
-    [columns.length],
+    [stableColumns.length],
   );
 
   // ── Remembered view state (tables.mdx) ────────────────────────────────────────
@@ -378,7 +462,7 @@ export function DataTable<T>({
     if (!tableId || !viewLoaded || hydrated) return;
     const v = storedView;
     if (v) {
-      const colIds = new Set(columns.map((c) => c.id));
+      const colIds = new Set(stableColumns.map((c) => c.id));
       const sort = (v.sort ?? [])
         .filter((s) => colIds.has(s.col))
         .map((s) => ({ id: s.col, desc: s.dir === "desc" }));
@@ -394,8 +478,9 @@ export function DataTable<T>({
       if (Array.isArray(v.hidden_types)) setHiddenTypes(new Set(v.hidden_types));
       // Extra facets (§4.1 hidden-not-shown). Only facets this surface still declares are restored, so a
       // retired facet id in an old saved view can never keep filtering rows the user can no longer see.
-      if (v.facet_hidden && extraFacets) {
-        const known = new Set(extraFacets.map((f) => f.id));
+      const facets = extraFacetsRef.current;
+      if (v.facet_hidden && facets) {
+        const known = new Set(facets.map((f) => f.id));
         const restored = Object.entries(v.facet_hidden)
           .filter(([id, vals]) => known.has(id) && Array.isArray(vals) && vals.length > 0)
           .map(([id, vals]) => [id, new Set(vals)] as const);
@@ -411,7 +496,7 @@ export function DataTable<T>({
         setFileFilterText(v.large_only ? "size = only_large" : "");
     }
     setHydrated(true);
-  }, [tableId, viewLoaded, hydrated, storedView, columns, ffHasSize, extraFacets]);
+  }, [tableId, viewLoaded, hydrated, storedView, stableColumns, ffHasSize]);
 
   // EVERY piece of persisted view state must appear in the payload below — a field left out is never
   // stored, and the round trip stays silent about it (that is how the §2.11 `file_filter` and the extra
@@ -451,13 +536,13 @@ export function DataTable<T>({
   // so a hidden column can still be sorted/filtered.
   const wrapRef = useRef<HTMLDivElement>(null);
   const containerW = useContainerWidth(wrapRef);
-  const hiddenCount = columns.filter((c) => c.priority !== undefined).length > 0; // any priorities set?
+  const hiddenCount = stableColumns.some((c) => c.priority !== undefined); // any priorities set?
   // Manual show/hide (Columns ⚏ dropdown) is applied FIRST — the user's explicit "off" wins — then the
   // responsive budget runs over what's left. So a column the user hid never comes back on a wide window,
   // and the responsive layer only ever hides more, never re-shows a manually-hidden column.
   const manualColumns = useMemo(
-    () => (hiddenCols.size ? columns.filter((c) => !hiddenCols.has(c.id)) : columns),
-    [columns, hiddenCols],
+    () => (hiddenCols.size ? stableColumns.filter((c) => !hiddenCols.has(c.id)) : stableColumns),
+    [stableColumns, hiddenCols],
   );
   const visibleColumns = useMemo(
     () => (hiddenCount ? computeVisibleColumns(manualColumns, containerW, !!selection) : manualColumns),
@@ -481,41 +566,53 @@ export function DataTable<T>({
 
   // Column model — selection is NOT part of it (P-03), so this only rebuilds when the caller's
   // logical columns change, never when a checkbox toggles.
+  // Every function here resolves the LIVE column (liveCol) at call time, so the model survives a caller
+  // passing fresh closures each render; `visibleColumns` itself only changes with the columns' structure.
   const tanColumns = useMemo<ColumnDef<T>[]>(
     () =>
-      visibleColumns.map((c) => ({
-        id: c.id,
-        // Icon columns render `headerCell` (a glyph) in the <thead>; text columns render their label.
-        // TanStack's `header` accepts a string OR a render function (not a bare node), so wrap the node.
-        header: c.headerCell != null ? () => c.headerCell : c.header,
-        accessorFn: (row) => c.accessor(row),
-        enableSorting: c.sortable ?? true,
-        filterFn: (row, _id, value) => {
-          if (value == null || value === "") return true;
-          const v = c.accessor(row.original);
-          if (c.kind === "enum") return String(v) === String(value);
-          if (c.kind === "int" || c.kind === "bytes") return Number(v) >= Number(value);
-          return String(v ?? "").toLowerCase().includes(String(value).toLowerCase());
-        },
-        cell: ({ row }) => (c.cell ? c.cell(row.original) : String(c.accessor(row.original) ?? "")),
-        meta: { align: c.align, tight: c.tight },
-      })),
+      visibleColumns.map((c) => {
+        const liveCol = (): LfbColumn<T> => liveColsRef.current.get(c.id) ?? c;
+        return {
+          id: c.id,
+          // Icon columns render `headerCell` (a glyph) in the <thead>; text columns render their label.
+          // TanStack's `header` accepts a string OR a render function (not a bare node), so wrap the node.
+          header: c.headerCell != null ? () => liveCol().headerCell : c.header,
+          accessorFn: (row) => liveCol().accessor(row),
+          enableSorting: c.sortable ?? true,
+          filterFn: (row, _id, value) => {
+            if (value == null || value === "") return true;
+            const v = liveCol().accessor(row.original);
+            if (c.kind === "enum") return String(v) === String(value);
+            if (c.kind === "int" || c.kind === "bytes") return Number(v) >= Number(value);
+            return String(v ?? "").toLowerCase().includes(String(value).toLowerCase());
+          },
+          cell: ({ row }) => {
+            const lc = liveCol();
+            return lc.cell ? lc.cell(row.original) : String(lc.accessor(row.original) ?? "");
+          },
+          meta: { align: c.align, tight: c.tight },
+        };
+      }),
     [visibleColumns],
   );
 
   const table = useReactTable({
     data: shownData,
     columns: tanColumns,
-    state: { sorting, columnFilters, globalFilter, pagination: { pageIndex: 0, pageSize } },
+    state: { sorting, columnFilters, globalFilter, pagination },
     onSortingChange: setSorting,
     onColumnFiltersChange: setColumnFilters,
+    onPaginationChange: (u: Updater<PaginationState>) => setPagination((prev) => (typeof u === "function" ? u(prev) : u)),
     globalFilterFn: (row, _id, filterValue) =>
-      searchText(row.original).toLowerCase().includes(String(filterValue).toLowerCase()),
+      searchText(row.original).includes(String(filterValue).toLowerCase()),
     getCoreRowModel: getCoreRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getPaginationRowModel: getPaginationRowModel(),
-    autoResetPageIndex: true,
+    // NOT TanStack's auto-reset: that fires on every DATA change too, and live refreshes and stream frames
+    // change the data constantly — the user would be thrown back to page 1 mid-read. The effect below
+    // resets on what the USER changed (search / filters / sort) and clamps when the data shrinks.
+    autoResetPageIndex: false,
   });
 
   // The filter icon lights when ANY filter is active — column filters OR the promoted rail controls
@@ -543,6 +640,19 @@ export function DataTable<T>({
     });
   const rowCount = table.getFilteredRowModel().rows.length;
   const pageRows = table.getRowModel().rows;
+
+  // Back to page 1 whenever the user re-scopes the rows — a new search, filter, facet or sort order makes
+  // "page 7" mean something else entirely. setState bails on an unchanged 0, so this costs nothing at rest.
+  useEffect(() => {
+    setPagination((p) => (p.pageIndex === 0 ? p : { ...p, pageIndex: 0 }));
+  }, [globalFilter, columnFilters, sorting, ffApplied, hiddenTypes, facetHidden, largeOnlyOn]);
+  // A page that no longer exists (the data shrank under a live refresh) clamps to the last real page.
+  const pageCount = table.getPageCount();
+  useEffect(() => {
+    setPagination((p) =>
+      p.pageIndex > 0 && p.pageIndex >= pageCount ? { ...p, pageIndex: Math.max(0, pageCount - 1) } : p,
+    );
+  }, [pageCount]);
 
   // Selection — stable callbacks so toggling a row never closes over the whole Set (P-02).
   const sel = selection?.selected;
@@ -574,6 +684,10 @@ export function DataTable<T>({
   // running under it, so the header stops looking like it is floating on nothing.
   const [scrolled, setScrolled] = useState(false);
   const win = useWindowedRows(pageRows.length, ROW_H, scrollRef);
+  // A new page starts at its top row, not wherever the previous page was scrolled to.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 0;
+  }, [pagination.pageIndex]);
   const visibleRows = pageRows.slice(win.start, win.end);
 
   // select cell + data cells + trailing chevron cell

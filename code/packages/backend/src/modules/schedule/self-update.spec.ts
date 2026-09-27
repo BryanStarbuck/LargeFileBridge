@@ -5,7 +5,10 @@
 // file was missing fields the current schema publishes (the tell), and it kept emitting a timestamp-only
 // commit every ~16 minutes. Nothing in the product could see the gap; it took reading two device files
 // side by side by hand. These tests cover the machinery that now answers that question by itself.
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { APP_BUILD } from "@lfb/shared";
 import {
   stalePeers,
@@ -86,7 +89,17 @@ describe("shouldReportStalePeers — do not become the noise you are fixing", ()
 
   // The throttle keeps module-level state (it has to — it is remembering what it already said). Clear it
   // between tests through the public API: an empty set means "the fleet is current", which resets it.
-  beforeEach(() => void shouldReportStalePeers([], T0 - 1));
+  // The throttle is persisted in the state dir — never let a test write the real one.
+  let stateDir: string;
+  beforeEach(() => {
+    stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "lfb-stale-report-"));
+    process.env.LFB_STATE_DIR = stateDir;
+    shouldReportStalePeers([], T0 - 1);
+  });
+  afterEach(() => {
+    delete process.env.LFB_STATE_DIR;
+    fs.rmSync(stateDir, { recursive: true, force: true });
+  });
 
   it("says it once, then stays quiet about the same answer", () => {
     expect(shouldReportStalePeers([P("laptop", 3)], T0)).toBe(true);

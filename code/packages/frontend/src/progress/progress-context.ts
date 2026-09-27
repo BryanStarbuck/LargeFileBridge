@@ -71,6 +71,17 @@ const host = globalThis as ContextHost;
 export const ProgressReactContext: Context<ProgressCtx | null> =
   host[CONTEXT_KEY] ?? (host[CONTEXT_KEY] = createContext<ProgressCtx | null>(null));
 
+// The STABLE half (performance): just `run`, which is a useCallback over stable deps and so keeps one
+// identity for the life of the provider. The full ProgressCtx above changes on EVERY /progress poll (1.2 s
+// while busy); a component that only launches work — the educate-and-fix popup with its thousands of subject
+// rows — subscribing to that would re-render on every poll for nothing. Same globalThis singleton guard.
+const RUN_CONTEXT_KEY = "__lfb_progress_run_context__";
+type RunHost = typeof globalThis & { [RUN_CONTEXT_KEY]?: Context<ProgressCtx["run"] | null> };
+const runHost = globalThis as RunHost;
+
+export const ProgressRunReactContext: Context<ProgressCtx["run"] | null> =
+  runHost[RUN_CONTEXT_KEY] ?? (runHost[RUN_CONTEXT_KEY] = createContext<ProgressCtx["run"] | null>(null));
+
 /**
  * Read the dock's shared job state. THROWS when there is no <ProgressProvider> above the caller.
  *
@@ -90,8 +101,24 @@ export function useProgress(): ProgressCtx {
   return ctx;
 }
 
+/**
+ * Just the shared runner — for components that LAUNCH background work but never render job state. Its value
+ * never changes across progress polls, so subscribing costs no re-renders. Throws outside the provider for
+ * the same reason useProgress() does.
+ */
+export function useProgressRun(): ProgressCtx["run"] {
+  const run = useContext(ProgressRunReactContext);
+  if (!run) {
+    throw new Error(
+      "useProgressRun must be used within <ProgressProvider> — this component mounted outside the " +
+        "signed-in app shell (main.tsx Root) or in a second React root.",
+    );
+  }
+  return run;
+}
+
 // The card verb per operation kind (webapp.mdx §11). Exported so the dock renders the same label.
-const VERBS: Record<ProgressKind, string> = {
+const VERBS: Partial<Record<ProgressKind, string>> = {
   scan: "Scanning",
   pin: "Pinning",
   publish: "Publishing",
@@ -114,9 +141,16 @@ const VERBS: Record<ProgressKind, string> = {
   // The two dedicated Videos scans (videos.mdx §4) — separate kinds on purpose.
   dedupe_scan: "Finding duplicates in",
   subset_scan: "Finding subsets in",
+  // Background git-backbone exchanges with the user's other computers (the storage-sync cycles). The
+  // target reads "your other computers" / "sending your change to your other computers", so the card says
+  // "Syncing with your other computers".
+  sync: "Syncing with",
 };
-export function verb(kind: ProgressKind): string {
-  return VERBS[kind] ?? "Working";
+// Unknown kinds are EXPECTED, not an error: the backend adds new progress kinds (background storage-sync
+// cycles, …) on its own schedule, and a card for a kind this build has never heard of must still render
+// with a neutral verb rather than vanish or throw.
+export function verb(kind: ProgressKind | string): string {
+  return (VERBS as Record<string, string | undefined>)[kind] ?? "Working on";
 }
 
 // Guard 3 — dev only. Editing this module can never be applied as a partial hot update: accept the

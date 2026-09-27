@@ -133,7 +133,10 @@ describe("run-worker trigger — fire-and-acknowledge", () => {
     const res = await runTrigger(port);
 
     expect(res.code).toBe(0); // launchd must keep firing a healthy trigger
-    expect(res.stderr).toMatch(/Large File Bridge is not running/);
+    // INFO on stdout (→ log.log), NOT stderr (→ error.err): a stopped app is an expected state, not a fault
+    // (error catalog #22). The miss is still recorded below, so nothing is lost by keeping it out of error.err.
+    expect(res.stdout).toMatch(/\[INFO\].*Large File Bridge is not running/);
+    expect(res.stderr).not.toMatch(/Large File Bridge is not running/);
     expect(misses().pin.reason).toBe("app-not-running");
     // The record is durable and counts consecutive misses, so nothing vanishes into the next 15 minutes.
     const before = misses().pin.consecutive;

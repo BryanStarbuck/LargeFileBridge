@@ -22,25 +22,29 @@
 import fs from "node:fs";
 import path from "node:path";
 import crypto from "node:crypto";
-import YAML from "yaml";
-import { DeletionsSchema, type Deletions, type DeletionRecord, type ManifestFile } from "@lfb/shared";
+import { type Deletions, type DeletionRecord, type ManifestFile } from "@lfb/shared";
 import { resolveTrackingRoot, resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { joinRelConfined } from "../../shared/rel-path.js";
 import { log } from "../../shared/logging.js";
+import {
+  emptyDeletions,
+  parseDeletionsText,
+  serializeDeletions,
+  mergeDeletions,
+  deletionsMeaning,
+} from "./deletions-merge.js";
+import { writerStamp } from "../../shared/writer-stamp.js";
+
+// The pure half lives in deletions-merge.ts (a leaf the worker thread and the git merge driver can load);
+// re-exported so every existing caller keeps importing from here.
+export { emptyDeletions, parseDeletionsText, serializeDeletions, mergeDeletions, deletionsMeaning };
 
 /** `<trackingRoot>/deletions.yaml` — beside manifest.yaml, Category B, never in the working repo. */
 export function deletionsPathForRepo(repoRoot: string): string {
   return path.join(resolveTrackingRoot(repoRoot), "deletions.yaml");
 }
 
-export function emptyDeletions(): Deletions {
-  return { schema_version: 1, unit: "repo", deletions: [] };
-}
 
-/** True if the raw text carries git merge-conflict markers (repo__list_syns.mdx §5.1). */
-function hasConflictMarkers(raw: string): boolean {
-  return /^(<{7}|={7}|>{7})(\s|$)/m.test(raw);
-}
 
 /**
  * Read a ledger. A MISSING FILE IS AN EMPTY LEDGER — that is the only absence in this feature that means
@@ -57,42 +61,9 @@ export function readDeletions(file: string): Deletions {
   } catch {
     return emptyDeletions();
   }
-  if (hasConflictMarkers(raw)) {
-    throw new Error(`deletions.yaml is half-merged (conflict markers): ${file} — resolve it before syncing`);
-  }
-  try {
-    return DeletionsSchema.parse(YAML.parse(raw) ?? {});
-  } catch (e) {
-    throw new Error(`deletions.yaml is unreadable: ${file} — ${(e as Error).message}`);
-  }
+  return parseDeletionsText(raw, file);
 }
 
-/** Deterministic, byte-stable serialization — same contract as the manifest (repo__list_syns.mdx §6). */
-export function serializeDeletions(d: Deletions): string {
-  return YAML.stringify({
-    schema_version: d.schema_version,
-    unit: d.unit,
-    deletions: [...d.deletions]
-      .sort((a, b) => a.path.localeCompare(b.path) || (a.removed_at ?? "").localeCompare(b.removed_at ?? ""))
-      .map((r) => ({
-        path: r.path,
-        cid: r.cid,
-        cid_alternates: [...r.cid_alternates].sort((a, b) => a.localeCompare(b)),
-        sha256: r.sha256,
-        size: r.size,
-        scope: r.scope,
-        reason: r.reason,
-        removed_at: r.removed_at,
-        removed_by: r.removed_by,
-        removed_on_device: r.removed_on_device,
-        actions: { delete_bytes: r.actions.delete_bytes, unpin: r.actions.unpin },
-        enforced_by: [...r.enforced_by].sort((a, b) => a.device.localeCompare(b.device)),
-        undeleted_at: r.undeleted_at,
-        undeleted_by: r.undeleted_by,
-        undelete_reason: r.undelete_reason,
-      })),
-  });
-}
 
 export function writeDeletions(file: string, d: Deletions): void {
   fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -107,65 +78,7 @@ export function writeDeletions(file: string, d: Deletions): void {
   fs.writeFileSync(file, next);
 }
 
-/** The identity key a record folds on (deletion.mdx §6): union by (path, cid, sha256). */
-function identityKey(r: DeletionRecord): string {
-  return `${r.path}\u0000${r.cid ?? ""}\u0000${r.sha256 ?? ""}`;
-}
 
-/**
- * MERGE TWO LEDGERS (deletion.mdx §6). Union by identity; `enforced_by` and `cid_alternates` union;
- * WIDEST SCOPE wins (`fleet` beats `here`); MOST DESTRUCTIVE `actions` win (`true` beats `false`).
- *
- * That last rule is the ONE place in this product where conflict resolution deliberately does not preserve
- * data, and it is correct precisely here: the cost of over-deleting is an `undelete`, and the cost of
- * under-deleting is a private individual's photograph back on a public website.
- *
- * ABSENCE NEVER LIFTS A TOMBSTONE. An incoming ledger that is empty, truncated, mid-transfer, or written
- * by an older build that never knew about the file removes NOTHING — this function only ever adds.
- */
-export function mergeDeletions(mine: Deletions, theirs: Deletions): Deletions {
-  const by = new Map<string, DeletionRecord>();
-  for (const r of [...mine.deletions, ...theirs.deletions]) {
-    const k = identityKey(r);
-    const prior = by.get(k);
-    if (!prior) {
-      by.set(k, { ...r, cid_alternates: [...r.cid_alternates], enforced_by: [...r.enforced_by] });
-      continue;
-    }
-    const receipts = new Map(prior.enforced_by.map((e) => [e.device, e]));
-    for (const e of r.enforced_by) {
-      const had = receipts.get(e.device);
-      // Newest receipt per device wins — a device that re-enforced later is reporting the current truth.
-      if (!had || (e.at ?? "") > (had.at ?? "")) receipts.set(e.device, e);
-    }
-    // An undelete is honoured only when it is NEWER than the deletion it lifts. An older undelete arriving
-    // late must not resurrect a file that was deliberately deleted again afterwards.
-    const undeleteWins =
-      (prior.undeleted_at ?? r.undeleted_at) !== null &&
-      (() => {
-        const un = [prior.undeleted_at, r.undeleted_at].filter(Boolean).sort().at(-1) as string;
-        const del = [prior.removed_at, r.removed_at].filter(Boolean).sort().at(-1) as string;
-        return un > del;
-      })();
-    const newer = (r.removed_at ?? "") > (prior.removed_at ?? "") ? r : prior;
-    by.set(k, {
-      ...newer,
-      cid_alternates: [...new Set([...prior.cid_alternates, ...r.cid_alternates])],
-      sha256: prior.sha256 ?? r.sha256,
-      cid: prior.cid ?? r.cid,
-      scope: prior.scope === "fleet" || r.scope === "fleet" ? "fleet" : "here",
-      actions: {
-        delete_bytes: prior.actions.delete_bytes || r.actions.delete_bytes,
-        unpin: prior.actions.unpin || r.actions.unpin,
-      },
-      enforced_by: [...receipts.values()],
-      undeleted_at: undeleteWins ? ([prior.undeleted_at, r.undeleted_at].filter(Boolean).sort().at(-1) as string) : null,
-      undeleted_by: undeleteWins ? (prior.undeleted_by ?? r.undeleted_by) : null,
-      undelete_reason: undeleteWins ? (prior.undelete_reason ?? r.undelete_reason) : null,
-    });
-  }
-  return { schema_version: 1, unit: mine.unit ?? theirs.unit ?? "repo", deletions: [...by.values()] };
-}
 
 /** A tombstone is LIVE when it has not been undeleted and it applies to this device. */
 export function isLive(r: DeletionRecord, thisDevice: string): boolean {
@@ -282,29 +195,30 @@ export async function reap(d: Deletions, deps: ReapDeps, nowIso: string): Promis
   const out: ReapResult = { bytesDeleted: 0, unpinned: 0, sidecarsRemoved: 0, entriesMarked: 0, touched: [] };
   const staled: string[] = [];
 
+  // Canonicalize every entry's CID ONCE. This used to happen inside the per-tombstone loop — for every live
+  // tombstone, every manifest entry's CID and every tombstone CID were base58-decoded again. On charlie-kirk
+  // that is 159 tombstones × thousands of entries of base58 math on the event loop: a measured 326 ms
+  // uninterrupted stall on every pin pass (performance.mdx P-62).
+  const canon = (c: string): string => {
+    try {
+      return deps.canonicalCid(c);
+    } catch {
+      return c; // raw
+    }
+  };
+  const entryCanon = new Map<ManifestFile, string>();
+  for (const e of deps.byPath.values()) if (e.cid) entryCanon.set(e, canon(e.cid));
+
   for (const r of d.deletions) {
     if (!isLive(r, deps.label)) continue;
 
     // Which manifest entries does this tombstone actually claim here? Match by CONTENT as well as path, so
     // the same bytes tracked under a second name in this unit are caught too (§5.1).
     const targets: ManifestFile[] = [];
+    const tombCids = new Set([r.cid, ...r.cid_alternates].filter(Boolean).map((c) => canon(c as string)));
     for (const e of deps.byPath.values()) {
-      let ec = e.cid ?? "";
-      if (ec) {
-        try {
-          ec = deps.canonicalCid(ec);
-        } catch {
-          /* raw */
-        }
-      }
-      const cidHit =
-        !!ec && [r.cid, ...r.cid_alternates].filter(Boolean).some((c) => {
-          try {
-            return deps.canonicalCid(c as string) === ec;
-          } catch {
-            return c === ec;
-          }
-        });
+      const ec = entryCanon.get(e) ?? "";
+      const cidHit = !!ec && tombCids.has(ec);
       const shaHit = !!r.sha256 && !!e.sha256 && r.sha256.toLowerCase() === e.sha256.toLowerCase();
       const pathHit = toRelPosix(e.path) === toRelPosix(r.path);
       if (cidHit || shaHit || pathHit) targets.push(e);
@@ -389,11 +303,19 @@ export async function reap(d: Deletions, deps: ReapDeps, nowIso: string): Promis
     for (const t of targets) {
       const had = t.pinned_by.includes(deps.label);
       if (had) t.pinned_by = t.pinned_by.filter((l) => l !== deps.label);
-      if (t.state !== "removed") {
+      const wasLive = t.state !== "removed";
+      if (wasLive) {
         t.state = "removed";
         out.entriesMarked++;
       }
-      staled.push(t.path);
+      // STALE ONLY WHAT THIS PASS CHANGED — idempotency, and the root of the 2026-09-27 charlie-kirk hang.
+      // Staling every target of every live tombstone on every pass re-tombstoned the same 160 paths with a
+      // fresh `decided_at` each time: the 3.6 MB ledger was rewritten, mirrored, committed (373 commits in a
+      // day), line-union-damaged by git, healed, and fully re-merged — a 2–3.5 s un-sliceable stall per
+      // pass, forever, with nothing in the product changing. An entry already `removed` with no claim of
+      // ours was tombstoned by the pass that removed it (and `recordDecision` skips a path the ledger
+      // already folds to Undecided, so a retry through the orphan path is also free).
+      if (wasLive || had) staled.push(t.path);
     }
 
     // 7.4 · the receipt. A device that enforced NOTHING because there was nothing here still records
@@ -420,7 +342,10 @@ export async function reap(d: Deletions, deps: ReapDeps, nowIso: string): Promis
       (PIN_RANK[pin] ?? 0) > (PIN_RANK[prior.pin] ?? 0) ||
       sidecars > prior.sidecars;
     if (improves) {
-      r.enforced_by = [...r.enforced_by.filter((e) => e.device !== deps.label), { device: deps.label, at: nowIso, bytes, pin, sidecars, note }];
+      r.enforced_by = [
+        ...r.enforced_by.filter((e) => e.device !== deps.label),
+        { device: deps.label, at: nowIso, bytes, pin, sidecars, note, writer_build: writerStamp().writer_build },
+      ];
       if (!out.touched.includes(r.path)) out.touched.push(r.path);
     }
   }

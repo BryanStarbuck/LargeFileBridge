@@ -71,6 +71,7 @@ import { track } from "../progress/progress.registry.js";
 // the limiter, so the note is COMPOSED from a phase + the in-flight files rather than written by hand.
 import { WorkNote, yieldToLoop } from "../progress/work-note.js";
 import * as ipfs from "../ipfs/ipfs.service.js";
+import { isPinsetUnavailable } from "../ipfs/pinset-unavailable.js";
 import { joinRelConfined, healWindowsPath } from "../../shared/rel-path.js";
 // The RECORDED foreign-pin discovery (foreign_pin_discovery.mdx §5) — a flag read, never a hash, so it
 // is safe on the per-file pin path. Used to publish an already-pinned file without re-adding it.
@@ -280,7 +281,9 @@ async function runUnitPin(t: UnitTarget, onlyPaths?: Set<string>, report?: PinRe
     // every previously-pinned file look pin-lost and re-uploads the whole unit. Skip this pass instead;
     // the next scheduled pass retries with a healthy daemon.
     const msg = `pin ls failed — skipping pin pass: ${(e as Error).message}`;
-    markUnitError(t, msg);
+    // The unit still carries the error (the UI must say this pass did nothing), but the fault trail already
+    // has the one WARN for this enumeration (ipfs PinsetUnavailableError) — repeating it per unit is noise.
+    markUnitError(t, msg, isPinsetUnavailable(e) ? "info" : "warn");
     counts.error = msg;
     return counts;
   }
@@ -1096,7 +1099,13 @@ export type PhaseNote = (text: string) => void;
  * trail stays a list of real faults, NOTHING is marked failed, and the whole cycle is re-run the moment the
  * remote's host resolves again instead of waiting out the next 15-minute tick.
  */
-function reportGitProblem(prefix: string, id: string, remote: string | null, r: GitCycleResult): void {
+function reportGitProblem(
+  prefix: string,
+  id: string,
+  remote: string | null,
+  r: GitCycleResult,
+  alreadyWarned = false,
+): void {
   if (!r.problem) return;
   if (r.offline) {
     log.info("pin", `${prefix}storage ${id} git: ${r.problem}`);
@@ -1107,7 +1116,29 @@ function reportGitProblem(prefix: string, id: string, remote: string | null, r: 
     });
     return;
   }
-  log.warn("pin", `${prefix}storage ${id} git: ${r.problem}`);
+  // ONE FAILURE, ONE WARN (error catalog #16). When the git layer has already put this exact result in the
+  // fault trail (see `gitProblemAlreadyWarned`), this line is the storage-level consequence, not a new fault.
+  (alreadyWarned ? log.info : log.warn)("pin", `${prefix}storage ${id} git: ${r.problem}`);
+}
+
+/**
+ * Did the problem left on `after` by the PUSH half of a cycle already reach error.err at WARN — from the git
+ * layer, or from this module's own report of the pull half?
+ *
+ * One push give-up used to be three WARNs: git.service's `push rejected … giving up this cycle`, then this
+ * module's `sync storage … git:` and backbone-freshness's `boot: storage …` restating it (error catalog #16).
+ * `commitAndPush` WARNs every problem it sets from its push loop (final give-up, auth rejection) and the
+ * no-origin case; what it does NOT log is a failed commit (`Git commit failed:`), our own catch of a thrown
+ * push (`Git push failed:`), and a re-pull that hit a merge conflict — those keep their WARN here. A problem
+ * unchanged since the pull report is the pull's, which `reportGitProblem` already logged once.
+ * Exported for test.
+ */
+export function gitProblemAlreadyWarned(problemAfterPull: string | undefined, after: GitCycleResult): boolean {
+  const p = after.problem;
+  if (!p) return false;
+  if (p === problemAfterPull) return true;
+  if (after.conflicts?.length) return false;
+  return !/^Git (commit|push) failed:/.test(p);
 }
 
 /**
@@ -1233,10 +1264,13 @@ async function pinStorageUnitInner(id: string, onPhase?: PhaseNote): Promise<voi
   // fetch-merge-push retry on a non-fast-forward reject. Big bytes are git-ignored, so only the small
   // text is ever committed. A push/auth problem is surfaced (logged) and never blocks the IPFS work.
   if (gitBackbone) {
+    const problemAfterPull = gitResult.problem;
     await gitBackbone.commitAndPush(gitResult, onPhase).catch((e) => {
       gitResult.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (gitResult.problem) reportGitProblem("", id, gitRemote?.remote ?? null, gitResult);
+    if (gitResult.problem) {
+      reportGitProblem("", id, gitRemote?.remote ?? null, gitResult, gitProblemAlreadyWarned(problemAfterPull, gitResult));
+    }
     else if (gitResult.pushed) log.info("pin", `storage ${id} git: pushed device state to remote`);
   }
 }
@@ -1340,10 +1374,13 @@ async function syncStorageTextInner(id: string, tag: string, onPhase?: PhaseNote
 
   // 3. COMMIT + PUSH this device's own SDL text (skips an empty commit; non-fast-forward retry inside).
   if (gitBackbone) {
+    const problemAfterPull = result.problem;
     await gitBackbone.commitAndPush(result, onPhase).catch((e) => {
       result.problem = `Git push failed: ${(e as Error).message}`;
     });
-    if (result.problem) reportGitProblem(`${tag} `, id, gitRemote?.remote ?? null, result);
+    if (result.problem) {
+      reportGitProblem(`${tag} `, id, gitRemote?.remote ?? null, result, gitProblemAlreadyWarned(problemAfterPull, result));
+    }
     else if (result.pushed) log.info("pin", `${tag} storage ${id} git: pushed SDL text to remote`);
   }
   return result;
@@ -1578,7 +1615,9 @@ async function healSelfPinClaims(
   try {
     pinset = new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
   } catch (e) {
-    log.warn("pin", `${name}: pin claims left as they are — could not read the pin list: ${(e as Error).message}`);
+    // Already reported once at WARN by the ipfs layer when it is the known "pin ls failed" (error catalog #17).
+    const say = isPinsetUnavailable(e) ? log.info : log.warn;
+    say("pin", `${name}: pin claims left as they are — could not read the pin list: ${(e as Error).message}`);
     return;
   }
   for (const doc of loaded) {
@@ -1596,9 +1635,9 @@ async function healSelfPinClaims(
   }
 }
 
-function markUnitError(t: UnitTarget, msg: string): void {
+function markUnitError(t: UnitTarget, msg: string, level: "warn" | "info" = "warn"): void {
   t.writeStatus({ ...t.status, last_error: msg });
-  log.warn("pin", `${t.name}: ${msg}`);
+  log[level]("pin", `${t.name}: ${msg}`);
 }
 
 // ── "A computer of yours pinned files this one doesn't have — pull them down" (warnings.mdx §10.8.12) ──
@@ -1630,7 +1669,11 @@ export async function pinnedCidSet(): Promise<Set<string> | null> {
     // and needlessly re-pulled. Callers MUST test membership as `pinset.has(ipfs.canonicalCid(cid))`.
     return new Set((await ipfs.listPins()).map((p) => ipfs.canonicalCid(p.cid)));
   } catch (e) {
-    log.warn("pin", `listPins failed (pin state UNKNOWN this pass, not empty): ${(e as Error).message}`);
+    // ONE failure, ONE WARN (error catalog #17): the known pin-ls failure was already reported by the ipfs
+    // layer, and single-flight hands that same rejection to every concurrent reader — so only a failure
+    // nobody has logged yet is worth a WARN here.
+    const say = isPinsetUnavailable(e) ? log.info : log.warn;
+    say("pin", `listPins failed (pin state UNKNOWN this pass, not empty): ${(e as Error).message}`);
     return null;
   }
 }
@@ -1694,7 +1737,9 @@ export async function missingPinnedFromPeers(repoRoot: string): Promise<MissingP
     // Pin state UNKNOWN (see `pinnedCidSet`). Answering "everything is missing" here is what made the
     // pull-down count spring back to life after a restart, so answer nothing instead: the caller keeps the
     // previous number for a beat and the next computation — seconds later, with a healthy daemon — is true.
-    log.warn("pin", `missingPinnedFromPeers(${repoRoot}): IPFS could not list pins — reporting no offers this pass`);
+    // INFO: a null pinset has always been reported already (the ipfs layer, or `pinnedCidSet` for anything
+    // else) — this line only records the consequence for this repo.
+    log.info("pin", `missingPinnedFromPeers(${repoRoot}): IPFS could not list pins — reporting no offers this pass`);
     return [];
   }
   const selfLabel = computerLabel();

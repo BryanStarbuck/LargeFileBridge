@@ -19,9 +19,67 @@
  */
 export const APP_BUILD = {
   /** Monotonic. Higher = newer. Compared across computers to find who is behind. */
-  number: 6,
+  number: 7,
   /** What this build is, in a few words — shown next to the number so a stale peer is self-explaining. */
-  label: "a disproved wrapper CID cannot survive ANY merge, local or wire; corrections audited and published",
+  label: "fleet compatibility: writer-stamped records, semantic merges in git, no rewrites of unchanged meaning",
 } as const;
 
 export type AppBuild = typeof APP_BUILD;
+
+/**
+ * WHAT AN OLDER BUILD IS KNOWN TO DO TO SHARED DATA (backward_compatibility.md §6).
+ *
+ * A stale peer cannot be fixed from here — its code is its code until someone updates it. What THIS build
+ * can do is (a) refuse to amplify what the old code writes, and (b) say precisely what the old code does, so
+ * "update that computer" comes with a reason. Every build that fixes a behaviour other computers can SEE
+ * adds a row: `below` is the first build WITHOUT the defect, so a peer with `build < below` still has it.
+ *
+ * `defended` states what this build does about it, so the message a user reads never promises more than the
+ * code delivers.
+ */
+export interface KnownFleetDefect {
+  /** Builds strictly below this still have the defect. */
+  below: number;
+  /** Short id, cited in logs and in backward_compatibility.md. */
+  id: string;
+  /** What the older build does, in one sentence a user can read. */
+  does: string;
+  /** What this build does about it. */
+  defended: string;
+}
+
+export const KNOWN_FLEET_DEFECTS: readonly KnownFleetDefect[] = [
+  {
+    below: 7,
+    id: "P-56 tombstone re-stamp",
+    does: "re-records every fleet-deleted file as Undecided on every pass, rewriting the decision ledger",
+    defended: "re-stamps are recognised as unchanged meaning and never written back to the shared copy",
+  },
+  {
+    below: 7,
+    id: "P-57 deletion twins",
+    does: "keeps a deletion twice after its checksum is filled in, and writes the pair in varying order",
+    defended: "twins are folded on read and a difference of order alone is never written back",
+  },
+  {
+    below: 7,
+    id: "P-52 line-union merge",
+    does: "merges the structured YAML documents line by line, which can leave a file no reader can open",
+    defended: "damaged documents are healed on read; this build merges them with a semantic git merge driver",
+  },
+];
+
+/** The defects a peer on `build` still has. A peer that predates build tracking reports 0 — all of them. */
+export function defectsOfBuild(build: number): KnownFleetDefect[] {
+  return KNOWN_FLEET_DEFECTS.filter((d) => build < d.below);
+}
+
+/** GET /api/health/fleet — the fleet's compatibility picture, from this computer (backward_compatibility.md §6). */
+export interface FleetCompat {
+  build: number;
+  label: string;
+  /** Computers on an older build, with what that build is known to do to shared data. */
+  stalePeers: Array<{ device: string; build: number; label: string; defects: KnownFleetDefect[] }>;
+  /** Shared files the tug-of-war breaker is holding (sync-fight.ts). */
+  fights: Array<{ file: string; since: string; held: number }>;
+}

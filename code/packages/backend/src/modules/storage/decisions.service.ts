@@ -29,7 +29,13 @@ import {
 import { readStorageIndex } from "./tracking.service.js";
 import { resolveTrackingRoot } from "./tracking-root.service.js";
 import { mirrorToSyncRepo } from "./tracking-sync.service.js";
-import { serializeLedger } from "./ledger-merge.js";
+import {
+  latestEventPerPath,
+  canonicalLedgerEvents,
+  serializeCanonicalLedger,
+} from "./ledger-merge.js";
+import { fileId, sameIdentity, type FileId } from "./merge-tasks.js";
+import { runMergeOffloaded, mergeWorkerEnabled } from "./merge-offload.js";
 import { storageSid } from "./storage.service.js";
 import { normalizeRemoteKey } from "./repo-identity.js";
 import { readStorageSettings } from "./storage-settings.service.js";
@@ -46,6 +52,7 @@ import { log } from "../../shared/logging.js";
 import { expandHome } from "../../shared/home-path.js";
 import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
 import { insertDecisionEvents, unitIdForAbsPath } from "./decision.repo.js";
+import { writerStamp } from "../../shared/writer-stamp.js";
 
 /** The two axes the user decides on, per file (decisions.mdx §1). Either may be undefined = "leave as-is". */
 export interface DecisionAxes {
@@ -104,6 +111,9 @@ function hasConflictMarkers(raw: string): boolean {
  *  refuse (never parse a half-merged file as truth). */
 export function readLedger(repoRoot: string): DecisionEvent[] {
   const file = ledgerPath(repoRoot);
+  const cached = ledgerCacheGet(file);
+  if (cached) return cached;
+  const idBeforeRead = fileId(file); // taken BEFORE the read, so a write racing it can only cause a miss later
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
@@ -137,7 +147,69 @@ export function readLedger(repoRoot: string): DecisionEvent[] {
     log.error("decisions", `Schema validation failed: ${file}: ${result.error.message}`);
     throw new Error(`Invalid decision ledger at ${file}`);
   }
-  return result.data.events;
+  ledgerCachePut(file, idBeforeRead, result.data.events);
+  return [...result.data.events];
+}
+
+// ── the parsed-ledger cache (performance.mdx P-59) ────────────────────────────────────────────────────
+//
+// A decision click on charlie-kirk parsed its 3.6 MB ledger (~530 ms) to fold the prior state, serialized it
+// (~220 ms) to append, then `reconcile` parsed the file it had just written AGAIN — ~1.3 s with the event
+// loop held, i.e. a frozen page on every click. Most of the readers in this module re-parse a file nobody
+// has touched since the last read.
+//
+// Keyed by the file's (inode, size, mtime-ns) identity, taken BEFORE the read, so any write by anyone — a
+// git merge, the reconcile leg, a peer's push landing through the mirror — moves the identity and misses.
+// `writeLedgerText` seeds it with exactly what it wrote (the canonical list a fresh parse would return), which
+// is what makes the read right after a click free. Callers get a shallow copy of the list; the event objects
+// are shared and must be treated as read-only (every caller here builds new events, never edits old ones).
+const LEDGER_CACHE_MAX = 16;
+const ledgerCache = new Map<string, { id: FileId; events: DecisionEvent[] }>();
+
+function ledgerCacheGet(file: string): DecisionEvent[] | null {
+  const hit = ledgerCache.get(file);
+  if (!hit || !sameIdentity(hit.id, fileId(file))) return null;
+  ledgerCache.delete(file); // LRU: re-insert as most recent
+  ledgerCache.set(file, hit);
+  return [...hit.events];
+}
+
+function ledgerCacheGetWithId(file: string): { events: DecisionEvent[]; id: FileId } | null {
+  const events = ledgerCacheGet(file);
+  return events ? { events, id: ledgerCache.get(file)!.id } : null;
+}
+
+function ledgerCachePut(file: string, id: FileId | null, events: DecisionEvent[]): void {
+  ledgerCache.delete(file);
+  if (!id) return;
+  ledgerCache.set(file, { id, events });
+  while (ledgerCache.size > LEDGER_CACHE_MAX) ledgerCache.delete(ledgerCache.keys().next().value!);
+}
+
+/**
+ * `readLedger`, with the parse on the merge worker thread when the cache misses — for the ASYNC callers on a
+ * user's click. Returns the identity the events were read at, for the compare-and-swap in
+ * `appendEventsOffThread`. A ledger the worker cannot read strictly falls back to `readLedger`, which
+ * quarantines and throws exactly as it always has.
+ */
+async function readLedgerOffThread(repoRoot: string): Promise<{ events: DecisionEvent[]; id: FileId | null }> {
+  const file = ledgerPath(repoRoot);
+  const hit = ledgerCacheGetWithId(file);
+  if (hit) return hit;
+  if (mergeWorkerEnabled()) {
+    const r = await runMergeOffloaded({ kind: "ledger-read", file });
+    if (r.outcome === "events") {
+      ledgerCachePut(file, r.id, r.events);
+      return { events: [...r.events], id: r.id };
+    }
+  }
+  const id = fileId(file);
+  return { events: readLedger(repoRoot), id };
+}
+
+/** TEST-ONLY: drop every cached ledger. */
+export function resetLedgerCache(): void {
+  ledgerCache.clear();
 }
 
 /**
@@ -145,24 +217,12 @@ export function readLedger(repoRoot: string): DecisionEvent[] {
  * latest `decided_at` wins; ties break by `decided_by` lexical order so every machine folds identically.
  */
 export function foldLedger(events: DecisionEvent[]): Map<string, FoldedDecision> {
-  const latest = new Map<string, DecisionEvent>();
-  for (const e of events) {
-    // Fold by PATH ALONE (ledger is per-storage); sid is provenance, NOT a fold key. The path is
-    // POSIX-normalized (`\` → `/`) HERE, at the fold — not in the union merge, whose event identity must
-    // stay byte-exact — so a Windows peer's `jfk\training\...` events and this computer's
-    // `jfk/training/...` events resolve to ONE decision per file (repo__list_syns.mdx §6.1; without this,
-    // a Windows-recorded pin decision never matched the normalized manifest path and the background
-    // fetch-missing pass skipped the file forever).
-    const key = healWindowsPath(e.path);
-    const prev = latest.get(key);
-    if (
-      !prev ||
-      e.decided_at > prev.decided_at ||
-      (e.decided_at === prev.decided_at && (e.decided_by ?? "") > (prev.decided_by ?? ""))
-    ) {
-      latest.set(key, e);
-    }
-  }
+  // Fold by PATH ALONE (ledger is per-storage); sid is provenance, NOT a fold key. The path is
+  // POSIX-normalized (`\` → `/`) at the fold — not in the union merge, whose event identity must stay
+  // byte-exact — so a Windows peer's `jfk\training\...` events and this computer's `jfk/training/...` events
+  // resolve to ONE decision per file (repo__list_syns.mdx §6.1). The rule itself lives in ledger-merge.ts
+  // (`latestEventPerPath`) so the semantic write gate can never disagree with it.
+  const latest = latestEventPerPath(events);
   const folded = new Map<string, FoldedDecision>();
   for (const [key, e] of latest.entries()) {
     folded.set(key, {
@@ -184,6 +244,14 @@ export function foldLedger(events: DecisionEvent[]): Map<string, FoldedDecision>
  * lines, so a union-merge of two divergent logs keeps both sides (decisions.mdx §5).
  */
 function writeLedger(repoRoot: string, events: DecisionEvent[]): void {
+  const canonical = canonicalLedgerEvents(events);
+  writeLedgerText(repoRoot, serializeCanonicalLedger(canonical), canonical);
+}
+
+/** Write an already-serialized ledger (`body` MUST be `serializeCanonicalLedger(canonical)`), atomically,
+ *  seed the cache with what was written, and mirror it. The one write path for both the synchronous and the
+ *  off-thread appends. */
+function writeLedgerText(repoRoot: string, body: string, canonical: DecisionEvent[]): void {
   const dir = trackingDir(repoRoot);
   try {
     fs.mkdirSync(dir, { recursive: true });
@@ -192,7 +260,6 @@ function writeLedger(repoRoot: string, events: DecisionEvent[]): void {
   }
   // ONE spelling of this document, shared with the mirror and the reconcile (ledger-merge.ts): sorted,
   // deduped and COMPACTED. Two writers stringifying the same log their own way is churn by construction.
-  const body = serializeLedger(events);
   const file = ledgerPath(repoRoot);
   const tmp = `${file}.${process.pid}.${Date.now()}.tmp`;
   try {
@@ -201,6 +268,7 @@ function writeLedger(repoRoot: string, events: DecisionEvent[]): void {
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fs.renameSync(tmp, file);
+    ledgerCachePut(file, fileId(file), canonical); // exactly what a re-read would return
   } catch (e) {
     try {
       fs.unlinkSync(tmp);
@@ -222,6 +290,54 @@ function appendEvents(repoRoot: string, events: DecisionEvent[], alreadyRead?: D
   // array standing in for a failed read — that would write a ledger holding only `events`.
   const existing = alreadyRead ?? readLedger(repoRoot);
   writeLedger(repoRoot, [...existing, ...events]);
+}
+
+/**
+ * `appendEvents` for the CLICK path, with the two multi-hundred-millisecond steps (the cold parse and the
+ * serialize) on the merge worker thread, so the page stays responsive while a decision is recorded.
+ *
+ * COMPARE-AND-SWAP. Between the read and the write the event loop is free, so another writer can land —
+ * the reconcile leg committing a peer's events, a git merge. The write only happens if the ledger still
+ * has the identity it was read at; otherwise the append is rebuilt on the new file (bounded), and after
+ * three moves in a row it falls back to the synchronous read-modify-write, which cannot interleave. Two
+ * clicks on the same repo cannot interleave either: `recordDecision` holds `withLedgerLock` around this.
+ */
+async function appendEventsOffThread(
+  repoRoot: string,
+  events: DecisionEvent[],
+  alreadyRead: { events: DecisionEvent[]; id: FileId | null } | null,
+): Promise<void> {
+  const file = ledgerPath(repoRoot);
+  let base = alreadyRead;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (!base || attempt > 0) base = await readLedgerOffThread(repoRoot);
+    const canonical = canonicalLedgerEvents([...base.events, ...events]);
+    let body: string | null = null;
+    if (mergeWorkerEnabled()) {
+      const r = await runMergeOffloaded({ kind: "ledger-serialize", events: canonical });
+      if (r.outcome === "text") body = r.text;
+    }
+    body ??= serializeCanonicalLedger(canonical);
+    if (!sameIdentity(fileId(file), base.id)) continue; // moved while we worked — rebuild on the new file
+    writeLedgerText(repoRoot, body, canonical);
+    return;
+  }
+  log.info("decisions", `${repoRoot}: the ledger kept moving during an append — finishing it synchronously`);
+  appendEvents(repoRoot, events);
+}
+
+/** One read-modify-write of a repo's ledger at a time, across awaits (see `appendEventsOffThread`). */
+const ledgerLocks = new Map<string, Promise<unknown>>();
+async function withLedgerLock<T>(repoRoot: string, fn: () => Promise<T>): Promise<T> {
+  const prev = ledgerLocks.get(repoRoot) ?? Promise.resolve();
+  const run = prev.catch(() => undefined).then(fn);
+  const tail = run.catch(() => undefined);
+  ledgerLocks.set(repoRoot, tail);
+  try {
+    return await run;
+  } finally {
+    if (ledgerLocks.get(repoRoot) === tail) ledgerLocks.delete(repoRoot);
+  }
 }
 
 // ── record + reconcile (the write path every decision surface funnels through) ──
@@ -344,6 +460,17 @@ export async function recordDecision(
   opts: { asked?: boolean; unignore?: boolean } = {},
 ): Promise<void> {
   const repoRoot = repoRootFor(folder);
+  return withLedgerLock(repoRoot, () => recordDecisionLocked(folder, repoRoot, relPaths, axes, decidedBy, opts));
+}
+
+async function recordDecisionLocked(
+  folder: string,
+  repoRoot: string,
+  relPaths: string[],
+  axes: DecisionAxes,
+  decidedBy: string | null,
+  opts: { asked?: boolean; unignore?: boolean },
+): Promise<void> {
   const asked = opts.asked !== false;
   const sid = decisionSid(folder, repoRoot); // STABLE across the team (remote-derived), not per-machine
   const decidedAt = new Date().toISOString();
@@ -365,15 +492,23 @@ export async function recordDecision(
 
   // The prior state an omitted axis carries forward (axesToRecord). Folded ONCE, and the same read is
   // reused for the append below, so honoring the contract costs no extra parse of a large ledger.
-  const needsPrior = asked && (axes.ipfs === undefined || axes.gitignore === undefined);
+  // A TOMBSTONE needs the prior state too: re-tombstoning a path the ledger already folds to Undecided
+  // changes nothing but `decided_at`, and that re-stamp is a full rewrite of a multi-megabyte ledger, a
+  // mirror, a backbone commit and a git line-union that damages the document (performance.mdx, the
+  // 2026-09-27 charlie-kirk churn loop). appendEvents reads the ledger anyway, so this costs no extra parse.
+  const needsPrior = !asked || axes.ipfs === undefined || axes.gitignore === undefined;
   // null = "we do not have the ledger". NEVER an empty array on failure: handing `[]` to appendEvents would
   // write a ledger containing only this click's events — every decision the team ever made, deleted.
   let existingEvents: DecisionEvent[] | null = null;
+  let readAt: { events: DecisionEvent[]; id: FileId | null } | null = null;
   let prior = new Map<string, FoldedDecision>();
-  if (needsPrior) {
+  {
     try {
-      existingEvents = readLedger(repoRoot);
-      prior = foldLedger(existingEvents);
+      // Off the event loop on a cache miss (the cold parse of a multi-megabyte ledger), and read ONCE for
+      // both the fold and the append below.
+      readAt = await readLedgerOffThread(repoRoot);
+      existingEvents = readAt.events;
+      if (needsPrior) prior = foldLedger(existingEvents);
     } catch (e) {
       // An unreadable ledger must not silently fabricate decisions: appendEvents re-reads (and throws on
       // the same fault) below, so fall through with no prior state rather than guessing one.
@@ -386,8 +521,10 @@ export async function recordDecision(
   // §6.1a). It also repairs the fingerprint join: the tracking index is POSIX-keyed, so a `\` path silently
   // looked up nothing and every Windows-recorded decision lost its fingerprint.
   const events: DecisionEvent[] = [];
+  const writer = writerStamp(); // who SAID this, recorded once (backward_compatibility.md §3)
   for (const raw of relPaths) {
     const p = healWindowsPath(raw);
+    if (!asked && existingEvents !== null && prior.get(p)?.asked === false) continue; // already Undecided
     const stamp = axesToRecord(axes, asked, needsPrior ? prior.get(p) : undefined);
     if (!stamp) continue; // nothing honest to record for this path — see axesToRecord
     events.push({
@@ -398,6 +535,7 @@ export async function recordDecision(
       ...stamp,
       decided_by: stampedBy,
       decided_at: decidedAt,
+      ...writer,
     });
   }
 
@@ -411,7 +549,7 @@ export async function recordDecision(
   // projects the ledger onto the local frozen enum, so a tombstone (asked:false) correctly un-decides.
   if (events.length > 0) {
     try {
-      appendEvents(repoRoot, events, existingEvents ?? undefined);
+      await appendEventsOffThread(repoRoot, events, readAt);
     } catch (e) {
       log.error("decisions", `${repoRoot}: shared ledger append failed: ${(e as Error).message}`);
       throw e;
@@ -474,7 +612,9 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
   const repoRoot = repoRootFor(folder);
   let folded: Map<string, FoldedDecision>;
   try {
-    folded = foldLedger(readLedger(repoRoot));
+    // Off the event loop on a cache miss: the scan calls this for every repo, and a cold 3.6 MB parse here
+    // was a measured 695 ms stall (performance.mdx P-62).
+    folded = foldLedger((await readLedgerOffThread(repoRoot)).events);
   } catch (e) {
     log.warn("decisions", `${repoRoot}: reconcile skipped (ledger unreadable): ${(e as Error).message}`);
     return { changed: [] };
@@ -518,6 +658,7 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
         gitignore: false,
         decided_by: "migrated",
         decided_at: decidedAt,
+        ...writerStamp(),
       }));
       appendEvents(repoRoot, events);
       // Same dual write as `recordDecision` — see `mirrorEventsToPostgres`. Without it this guard's
@@ -733,7 +874,7 @@ export async function applyDefaultPolicy(
   // Nothing to do unless at least one kind is on auto — cheap early out.
   if (policy.media.mode !== "auto" && policy.other.mode !== "auto") return { autoDecided: 0 };
 
-  const decided = new Set(foldLedger(readLedger(repoRoot)).keys());
+  const decided = new Set(foldLedger((await readLedgerOffThread(repoRoot)).events).keys());
   const ctx = policyClassifyCtx();
   const setBy = policy.set_by ?? "unknown";
   const decidedBy = `policy:${setBy}`;
@@ -874,7 +1015,7 @@ export function shareStatus(
  */
 export async function carryOnRename(folder: string, oldRel: string, newRel: string): Promise<boolean> {
   const repoRoot = repoRootFor(folder);
-  const prior = foldLedger(readLedger(repoRoot)).get(oldRel);
+  const prior = foldLedger((await readLedgerOffThread(repoRoot)).events).get(oldRel);
   if (!prior || !prior.asked) return false; // nothing decided to carry
   const decidedBy = `moved:${prior.decidedBy ?? "unknown"}`;
   await recordDecision(folder, [newRel], { ipfs: prior.ipfs, gitignore: prior.gitignore }, decidedBy, {
@@ -900,7 +1041,7 @@ export async function restampOnTransform(
 ): Promise<boolean> {
   if (oldRel === newRel) return false;
   const repoRoot = repoRootFor(folder);
-  const prior = foldLedger(readLedger(repoRoot)).get(oldRel);
+  const prior = foldLedger((await readLedgerOffThread(repoRoot)).events).get(oldRel);
   if (!prior || !prior.asked) return false;
   await recordDecision(
     folder,
@@ -926,7 +1067,7 @@ export async function staleOrphans(
   const repoRoot = repoRootFor(folder);
   const live = new Set(livePaths);
   const orphans: string[] = [];
-  for (const rec of foldLedger(readLedger(repoRoot)).values()) {
+  for (const rec of foldLedger((await readLedgerOffThread(repoRoot)).events).values()) {
     if (rec.asked && !live.has(rec.path)) orphans.push(rec.path);
   }
   return { orphans };
@@ -971,6 +1112,7 @@ export async function seedMigratedLedger(
       gitignore: false,
       decided_by: "migrated",
       decided_at: decidedAtIso,
+      ...writerStamp(),
     });
   }
   if (events.length === 0) return 0;

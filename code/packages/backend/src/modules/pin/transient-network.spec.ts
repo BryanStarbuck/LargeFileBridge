@@ -115,3 +115,20 @@ describe("whenOnline — the lost cycle becomes a delayed cycle", () => {
     expect(pendingOnlineWaiters()).toBe(1);
   });
 });
+
+describe("classifyRemoteFailure — a push race is not a fault, and the reason is the line that says why", () => {
+  const rejected = new Error(
+    "To https://github.com/ACT3ai/act3_large_files_bridge.git\n" +
+      " ! [rejected]          main -> main (fetch first)\n" +
+      "error: failed to push some refs to 'https://github.com/ACT3ai/act3_large_files_bridge.git'\n" +
+      "hint: Updates were rejected because the remote contains work that you do not have locally.",
+  );
+  it("classifies a non-fast-forward as a race", () => {
+    expect(classifyRemoteFailure(rejected).kind).toBe("race");
+  });
+  it("reports the rejection line, not the `To <remote>` line", () => {
+    const { problem } = classifyRemoteFailure(rejected);
+    expect(problem).toContain("[rejected]");
+    expect(problem).not.toContain("(To https://");
+  });
+});

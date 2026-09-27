@@ -22,7 +22,7 @@
 // and matching job targets against repo names by string would be a drift waiting to happen.
 //
 // NO NEW REQUESTS. This reads the job set the progress dock is already polling (ProgressContext) and the
-// scan job the global scan bar already owns (["scanStatus"], fed by the event stream). Both are shared
+// scan job the progress dock already owns (["scanStatus"], fed by the event stream). Both are shared
 // react-query caches; mounting another observer costs nothing and adds no interval — the locked
 // "no background polling" rule (performance.mdx Aspect 6b) stays intact.
 import { useQuery } from "@tanstack/react-query";
@@ -83,7 +83,7 @@ export function censusPendingFrom(input: {
  */
 export function useCensusPending(): CensusPending {
   const { jobs, queued } = useProgress();
-  // Shared cache with <ScanProgressBar>, which owns the interval. No `refetchInterval` here on purpose:
+  // Shared cache with <ProgressDock>, which owns the interval. No `refetchInterval` here on purpose:
   // this observer must never introduce a poll of its own.
   const { data: scan } = useQuery({ queryKey: ["scanStatus"], queryFn: api.scanStatus });
   return censusPendingFrom({

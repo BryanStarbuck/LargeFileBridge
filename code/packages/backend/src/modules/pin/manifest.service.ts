@@ -16,7 +16,8 @@ import { log } from "../../shared/logging.js";
 import { normalizeManifestPaths } from "./manifest-normalize.js";
 // The canonical byte-stable serializer is a LEAF (manifest-merge.ts) so the sync-repo mirror and the
 // reconcile — neither of which may import this module — write the identical bytes (repo__list_syns.mdx §6).
-import { serializeManifest } from "../storage/manifest-merge.js";
+import { serializeManifest, manifestDocument } from "../storage/manifest-merge.js";
+import { fileId, sameIdentity, type FileId } from "../storage/merge-tasks.js";
 // The Postgres half of the manifest write (database.mdx §9 slice 7, migration 0007). `manifest.repo.ts` is
 // SQL-only and imports nothing from this module, so no cycle; `canonicalCid` is a pure re-encode and
 // `computerLabel` is one cached config read — the two values R7 says must be computed in TypeScript.
@@ -62,7 +63,34 @@ function hasConflictMarkers(raw: string): boolean {
  */
 /** Read a manifest FROM A GIVEN FILE (shared by the SDL-committed and repo-tracking readers). Missing →
  *  schema defaults; merge-conflict markers → quarantine + refuse (§5.1). */
+// ── the parsed-manifest cache (performance.mdx P-62) ────────────────────────────────────────────────────
+//
+// charlie-kirk's tracking manifest is 1.1 MB, and one pin pass read it from four places — the pin prelude, the
+// deletion reaper, `missingPinnedFromPeers`, the TO DO recalc — each a ~300–400 ms `YAML.parse` holding the
+// event loop (the live gap trace put these behind four of the eight remaining stalls). Keyed by file identity
+// taken BEFORE the read, and seeded by the writer with exactly what a re-read would return, so the read after a
+// write is free too. Callers MUTATE what they get (the reaper marks entries removed), so every hit is a
+// `structuredClone` — tens of milliseconds, against a parse ten times that.
+const MANIFEST_CACHE_MAX = 16;
+const manifestCache = new Map<string, { id: FileId; manifest: Manifest }>();
+function manifestCacheGet(file: string): Manifest | null {
+  const hit = manifestCache.get(file);
+  if (!hit || !sameIdentity(hit.id, fileId(file))) return null;
+  manifestCache.delete(file);
+  manifestCache.set(file, hit);
+  return structuredClone(hit.manifest);
+}
+function manifestCachePut(file: string, id: FileId | null, manifest: Manifest): void {
+  manifestCache.delete(file);
+  if (!id) return;
+  manifestCache.set(file, { id, manifest });
+  while (manifestCache.size > MANIFEST_CACHE_MAX) manifestCache.delete(manifestCache.keys().next().value!);
+}
+
 function readManifestFile(file: string): Manifest {
+  const cached = manifestCacheGet(file);
+  if (cached) return cached;
+  const idBeforeRead = fileId(file);
   let raw: string;
   try {
     raw = fs.readFileSync(file, "utf8");
@@ -99,7 +127,14 @@ function readManifestFile(file: string): Manifest {
     log.error("manifest", `Schema validation failed: ${file}: ${result.error.message}`);
     throw new Error(`Invalid manifest at ${file}`);
   }
-  return normalizeManifestPaths(result.data, file);
+  const manifest = normalizeManifestPaths(result.data, file);
+  manifestCachePut(file, idBeforeRead, manifest);
+  return structuredClone(manifest);
+}
+
+/** What a fresh read of `serializeManifest(manifest)` returns — built from the document, not by re-parsing it. */
+function asReread(manifest: Manifest, file: string): Manifest {
+  return normalizeManifestPaths(ManifestSchema.parse(JSON.parse(JSON.stringify(manifestDocument(manifest)))), file);
 }
 
 
@@ -133,7 +168,10 @@ function writeManifestFile(file: string, manifest: Manifest): void {
   // genuinely new do we pay both. `serializeManifest` is deterministic (stable key order, no volatile
   // fields), which is what makes the comparison meaningful rather than accidental.
   try {
-    if (fs.readFileSync(file, "utf8") === body) return;
+    if (fs.readFileSync(file, "utf8") === body) {
+      if (!manifestCache.has(file)) manifestCachePut(file, fileId(file), asReread(manifest, file));
+      return;
+    }
   } catch {
     /* absent or unreadable — fall through and write it */
   }
@@ -144,7 +182,9 @@ function writeManifestFile(file: string, manifest: Manifest): void {
     fs.fsyncSync(fd);
     fs.closeSync(fd);
     fs.renameSync(tmp, file);
+    manifestCachePut(file, fileId(file), asReread(manifest, file)); // the next read of what we just wrote is free
   } catch (e) {
+    manifestCache.delete(file);
     try {
       fs.unlinkSync(tmp);
     } catch {

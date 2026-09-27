@@ -32,8 +32,11 @@ export interface MetricView {
   hint: string;
   /** Tint when count > 0. At 0 the panel is always the light-green all-clear state. */
   positive: Health;
-  /** This metric's educate-and-fix popup (task_tabs.mdx §2.4), when it has one. Clicking the panel opens it. */
-  warning?: WarningDef;
+  /** This metric's educate-and-fix popup (task_tabs.mdx §2.4), when it has one. Clicking the panel opens it.
+   *  A THUNK, built only on click: the strip re-renders on every page render, and building every tile's
+   *  popup (each scoped to its full file list) up front was O(files) per tile per render. Returns null when
+   *  the metric has no popup, which falls back to `onOpen`. */
+  warning?: () => WarningDef | null;
   /** Fallback when the metric has no popup: re-tune the view to the tab where the user acts on it. */
   onOpen: () => void;
 }
@@ -130,7 +133,8 @@ export function MetricsStrip({
   useHoverDefault(defaultHint);
 
   const handle = (m: MetricView) => {
-    if (m.warning?.popup) setOpenWarning(m.warning);
+    const w = m.warning?.() ?? null;
+    if (w?.popup) setOpenWarning(w);
     else m.onOpen();
   };
 

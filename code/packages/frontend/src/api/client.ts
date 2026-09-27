@@ -1,5 +1,6 @@
 // Typed API calls against @lfb/shared. One function per endpoint (code_plan §10).
 import type {
+  FleetCompat,
   RepoRow,
   RepoDetail,
   RepoSyncBlock,
@@ -151,6 +152,9 @@ export const api = {
   // Cheap liveness — { status, ipfs }. Drives the media viewer's node-unreachable IPFS-button
   // disable (media_viewer.mdx §5) without walking the pinset like api.ipfs() does.
   health: () => unwrap<{ status: string; ipfs: IpfsHealth }>(http.get("/health")),
+  // Which of the user's computers run an older Large File Bridge, what that build is known to do to shared
+  // data, and which shared files the tug-of-war breaker is holding (backward_compatibility.md §6).
+  fleetCompat: () => unwrap<FleetCompat>(http.get("/health/fleet")),
 
   // Security allow-list (security.mdx §7). config is public; setup is one-time + loopback-guarded;
   // security/setSecurity are the admin-only return-visit editor.

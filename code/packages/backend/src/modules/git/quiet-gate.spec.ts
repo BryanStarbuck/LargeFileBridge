@@ -344,8 +344,15 @@ describe("volatileYamlPathsFor — what is allowed to move on its own", () => {
   });
 
   it("gives every other LFB-owned YAML the timestamp-only surface", () => {
-    expect(volatileYamlPathsFor("manifest.yaml")).toEqual([]);
-    expect(volatileYamlPathsFor("decisions.yaml")).toEqual([]);
+    expect(volatileYamlPathsFor("storage.yaml")).toEqual([]);
+  });
+
+  it("never judges the three large shared documents — they carry no volatile fields, and parsing them cost seconds", () => {
+    // backward_compatibility.md §4.2: spelling-only rewrites are stopped at the writer, and a
+    // deterministic serializer with no `updated_at` cannot produce a volatile-only change to find.
+    expect(volatileYamlPathsFor("manifest.yaml")).toBeNull();
+    expect(volatileYamlPathsFor("decisions.yaml")).toBeNull();
+    expect(volatileYamlPathsFor("repos/charlie-kirk-83e62afc2c80/deletions.yaml")).toBeNull();
   });
 
   it("returns null for anything it does not own, so that file always keeps its commit", () => {

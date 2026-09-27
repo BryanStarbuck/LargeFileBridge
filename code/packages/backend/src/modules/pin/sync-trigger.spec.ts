@@ -49,7 +49,7 @@ describe("noteArtifactWritten — producing an artifact schedules its own sync (
 
     await vi.advanceTimersByTimeAsync(20_000);
     expect(syncStorageText).toHaveBeenCalledOnce();
-    expect(syncStorageText).toHaveBeenCalledWith("personal");
+    expect(syncStorageText).toHaveBeenCalledWith("personal", expect.any(Function));
   });
 
   it("coalesces a burst into ONE pass — 300 descriptions must not mean 300 passes (§18.4)", async () => {
@@ -78,7 +78,7 @@ describe("noteArtifactWritten — producing an artifact schedules its own sync (
     const { noteArtifactWritten } = await importFresh();
     noteArtifactWritten(`${ROWS.acme.root}/videos/x.mp4.transcription`, "transcripts");
     await vi.advanceTimersByTimeAsync(20_000);
-    expect(syncStorageText).toHaveBeenCalledWith("acme");
+    expect(syncStorageText).toHaveBeenCalledWith("acme", expect.any(Function));
   });
 
   it("is a NO-OP outside a dedicated file repo — LFB is a guest in a working repo (§16.1)", async () => {

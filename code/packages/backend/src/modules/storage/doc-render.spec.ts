@@ -9,9 +9,15 @@ import os from "node:os";
 import path from "node:path";
 import YAML from "yaml";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { DecisionEvent } from "@lfb/shared";
+import { serializeLedger } from "./ledger-merge.js";
 import {
   digestOnDisk,
+  fenceWarnDue,
+  ledgerTextWithoutProvenance,
   recordSdlIngestForRepo,
+  resetFenceWarnMemo,
+  sameIgnoringProvenance,
   renderWritesArmed,
   resetDiskDigestMemo,
   sidecarFileFor,
@@ -154,5 +160,65 @@ describe("the pre-mirror fence covers the whole-unit documents ONLY", () => {
     const manifest = unitDocTargets(7, tmp).find((t) => t.doc === "manifest");
     expect(manifest?.docKey).toBe("tracking");
     expect(manifest?.file).toBe(path.join(tmp, "manifest.yaml"));
+  });
+});
+
+describe("the fence WARN says a situation once, not once per mirror pass", () => {
+  beforeEach(() => resetFenceWarnMemo());
+
+  it("warns the first time, stays quiet while nothing changes, and says a changed SET at INFO", () => {
+    const t0 = Date.parse("2026-09-27T12:00:00.000Z");
+    expect(fenceWarnDue("/r/charlie-kirk", ["decisions", "manifest"], t0)).toBe("warn");
+    // ~100 mirror passes a minute: 197 identical lines in two days before this memo.
+    for (let i = 1; i <= 100; i++) expect(fenceWarnDue("/r/charlie-kirk", ["manifest", "decisions"], t0 + i * 600)).toBeNull();
+    // The set flips every time a peer's pass moves a document ahead of the render — news, but not a fault.
+    expect(fenceWarnDue("/r/charlie-kirk", ["decisions"], t0 + 70_000)).toBe("info");
+    expect(fenceWarnDue("/r/charlie-kirk", ["decisions", "manifest"], t0 + 80_000)).toBe("info");
+    expect(fenceWarnDue("/r/other", ["decisions"], t0 + 70_000)).toBe("warn"); // repos are independent
+  });
+
+  it("repeats as a WARN at most hourly per repo, so a standing disagreement is not forgotten", () => {
+    const t0 = Date.parse("2026-09-27T12:00:00.000Z");
+    expect(fenceWarnDue("/r/a", ["decisions"], t0)).toBe("warn");
+    expect(fenceWarnDue("/r/a", ["decisions"], t0 + 59 * 60_000)).toBeNull();
+    expect(fenceWarnDue("/r/a", ["decisions"], t0 + 61 * 60_000)).toBe("warn");
+  });
+});
+
+describe("the render comparison sets writer provenance aside — and nothing else", () => {
+  const ev = (at: string, over: Partial<DecisionEvent> = {}): DecisionEvent => ({
+    sid: "r:1",
+    path: "videos/a.mp4",
+    fingerprint: null,
+    asked: true,
+    ipfs: true,
+    gitignore: false,
+    decided_by: "bryan",
+    decided_at: at,
+    ...over,
+  });
+  const rows = [ev("2026-09-27T10:00:00.000Z"), ev("2026-09-27T11:00:00.000Z", { path: "videos/b.mp4" })];
+  // What a render from `decision_event` produces: no stamp columns exist, so no stamps.
+  const rendered = serializeLedger(rows);
+  const stamp = (e: DecisionEvent): DecisionEvent => ({ ...e, writer_build: 7, writer_device: "tower" }) as DecisionEvent;
+
+  it("treats a stamped ledger on disk as matching the stamp-less render", () => {
+    const file = path.join(tmp, "decisions.yaml");
+    fs.writeFileSync(file, serializeLedger(rows.map(stamp)));
+    expect(fs.readFileSync(file, "utf8")).not.toBe(rendered); // the byte gate alone would call this a diff
+    expect(sameIgnoringProvenance({ doc: "decisions", file }, rendered)).toBe(true);
+  });
+
+  it("still reports a real difference in a stamped ledger", () => {
+    const file = path.join(tmp, "decisions.yaml");
+    fs.writeFileSync(file, serializeLedger([...rows, ev("2026-09-27T12:00:00.000Z", { ipfs: false })].map(stamp)));
+    expect(sameIgnoringProvenance({ doc: "decisions", file }, rendered)).toBe(false);
+  });
+
+  it("applies to the decision ledger only, and only when there are stamps to set aside", () => {
+    const file = path.join(tmp, "manifest.yaml");
+    fs.writeFileSync(file, "writer_build: 7\n");
+    expect(sameIgnoringProvenance({ doc: "manifest", file }, "anything")).toBe(false);
+    expect(ledgerTextWithoutProvenance(rendered)).toBeNull();
   });
 });

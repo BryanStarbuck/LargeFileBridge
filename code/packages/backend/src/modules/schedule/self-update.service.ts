@@ -27,10 +27,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { execFileSync } from "node:child_process";
-import { APP_BUILD } from "@lfb/shared";
+import { APP_BUILD, defectsOfBuild } from "@lfb/shared";
 import { getAppConfig } from "../store-model/config.service.js";
 import { stableGitBin } from "../git/git-bin.js";
 import { log } from "../../shared/logging.js";
+import { resolveStateDir } from "../../config/state-dir.js";
 
 /** How this computer answers "which build am I on?" — the published integer plus the local git truth. */
 export interface BuildState {
@@ -62,19 +63,43 @@ let lastFetchAt: number | null = null;
  * said when the ANSWER CHANGES, and otherwise at most hourly as a reminder that it is still true.
  */
 const STALE_REPORT_INTERVAL_MS = 60 * 60 * 1000;
-let lastStaleReport: { key: string; at: number } | null = null;
+// PERSISTED, so a restart does not re-say it. The dev app restarts on every save and the throttle lived only in
+// memory, so on a busy day the "hourly" reminder was written after every restart (2026-09-27: three times in
+// seven minutes). A missing/corrupt file just means the next report is said once — always safe.
+let lastStaleReport: { key: string; at: number } | null | undefined = undefined; // undefined = not loaded yet
+const staleReportFile = (): string => path.join(resolveStateDir(), "stale-peer-report.json");
+function loadStaleReport(): { key: string; at: number } | null {
+  if (lastStaleReport !== undefined) return lastStaleReport;
+  try {
+    const raw = JSON.parse(fs.readFileSync(staleReportFile(), "utf8")) as { key?: unknown; at?: unknown };
+    lastStaleReport = typeof raw.key === "string" && typeof raw.at === "number" ? { key: raw.key, at: raw.at } : null;
+  } catch {
+    lastStaleReport = null;
+  }
+  return lastStaleReport;
+}
+function saveStaleReport(v: { key: string; at: number } | null): void {
+  lastStaleReport = v;
+  try {
+    if (v) fs.writeFileSync(staleReportFile(), JSON.stringify(v));
+    else fs.rmSync(staleReportFile(), { force: true });
+  } catch {
+    /* best effort — the in-memory throttle still holds for this process */
+  }
+}
 
 /** True when this stale-peer set is worth saying out loud right now (changed, or the hourly reminder). */
 export function shouldReportStalePeers(peers: StalePeer[], now: number): boolean {
+  const last = loadStaleReport();
   if (peers.length === 0) {
-    lastStaleReport = null; // the fleet is current — the next problem is fresh news again
+    if (last) saveStaleReport(null); // the fleet is current — the next problem is fresh news again
     return false;
   }
   const key = peers.map((p) => `${p.device}@${p.build}`).join(",");
-  if (lastStaleReport && lastStaleReport.key === key && now - lastStaleReport.at < STALE_REPORT_INTERVAL_MS) {
+  if (last && last.key === key && now - last.at < STALE_REPORT_INTERVAL_MS) {
     return false;
   }
-  lastStaleReport = { key, at: now };
+  saveStaleReport({ key, at: now });
   return true;
 }
 
@@ -287,6 +312,18 @@ export async function stalePeersAcrossStorages(): Promise<StalePeer[]> {
 /**
  * The sentence a user can act on. Names the computer, the gap, and what to do — never just "out of date".
  */
+/** What the oldest stale build is KNOWN to do to shared data, and that this build defends against it
+ *  (backward_compatibility.md §6) — so the warning says why updating matters, not only that it does. */
+function knownDefectsSentence(peers: StalePeer[]): string {
+  const oldest = Math.min(...peers.map((p) => p.build));
+  const defects = defectsOfBuild(oldest);
+  if (defects.length === 0) return "";
+  return (
+    ` Known behaviour of the older build(s): ${defects.map((d) => `${d.does} [${d.id}]`).join("; ")}. ` +
+    `This computer does not repeat or amplify it (see backward_compatibility.md), but only updating ends it.`
+  );
+}
+
 export function stalePeerMessage(peers: StalePeer[]): string | null {
   if (peers.length === 0) return null;
   const names = peers.map((p) => `${p.device} (build ${p.build || "older than build tracking"})`).join(", ");
@@ -294,6 +331,7 @@ export function stalePeerMessage(peers: StalePeer[]): string | null {
     `${peers.length === 1 ? "Another computer is" : `${peers.length} other computers are`} running an older ` +
     `Large File Bridge than this one (this computer is on build ${APP_BUILD.number}): ${names}. ` +
     `Fixes that shipped since then are not running there — update Large File Bridge on ` +
-    `${peers.length === 1 ? "that computer" : "those computers"}.`
+    `${peers.length === 1 ? "that computer" : "those computers"}.` +
+    knownDefectsSentence(peers)
   );
 }

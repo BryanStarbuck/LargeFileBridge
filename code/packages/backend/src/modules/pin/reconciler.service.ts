@@ -379,7 +379,9 @@ async function reconcileRepoInner(folder: string, report?: PinReport): Promise<R
   note.phase("reading this computer's pin list");
   const pinset = await pinnedCidSet();
   if (!pinset) {
-    log.warn("pin", `reconcile: ${folder} skipped — IPFS could not list pins (pin state unknown, not empty)`);
+    // INFO, not WARN: `pinnedCidSet` answers null only after the failure itself was reported at WARN (by the
+    // ipfs layer or by pinnedCidSet), so this line is the consequence, not a second fault (error catalog #17).
+    log.info("pin", `reconcile: ${folder} skipped — IPFS could not list pins (pin state unknown, not empty)`);
     return zero();
   }
 

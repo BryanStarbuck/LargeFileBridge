@@ -21,7 +21,7 @@
 //
 // ONE CONNECTION PER TAB. Every call site here shares the single stream owned by `liveStream.ts` and gets
 // its events fanned out in memory. A tab mounts this hook four-plus times at once (AppShell, the progress
-// context, the scan bar, the routed page) — one connection each would blow past the browser's ~6
+// context, the progress dock, the routed page) — one connection each would blow past the browser's ~6
 // connections-per-origin limit and starve ordinary /api calls, which is exactly the failure that made
 // streams die with "network error" while the page kept showing frozen data.
 //
@@ -31,8 +31,53 @@
 // background tab does no work. Deferral lives here rather than in `liveStream.ts` because it is per
 // subscriber (each hook has its own query keys), while the connection itself is per tab.
 import { useEffect, useRef, useState } from "react";
-import { useQueryClient, type QueryKey } from "@tanstack/react-query";
+import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import { subscribeLive, subscribeLiveStatus, liveStatus, type LiveStatus, type StateStreamEvent } from "./liveStream.js";
+
+// COALESCED, NEVER CANCELLING (performance.mdx — the churn loop). The backend bumps `jobs` up to once a
+// second while a batch runs, and the One Repo page re-streams its whole detail on that topic. With the
+// default `invalidateQueries` every bump CANCELLED the in-flight fetch and started over, so on a big repo
+// whose stream takes longer than a second the refetch never landed and the page parsed NDJSON forever.
+// Two rules, per query key, shared by every hook instance in the tab:
+//   • at most ONE invalidation per COALESCE_MS window — the first bump in a quiet period acts at once, the
+//     rest of a burst fold into a single trailing one at the window's end (no starvation: it always fires);
+//   • never cancel a fetch already in flight — if one is running when the invalidation is due, wait for it
+//     to settle and THEN invalidate, so the bump that arrived mid-fetch is still honoured with fresh data.
+const COALESCE_MS = 2000;
+const INFLIGHT_RECHECK_MS = 300;
+
+interface KeySlot {
+  qc: QueryClient;
+  key: QueryKey;
+  lastRun: number; // ms epoch of the last invalidation actually issued for this key
+  timer: ReturnType<typeof setTimeout> | null; // a pending (leading or trailing) invalidation
+}
+const slots = new Map<string, KeySlot>();
+
+function fireSlot(slot: KeySlot): void {
+  slot.timer = null;
+  if (slot.qc.isFetching({ queryKey: slot.key }) > 0) {
+    // Let the in-flight fetch land; the invalidation follows it rather than killing it.
+    slot.timer = setTimeout(() => fireSlot(slot), INFLIGHT_RECHECK_MS);
+    return;
+  }
+  slot.lastRun = Date.now();
+  void slot.qc.invalidateQueries({ queryKey: slot.key }, { cancelRefetch: false });
+}
+
+/** Ask for `key` to be invalidated, coalesced per key (see COALESCE_MS). Exported for tests. */
+export function requestInvalidate(qc: QueryClient, key: QueryKey): void {
+  const id = JSON.stringify(key);
+  let slot = slots.get(id);
+  if (!slot) {
+    slot = { qc, key, lastRun: 0, timer: null };
+    slots.set(id, slot);
+  }
+  slot.qc = qc;
+  if (slot.timer != null) return; // already scheduled — this bump rides along with it
+  const s = slot;
+  s.timer = setTimeout(() => fireSlot(s), Math.max(0, s.lastRun + COALESCE_MS - Date.now()));
+}
 
 /**
  * Subscribe to the server's state-event stream and invalidate query keys when a watched topic bumps.
@@ -65,9 +110,7 @@ export function useLiveRefresh(
     if (!topicKey) return; // nothing to watch yet (id still resolving) — don't attach
 
     const runInvalidate = (): void => {
-      for (const key of keysRef.current) {
-        void qc.invalidateQueries({ queryKey: key });
-      }
+      for (const key of keysRef.current) requestInvalidate(qc, key);
     };
 
     // A bump for a tab the user cannot see is REMEMBERED, not acted on (§8.9.4, LOCKED). Collapsing to a

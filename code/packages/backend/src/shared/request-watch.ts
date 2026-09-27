@@ -28,7 +28,7 @@
 import type { Request, Response, NextFunction } from "express";
 import { performance } from "node:perf_hooks";
 import { log } from "./logging.js";
-import { blocking } from "./blocking.js";
+import { blocking, looksSuspended } from "./blocking.js";
 
 /** A finished request slower than this is worth a line. One second is the threshold at which a person
  *  stops reading the page and starts looking at the spinner. */
@@ -45,8 +45,59 @@ interface InFlight {
   method: string;
   path: string;
   startedAt: number;
+  /** Wall clock at arrival, and the frozen-time ledger at arrival — see `frozenTotalMs`. */
+  wallStartedAt: number;
+  frozenAtStart: number;
   /** Set once we have reported it as stuck, so one hung request produces one line, not one per sweep. */
   reported: boolean;
+}
+
+// ── A REQUEST THAT SPANNED A LID-CLOSE IS NOT A HUNG REQUEST (error catalog #19/#20) ─────────────────────
+// `STILL OPEN after 670328ms: POST /api/v1/client/sessions/…/tokens` looked like an eleven-minute hang in
+// the token mint. log.log says otherwise: in the SAME millisecond, loop-watch logged `PROCESS SUSPENDED for
+// about 612s`, the request completed 3 ms later, and the access token was refreshed. The mint arrived, the
+// laptop slept, and the request was answered the moment the process thawed. `performance.now()` on this
+// machine keeps counting across that freeze (the loop-watch histogram recorded it as one 670 s sample), so
+// every request open at lid-close was billed the whole night.
+//
+// The sweep is our own clock of liveness. It is set for SWEEP_MS; when a tick lands minutes late AND the
+// process burned almost no CPU in the gap (blocking.ts `looksSuspended` — a busy loop that delays the tick
+// burns CPU the whole time, so a real stall is never mistaken for sleep), that gap is frozen time. It is
+// added to a running ledger, and a request's AWAKE age is its wall age minus the ledger growth since it
+// arrived. Judging requests on awake time keeps every real hang reported while no longer paging anyone for
+// a laptop lid.
+let lastTickWall = Date.now();
+let lastTickCpuMs = cpuMs();
+let frozenTotalMs = 0;
+
+function cpuMs(): number {
+  const c = process.cpuUsage();
+  return (c.user + c.system) / 1000;
+}
+
+/**
+ * Fold any freeze since the last observation into the ledger. Called by every sweep tick AND on request
+ * completion, because after a thaw the finishing request can run before the overdue sweep does. The
+ * expected gap between observations is at most SWEEP_MS, so only the excess can be frozen time (a
+ * deliberately low estimate — undercounting a freeze leaves a line in the log, overcounting could hide one).
+ * Exported for test.
+ */
+export function observeFreeze(now: number = Date.now(), cpuNow: number = cpuMs()): number {
+  const gap = now - lastTickWall;
+  const cpu = cpuNow - lastTickCpuMs;
+  lastTickWall = now;
+  lastTickCpuMs = cpuNow;
+  const excess = gap - SWEEP_MS;
+  if (excess > 0 && looksSuspended(gap, cpu)) {
+    frozenTotalMs += excess;
+    return excess;
+  }
+  return 0;
+}
+
+/** A request's age with the frozen spans taken out, in ms. */
+function awakeAgeMs(r: InFlight, now: number): number {
+  return Math.max(0, now - r.wallStartedAt - (frozenTotalMs - r.frozenAtStart));
 }
 
 let nextId = 1;
@@ -92,7 +143,7 @@ export function requestWatch(req: Request, res: Response, next: NextFunction): v
   // absolute filesystem path in it is unreadable in a log and is not the thing being identified.
   const path = (req.originalUrl || req.url || "").split("?")[0] ?? "";
   const method = req.method;
-  inFlight.set(id, { method, path, startedAt, reported: false });
+  inFlight.set(id, { method, path, startedAt, wallStartedAt: Date.now(), frozenAtStart: frozenTotalMs, reported: false });
 
   let done = false;
   const finish = (how: "finish" | "close"): void => {
@@ -102,6 +153,20 @@ export function requestWatch(req: Request, res: Response, next: NextFunction): v
     inFlight.delete(id);
     const ms = performance.now() - startedAt;
     try {
+      // Before judging, catch up on a freeze the sweep has not seen yet (the thaw can run us first).
+      if (sweep) observeFreeze();
+      const frozenMs = entry ? frozenTotalMs - entry.frozenAtStart : 0;
+      if (frozenMs > 0 && !LONG_LIVED.test(path)) {
+        // Its timing is meaningless in either direction — the client's socket sat through a sleep too — so
+        // it is neither a SLOW line nor a NEVER ANSWERED one. INFO keeps the fact in the trail.
+        log.info(
+          "request",
+          `${method} ${path} -> ${how === "close" && !res.writableEnded ? "closed unanswered" : res.statusCode} ` +
+            `spanned a process suspension (~${Math.round(frozenMs / 1000)}s asleep of ${Math.round(ms / 1000)}s) — ` +
+            `not counted as slow.`,
+        );
+        return;
+      }
       if (how === "close" && !res.writableEnded && !LONG_LIVED.test(path)) {
         // The client hung up with nothing sent. This is the ONLY trace a page the user gave up on leaves.
         // Streams are excluded: a browser that navigates away from an open NDJSON/SSE response aborts it
@@ -156,13 +221,18 @@ function routeLabel(path: string): string {
 /** Start the stuck-request sweep. Idempotent; the timer is unref'd. */
 export function startRequestWatch(): void {
   if (sweep) return;
+  lastTickWall = Date.now();
+  lastTickCpuMs = cpuMs();
   sweep = setInterval(() => {
     try {
       const now = performance.now();
+      observeFreeze();
+      const wallNow = Date.now();
       for (const r of inFlight.values()) {
         if (r.reported || LONG_LIVED.test(r.path)) continue;
         const age = now - r.startedAt;
-        if (age < STUCK_MS) continue;
+        // AWAKE age decides (see `observeFreeze`); a request still open 10 s after the thaw is still reported.
+        if (awakeAgeMs(r, wallNow) < STUCK_MS) continue;
         r.reported = true;
         // Deliberately NOT recorded into the blocking tally. That tally measures who HELD the loop; a stuck
         // request is the opposite — someone WAITING on it — and filing it as a 0 ms section would put a
@@ -170,7 +240,11 @@ export function startRequestWatch(): void {
         // report through `inFlightSummary()`, which loop-watch prints as "STILL WAITING".
         log.error(
           "request",
-          `STILL OPEN after ${Math.round(age)}ms: ${r.method} ${r.path}. The browser is showing a spinner ` +
+          `STILL OPEN after ${Math.round(age)}ms: ${r.method} ${r.path}` +
+            (frozenTotalMs > r.frozenAtStart
+              ? ` (${Math.round(awakeAgeMs(r, wallNow))}ms of it awake — the rest was a process suspension)`
+              : "") +
+            `. The browser is showing a spinner ` +
             `for this right now. ${inFlight.size} request(s) in flight: ${inFlightSummary(now)}. ` +
             `A request that is open this long is either blocked behind synchronous work on the event loop ` +
             `(check the loop-watch and blocking lines for this window) or waiting on a child process / ` +
@@ -192,4 +266,5 @@ export function stopRequestWatch(): void {
   if (sweep) clearInterval(sweep);
   sweep = null;
   inFlight.clear();
+  frozenTotalMs = 0;
 }

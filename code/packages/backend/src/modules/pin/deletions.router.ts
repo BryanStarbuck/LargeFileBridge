@@ -28,6 +28,7 @@ import {
 } from "./deletions.service.js";
 import { enforceNow } from "./deletions-apply.service.js";
 import type { DeletionRecord } from "@lfb/shared";
+import { writerStamp } from "../../shared/writer-stamp.js";
 
 export const deletionsRouter = Router();
 deletionsRouter.use(requireAllowListed);
@@ -235,6 +236,7 @@ deletionsRouter.post("/", async (req, res) => {
         undeleted_at: null,
         undeleted_by: null,
         undelete_reason: null,
+        ...writerStamp(), // who SAID this deletion (backward_compatibility.md §3)
       };
 
       const targets: Array<{ repo: RepoView; record: DeletionRecord }> = [{ repo, record }];

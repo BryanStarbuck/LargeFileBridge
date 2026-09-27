@@ -19,7 +19,8 @@ import os from "node:os";
 import path from "node:path";
 import { describe, it, expect } from "vitest";
 import type { DecisionEvent } from "@lfb/shared";
-import { decisionScopes, parseCursor, toInsert } from "./decision-backfill.js";
+import { decisionScopes, eventIdentityKey, eventsMissingFromPg, parseCursor, toInsert } from "./decision-backfill.js";
+import { parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
 import { repoKeyFor } from "./tracking-root.service.js";
 
 describe("rel_path is byte-exact — a normalized copy re-inserts forever", () => {
@@ -145,5 +146,55 @@ describe("the SDL mirror leg is found by repoUid SUFFIX, not by directory name",
     // subtree living beside ours would otherwise donate its events to our unit.
     const { stateDir } = build(`work-${"f".repeat(40)}`);
     expect(legsFor(stateDir)).toEqual(["local"]);
+  });
+});
+
+describe("the row assertion is CONTAINMENT, because the ledger on disk is compacted and the table is not", () => {
+  const ev = (at: string, over: Partial<DecisionEvent> = {}): DecisionEvent => ({
+    sid: "r:83e62afc2c80",
+    path: "videos/a.mp4",
+    fingerprint: null,
+    asked: true,
+    ipfs: true,
+    gitignore: false,
+    decided_by: "bryan",
+    decided_at: at,
+    ...over,
+  });
+  // Ten identical re-statements plus one real change: what `decisions.mirrorEvents` inserted, one at a time.
+  const history = [
+    ...Array.from({ length: 10 }, (_, i) => ev(`2026-09-27T10:00:0${i}.000Z`)),
+    ev("2026-09-27T11:00:00.000Z", { ipfs: false }),
+  ];
+  const pgKeys = new Set(history.map(eventIdentityKey));
+  const onDisk = parseLedgerBestEffort(serializeLedger(history));
+
+  it("holds on the live shape that broke the count: disk compacted, Postgres holding every event", () => {
+    // The OLD assertion — count(origin='local') = events on disk — fails here, and fails forever: this is the
+    // 84,256 vs 20,359 of 2026-09-27 in miniature. Nothing is actually missing.
+    expect(onDisk.length).toBeLessThan(history.length);
+    expect(eventsMissingFromPg(onDisk, pgKeys)).toEqual([]);
+  });
+
+  it("still catches a REAL divergence: an event on disk the dual-write never inserted", () => {
+    const lost = ev("2026-09-27T12:00:00.000Z", { asked: false, ipfs: false, decided_by: "deleted" });
+    const missing = eventsMissingFromPg([...onDisk, lost], pgKeys);
+    expect(missing).toEqual([lost]);
+  });
+
+  it("keys on every identity column — a different sid or fingerprint is a different event", () => {
+    expect(eventsMissingFromPg([ev("2026-09-27T10:00:00.000Z", { sid: "r:other" })], pgKeys)).toHaveLength(1);
+    expect(eventsMissingFromPg([ev("2026-09-27T10:00:00.000Z", { fingerprint: "abc" })], pgKeys)).toHaveLength(1);
+  });
+
+  it("ignores writer provenance, which is not a column, and spells decided_at the way Postgres renders it", () => {
+    const stamped = { ...ev("2026-09-27T10:00:00.000Z"), writer_build: 7, writer_device: "tower" } as DecisionEvent;
+    expect(eventsMissingFromPg([stamped], pgKeys)).toEqual([]);
+    expect(eventsMissingFromPg([ev("2026-09-27T10:00:00+00:00")], pgKeys)).toEqual([]);
+  });
+
+  it("does not confuse a NULL decided_by with an empty one (the UNIQUE is NULLS NOT DISTINCT, not NULL = '')", () => {
+    const nul = new Set([eventIdentityKey(ev("2026-09-27T10:00:00.000Z", { decided_by: null }))]);
+    expect(eventsMissingFromPg([ev("2026-09-27T10:00:00.000Z", { decided_by: "" })], nul)).toHaveLength(1);
   });
 });

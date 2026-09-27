@@ -13,7 +13,7 @@ const pathSearch = (search: Record<string, unknown>): { path?: string } => ({
 
 const rootRoute = createRootRoute({ component: () => <Outlet /> });
 
-// AppShell stays eager — it's the always-present layout (sidebar + scan bar) that hosts every route.
+// AppShell stays eager — it's the always-present layout (sidebar + banners) that hosts every route.
 const appLayout = createRoute({
   getParentRoute: () => rootRoute,
   id: "app",

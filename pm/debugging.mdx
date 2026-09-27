@@ -146,6 +146,13 @@ the one that reads as "no evidence at all":
   `STILL OPEN`, no `longtask` → **the request never completed.** It went out and no answer, and no error,
   ever came back. This is not an absence of evidence; the absence *is* the evidence, and it eliminates both
   other owners at once. Go to **Node 0a**.
+* **the grep returns nothing recent at all** — the server is fast and quiet, `curl` answers in milliseconds,
+  and **no `client:` line has arrived** while the user is looking at a spinner → the **browser's socket
+  pool is exhausted**. perfWatch's report is itself a request, so a tab that cannot send anything reports
+  nothing. Count sockets: `lsof -nP -iTCP:2222 -sTCP:ESTABLISHED` and
+  `grep -a "state stream opened" ~/T/_large_files_bridge/log.log | tail`. Six means Chrome's per-host pool
+  is full of permanent streams ([performance.mdx](./performance.mdx) P-63; the tabs now share one stream,
+  and the server WARNs at four).
 
 A `(yielded)` suffix on a `BLOCKED BY` row means that work ran **cooperatively** — it accumulated real CPU
 but handed the loop back between slices, so it is not what froze anything. Rank it, do not chase it.

@@ -43,6 +43,8 @@ import {
   type BackfillScope,
   type BackfillVerification,
 } from "../../shared/persistence/backfill.js";
+import { q } from "../../shared/persistence/db.js";
+import { DB_SCHEMA as S } from "../../shared/persistence/pool.js";
 import { readRawYaml } from "../../shared/persistence/raw-yaml.js";
 import { isDirForKey } from "../../shared/store/keyed-dir.js";
 import { expandHome } from "../../shared/home-path.js";
@@ -298,6 +300,81 @@ export async function gateEveryUnit(limitPerUnit = 6): Promise<DecisionGateResul
   return out;
 }
 
+// ── the row assertion: every event on disk is in Postgres (database_migration.mdx §4.5) ─────────────────
+
+/**
+ * An event's identity as `decision_event_identity` states it — every column of the UNIQUE but `unit_id`,
+ * `decided_at` in the one ISO spelling both sides agree on. The SAME fields `ledger-merge.ts eventIdentity`
+ * joins; `writer_build` / `writer_device` are provenance and are in neither.
+ */
+export function eventIdentityKey(e: {
+  sid: string;
+  path: string;
+  fingerprint: string | null;
+  asked: boolean;
+  ipfs: boolean;
+  gitignore: boolean;
+  decided_by: string | null;
+  decided_at: string;
+}): string {
+  // Normalized through Date so a peer's `+00:00` spelling of the same instant is not a false "missing" —
+  // Postgres stores the instant, and renders it back with `to_char(... 'MS"Z"')`.
+  const ms = Date.parse(e.decided_at);
+  const at = Number.isFinite(ms) ? new Date(ms).toISOString() : e.decided_at;
+  return [e.sid, e.path, e.fingerprint ?? "\u0001", e.asked, e.ipfs, e.gitignore, e.decided_by ?? "\u0001", at].join(
+    "\u0000",
+  );
+}
+
+/**
+ * THE ROW ASSERTION, AND WHY IT IS A SUBSET AND NOT AN EQUALITY.
+ *
+ * It used to be `count(decision_event WHERE origin='local') = events on disk`, and it could only ever be true
+ * on the day of the first backfill (measured then: 18,234 = 18,234). After that the two sides are built
+ * under different rules ON PURPOSE:
+ *   * the ledger on disk is COMPACTED on every write — `serializeLedger` keeps only the first and last of a
+ *     run of identical re-statements (`ledger-merge.ts compactLedger`), and "serializeLedger compacts.
+ *     Nothing else compacts." (database.mdx §2.1);
+ *   * `decision_event` is APPEND-ONLY — every event `decisions.mirrorEvents` ever inserted stays, including
+ *     the middle re-stamps the next write compacts off disk. Rule 2 of this file's header forbids
+ *     compacting it.
+ * So Postgres grows past the file and the equality fails forever (2026-09-27: 84,256 vs 20,359, then
+ * 99,839 vs 20,598), which blocked the read cutover with a "mismatch" that was not one.
+ *
+ * What MUST hold is containment: every event the ledger on disk still carries is a row. An event on disk
+ * with no row is a lost insert — the dual-write dropped it, or the backfill skipped it — and that is exactly
+ * the divergence this assertion exists to catch. Extra rows are compacted-away history and are harmless
+ * BECAUSE compaction never removes a group's latest event: the fold over the superset equals the fold over
+ * the file, and `gateEveryUnit` asserts precisely that, per path, on the full tuple. Together the two checks
+ * are strictly stronger than the count ever was: the count could balance a lost event against an extra one.
+ *
+ * Any origin counts. A wire copy that arrived first keeps `origin='wire'` (DO NOTHING never rewrites it,
+ * `insertDecisionEvents`), and it is still the same event.
+ */
+export function eventsMissingFromPg(diskEvents: DecisionEvent[], pgKeys: ReadonlySet<string>): DecisionEvent[] {
+  return diskEvents.filter((e) => !pgKeys.has(eventIdentityKey(e)));
+}
+
+/** Every `decision_event` identity for one unit, keyed like `eventIdentityKey`. */
+async function pgEventKeys(unitId: number): Promise<Set<string>> {
+  const rows = await q<{
+    sid: string;
+    path: string;
+    fingerprint: string | null;
+    asked: boolean;
+    ipfs: boolean;
+    gitignore: boolean;
+    decided_by: string | null;
+    decided_at: string;
+  }>(
+    `SELECT sid, rel_path AS path, fingerprint, asked, ipfs, gitignore, decided_by,
+            to_char(decided_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS decided_at
+       FROM ${S}.decision_event WHERE unit_id = $1`,
+    [unitId],
+  );
+  return new Set(rows.map(eventIdentityKey));
+}
+
 /**
  * The plan's cross-check: the frozen `pin/r/<folder>/config.yaml → decisions:` enum map against the folded
  * IPFS axis. LOGGED, NEVER RECONCILED — the two are supposed to agree, and any drift is PRE-EXISTING
@@ -357,21 +434,35 @@ export const BACKFILL_DECISIONS: BackfillArea = {
   async verify(): Promise<BackfillVerification> {
     const mismatches: string[] = [];
 
-    // §4.5's row assertion: count(decision_event WHERE origin='local') = the events on disk.
+    // §4.5's row assertion, as CONTAINMENT: every event the local ledger still carries is a row. See
+    // `eventsMissingFromPg` for why this is not the count equality it used to be.
     let yamlRows = 0;
     for (const scope of decisionScopes()) {
       const data = scope.data as DecisionScopeData;
       const local = data.legs.find((l) => l.key === LOCAL_LEG);
       if (!local) continue;
+      let events: DecisionEvent[];
       try {
-        yamlRows += readRawYaml(local.file, DecisionsLedgerSchema).events.length;
+        events = readRawYaml(local.file, DecisionsLedgerSchema).events;
       } catch {
-        // Already in the reject table with the parser's own message; it must not also inflate the expected
-        // count, or the assertion below would fail for a file we deliberately skipped.
+        // Already in the reject table with the parser's own message; it must not also count as missing
+        // rows, or the assertion below would fail for a file we deliberately skipped.
+        continue;
+      }
+      yamlRows += events.length;
+      const unitId = await unitIdForAbsPath(data.absPath);
+      if (unitId === null) continue; // the gate below reports an un-adopted repo; it has nowhere to hold rows
+      const missing = eventsMissingFromPg(events, await pgEventKeys(unitId));
+      if (missing.length) {
+        const eg = missing
+          .slice(0, 3)
+          .map((e) => `${e.path}@${e.decided_at}`)
+          .join(", ");
+        mismatches.push(
+          `${data.absPath}: ${missing.length} of ${events.length} ledger event(s) on disk have no decision_event row (e.g. ${eg})`,
+        );
       }
     }
-    const pgLocal = await countDecisionEvents("local");
-    if (pgLocal !== yamlRows) mismatches.push(`decision_event origin='local' is ${pgLocal}, ledgers hold ${yamlRows}`);
 
     // THE GATE. Any per-unit disagreement fails the area and blocks the read cutover (§4.5).
     const gate = await gateEveryUnit();

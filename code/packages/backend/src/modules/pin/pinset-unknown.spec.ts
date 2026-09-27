@@ -73,3 +73,60 @@ describe("missingPinnedFromPeers — an unreachable IPFS node must not invent a 
     expect(offers.map((o) => o.path)).toEqual(["videos/a.mp4"]);
   });
 });
+
+// ONE FAILED `pin ls`, ONE WARN (error catalog #17). `listPins` is single-flight, so every reader waiting on
+// an enumeration receives the SAME rejection — and each used to restate it at WARN (pinnedCidSet, then
+// missingPinnedFromPeers per repo, the reconciler, each pin pass): six WARNs for one abort. The ipfs layer
+// reports the failure once; the readers record their consequence at INFO. A failure no one has reported yet
+// (anything that is not the ipfs layer's PinsetUnavailableError) keeps its WARN.
+describe("pinnedCidSet — the already-reported pin-ls failure is not re-announced", () => {
+  it("logs the consequence at INFO, not WARN, when the ipfs layer already reported the failure", async () => {
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    const { PinsetUnavailableError } = await import("../ipfs/pinset-unavailable.js");
+    vi.mocked(ipfs.listPins).mockRejectedValue(new PinsetUnavailableError("ipfs pin ls (recursive) failed: aborted"));
+    await seedManifest();
+    const { log } = await import("../../shared/logging.js");
+    const warn = vi.spyOn(log, "warn");
+
+    const { missingPinnedFromPeers } = await import("./pin.service.js");
+    expect(await missingPinnedFromPeers(repoRoot)).toEqual([]);
+    expect(warn.mock.calls.filter(([ctx]) => ctx === "pin")).toEqual([]);
+  });
+
+  it("still WARNs for a failure nobody has reported yet", async () => {
+    const ipfs = await import("../ipfs/ipfs.service.js");
+    vi.mocked(ipfs.listPins).mockRejectedValue(new Error("something unexpected"));
+    const { log } = await import("../../shared/logging.js");
+    const warn = vi.spyOn(log, "warn");
+
+    const { pinnedCidSet } = await import("./pin.service.js");
+    expect(await pinnedCidSet()).toBeNull();
+    expect(warn.mock.calls.some(([ctx, m]) => ctx === "pin" && /listPins failed/.test(m))).toBe(true);
+  });
+});
+
+// ONE PUSH GIVE-UP, ONE WARN (error catalog #16). git.service already WARNs its own push give-up; pin's
+// report of the same result (and backbone-freshness after it) must not restate it at WARN.
+describe("gitProblemAlreadyWarned", () => {
+  it("a push-phase remote/auth problem was already WARNed by the git layer", async () => {
+    const { gitProblemAlreadyWarned } = await import("./pin.service.js");
+    const why = "Git remote error — Large File Bridge keeps pinning over IPFS. ( ! [rejected] main -> main (fetch first))";
+    expect(gitProblemAlreadyWarned(undefined, { ran: true, fetched: true, problem: why })).toBe(true);
+  });
+  it("the pull's problem, unchanged by the push, was already reported by the pull report", async () => {
+    const { gitProblemAlreadyWarned } = await import("./pin.service.js");
+    expect(gitProblemAlreadyWarned("Git pull failed: x", { ran: true, problem: "Git pull failed: x" })).toBe(true);
+  });
+  it("a failed commit, a thrown push, or a re-pull conflict is NOT logged by git — it keeps its WARN", async () => {
+    const { gitProblemAlreadyWarned } = await import("./pin.service.js");
+    expect(gitProblemAlreadyWarned(undefined, { ran: true, problem: "Git commit failed: index.lock" })).toBe(false);
+    expect(gitProblemAlreadyWarned(undefined, { ran: true, problem: "Git push failed: boom" })).toBe(false);
+    expect(
+      gitProblemAlreadyWarned(undefined, { ran: true, problem: "Git merge conflict on 1 file(s)", conflicts: ["a"] }),
+    ).toBe(false);
+  });
+  it("no problem, nothing to dedupe", async () => {
+    const { gitProblemAlreadyWarned } = await import("./pin.service.js");
+    expect(gitProblemAlreadyWarned(undefined, { ran: true, pushed: true })).toBe(false);
+  });
+});

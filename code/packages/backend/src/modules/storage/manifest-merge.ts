@@ -199,7 +199,14 @@ export function mergeManifests(
  * re-dirtied what the other had just written, and every one of those diffs became a backbone commit.
  */
 export function serializeManifest(manifest: Manifest): string {
-  return YAML.stringify({
+  return YAML.stringify(manifestDocument(manifest));
+}
+
+/** The plain document `serializeManifest` writes — folded, sorted, `state` only when removed. Exported so a
+ *  writer can seed a read cache with exactly what a re-read of the file would return, without re-parsing it
+ *  (manifest.service.ts, performance.mdx P-62). */
+export function manifestDocument(manifest: Manifest): { schema_version: number; unit: Manifest["unit"]; files: Array<Record<string, unknown>> } {
+  return {
     schema_version: manifest.schema_version,
     unit: manifest.unit,
     files: foldManifestFiles(manifest.files, manifest.unit)
@@ -219,6 +226,6 @@ export function serializeManifest(manifest: Manifest): string {
         state: f.state === "removed" ? "removed" : undefined,
       }))
       .sort((a, b) => a.path.localeCompare(b.path)),
-  });
+  };
 }
 

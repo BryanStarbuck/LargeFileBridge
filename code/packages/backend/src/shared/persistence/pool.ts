@@ -117,9 +117,9 @@ function num(name: string, fallback: number): number {
  * session store" is indistinguishable from "not signed in".
  *
  * So background work never gets the whole pool. `POOL_MAX` is the ceiling for everything; `INTERACTIVE_RESERVE`
- * is the slice that background callers must leave alone. Enforcement is by convention at the call site
- * (`acquireBackground` below), which is enough because there is exactly ONE backend process per machine
- * (single-instance.ts).
+ * is the slice that background callers must leave alone. Enforced by db.ts's BACKGROUND LANE: work wrapped in
+ * `runInBackground` holds at most `POOL_MAX - INTERACTIVE_RESERVE` connections at once. That is enough
+ * because there is exactly ONE backend process per machine (single-instance.ts).
  */
 export const POOL_MAX = num("LFB_DB_POOL_MAX", 8);
 export const INTERACTIVE_RESERVE = Math.min(num("LFB_DB_POOL_RESERVE", 3), Math.max(POOL_MAX - 1, 1));

@@ -7,8 +7,8 @@ import { api } from "../../api/client.js";
 import { Sidebar } from "../../components/layout/Sidebar.js";
 import { HoverInfoBridge } from "../repos/HoverInfoRegion.js";
 import { OptionImagePreviewLayer } from "../../components/preview/OptionImagePreview.js";
-import { ScanProgressBar } from "../../components/ScanProgressBar.js";
 import { IpfsStatusBanner } from "../../components/IpfsStatusBanner.js";
+import { FleetCompatBanner } from "../../components/FleetCompatBanner.js";
 import { LiveUpdatesBanner } from "../../components/LiveUpdatesBanner.js";
 import { useSessionPing } from "../../lib/useSessionPing.js";
 import { useLiveRefresh } from "../../lib/useLiveRefresh.js";
@@ -96,6 +96,7 @@ export function AppShell() {
         <div className="shrink-0">
           <LiveUpdatesBanner />
           <IpfsStatusBanner />
+          <FleetCompatBanner />
         </div>
         {/* min-h-full + flex column so a full-page-height table (repos.mdx §3.3.1) can flex its body
             down to the bottom of the viewport; long/normal pages still grow and let <main> scroll.
@@ -118,7 +119,8 @@ export function AppShell() {
           not per page, so every surface that publishes a hover target (One-repo files table, the File
           System columns, Full paths) shares one overlay + one Option-key tracker. */}
       <OptionImagePreviewLayer />
-      <ScanProgressBar />
+      {/* The discovery-scan bar that used to mount here is folded into the progress dock (ProgressDock.tsx),
+          which already showed the same scan as a card and now owns the ["scanStatus"] poller. */}
     </div>
   );
 }

@@ -113,6 +113,28 @@ function apiKeyUser(req: Request): AuthUser | null {
   };
 }
 
+/**
+ * Leeway on `exp`/`nbf` when verifying an access token — kept SMALL on purpose.
+ *
+ * WHY ANY. The browser never attaches a token with under 10 s of life (frontend api/tokenFreshness.ts,
+ * TOKEN_HARD_FLOOR_S), yet error.err logged 16 `"exp" claim timestamp check failed` lines in one burst right
+ * after a restart (error catalog #8). A token that left the browser valid and arrived expired spent its
+ * last seconds QUEUED — behind a blocked event loop, or on a socket that sat through a lid-close — before
+ * this middleware ran. Rejecting it is not security, it is our own latency charged to the user as a 401.
+ *
+ * WHY 30 s AND NO MORE. Access tokens live 15 minutes (auth-frontend.ts accessTokenTtlSeconds), so 30 s
+ * extends a token's useful life by ~3%; the session behind it is still re-checked on every mint (revocation,
+ * inactivity), and the signature/issuer checks are untouched. It is the conventional JWT clock-skew
+ * allowance, not a way around expiry: a genuinely stale token still fails.
+ */
+export const TOKEN_CLOCK_TOLERANCE_MS = 30_000;
+
+/** Did verification fail ONLY because the token had expired (vs. a bad signature, issuer, or shape)? */
+export function isExpiredTokenError(e: unknown): boolean {
+  const err = e as { code?: string; message?: string } | null;
+  return err?.code === "ERR_JWT_EXPIRED" || /"exp" claim timestamp check failed/.test(err?.message ?? "");
+}
+
 export async function identify(req: Request, _res: Response, next: NextFunction): Promise<void> {
   const withUser = req as Request & { user?: AuthUser };
 
@@ -163,7 +185,11 @@ export async function identify(req: Request, _res: Response, next: NextFunction)
     // guarantees the symmetric verification path even if configuration ordering ever changes, so a
     // stale/invalid token fails with a proper signature error (caught below) rather than the
     // misleading "issuer must be an absolute URL" thrown on the JWKS path for a bare issuer string.
-    const claims = await verifyToken(token, { issuer: AUTH_ISSUER, embedded: true });
+    const claims = await verifyToken(token, {
+      issuer: AUTH_ISSUER,
+      embedded: true,
+      clockSkewInMs: TOKEN_CLOCK_TOLERANCE_MS,
+    });
     const email = (claims.email as string | undefined) ?? null;
     const listed = allowListed(email);
     withUser.user = {
@@ -179,7 +205,18 @@ export async function identify(req: Request, _res: Response, next: NextFunction)
   } catch (e) {
     // Include the route (method + path, never the query string — media tokens ride in queries) so a
     // recurring failure identifies its caller instead of reading as an anonymous expired token.
-    log.warn("auth", `Token verification failed (${req.method} ${req.path}): ${(e as Error).message}`);
+    //
+    // An EXPIRED token is routine, not a fault: the request is answered 401, and the browser's axios
+    // interceptor (frontend api/axios.ts) re-mints and replays it once — including `/client-log`, so the
+    // client's own log line is not lost. INFO keeps the trail without a WARN per stale tab after a sleep.
+    // Anything else — a bad signature, a foreign issuer, a malformed token — is someone presenting a token
+    // we never issued, and stays WARN.
+    const expired = isExpiredTokenError(e);
+    (expired ? log.info : log.warn)(
+      "auth",
+      `Token verification failed (${req.method} ${req.path}): ${(e as Error).message}` +
+        (expired ? " — the client re-mints and retries" : ""),
+    );
     withUser.user = DEFAULT_USER;
   }
   return next();

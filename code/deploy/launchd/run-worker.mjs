@@ -161,8 +161,12 @@ if (last.kind === "refused" && !alive) {
   // (a) The app genuinely is not running — an EXPECTED state between app sessions, not a fault in this
   // trigger. Exit 0: launchd fires on its interval regardless, and the app recovers the missed cycle on
   // its next boot (watchdog.service.ts). A non-zero exit would only teach launchd to distrust a healthy job.
+  //
+  // INFO, not WARN (error catalog #22): stdout lands in log.log, stderr in error.err, and error.err is the
+  // fault trail. A user who quit the app, or a dev restart window, is not a fault — and the miss is still
+  // recorded (worker-misses.json) for the app to reconcile, so nothing is lost by keeping it out of there.
   const n = recordMiss("app-not-running", last.detail);
-  out("WARN", `${worker}: Large File Bridge is not running (nothing listening on 127.0.0.1:${port}, ${last.detail}) — this cycle did not run. Recorded; the app recovers it when it next starts.${n > 1 ? ` (${n} cycles in a row)` : ""}`);
+  out("INFO", `${worker}: Large File Bridge is not running (nothing listening on 127.0.0.1:${port}, ${last.detail}) — this cycle did not run. Recorded; the app recovers it when it next starts.${n > 1 ? ` (${n} cycles in a row)` : ""}`);
   process.exit(0);
 }
 

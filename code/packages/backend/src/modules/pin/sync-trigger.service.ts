@@ -27,6 +27,7 @@ import { listStorageIds, getStorageRow } from "../storage/storage.service.js";
 import { expandHome } from "../fs/badges.js";
 import { workingRepoRootForArtifact } from "../storage/artifact-committability.service.js";
 import { isTransientNetworkError, hostFromGitError, whenOnline } from "../../shared/net-transient.js";
+import { track } from "../progress/progress.registry.js";
 
 /** §18.4 — coalesce a burst of artifact writes into one pass shortly after the burst ends. */
 const DEBOUNCE_MS = 20_000;
@@ -195,7 +196,10 @@ async function fire(storageId: string, reasons: Map<string, number>): Promise<vo
     // LAZY import — breaks the module cycle pin.service → jobqueue → describe.service → (here) → pin.service.
     // A static import would make Node evaluate pin.service while describe.service is still initializing.
     const { syncStorageText } = await import("./pin.service.js");
-    const r = await syncStorageText(storageId);
+    // A card in the progress dock while the change travels (performance.mdx P-59) — see cycleAllStorages.
+    const r = await track("sync", "sending your change to your other computers", (report) =>
+      syncStorageText(storageId, (phase) => report({ note: phase })),
+    );
     if (r.problem) {
       // A contained git problem (pull/push failed inside the cycle) is still a FAILED delivery — the
       // artifact is not on the server. Same backoff as a throw; `r.problem` carries git's own stderr.

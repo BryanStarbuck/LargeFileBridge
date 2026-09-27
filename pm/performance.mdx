@@ -2181,3 +2181,234 @@ Two honest caveats on that table:
   measure before choosing.
 * `merge=union` still runs on the other five computers (P-52's two-phase rollout).
 * Everything the ninth pass left open stands.
+
+## Eleventh pass (P-56…P-58) — a deletion that was re-announced forever · T3/T6
+
+**The report (2026-09-27):** *"There are large-scale performance problems. The page is hanging right now."*
+
+One grep (debugging.mdx **Node 0**) named the same repo in every window: `storage.reconcile.yielding …
+worst 2264ms on charlie-kirk` and `storage.mirror … worst 3359ms on charlie-kirk`, once every pin/device
+pass, all day. The walks were already interruptible (P-53), so a 2–3 s *single* stretch meant the
+un-sliceable atom (the multi-megabyte `YAML.parse` + union) was being paid **every pass** — the memos that
+make a settled pass free were never warm. The reason was a churn loop, the same shape as the tenth pass,
+fed from a new place: the fleet-deletion reaper.
+
+| Signal (24 h, reference machine) | Count |
+|---|---|
+| backbone commits touching `repos/charlie-kirk-*/decisions.yaml` | **283** (every ~7 min) |
+| backbone commits touching `repos/charlie-kirk-*/deletions.yaml` | **218** |
+| `repaired line-union damage … dropping 160 record(s)` | every cycle |
+| every other repo's ledger | **0** commits |
+
+### 🔴 P-56 — The reaper re-tombstoned every already-deleted file on every pass · T3
+
+`reap()` pushed **every** manifest entry covered by a live deletion into `staled`, including entries a
+previous pass had already marked `removed`, and `recordDecision` appended a fresh `asked:false` event with a
+new `decided_at` for each. So 160 banned images in `site/internals/static/img/evidence/` were re-decided
+every pass: the 3.6 MB ledger was rewritten, mirrored, committed, **line-union-damaged by git** (two
+`decided_at:` keys in one record, P-52), healed (dropping the 160 records), then re-tombstoned — the loop
+closed on itself. Fix, two layers: the reaper stales only entries **this pass** changed (newly removed, or
+our claim retracted); and `recordDecision` skips a tombstone for a path the ledger already folds to
+Undecided (so the orphan path is idempotent too).
+
+Stale only what this pass changed, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/deletions.service.ts` — `reap()`
+Idempotent tombstone, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `recordDecision()`
+
+### 🔴 P-57 — A sha256 backfill made a second tombstone, and the two twins swapped places every leg · T3
+
+`reap()` backfills `sha256` the first time it holds the bytes (deletion.mdx §7.3). The identity key is
+`(path, cid, sha256)`, so the backfilled record and every peer's null-sha copy were **two** records; the
+union kept both (131 twin pairs, 290 records for 159 paths). `serializeDeletions` sorted only by
+`(path, removed_at)`, leaving twins in INPUT order — local-first on the mirror leg, mirror-first on the
+reconcile leg — so each leg rewrote the other's bytes. Fix: a null-sha record folds into its twin when
+exactly one sha is known for that `(path, cid)` (two different shas stay two records), and the serializer
+sorts to a total order (`path, removed_at, cid, sha256`). The file went 396 KB → 222 KB on the first pass.
+
+Twin folding and the total order, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/deletions.service.ts` — `mergeDeletions()`, `serializeDeletions()`
+
+### 🟠 P-58 — No seam between the atomic merge legs · T3
+
+`mirrorGen` and `reconcileGen` ran the manifest, deletions, ledger and policy merges back to back inside
+one generator step, so a pass where several documents genuinely changed held the loop for the SUM of them.
+A `yield` now sits between every leg; a genuine change costs at most its single largest parse per stretch.
+
+Seams between merge legs, in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mirrorGen()`, `reconcileGen()`
+
+### Measured
+
+Sampling `GET /api/security/config` every 0.5 s across a forced `POST /api/internal/run/pin`
+(180 samples each):
+
+| Pass | p50 | p99 | worst | files rewritten | backbone commit |
+|---|---|---|---|---|---|
+| before (from `loop-watch`, every pass) | ~21 ms | — | 2.3–4.6 s | ledger + deletions | yes, every ~7 min |
+| first pass after fix (one-time heal) | 1 ms | 664 ms | 2.73 s | converged once | one |
+| second pass | 0.8 ms | 289 ms | **0.54 s** | **none** | **none** |
+
+Regression tests: `deletions.spec.ts` — *"churn — a settled deletion must be SILENT on every later pass"*
+(fail on the old code, pass on the new).
+
+### Not the server
+
+The browser also reported `SLOW PAGE: / took 130231ms` in a window where the backend logged no SLOW
+request and no loop block. At that moment the machine had **10.6 GB of 11.2 GB swap in use** and a
+Docusaurus build using 11 GB RSS at 300% CPU. A tab starved of memory and CPU reports its own stall; see
+heap-watch's `MEMORY PRESSURE` lines before chasing one of these.
+
+## Twelfth pass (P-59…P-61) — nothing heavy on the event loop, and the dock tells the truth · T3/T6
+
+The eleventh pass stopped the churn, which made a SETTLED pass nearly free. What remained was the work
+that is real: a merge of a document that genuinely changed, and a decision click. Each still ran as one
+multi-hundred-millisecond synchronous step on the event loop — and on the browser's side the same pass
+found the page re-sorting every file on every render. Compatibility with older builds, which is what kept
+re-creating the churn, is its own document: [backward_compatibility.md](backward_compatibility.md).
+
+### 🔴 P-59 — The heavy merges run on a worker thread; the click path parses once, off the loop · T3
+
+* **Merges.** The mirror and reconcile passes are generators, and a heavy step is now YIELDED as a task
+  (`{ merge: task }`) instead of run in place. The synchronous driver runs it inline (byte-for-byte the old
+  behaviour — every existing test still asserts through it); the interruptible drivers run it on the merge
+  worker thread and hand the loop back while it runs. The result is committed on the main thread with a
+  COMPARE-AND-SWAP on the files' identity, so a decision clicked while the worker was parsing is never
+  overwritten by a merge of the older ledger (`merge-offload.spec.ts`).
+* **The click.** `recordDecision` on charlie-kirk parsed the 3.6 MB ledger (~530 ms), serialized it
+  (~220 ms), then `reconcile` parsed the file it had just written — ~1.3 s of frozen page per click. Now:
+  a parsed-ledger cache keyed by file identity (seeded by the write itself, so the follow-up read is free),
+  the cold parse and the serialize on the worker, a compare-and-swap write, and a per-repo lock so two
+  clicks cannot interleave.
+
+Heavy half of every merge leg (pure, any thread):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/merge-tasks.ts` — `runMergeTask()`
+The worker and its client (lazy start, log replay, timeout, crash fallback):
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/merge-offload.ts` — `runMergeOffloaded()`; `merge-worker.ts`
+Effect-yielding drivers and the CAS commit:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `mergeStep()`, `drainYielding()`, `finishMirrorCooperatively()`, `commitMerge()`
+Click path:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/decisions.service.ts` — `readLedgerOffThread()`, `appendEventsOffThread()`, `withLedgerLock()`, the ledger cache
+
+### 🟠 P-60 — Background sync had no card in the progress dock · T6
+
+The git backbone cycle (every stale page load and every boot) and the write-triggered push ran with no card
+at all, so a slow fetch or a big merge looked like an app that had stopped. Both are now tracked as the
+`sync` kind ("Syncing with your other computers", with the storage and git phase as the note). The dock can
+collapse to a pill so it can stay on screen.
+
+Tracked cycles:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/backbone-freshness.service.ts` — `cycleAllStorages()`;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/sync-trigger.service.ts`
+The dock:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ProgressDock.tsx`
+
+### 🟠 P-61 — The browser's own main-thread work · T6
+
+The One-Repo page filtered and sorted every file on every render (every checkbox, every stream frame),
+rebuilt all fifteen warning target lists per render, and `DataTable` rebuilt its row model twice per render
+for inline filter props; live refresh cancelled in-flight fetches, so a batch bumping the `jobs` topic once a
+second could restart a slow repo stream forever; the warning popup rendered thousands of rows unwindowed.
+All memoized, lazily built, windowed, coalesced (2 s, never cancelling), and streams throttled to 250 ms.
+Pagination Prev/Next was also dead (hard-coded page 0) and is fixed.
+
+In code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/pages/repos/OneRepoPage.tsx`,
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/table/DataTable.tsx`,
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/useLiveRefresh.ts`,
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/components/ui/WarningPopup.tsx`
+
+### Also fixed in this pass (dev tooling)
+
+* `vite build` evaluated `vite.config.ts`, whose port takeover found the RUNNING dev server on :2222, judged
+  it a stale instance and killed it — and the whole `pnpm dev` tree with it (every such kill reads as a
+  session that "ended ABNORMALLY"). The takeover now runs only when serving.
+* A `vite.config.ts` change restarts Vite in place; the port resolver saw its OWN socket, called it foreign,
+  and moved the app to :2223, leaving every open tab dead. The holder being this process now means "restart".
+
+In code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/vite.config.ts` — `defineConfig` (`command === "serve"`);
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/scripts/web-port.mjs` — `resolveWebPort()`
+
+### 🔴 P-62 — What the live CPU profile found after the worker thread · T3
+
+With the merges on the worker, `loop-watch` still reported 1.0–1.16 s stalls during a full forced cycle and
+NO named section accounted for them. So the running backend was profiled over the DevTools protocol
+(inspector opened with `SIGUSR1`, closed again afterwards), with a 10 ms heartbeat timer injected into the
+process that recorded every gap over 300 ms — and each gap was attributed to the exact stacks sampled inside
+it. That named every remaining stall:
+
+| Stall | Cause | Fix |
+|---|---|---|
+| up to 1 s, in the scan | `walkUnit` yielded every **400 entries** — a count, not a bound, when one entry is a `stat` + gitignore + glob match | yield by **elapsed time** (8 ms slices), per entry; same for repo discovery and the per-candidate loop (`await` of a sync fast path never yields) |
+| 695 / 331 ms | `reconcile()` (called by the scan for every repo) parsed the 3.6 MB ledger on the loop | the async ledger readers go through the worker + the identity cache |
+| 380–490 ms, ×4 per pass | the 1.1 MB tracking manifest was parsed by four readers per pass, with **no cache at all**; `writeYaml` *invalidated* the unit-manifest cache on every write | identity-keyed manifest cache (clone on read), seeded by the writer; `writeYaml` re-seeds large documents instead of dropping them |
+| 326 ms | `reap()` base58-decoded every entry's CID again for every live tombstone — quadratic | canonicalize once per pass |
+| 582 ms | the sync fence **parsed the whole ledger to count its events** (and the manifest to count claims) | a line scan: identical count, 2.9 ms instead of 552 ms |
+
+Measured on the live app, all three heavy passes forced at once, caches warm: request p50 1.3 ms, p99 0.27 s,
+worst 0.58 s; loop-watch worst stall 0.36–0.51 s — against 2.3–4.6 s on every pass at the start of the day.
+With the profiler attached, one gap over 300 ms remained in 75 s: a single reconcile step's directory
+listing + case index for the ~20,000-entry `files/` subtree. That, and a cold first pass right after a
+restart (every cache empty), are what is left.
+
+In code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/time-slice.ts` — `timeSlicer()`;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `walkUnit()`, `findGitRepos()`, the per-candidate loop;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/manifest.service.ts` — the manifest cache in `readManifestFile()` / `writeManifestFile()`;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/shared/store/yaml-store.ts` — `writeYaml()` re-seed;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/pin/deletions.service.ts` — `reap()`;
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/doc-render.service.ts` — `countArrivingEvents()` / `countArrivingClaims()`
+
+**How to repeat the measurement** (debugging.mdx Node 0 is still the first step): mint a token (an HS256 JWT
+signed with `~/T/_large_files_bridge/.auth_session_secret`, issuer `large-file-bridge` — debugging.mdx), `kill -USR1 <backend pid>`, connect to `127.0.0.1:9229`, inject a 10 ms
+`setInterval` that records gaps > 300 ms, `Profiler.start`, `POST /api/internal/run/{pin,scan,device}`,
+wait 60–75 s, `Profiler.stop`, then map each gap to the samples inside it. **Close the inspector afterwards**
+(`process.getBuiltinModule('node:inspector').close()` over the same session) — an open debugger port lets
+any local process run code in the app.
+
+## Thirteenth pass (P-63) — the browser ran out of sockets, not the server out of time · T6
+
+"The page just spins" again, and every backend instrument said the server was fine: `curl` answered in
+1 ms, `loop-watch` had nothing after boot, `request-watch` had no SLOW or STILL OPEN line, and no
+`client:perf.route` report had arrived for almost three hours. That silence was the clue. perfWatch's
+report is itself a request, so a tab that can send NOTHING reports nothing.
+
+### 🔴 P-63 — Six tabs held six permanent streams, and Chrome only has six sockets per host · T6
+
+`liveStream.ts` had already cut the stream count to **one per tab** (Aspect 6b). But Chrome's ~6
+connections-per-host pool is shared by **every tab** on the origin, and `/api/events/stream` never ends.
+Six open Large File Bridge tabs held all six sockets to `localhost:2222`, so every other request from every
+tab (data queries, the token mint, perfWatch's own report) queued inside the browser forever. The
+backend never saw them, so nothing on the server side could time them or log them.
+
+Evidence: `log.log` showed six `state stream opened (1…6 attached)` lines within one second of each
+backend restart (21:59:23, 23:28:15 UTC), 259 opens in the current log generation, and `lsof` showed six
+Chrome→Vite sockets proxied through to `:8787` while the backend sat at 0% CPU. `request-watch` exempts
+streams from STILL OPEN by design (a stream is long-lived by contract), which is why this was invisible.
+
+Fix: **one stream per browser, not per tab.** The tabs elect a leader with the Web Locks API
+(`navigator.locks`, lock `lfb.liveStream.leader`). Only the leader opens the stream, and it relays every
+event and status change to the other tabs over a `BroadcastChannel` (`lfb.liveStream`). Closing or
+discarding the leader tab releases the lock. The next tab in line takes over at once, and its first
+`hello` is announced to every tab as a `reconnect`, so each tab refetches whatever the handover gap
+missed. A browser without Web Locks or BroadcastChannel falls back to the old per-tab stream.
+Cross-tab leader election and relay of the state stream is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/frontend/src/lib/liveStream.ts` — `ensureRunning()`, `openChannel()`, `publish()`, `stop()`
+
+The server now says so when it happens again (tabs still on pre-election code, or several browsers): a WARN
+the first time four or more streams are attached at once, naming the socket pool as the cause.
+Warning on too many attached state streams is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /stream` handler (`warnedAtCount`)
+
+Measured: in a headless Chromium with 8 tabs in one profile, only the leader opened `/events/stream`
+(every other tab: 0 opens), and every tab received every event. After the leader tab closed, the next tab
+took over within the backoff and every tab got the `reconnect`. A same-origin fetch from each of the 7
+remaining tabs took 2–3 ms. On the user's own Chrome, the next backend restart re-attached **1** stream
+(23:52:41 UTC) where every earlier restart re-attached 6, and the first `client:perf.route` report in three
+hours arrived eleven seconds later.
+
+**Diagnosis rule this leaves:** if the backend is fast and quiet while the page spins, and no client
+report is arriving, count sockets before profiling anything:
+`lsof -nP -iTCP:2222 -sTCP:ESTABLISHED` (the browser's side) and
+`grep -a "state stream opened" ~/T/_large_files_bridge/log.log | tail`. Six of either means the browser pool is exhausted.

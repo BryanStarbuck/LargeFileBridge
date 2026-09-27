@@ -3,9 +3,11 @@
 // Opens GET /api/fs/flat/stream and feeds the Full Paths table as rows arrive, instead of a single
 // blocking useQuery blob. The design keeps renders bounded no matter how many rows stream:
 //   • incoming `batch` rows accumulate into a useRef array (NO React render per batch);
-//   • the ref is flushed into state COALESCED on requestAnimationFrame — at most one render per frame
-//     (the P-18 windowing discipline, applied to ingest). A 5000-row stream costs a handful of
-//     renders, not 5000;
+//   • the ref is flushed into state THROTTLED — the first flush on the next frame, then at most one every
+//     FLUSH_INTERVAL_MS (~4 a second). Every flush makes the page re-filter and re-sort the WHOLE growing
+//     list, so flushing once per animation frame cost O(n log n) sixty times a second for the length of the
+//     walk; four times a second keeps the table visibly filling at a fraction of that. The final `done`
+//     flush is immediate, so the finished (and finally sorted) list never waits on the throttle;
 //   • the stream ABORTS on unmount / root change, which the backend observes (req "close") and stops
 //     walking — no orphaned walks (Aspect 7 scaling).
 //
@@ -29,6 +31,9 @@ export interface StreamedFlatListing {
   setFiles: (updater: (prev: FsEntry[]) => FsEntry[]) => void;
 }
 
+/** Minimum gap between two intermediate flushes while the walk streams (see the header). */
+const FLUSH_INTERVAL_MS = 250;
+
 const EMPTY: Omit<StreamedFlatListing, "setFiles"> = {
   files: [],
   root: null,
@@ -42,7 +47,7 @@ const EMPTY: Omit<StreamedFlatListing, "setFiles"> = {
 export function useStreamedFlatListing(root: string | null, hidden: boolean): StreamedFlatListing {
   const [state, setState] = useState<Omit<StreamedFlatListing, "setFiles">>(EMPTY);
   const bufRef = useRef<FsEntry[]>([]);
-  const rafRef = useRef<number | null>(null);
+  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const metaRef = useRef<{ root: string; thresholdBytes: number } | null>(null);
 
   // Stable patch handler for the optimistic badge flip — mutates the buffer AND the visible state.
@@ -71,8 +76,10 @@ export function useStreamedFlatListing(root: string | null, hidden: boolean): St
     setState({ ...EMPTY, loading: true });
     const ac = new AbortController();
 
+    let lastFlush = 0; // 0 = nothing flushed yet — the first rows go out on the next frame
     const flush = () => {
-      rafRef.current = null;
+      timerRef.current = null;
+      lastFlush = Date.now();
       setState((prev) => ({
         ...prev,
         files: bufRef.current.slice(),
@@ -82,13 +89,14 @@ export function useStreamedFlatListing(root: string | null, hidden: boolean): St
       }));
     };
     const scheduleFlush = () => {
-      if (rafRef.current != null) return;
-      rafRef.current = requestAnimationFrame(flush);
+      if (timerRef.current != null) return;
+      const wait = lastFlush === 0 ? 16 : Math.max(16, lastFlush + FLUSH_INTERVAL_MS - Date.now());
+      timerRef.current = setTimeout(flush, wait);
     };
     const cancelPending = () => {
-      if (rafRef.current != null) {
-        cancelAnimationFrame(rafRef.current);
-        rafRef.current = null;
+      if (timerRef.current != null) {
+        clearTimeout(timerRef.current);
+        timerRef.current = null;
       }
     };
 

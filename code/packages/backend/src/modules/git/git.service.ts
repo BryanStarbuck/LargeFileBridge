@@ -15,10 +15,11 @@
 import type { RepoOwner, PersonalAccount } from "@lfb/shared";
 import fs from "node:fs";
 import path from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { createRequire } from "node:module";
 import { execFileSync, execFile } from "node:child_process";
 // Name a synchronous stretch in the event-loop stall report (shared/blocking.ts, performance.mdx P-46).
 import { blocking } from "../../shared/blocking.js";
-import YAML from "yaml";
 import { simpleGit, type SimpleGit } from "simple-git";
 import { canonicalize } from "../../shared/store/yaml-store.js";
 import { storageUnitDir } from "../../shared/store/scopes.js";
@@ -39,7 +40,7 @@ import { resolveStateDir } from "../../config/state-dir.js";
 import { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 export { parseRemoteOwner, normalizeRemoteKey, sameRemoteKey } from "../storage/repo-identity.js";
 import { healWindowsPath } from "../../shared/rel-path.js";
-import { repairUnionDamagedYaml } from "../storage/union-damage.js";
+import { repairUnionDamagedYaml, parseYamlHealingUnionDamage } from "../storage/union-damage.js";
 import { log } from "../../shared/logging.js";
 // The heartbeat floor is shared with the WRITER (devices.service.ts). One fact, one place — see the module.
 import { HEARTBEAT_MAX_AGE_MS, heartbeatIsStale } from "../../shared/heartbeat.js";
@@ -71,6 +72,95 @@ const UNION_MERGE_PATHS = [
   "**/history/*.txt", // history/<device>.txt — append-only, per device, at any depth
   "**/files/**/*.yaml", // the per-file sidecars — append-only event lists
 ];
+
+/**
+ * The structured documents git must merge AS DOCUMENTS on a build-7 computer (backward_compatibility.md
+ * §4.1). They stay in `UNION_MERGE_PATHS` too — older builds re-add a missing union line, so removing one
+ * would flap `.gitattributes` between computers — and this list is written AFTER them, because git applies
+ * the LAST matching line. Deliberately only the large multi-record documents: git spawns the driver once per
+ * file BOTH sides changed, and the thousands of small per-file sidecars keep git's in-process union.
+ */
+const SEMANTIC_MERGE_PATHS = [
+  "decisions.yaml",
+  "manifest.yaml",
+  "deletions.yaml",
+  ".lfbridge/decisions.yaml",
+  ".lfbridge/manifest.yaml",
+];
+/** The driver's registered name. Unregistered on an older computer, where git falls back to a text merge. */
+const LFB_MERGE_DRIVER = "lfb";
+const DRIVER_BLOCK_BEGIN =
+  "# >>> Large File Bridge (build 7+): merge these as documents, not lines — must stay LAST (backward_compatibility.md §4.1)";
+const DRIVER_BLOCK_END = "# <<< Large File Bridge merge driver";
+
+/** The `.gitattributes` text build 7 wants, given what is there now: every union line older builds expect
+ *  (added if missing, never removed), then our driver block, last. Pure — exported for test. */
+export function desiredGitattributes(existing: string): string {
+  const lines = existing.split("\n");
+  // Drop any previous copy of our block, wherever an older write left it, so it can be re-appended LAST.
+  const kept: string[] = [];
+  let inBlock = false;
+  for (const l of lines) {
+    if (l.trim() === DRIVER_BLOCK_BEGIN) {
+      inBlock = true;
+      continue;
+    }
+    if (inBlock) {
+      if (l.trim() === DRIVER_BLOCK_END) inBlock = false;
+      continue;
+    }
+    kept.push(l);
+  }
+  const want = UNION_MERGE_PATHS.map((p) => `${p} merge=union`);
+  const missing = want.filter((w) => !kept.some((l) => l.trim() === w));
+  const head = [...kept.join("\n").trimEnd().split("\n"), ...missing].join("\n").replace(/^\n+/, "");
+  const block = [DRIVER_BLOCK_BEGIN, ...SEMANTIC_MERGE_PATHS.map((p) => `${p} merge=${LFB_MERGE_DRIVER}`), DRIVER_BLOCK_END];
+  return `${head ? `${head}\n` : ""}${block.join("\n")}\n`;
+}
+
+/** Does an existing `merge.lfb.driver` value still run OUR driver? It must name this checkout's driver
+ *  script, pass git's four placeholders, and every absolute path it quotes must still exist (a moved
+ *  checkout or an uninstalled node version makes it stale, and then it is rewritten). */
+export function registrationStillWorks(value: string): boolean {
+  if (!value) return false;
+  const driver = fileURLToPath(new URL("../../tools/git-merge-driver.ts", import.meta.url));
+  if (!value.includes(`'${driver}'`) || !value.trimEnd().endsWith("%O %A %B %P")) return false;
+  const quoted = [...value.matchAll(/'([^']*)'/g)].map((m) => m[1]!);
+  return quoted.every((q) => {
+    const p = q.startsWith("file://") ? fileURLToPath(q) : q;
+    return !path.isAbsolute(p) || fs.existsSync(p);
+  });
+}
+
+/**
+ * The shell command git runs for the `lfb` driver: THIS node, with THIS process's TypeScript loader, on
+ * git-merge-driver.ts. Taken from `process.execArgv` so the driver runs under exactly the runtime the app
+ * does; outside it (a test runner) tsx's loader is resolved directly. Quoted for `sh -c`, which is how git
+ * invokes a driver.
+ */
+export function mergeDriverCommand(): string {
+  const driver = fileURLToPath(new URL("../../tools/git-merge-driver.ts", import.meta.url));
+  // ONLY tsx's own hooks are carried over — never another tool's preload (a test runner's, a profiler's),
+  // and matched on tsx's `dist/` directory rather than the word "tsx", which also appears in unrelated pnpm
+  // folder names (`vitest@…_tsx@4.23.1_…`).
+  const isTsxHook = (v: string): boolean => /[\\/]tsx[\\/]dist[\\/]/.test(v);
+  const loader: string[] = [];
+  const ea = process.execArgv;
+  for (let i = 0; i < ea.length; i++) {
+    const a = ea[i]!;
+    if ((a === "--require" || a === "--import" || a === "--loader") && ea[i + 1]) {
+      if (isTsxHook(ea[i + 1]!)) loader.push(a, ea[i + 1]!);
+      i++;
+    } else if (/^--(require|import|loader)=/.test(a) && isTsxHook(a)) {
+      loader.push(a);
+    }
+  }
+  if (!loader.some((a) => a === "--import" || /^--import=/.test(a))) {
+    loader.push("--import", pathToFileURL(createRequire(import.meta.url).resolve("tsx/esm")).href);
+  }
+  const q = (v: string): string => `'${v.replace(/'/g, `'\\''`)}'`;
+  return `${[process.execPath, ...loader, driver].map(q).join(" ")} %O %A %B %P`;
+}
 
 /** The SDL's travelling payload at its ROOT (artifact_placement_policy.mdx §0.1). Ignoring any of these is
  *  the post-migration shape of the git_backbone.mdx §4.2.1 defect — it would stop the device registry (and
@@ -719,22 +809,57 @@ export class GitBackbone {
     return ignoresSdlPayloadLine(line);
   }
 
-  /** Ensure the union-merge `.gitattributes` so shared append-mostly lists never conflict (git_backbone.mdx §4.2). */
+  /** Ensure the merge `.gitattributes`: the union lines every build expects (git_backbone.mdx §4.2), then the
+   *  build-7 driver block LAST (backward_compatibility.md §4.1). Idempotent — unchanged text is not rewritten. */
   ensureMergeAttributes(): void {
     const file = path.join(this.dir, ".gitattributes");
-    const want = UNION_MERGE_PATHS.map((p) => `${p} merge=union`);
     let existing = "";
     try {
       existing = fs.readFileSync(file, "utf8");
     } catch {
       /* none yet */
     }
-    const lines = existing.split("\n");
-    const missing = want.filter((w) => !lines.some((l) => l.trim() === w));
-    if (missing.length === 0) return;
-    const next = (existing.trimEnd() + "\n" + missing.join("\n") + "\n").replace(/^\n/, "");
-    fs.writeFileSync(file, next);
+    const next = desiredGitattributes(existing);
+    if (next !== existing) fs.writeFileSync(file, next);
   }
+
+  /**
+   * Register the `lfb` merge driver in THIS working copy's own `.git/config` (never a global setting, never
+   * a committed file — the command is a path on this computer). Checked every cycle and rewritten only when it
+   * differs, so a moved checkout or a new node binary is picked up without a restart. Best-effort: a
+   * computer that cannot register it falls back to git's text merge, which the conflict resolver handles.
+   */
+  async ensureMergeDriver(): Promise<void> {
+    const want = mergeDriverCommand();
+    // The git BINARY, not simple-git: simple-git's unsafe-operations guard refuses to set any
+    // `merge.*.driver` (it runs a command, so it is exactly what that guard exists to stop when the value
+    // comes from untrusted input). Here the value is ours — this process's own node + loader + a file in
+    // this repo's code tree — and it goes into this working copy's LOCAL config only.
+    const git = (args: string[]): Promise<string> =>
+      new Promise((resolve, reject) =>
+        execFile(stableGitBin(), ["-C", this.dir, ...args], { env: withGitOnPath(process.env) }, (err, stdout) =>
+          err ? reject(err) : resolve(String(stdout)),
+        ),
+      );
+    try {
+      let have = "";
+      try {
+        have = (await git(["config", "--local", "--get", `merge.${LFB_MERGE_DRIVER}.driver`])).trim();
+      } catch {
+        /* unset — `git config --get` exits 1 */
+      }
+      // ANY WORKING registration is kept, not only a byte-identical one. Several processes on this computer
+      // run backbone cycles (the app, the launchd worker, a CLI), each with its own node path and loader
+      // flags, and demanding an exact match made them rewrite each other's registration on every cycle.
+      if (have === want || registrationStillWorks(have)) return;
+      await git(["config", "--local", `merge.${LFB_MERGE_DRIVER}.name`, "Large File Bridge semantic merge"]);
+      await git(["config", "--local", `merge.${LFB_MERGE_DRIVER}.driver`, want]);
+      log.info("git", `${this.dir}: registered the Large File Bridge merge driver (backward_compatibility.md §4.1)`);
+    } catch (e) {
+      log.warn("git", `${this.dir}: could not register the merge driver — git will text-merge these documents: ${(e as Error).message.split("\n")[0]}`);
+    }
+  }
+
 
   /**
    * Fetch + automatic merge (git_backbone.mdx §4). Merges `origin/<branch>` into the working copy with git's
@@ -759,6 +884,7 @@ export class GitBackbone {
     // (SyncList, manifest, decisions ledger) only fold conflict-free once this file is present. On a fresh
     // backbone the first merge would otherwise happen before any `.gitattributes` existed (git_backbone.mdx §4.2).
     this.ensureMergeAttributes();
+    await this.ensureMergeDriver();
     // …and the `.gitignore` heal, which ALSO edits the working tree. Both edits used to sit UNCOMMITTED
     // across the merge, so an incoming change to either file made git refuse the whole merge.
     this.ensureSdlCommittable();
@@ -1249,8 +1375,14 @@ export class GitBackbone {
       try {
         const headBlob = await this.git.raw(["show", `HEAD:${rel}`]);
         const working = fs.readFileSync(path.join(this.dir, rel), "utf8");
-        const headDoc = (YAML.parse(headBlob) ?? {}) as Record<string, unknown>;
-        if (canonicalize(headDoc, volatilePaths) !== canonicalize(YAML.parse(working) ?? {}, volatilePaths)) {
+        // HEALING parses: a line-union-damaged side is still a document (union-damage.ts). And a HEAD that
+        // NEEDED healing is never "volatile-only" against the working copy — the working copy is the repair,
+        // and reverting it would put the damage straight back.
+        const head = parseYamlHealingUnionDamage(headBlob);
+        if (head.repaired !== null) continue;
+        const headDoc = (head.doc ?? {}) as Record<string, unknown>;
+        const workingDoc = parseYamlHealingUnionDamage(working).doc ?? {};
+        if (canonicalize(headDoc, volatilePaths) !== canonicalize(workingDoc, volatilePaths)) {
           continue; // a real change — this is exactly what the backbone exists to carry
         }
         // THE HEARTBEAT FLOOR (devices.mdx §7.1). A device record's `updated_at` is not only churn — it is
@@ -1274,7 +1406,9 @@ export class GitBackbone {
         reverted.push(rel);
       } catch (e) {
         // Unreadable/unparseable on either side — not provably meaningless, so it keeps its commit.
-        log.warn("git", `${this.dir}: quiet gate skipped ${rel}: ${(e as Error).message}`);
+        // ONE line: a YAML error's message carries a multi-line source excerpt, which landed in the log as
+        // four separately-stamped lines per skip.
+        log.warn("git", `${this.dir}: quiet gate skipped ${rel}: ${(e as Error).message.split("\n")[0]}`);
       }
     }
     if (reverted.length > 0) {
@@ -1428,11 +1562,13 @@ export class GitBackbone {
         // LOG THE CAUSE (storage_personal.mdx §16.2(g)): previously this error was captured and never read,
         // so an auth failure and a routine non-fast-forward race were indistinguishable in the log — and if
         // a retry then succeeded, the fact that anything went wrong vanished entirely.
-        log.warn(
-          "git",
+        // A RACE that will be retried is routine (another computer pushed first) — INFO, so error.err keeps
+        // only the pushes that actually failed. A final give-up, or any non-race rejection, stays a WARN.
+        const line =
           `${this.dir}: push rejected (${why}) — attempt ${attempt + 1}/${ATTEMPTS}` +
-            (last ? "; giving up this cycle" : "; re-pulling and retrying"),
-        );
+          (last ? "; giving up this cycle" : "; re-pulling and retrying");
+        if (failure.kind === "race" && !last) log.info("git", line);
+        else log.warn("git", line);
         result.problem = why;
         // GIVING UP THIS CYCLE MUST NOT MEAN GIVING UP (bug #16). The commits are still here and the other
         // computers still cannot see them, so the fact is recorded durably, re-armed on a jittered backoff,
@@ -1551,6 +1687,14 @@ export function volatileYamlPathsFor(relPath: string): string[] | null {
   // not the repo. `mirrorToSyncRepo` now scrubs it at the writer too, but a writer-side fix only holds for
   // a machine on THIS build: a peer on an older one re-stamps its own count and the two ping-pong again.
   if (isRepoStorageYamlPath(p)) return ["repo_storage.last_scan", "repo_storage.counts"];
+  // THE THREE LARGE SHARED DOCUMENTS ARE NEVER VOLATILE-ONLY. The decision ledger, the deletion ledger and
+  // the manifest carry no `updated_at` and are written by deterministic serializers, so a staged change to
+  // one is never "the same document, re-stamped" — there is nothing for the gate to find. Judging them anyway
+  // cost two multi-megabyte YAML parses on the event loop per commit (3.6 MB for charlie-kirk's ledger), and
+  // a strict parse of a line-union-damaged HEAD made the gate log a four-line error per cycle. Spelling-only
+  // rewrites of these documents are stopped at the WRITER now (backward_compatibility.md §4.2).
+  const base = p.split("/").pop() ?? p;
+  if (base === "decisions.yaml" || base === "deletions.yaml" || base === "manifest.yaml") return null;
   // Every other LFB-owned YAML: `updated_at` alone is the whole volatile surface.
   if (isLfbOwnedSdlPath(p)) return [];
   return null;
@@ -2073,12 +2217,17 @@ export async function checkIgnoreAsync(repoRoot: string, absPaths: string[]): Pr
  *  • "offline"  — no usable network/DNS at the moment we tried. Expected, self-healing, NOT a fault.
  *  • "auth"     — a credential the user must fix. A real fault.
  *  • "remote"   — anything else the remote said no to. A real fault.  */
-export type RemoteErrorKind = "offline" | "auth" | "remote";
+export type RemoteErrorKind = "offline" | "auth" | "remote" | "race";
 
 /** Classify a fetch/push failure by kind + the sentence to show the user (git_backbone.mdx §5). */
 export function classifyRemoteFailure(e: Error): { kind: RemoteErrorKind; problem: string } {
   const m = e.message || String(e);
-  const first = m.split("\n")[0];
+  // THE LINE THAT SAYS WHY, not the first line. git's push output starts with `To https://github.com/…`, so
+  // the first line named the remote and dropped the reason (`! [rejected] main -> main (fetch first)`) —
+  // every push failure in error.err read as the same unexplained "Git remote error".
+  const lines = m.split("\n").map((l) => l.trim()).filter(Boolean);
+  const first =
+    lines.find((l) => /\[rejected\]|\[remote rejected\]|^error:|^fatal:|denied|could not/i.test(l)) ?? lines[0] ?? m;
   // OFFLINE FIRST — "Could not resolve host" also contains the word "host", and some transports word a DNS
   // failure in ways that brush the auth regex. A network that is not there cannot be an authentication
   // problem, so this test wins.
@@ -2094,6 +2243,14 @@ export function classifyRemoteFailure(e: Error): { kind: RemoteErrorKind; proble
     return {
       kind: "auth",
       problem: `Git authentication failed for this remote — re-authenticate it (Large File Bridge keeps pinning over IPFS meanwhile). (${first})`,
+    };
+  }
+  // A NON-FAST-FORWARD IS A RACE, NOT A FAULT: another computer pushed first. The push loop re-pulls and
+  // retries, and that almost always lands — so it is its own kind, and only a final give-up is a warning.
+  if (/non-fast-forward|fetch first|\[rejected\].*\((fetch first|non-fast-forward)\)|Updates were rejected/i.test(m)) {
+    return {
+      kind: "race",
+      problem: `Another of your computers pushed first; Large File Bridge merges its changes and pushes again. (${first})`,
     };
   }
   return { kind: "remote", problem: `Git remote error — Large File Bridge keeps pinning over IPFS. (${first})` };

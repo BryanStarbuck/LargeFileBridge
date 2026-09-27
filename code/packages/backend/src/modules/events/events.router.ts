@@ -32,6 +32,9 @@ export type StateStreamEvent =
   | { type: "bump"; topic: string; revision: number }
   | { type: "heartbeat" };
 
+/** Highest attached count already warned about — one WARN per climb, not one per reconnect. */
+let warnedAtCount = 0;
+
 // GET /api/events/stream — an open NDJSON stream of state bumps. One JSON object per line:
 //   {"type":"hello","revisions":{...}}          once, on connect
 //   {"type":"bump","topic":"repo:charlie-kirk","revision":7}
@@ -118,5 +121,21 @@ eventsRouter.get("/stream", (req, res) => {
   // Never let the heartbeat timer hold the process open at shutdown.
   heartbeat.unref?.();
 
-  log.debug("events", `state stream opened (${subscriberCount()} attached)`);
+  const attached = subscriberCount();
+  log.debug("events", `state stream opened (${attached} attached)`);
+  // The browser keeps ONE stream per browser profile (liveStream.ts elects a leader tab), so several at
+  // once means tabs still running pre-election code, or several browsers. Four+ is the dangerous zone:
+  // Chrome's ~6-socket per-host pool is shared by every tab, and permanent streams starve every other
+  // request — every tab spins while this server looks idle (performance.mdx, 2026-09-27).
+  if (attached >= 4 && attached > warnedAtCount) {
+    warnedAtCount = attached;
+    log.warn(
+      "events",
+      `${attached} live state streams are attached at once. Each holds one of the browser's ~6 connections ` +
+        `to this origin forever; at 6 every other request from every tab queues in the browser and the pages ` +
+        `spin while this server answers curl instantly. Reload the open Large File Bridge tabs so they share one stream.`,
+    );
+  }
+  if (attached < 4) warnedAtCount = 0;
 });
+

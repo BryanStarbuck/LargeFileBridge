@@ -66,7 +66,8 @@ import {
   type PerceptualFingerprint,
   type RepoStorageDoc,
 } from "@lfb/shared";
-import { dbEnabled, exec, q, q1, tryDb } from "../../shared/persistence/db.js";
+import { dbEnabled, exec, q, q1, runInBackground, tryDb } from "../../shared/persistence/db.js";
+import { Coalescer } from "../../shared/persistence/lane.js";
 import { DB_SCHEMA as S } from "../../shared/persistence/pool.js";
 import { parseLedgerBestEffort, serializeLedger } from "./ledger-merge.js";
 import { serializeManifest } from "./manifest-merge.js";
@@ -811,6 +812,17 @@ export interface FenceOutcome {
  * `dbEnabled()` call and nothing else (R2).
  */
 export async function syncFenceBeforeMirror(repoRoot: string): Promise<FenceOutcome> {
+  if (!dbEnabled()) return { recorded: 0, written: 0, diffs: 0, unchanged: 0, skipped: "no-database" };
+  // BOUNDED, because the caller cannot bound it: `mirrorGen` fires this once per repo per pass and does not
+  // await it. Coalesced per repo (one running + one trailing — the trailing run re-reads the disk, so no
+  // change is missed) and run in the background lane, so the fleet's fences queue for at most
+  // `BACKGROUND_SLOTS` connections instead of taking the whole pool from the user's requests (db.ts).
+  return fenceFlights.run(path.resolve(repoRoot), () => runInBackground(() => syncFenceOnce(repoRoot)));
+}
+
+const fenceFlights = new Coalescer<FenceOutcome>();
+
+async function syncFenceOnce(repoRoot: string): Promise<FenceOutcome> {
   const idle: FenceOutcome = { recorded: 0, written: 0, diffs: 0, unchanged: 0, skipped: null };
   if (!dbEnabled()) return { ...idle, skipped: "no-database" };
   return tryDb(
@@ -823,6 +835,7 @@ export async function syncFenceBeforeMirror(repoRoot: string): Promise<FenceOutc
       const armed = renderWritesArmed();
       const known = await readDocRender(unitId);
       const out: FenceOutcome = { recorded: 0, written: 0, diffs: 0, unchanged: 0, skipped: null };
+      const differing: DocKind[] = [];
       for (const target of unitDocTargets(unitId, stateDir)) {
         const disk = digestOnDisk(target.file);
         // A whole-unit document this repo does not have (there are zero `decisions_policy.yaml` on this
@@ -841,12 +854,13 @@ export async function syncFenceBeforeMirror(repoRoot: string): Promise<FenceOutc
           out.recorded += 1;
           continue;
         }
-        if (disk.sha256 === rendered.sha256) {
+        if (disk.sha256 === rendered.sha256 || sameIgnoringProvenance(target, rendered.text)) {
           await recordRendered(unitId, target.doc, target.docKey, disk.sha256, disk.bytes);
           out.recorded += 1;
           continue;
         }
         out.diffs += 1;
+        differing.push(target.doc);
         if (!armed) {
           await recordRendered(unitId, target.doc, target.docKey, disk.sha256, disk.bytes);
           out.recorded += 1;
@@ -858,17 +872,85 @@ export async function syncFenceBeforeMirror(repoRoot: string): Promise<FenceOutc
         out.written += 1;
         out.recorded += 1;
       }
-      if (out.diffs > 0 && !armed) {
-        log.warn(
+      const due = out.diffs > 0 && !armed ? fenceWarnDue(repoRoot, differing) : null;
+      if (due) {
+        // WARN at most hourly per repo: while the gate is off this is a database-cutover diagnostic, not a
+        // fault the user can act on, and the differing SET legitimately flips every time a peer's pass moves
+        // a document ahead of the render. A changed set is still said — at INFO.
+        (due === "warn" ? log.warn : log.info)(
           "storage",
           `sync fence: ${out.diffs} document(s) in ${repoRoot} render differently from the bytes on disk — ` +
-            `the Postgres-fed write stays OFF (database.mdx §2.3). Run \`just db-render-gate\` for the detail.`,
+            `the Postgres-fed write stays OFF (database.mdx §2.3). Differing: ${[...differing].sort().join(", ")}. ` +
+            `Run \`just db-render-gate\` for the detail. (A WARN at most hourly per repo; changes are logged at INFO.)`,
         );
       }
       return out;
     },
     idle,
     "storage.syncFence",
+  );
+}
+
+/**
+ * THE FENCE WARN, ONCE PER SITUATION — not once per mirror pass.
+ *
+ * `storage.mirror` runs ~100 times a minute, and an unchanged disagreement repeated every pass is one fact
+ * said 200 times (error.err 2026-09-25 → 09-27: 202 lines, 197 of them charlie-kirk). It is still worth
+ * saying: it is the live counter of the render gate on a real machine. So it is said when it first appears,
+ * again whenever WHICH documents differ changes (that is news — a new drift, or one healed), and otherwise
+ * once an hour so a long-standing disagreement is not forgotten.
+ */
+const FENCE_WARN_REPEAT_MS = 60 * 60_000;
+const fenceWarned = new Map<string, { signature: string; warnedAt: number }>();
+
+export function fenceWarnDue(repoRoot: string, differing: readonly string[], now = Date.now()): "warn" | "info" | null {
+  const signature = [...differing].sort().join(",");
+  const prior = fenceWarned.get(repoRoot);
+  if (!prior || now - prior.warnedAt >= FENCE_WARN_REPEAT_MS) {
+    fenceWarned.set(repoRoot, { signature, warnedAt: now });
+    return "warn";
+  }
+  if (prior.signature === signature) return null;
+  fenceWarned.set(repoRoot, { signature, warnedAt: prior.warnedAt });
+  return "info";
+}
+
+/** TEST-ONLY: forget which fence situations have been reported. */
+export function resetFenceWarnMemo(): void {
+  fenceWarned.clear();
+}
+
+/**
+ * Does the document on disk say EXACTLY what the render says, once writer provenance is set aside?
+ *
+ * `writer_build` / `writer_device` (backward_compatibility.md §3) are stamped on decision events by the
+ * writing build and are NOT columns of `decision_event` — they are evidence of who wrote a record, never
+ * part of its identity, and never read by the fold (`ledger-merge.ts ledgerMeaning`). A render from rows
+ * therefore cannot reproduce them, and without this every ledger a stamping build had touched would read as
+ * a permanent render diff — the gate would go red for a field it has no business comparing.
+ *
+ * NARROW ON PURPOSE: the disk ledger, stamps stripped, is put back through the SAME serializer and must then
+ * be byte-identical to the render. Any other difference — an event, an order, a spelling — is still a diff.
+ * Only reached after the sha comparison failed, so the parse is paid only when the bytes actually disagree.
+ */
+export function sameIgnoringProvenance(target: Pick<RenderTarget, "doc" | "file">, renderedText: string): boolean {
+  if (target.doc !== "decisions") return false;
+  let raw: string;
+  try {
+    raw = fs.readFileSync(target.file, "utf8");
+  } catch {
+    return false;
+  }
+  return ledgerTextWithoutProvenance(raw) === renderedText;
+}
+
+/** A ledger document re-serialized with every event's writer stamp removed; null when it does not parse. */
+export function ledgerTextWithoutProvenance(raw: string): string | null {
+  if (!/^[\s-]*writer_(build|device):/m.test(raw)) return null; // no stamps → nothing to set aside
+  const events = parseLedgerBestEffort(raw);
+  if (events.length === 0) return null;
+  return serializeLedger(
+    events.map(({ writer_build: _b, writer_device: _d, ...rest }) => rest as DecisionEvent),
   );
 }
 
@@ -903,6 +985,17 @@ export async function recordSdlIngestForRepo(
   sdlRoot: string,
   sdlSubtree: string,
 ): Promise<IngestOutcome> {
+  if (!dbEnabled()) return { recorded: 0, eventsIn: 0, claimsIn: 0, skipped: "no-database" };
+  // The #1 source of the 2026-09 pool starvation (`storage.sdlIngest`, 112 of 190 lines, up to +103 a
+  // minute): `reconcileGen` fires this once per repo per pass without awaiting it. Same bound as the fence —
+  // coalesced per (repo, SDL subtree), statements through the background lane.
+  const key = `${path.resolve(repoRoot)}\u0000${path.resolve(sdlSubtree)}`;
+  return ingestFlights.run(key, () => runInBackground(() => recordSdlIngestOnce(repoRoot, sdlRoot, sdlSubtree)));
+}
+
+const ingestFlights = new Coalescer<IngestOutcome>();
+
+async function recordSdlIngestOnce(repoRoot: string, sdlRoot: string, sdlSubtree: string): Promise<IngestOutcome> {
   const idle: IngestOutcome = { recorded: 0, eventsIn: 0, claimsIn: 0, skipped: null };
   if (!dbEnabled()) return { ...idle, skipped: "no-database" };
   return tryDb(
@@ -934,26 +1027,52 @@ export async function recordSdlIngestForRepo(
   );
 }
 
-/** Events in an arriving ledger, through the same best-effort parse the reconcile itself uses. */
+// COUNTED, NOT PARSED (performance.mdx P-62). These two numbers are a watermark statistic ("how many events /
+// claims arrived"), and they used to cost a full YAML parse of a multi-megabyte document each — 582 ms of
+// uninterrupted event loop for charlie-kirk's 3.6 MB ledger on every fence, which the live gap trace named
+// directly. Both documents are written by one deterministic serializer with one key per line, so a line scan
+// gives the same count in a few milliseconds. A line-union-damaged copy may be off by the handful of records
+// the damage fused — acceptable for a statistic, and exactly the records the reconcile reports separately.
+
+/** Events in an arriving ledger: one `decided_at:` line per event. */
 function countArrivingEvents(file: string): number {
   try {
-    return parseLedgerBestEffort(fs.readFileSync(file, "utf8")).length;
+    const text = fs.readFileSync(file, "utf8");
+    return text.match(/^\s+decided_at:/gm)?.length ?? 0;
   } catch {
     return 0;
   }
 }
 
-/** `pinned_by` claims in an arriving manifest. Best-effort: an unparseable copy contributes nothing. */
+/** `pinned_by` claims in an arriving manifest: the list items under each `pinned_by:` key. Best-effort: an
+ *  unreadable copy contributes nothing. */
 function countArrivingClaims(file: string): number {
+  let text: string;
   try {
-    const parsed = YAML.parse(fs.readFileSync(file, "utf8")) as { files?: Array<{ pinned_by?: string[] }> } | null;
-    if (!parsed || !Array.isArray(parsed.files)) return 0;
-    let n = 0;
-    for (const f of parsed.files) n += f.pinned_by?.length ?? 0;
-    return n;
+    text = fs.readFileSync(file, "utf8");
   } catch {
     return 0;
   }
+  let n = 0;
+  let keyIndent = -1; // indentation of the `pinned_by:` key we are inside, or -1
+  for (const line of text.split("\n")) {
+    const indent = line.length - line.trimStart().length;
+    const t = line.trim();
+    if (keyIndent >= 0) {
+      if (t === "") continue;
+      if (indent > keyIndent && t.startsWith("- ")) {
+        n += 1;
+        continue;
+      }
+      if (indent === keyIndent && t.startsWith("- ") && !t.startsWith("- path:")) {
+        n += 1; // YAML also allows the list at the key's own indentation
+        continue;
+      }
+      keyIndent = -1;
+    }
+    if (t === "pinned_by:") keyIndent = indent;
+  }
+  return n;
 }
 
 /** Atomic write — temp → fsync → rename, the same discipline every designated serializer's writer uses. */
@@ -1171,7 +1290,7 @@ export async function runRenderGate(
         });
         continue;
       }
-      if (disk.sha256 === rendered.sha256) {
+      if (disk.sha256 === rendered.sha256 || sameIgnoringProvenance(target, rendered.text)) {
         u.matched += 1;
         if (opts.record) await recordRendered(unit.unitId, target.doc, target.docKey, disk.sha256, disk.bytes);
         continue;
@@ -1244,3 +1363,6 @@ export function sidecarKeyFor(file: string, stateDir: string): string | null {
   const rel = path.relative(path.join(stateDir, "files"), file).split(path.sep).join("/");
   return rel.endsWith(".yaml") ? healWindowsPath(rel.slice(0, -".yaml".length)) : null;
 }
+
+/** TEST-ONLY: the two line-scan counters. */
+export const countersForTest = { countArrivingEvents, countArrivingClaims };

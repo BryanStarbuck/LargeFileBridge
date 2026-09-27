@@ -48,7 +48,7 @@ export function ReposPage() {
     queryFn: ({ signal }) => streamRepoRows(qc, signal),
   });
 
-  // The scan runs server-side. The always-mounted ScanProgressBar is the single poller for
+  // The scan runs server-side. The always-mounted ProgressDock is the single poller for
   // ["scanStatus"] (performance.mdx P-07) — here we just subscribe to that SHARED cache, with no second
   // competing interval, so the Rescan button reflects a scan running anywhere (even one started before
   // this page mounted) without doubling the request rate.

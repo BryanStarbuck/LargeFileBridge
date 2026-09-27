@@ -29,6 +29,8 @@ const mutexes = new Map<string, Promise<unknown>>();
 // config.yaml and `readStorageIndex` uses for its row cache. Any write through this module also drops
 // the entry explicitly, so a same-millisecond rewrite of identical length cannot serve a stale document.
 const RAW_CACHE_MAX = 4096;
+/** Documents at least this large are re-seeded into the cache by `writeYaml` (see there). */
+const SEED_MIN_BYTES = 32 * 1024;
 const rawCache = new Map<string, { ino: number; size: number; mtimeMs: number; raw: unknown }>();
 
 /** Forget the cached parse of `file` (or the whole cache). Called on every write through this module. */
@@ -187,8 +189,18 @@ export function writeYaml<T extends Record<string, unknown>>(file: string, value
     fs.closeSync(fd);
     fs.renameSync(tmp, file);
     // The bytes changed — drop the cached parse so a same-millisecond, same-length rewrite can never be
-    // served stale by the identity check.
+    // served stale by the identity check…
     invalidateYamlCache(file);
+    // …and for a LARGE document, re-seed it with exactly what we just wrote, taken against the NEW file's
+    // identity. Dropping it meant the next reader always paid a full `YAML.parse` of a document this process
+    // had in hand a millisecond earlier — hundreds of milliseconds on the event loop for a big unit manifest
+    // or repo config (performance.mdx P-62). A JSON round trip is what YAML does to plain data (undefined
+    // dropped, dates as strings) at a fraction of the cost, and it is a copy: the caller's object is not
+    // aliased by the cache. Small documents parse in microseconds and are simply left to the next read.
+    if (body.length >= SEED_MIN_BYTES) {
+      const st = statOrNull(file);
+      if (st) rawCache.set(file, { ino: st.ino, size: st.size, mtimeMs: st.mtimeMs, raw: JSON.parse(JSON.stringify(stamped)) });
+    }
   } catch (e) {
     try {
       fs.unlinkSync(tmp);

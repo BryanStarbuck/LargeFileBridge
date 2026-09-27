@@ -161,6 +161,24 @@ export function VideosReviewPage<M extends VideoMember>({
 
   const groups = useMemo(() => buildGroups(data?.rows ?? []), [buildGroups, data]);
   const columns = useMemo(() => buildVideoColumns<M>(), []);
+  // The table's facet props, memoized so each keeps one identity across renders (the hover state below
+  // re-renders this page on every row the pointer crosses).
+  const fileTypeFacet = useMemo(
+    () => (withFileTypeFacet ? { valueOf: (g: VideoGroup<M>) => g.fileType } : undefined),
+    [withFileTypeFacet],
+  );
+  // The match-basis facet (duplicates.mdx §3.2 / subsets.mdx §3) — group-level, like the rows.
+  const extraFacets = useMemo(
+    () => [
+      {
+        id: "match_basis",
+        label: "Match basis",
+        values: matchBasisValues,
+        valueOf: (g: VideoGroup<M>) => g.matchBasis,
+      },
+    ],
+    [matchBasisValues],
+  );
 
   // ── Which group the right column shows (duplicates.mdx §3.3) ────────────────────────────────────
   // Two inputs, one answer: a CLICKED selection (sticky, tinted light yellow) and a HOVERED row
@@ -289,16 +307,9 @@ export function VideosReviewPage<M extends VideoMember>({
             // Groups by reclaimable bytes descending — the most disk-winning groups first (§3.2).
             defaultSort={[{ id: "size", desc: true }]}
             loading={isLoading}
-            fileTypeFacet={withFileTypeFacet ? { valueOf: (g) => g.fileType } : undefined}
+            fileTypeFacet={fileTypeFacet}
             // The match-basis facet (duplicates.mdx §3.2 / subsets.mdx §3) — group-level, like the rows.
-            extraFacets={[
-              {
-                id: "match_basis",
-                label: "Match basis",
-                values: matchBasisValues,
-                valueOf: (g) => g.matchBasis,
-              },
-            ]}
+            extraFacets={extraFacets}
             empty={empty}
           />
         }

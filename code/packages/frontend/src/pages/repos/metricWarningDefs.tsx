@@ -47,6 +47,17 @@ function repoPreviewResolver(detail: RepoDetail): (t: WarningTarget) => Promise<
   return grantPreviewResolver((t) => `${detail.path}/${t.label}`, "metricWarningDefs.preview");
 }
 
+/**
+ * A subjects list built on first READ instead of at build time. The tiles and the header primary build
+ * these defs whenever the repo detail changes, but only an OPENED popup ever reads `popup.targets` — and on
+ * a big repo each list is thousands of objects (a formatted size + a preview descriptor per file). Used as
+ * `get targets() { return list(); }` inside the popup literal, so the WarningPopupSpec shape is unchanged.
+ */
+function lazyList<T>(build: () => T[]): () => T[] {
+  let cache: T[] | null = null;
+  return () => (cache ??= build());
+}
+
 /** True when the repo has never been scanned, or its last scan is older than the 2-week staleness window. */
 export function scanIsStale(detail: RepoDetail, nowMs: number = Date.now()): boolean {
   if (!detail.lastScanAt) return true;
@@ -392,6 +403,7 @@ export function buildAddToIpfsWarning(detail: RepoDetail, repoId: string): Warni
     : neverIpfsCount > 0
       ? `back them up across your computers over IPFS · ${neverIpfsCount} of these ${neverIpfsCount === 1 ? "is" : "are"} Never-IPFS and will be skipped`
       : "back them up across your computers over IPFS";
+  const targetList = lazyList(() => undecidedFiles.map((f) => repoFileTarget(detail, f, f.path)));
   return {
     id: "repo-files-need-decision",
     state: "warn",
@@ -425,7 +437,9 @@ export function buildAddToIpfsWarning(detail: RepoDetail, repoId: string): Warni
         },
       ],
       canApply: () => true,
-      targets: undecidedFiles.map((f) => repoFileTarget(detail, f, f.path)),
+      get targets() {
+        return targetList();
+      },
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Apply",
@@ -461,6 +475,7 @@ export function buildGitIgnoreWarning(detail: RepoDetail, repoId: string): Warni
   const files = gitIgnoreCandidates(detail);
   if (files.length === 0) return null;
   const n = files.length;
+  const targetList = lazyList(() => files.map((f) => repoFileTarget(detail, f, f.path)));
   return {
     id: "repo-files-not-git-ignored",
     state: "warn",
@@ -486,7 +501,9 @@ export function buildGitIgnoreWarning(detail: RepoDetail, repoId: string): Warni
         },
       ],
       canApply: () => true,
-      targets: files.map((f) => repoFileTarget(detail, f, f.path)),
+      get targets() {
+        return targetList();
+      },
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Git-ignore",
@@ -502,7 +519,9 @@ export function buildGitIgnoreWarning(detail: RepoDetail, repoId: string): Warni
         const alsoPin = !!sel.checks.ipfs;
         const byPath = new Map(detail.files.map((f) => [f.path, f]));
         const pinning = checkedPaths.filter((p) => alsoPin || byPath.get(p)?.decision === "sync");
-        const notPinning = checkedPaths.filter((p) => !pinning.includes(p));
+        // A Set, not `pinning.includes` — the latter made this O(k²), a multi-second freeze at 10k paths.
+        const pinningSet = new Set(pinning);
+        const notPinning = checkedPaths.filter((p) => !pinningSet.has(p));
         if (pinning.length) await api.setFileDecisions(repoId, pinning, { ipfs: true, gitignore: true });
         if (notPinning.length) await api.setFileDecisions(repoId, notPinning, { ipfs: false, gitignore: true });
       },
@@ -524,6 +543,7 @@ export function buildTranscribeWarning(detail: RepoDetail, repoId: string): Warn
   const files = detail.files.filter((f) => f.transcribe === "could");
   if (files.length === 0) return null;
   const n = files.length;
+  const targetList = lazyList(() => files.map((f) => repoFileTarget(detail, f, absPath(detail, f))));
   return {
     id: "repo-files-transcribable",
     state: "warn",
@@ -534,7 +554,9 @@ export function buildTranscribeWarning(detail: RepoDetail, repoId: string): Warn
       whatThisIs: `Large File Bridge found ${n} audio/video file${n === 1 ? "" : "s"} in this repo with no transcript yet. It can transcribe ${n === 1 ? "it" : "them"} on this computer with a local, offline engine — no file ever leaves your machine.`,
       whyItMatters:
         "A transcript makes a recording searchable, quotable, and readable without scrubbing the timeline. It runs in the background and, when done, is saved per your repo's transcription placement setting. Review the list on the right and uncheck any you want to skip.",
-      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
+      get targets() {
+        return targetList();
+      },
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Transcribe",
@@ -580,6 +602,7 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
   const files = detail.files.filter((f) => f.describe === "could");
   if (files.length === 0) return null;
   const n = files.length;
+  const targetList = lazyList(() => files.map((f) => repoFileTarget(detail, f, absPath(detail, f))));
   return {
     id: "repo-files-describable",
     state: "warn",
@@ -590,7 +613,9 @@ export function buildDescribeWarning(detail: RepoDetail, repoId: string): Warnin
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo with no AI description yet. It can generate one for each with your configured AI provider.`,
       whyItMatters:
         "An AI description makes an image or video searchable and captioned without opening it. Each file is sent to your configured AI provider; add a key in Settings → AI credentials first. Use the File types filter to narrow the list, and uncheck any you want to skip.",
-      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
+      get targets() {
+        return targetList();
+      },
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "Describe",
@@ -634,6 +659,7 @@ export function buildOcrWarning(detail: RepoDetail, repoId: string): WarningDef 
   const files = detail.files.filter((f) => f.ocr === "could");
   if (files.length === 0) return null;
   const n = files.length;
+  const targetList = lazyList(() => files.map((f) => repoFileTarget(detail, f, absPath(detail, f))));
   return {
     id: "repo-ocrable-work",
     state: "warn",
@@ -644,7 +670,9 @@ export function buildOcrWarning(detail: RepoDetail, repoId: string): WarningDef 
       whatThisIs: `Large File Bridge found ${n} image/video file${n === 1 ? "" : "s"} in this repo whose on-screen text hasn't been read yet. It reads the words visible in the pixels — a screenshot's error message, a slide's figures, a sign — so you can search for them later.`,
       whyItMatters:
         "OCR text makes the words inside your images and videos searchable without opening them. It runs entirely on this computer — nothing is uploaded, and no API key is needed. Images finish in seconds; each video is sampled every 15 seconds, so it takes about a minute per hour of footage. Use the File types filter to narrow the list, and uncheck any you want to skip.",
-      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
+      get targets() {
+        return targetList();
+      },
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: "file",
       actionLabel: "OCR",
@@ -702,6 +730,7 @@ export function buildCompressWarning(
   if (files.length === 0) return null;
   const n = files.length;
   const noun = kind ?? "file";
+  const targetList = lazyList(() => files.map((f) => repoFileTarget(detail, f, absPath(detail, f))));
   return {
     id: kind ? `repo-files-compressible-${kind}` : "repo-files-compressible",
     state: "warn",
@@ -712,7 +741,9 @@ export function buildCompressWarning(
       whatThisIs: `Large File Bridge found ${n} ${noun}${n === 1 ? "" : "s"} that look uncompressed and could be made smaller with no meaningful quality loss. Compression runs on this computer; the original moves to the recoverable Large File Bridge trash.`,
       whyItMatters:
         "Uncompressed media wastes disk and slows every sync over IPFS. Compressing reclaims space while keeping the same resolution. Review the list on the right and uncheck any you want to leave as-is.",
-      targets: files.map((f) => repoFileTarget(detail, f, absPath(detail, f))),
+      get targets() {
+        return targetList();
+      },
       resolvePreviewUrl: repoPreviewResolver(detail),
       targetNoun: noun,
       actionLabel: "Compress",

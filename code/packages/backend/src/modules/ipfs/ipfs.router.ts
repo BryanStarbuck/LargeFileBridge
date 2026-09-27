@@ -28,12 +28,59 @@ ipfsRouter.get("/node", async (_req, res) => {
 
 // GET /api/ipfs/liveness — the CHEAP app-wide summary the nudge banner polls (ipfs_ui.mdx §10/§17):
 // installed / running / autostart / config-blocker. Never walks the pinset.
+//
+// CHEAP MUST ALSO MEAN BOUNDED (error catalog #19, `STILL OPEN after 12071ms: GET /api/ipfs/liveness`, and
+// the client-side 45 s timeout of #11). `liveness()` awaits `ipfs.health()`, which on a busy or just-woken
+// daemon re-probes on a fresh socket before it believes a timeout — two 15 s probes — then asks launchd and
+// the config file. Every step is right for the status CARD, which is allowed to take its time; the banner is
+// a poll whose only job is "should I nag?", and a banner request that holds a socket for 30 s is exactly the
+// spinner request-watch exists to catch. So the route answers within LIVENESS_DEADLINE_MS: with the fresh
+// answer when it arrives in time, otherwise with the LAST answer it computed (marked `stale`), and the slow
+// computation keeps running in the background so the next poll gets a current one. The in-flight probe is
+// shared, so a slow daemon costs one probe however many tabs are polling.
+const LIVENESS_DEADLINE_MS = Number(process.env.LFB_LIVENESS_DEADLINE_MS) || 8_000; // env: tests only
+let lastLiveness: Awaited<ReturnType<typeof liveness>> | null = null;
+let livenessInFlight: Promise<Awaited<ReturnType<typeof liveness>>> | null = null;
+
+function sharedLiveness(): Promise<Awaited<ReturnType<typeof liveness>>> {
+  if (!livenessInFlight) {
+    livenessInFlight = liveness()
+      .then((data) => {
+        lastLiveness = data;
+        return data;
+      })
+      .finally(() => {
+        livenessInFlight = null;
+      });
+  }
+  return livenessInFlight;
+}
+
+/** TEST-ONLY: forget the remembered answer. */
+export function resetLivenessMemo(): void {
+  lastLiveness = null;
+  livenessInFlight = null;
+}
+
 ipfsRouter.get("/liveness", async (_req, res) => {
+  let timer: NodeJS.Timeout | undefined;
+  const deadline = new Promise<"deadline">((resolve) => {
+    timer = setTimeout(() => resolve("deadline"), LIVENESS_DEADLINE_MS);
+    timer.unref?.();
+  });
   try {
-    res.json({ ok: true, data: await liveness() });
+    const out = await Promise.race([sharedLiveness(), deadline]);
+    if (out !== "deadline") return res.json({ ok: true, data: out });
+    if (lastLiveness) return res.json({ ok: true, data: lastLiveness, stale: true });
+    // Nothing to fall back on (first poll after boot). An honest "not yet" — never a guessed `running:false`,
+    // which would paint the "IPFS is not running" nag over a node that is merely slow to answer.
+    log.info("ipfs", `liveness: no answer within ${LIVENESS_DEADLINE_MS}ms and none remembered yet — told the client to retry`);
+    return res.status(503).json({ ok: false, error: "The IPFS node has not answered yet — retrying shortly." });
   } catch (e) {
     log.error("ipfs", `liveness failed: ${(e as Error).message}`);
-    res.status(500).json({ ok: false, error: (e as Error).message });
+    return res.status(500).json({ ok: false, error: (e as Error).message });
+  } finally {
+    if (timer) clearTimeout(timer);
   }
 });
 

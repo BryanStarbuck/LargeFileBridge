@@ -80,18 +80,27 @@ function yamlParsedAtBuildTime(): Plugin {
   };
 }
 
-export default defineConfig(async () => {
+export default defineConfig(async ({ command }) => {
   // The web app that serves pages ALWAYS defaults to :2222 (code_plan.mdx §2). Before Vite binds we
   // resolve the real port under the collision policy: free → take it; held by our own stale instance
   // → kill it and reclaim :2222; held by a foreign process → increment and report the moved port.
   // If the port resolver throws (port probe / stale-instance takeover failed), Vite would die with an
   // opaque stack — surface a clear reason first, then rethrow so the dev server still fails loudly.
-  let port: number, action: string, from: number | undefined;
-  try {
-    ({ port, action, from } = await resolveWebPort());
-  } catch (e) {
-    console.error("[LFB] Failed to resolve the web-app port before Vite bind:", e);
-    throw e;
+  //
+  // ONLY WHEN SERVING. `vite build` evaluates this same config, and the takeover above found the RUNNING dev
+  // server on :2222, judged it a stale instance of our own app, and killed it — taking the whole `pnpm dev`
+  // tree (backend included) down with it, which the next boot then reported as a session that "ended
+  // ABNORMALLY" (2026-09-27). A build binds no port, so it must never probe, let alone reclaim, one.
+  let port: number = DEFAULT_WEB_PORT,
+    action = "build",
+    from: number | undefined;
+  if (command === "serve") {
+    try {
+      ({ port, action, from } = await resolveWebPort());
+    } catch (e) {
+      console.error("[LFB] Failed to resolve the web-app port before Vite bind:", e);
+      throw e;
+    }
   }
   if (action === "took-over") {
     console.log(`[LFB] :${port} was a stale LargeFileBridge instance — replaced it with this one.`);

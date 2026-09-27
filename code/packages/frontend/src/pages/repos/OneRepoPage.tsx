@@ -3,7 +3,7 @@
 // Title-Case label over a big number, and clicking a panel whose count is > 0 opens that metric's
 // educate-and-fix popup (undecided → decision triage, pull-down → pull peer-pinned files). The files
 // table is unchanged; the old status strip lives in a collapsed "Repo details" disclosure below it.
-import { useState, useMemo } from "react";
+import { useState, useMemo, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useLiveRefresh, repoTopic } from "../../lib/useLiveRefresh.js";
 import { useParams, useNavigate, Link } from "@tanstack/react-router";
@@ -27,7 +27,7 @@ import { confirmModal } from "../../lib/modals.js";
 // AI description, OCR — unique-color box icons with icon-only headers + hover-region explanations.
 import { TaskIconCell, TaskIconHeader, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
 // The §2.11 file filter (tables.mdx §2.11): the TaskStatus → not_yet/done/na row-value mapper.
-import { taskRowValue } from "../../components/table/fileFilter.js";
+import { taskRowValue, type FileFilterFieldId, type FileFilterRowValue } from "../../components/table/fileFilter.js";
 import { CompressStatusIcon } from "../../components/CompressStatusIcon.js";
 import { runDescribeFile } from "../../lib/describe.js";
 import { runOcrFile } from "../../lib/ocr.js";
@@ -70,6 +70,29 @@ const ABSENT_BYTES_REASON = "The bytes aren't on this computer yet — pull it d
 // The row's File-type class (video/image/audio/pdf/other) from its name — used by the §2.11
 // compressible_videos / _images / _audio filter fields.
 const rowFileType = (f: FileRow) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
+
+// The File-type facet (tables.mdx §2.10) — classifies each row by name. Module-level so the prop keeps ONE
+// identity: an inline literal was a new object every render, which re-scanned every row for its classes.
+const FILE_TYPE_FACET = { valueOf: (f: FileRow) => rowFileType(f) };
+
+// The §2.11 file filter's fields (tables.mdx §2.11) — this is the full-vocabulary surface: all ten fields.
+// The two decision axes stay separate fields (add_to_ipfs = the ledger's intent; git_ignore = live
+// `git check-ignore` — tables.mdx §2.4), and pull_down reads presence (§4e). Pure functions of the row, so
+// they live at module level; only the seed expression varies per tab (see `fileFilter` in the page).
+const FILE_FILTER_FIELDS: { id: FileFilterFieldId; valueOf: (f: FileRow) => FileFilterRowValue }[] = [
+  { id: "transcribe", valueOf: (f) => taskRowValue(f.transcribe) },
+  { id: "ai_description", valueOf: (f) => taskRowValue(f.describe) },
+  { id: "ocr", valueOf: (f) => taskRowValue(f.ocr) },
+  { id: "pull_down", valueOf: (f) => (f.presence === "remote-only" ? "not_yet" : "done") },
+  { id: "add_to_ipfs", valueOf: (f) => (f.decision === "sync" ? "done" : "not_yet") },
+  // Three-valued like the ⊘ column: an UNDETERMINED axis is "na", never "not_yet" — filtering for "not
+  // git-ignored" must not sweep in files whose verdict simply has not arrived.
+  { id: "git_ignore", valueOf: (f) => (f.gitignore === undefined ? "na" : f.gitignore ? "done" : "not_yet") },
+  { id: "compressible_videos", valueOf: (f) => (f.compress === "could" && rowFileType(f) === "video" ? "yes" : "no") },
+  { id: "compressible_images", valueOf: (f) => (f.compress === "could" && rowFileType(f) === "image" ? "yes" : "no") },
+  { id: "compressible_audio", valueOf: (f) => (f.compress === "could" && rowFileType(f) === "audio" ? "yes" : "no") },
+  { id: "size", valueOf: (f) => (f.analysisOnly ? "small" : "large") },
+];
 
 /** One-line summary of a file for the hover-info region (task_tabs.mdx §3) — name · size · kind · task state.
  *  The compress phrase only appears when the user shows compression (compression_visibility.mdx §2 row 7). */
@@ -183,7 +206,6 @@ export function OneRepoPage() {
   // Turning it off while on the Compress tab falls back to All rather than showing a tab that isn't there.
   const compressionOn = useCompressionEnabled();
   const activeTab: TaskTabId = !compressionOn && chosenTab === "compress" ? "all" : chosenTab;
-  const summary = (f: FileRow): string => fileSummary(f, compressionOn);
   // The educate-and-fix popup the header "View recommendation" primary opens (one_repo.mdx §3.1). The
   // metric tiles host their own popup inside MetricsStrip; this is the header button's separate host.
   const [headerWarning, setHeaderWarning] = useState<WarningDef | null>(null);
@@ -420,7 +442,7 @@ export function OneRepoPage() {
   // A metric panel with NO educate-and-fix popup (task_tabs.mdx §2.4): re-tune the view to the tab where
   // the user acts on it. Metrics that DO carry a popup (undecided, pullDown) open it instead — the metric
   // panels are this page's only warning surface; there is no separate warning banner (§2.6).
-  const openMetric = (id: MetricId) => {
+  const openMetric = useCallback((id: MetricId) => {
     if (id === "notBackedUp") { navigate({ to: "/devices" }); return; }
     if (id === "compressibleVideos" || id === "compressibleImages" || id === "alreadyCompressed") setActiveTab("compress");
     else if (id === "transcribable" || id === "transcribed") setActiveTab("transcribe");
@@ -428,7 +450,7 @@ export function OneRepoPage() {
     else if (id === "ocrable" || id === "ocred") setActiveTab("ocr");
     // addToIpfs / gitIgnore / pullDown / pending all act on the IPFS + decision axes.
     else setActiveTab("ipfs");
-  };
+  }, [navigate]);
 
   // The node's health is one of the LAST facts the stream delivers (the pinset enumeration it rides can take
   // seconds), so while `streaming` is true we do not yet know it. Reporting "unreachable" then would grey out
@@ -562,270 +584,304 @@ export function OneRepoPage() {
     },
   );
 
-  const columns: LfbColumn<FileRow>[] = [
-    // ── The five leading icon control columns (tables.mdx icon-columns). Immediately right of the row
-    // checkbox on EVERY tab, narrow with tight padding and icon-only headers. Pin & Ignore are toggles;
-    // the three analysis icons (Transcribe / AI description / OCR) show status AND perform the one-click
-    // action. Each owns a unique "done" color and explains itself in the hover-info region on hover.
-    {
-      ...iconCol("pin"),
-      id: "pinned",
-      kind: "text",
-      sortable: false,
-      filterable: false,
-      accessor: () => "",
-      cell: (f) => {
-        const decided = f.decision === "sync";
-        // Never-IPFS (decisions.mdx §17): a flagged file may never be pinned, so the pin toggle is disabled.
-        const blockedByNeverIpfs = !!f.neverIpfs;
-        // THREE STATES (one_repo.mdx §4.9). The state comes from the DECISION (intent) crossed with a LIVE,
-        // canonical read of this node's pinset (`f.pinnedHere`, knowledge/ipfs.mdx §5.1):
-        //   • not decided        → "could": grey OUTLINE pin (white/not-set) — click adds it to IPFS.
-        //   • decided & here      → "done" BLUE filled pin — synced (pinned) on THIS computer.
-        //   • decided & NOT here  → "done" RED filled pin — we chose to sync it, but this machine doesn't hold
-        //     it yet (the pin pass will pull it). `pinnedHere===false` is a VERIFIED miss; `undefined` means
-        //     unverified (IPFS down / not fetched) → we do NOT cry red, we show intent-blue.
-        const missingHere = decided && f.pinnedHere === false;
-        // FOURTH state (foreign_pin_discovery.mdx §6): an UNDECIDED file whose bytes a background pass
-        // discovered are ALREADY pinned on this node under a foreign CID (a bare `ipfs add`, another tool).
-        // Reality without intent — rendered as a GREEN filled pin, distinct from intent-blue, so the app
-        // never shows "not pinned" for a file the node genuinely holds.
-        const foreignPinned = !decided && f.pinnedForeign === true;
-        // FIFTH state (storage_company.mdx §8.5): a REMOTE-ONLY row — another of your computers has this
-        // file's bytes and this one does not. It is the purest case of the red state (wanted here, not here),
-        // so it renders red whatever this computer has decided, and its one action is PULL IT DOWN rather
-        // than a decision toggle. Red here means "available, not here yet" — never "lost".
-        const remoteOnly = f.presence === "remote-only";
-        const state: TaskStatus = decided || foreignPinned || remoteOnly ? "done" : "could";
-        const doneColor = missingHere || remoteOnly ? "#dc2626" : foreignPinned ? "#15803d" : undefined;
-        // One sentence, one source (§4.10) — the same text the row tooltip and hover-info use.
-        const onDevice = remoteOnlyTooltip(f);
-        return (
-          <TaskIconCell
-            kind="pin"
-            state={state}
-            doneColor={doneColor}
-            busy={busyPaths.has(f.path)}
-            disabled={ipfsDown || (blockedByNeverIpfs && !remoteOnly)}
-            title={
-              remoteOnly
-                ? `${onDevice} Click to pull it down over IPFS.`
-                : blockedByNeverIpfs
-                  ? "Add to IPFS is blocked by Never-IPFS"
-                  : foreignPinned
-                    ? "Pinned locally — this file is already pinned on this computer's IPFS node (by other IPFS software, which is fine). Click to have Large File Bridge sync it across your computers too."
-                    : !decided
-                      ? "Not set to sync — click to add this file to IPFS"
-                      : missingHere
-                        ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
-                        : "Synced (pinned) on this computer — click to stop syncing this file"
-            }
-            extraHover={summary(f)}
-            // ONE axis per click (decision_toggles.mdx §2): the git-ignore axis is left as-is rather than
-            // re-asserted — except for a remote-only row, whose only meaningful action is to fetch the bytes.
-            onActivate={() =>
-              remoteOnly
-                ? pullOne.mutate(f.path)
-                : setAxes.mutate({ paths: [f.path], ipfs: !decided, axis: "ipfs" })
-            }
-          />
-        );
+  // The row cells' ACTIONS, read through a ref at click time. They close over `detail` and the mutations, so
+  // listing them as `columns` deps would rebuild the column set on every render — which is exactly what the
+  // memo below exists to stop. What a cell RENDERS (busy spinners, IPFS-down, streaming) stays a real dep.
+  const cellActions = {
+    setAxes: setAxes.mutate,
+    pullOne: pullOne.mutate,
+    onTranscribeActivate,
+    onCompressActivate,
+    onDescribeActivate,
+    onOcrActivate,
+  };
+  const actRef = useRef(cellActions);
+  actRef.current = cellActions;
+
+  // MEMOIZED (performance: a new column set every render rebuilt the table's column model on every checkbox
+  // click, hover and stream frame). Rebuilt only when something a cell actually renders changes.
+  const columns = useMemo<LfbColumn<FileRow>[]>(() => {
+    const summary = (f: FileRow): string => fileSummary(f, compressionOn);
+    const act = () => actRef.current;
+    return [
+      // ── The five leading icon control columns (tables.mdx icon-columns). Immediately right of the row
+      // checkbox on EVERY tab, narrow with tight padding and icon-only headers. Pin & Ignore are toggles;
+      // the three analysis icons (Transcribe / AI description / OCR) show status AND perform the one-click
+      // action. Each owns a unique "done" color and explains itself in the hover-info region on hover.
+      {
+        ...iconCol("pin"),
+        id: "pinned",
+        kind: "text",
+        sortable: false,
+        filterable: false,
+        accessor: () => "",
+        cell: (f) => {
+          const decided = f.decision === "sync";
+          // Never-IPFS (decisions.mdx §17): a flagged file may never be pinned, so the pin toggle is disabled.
+          const blockedByNeverIpfs = !!f.neverIpfs;
+          // THREE STATES (one_repo.mdx §4.9). The state comes from the DECISION (intent) crossed with a LIVE,
+          // canonical read of this node's pinset (`f.pinnedHere`, knowledge/ipfs.mdx §5.1):
+          //   • not decided        → "could": grey OUTLINE pin (white/not-set) — click adds it to IPFS.
+          //   • decided & here      → "done" BLUE filled pin — synced (pinned) on THIS computer.
+          //   • decided & NOT here  → "done" RED filled pin — we chose to sync it, but this machine doesn't hold
+          //     it yet (the pin pass will pull it). `pinnedHere===false` is a VERIFIED miss; `undefined` means
+          //     unverified (IPFS down / not fetched) → we do NOT cry red, we show intent-blue.
+          const missingHere = decided && f.pinnedHere === false;
+          // FOURTH state (foreign_pin_discovery.mdx §6): an UNDECIDED file whose bytes a background pass
+          // discovered are ALREADY pinned on this node under a foreign CID (a bare `ipfs add`, another tool).
+          // Reality without intent — rendered as a GREEN filled pin, distinct from intent-blue, so the app
+          // never shows "not pinned" for a file the node genuinely holds.
+          const foreignPinned = !decided && f.pinnedForeign === true;
+          // FIFTH state (storage_company.mdx §8.5): a REMOTE-ONLY row — another of your computers has this
+          // file's bytes and this one does not. It is the purest case of the red state (wanted here, not here),
+          // so it renders red whatever this computer has decided, and its one action is PULL IT DOWN rather
+          // than a decision toggle. Red here means "available, not here yet" — never "lost".
+          const remoteOnly = f.presence === "remote-only";
+          const state: TaskStatus = decided || foreignPinned || remoteOnly ? "done" : "could";
+          const doneColor = missingHere || remoteOnly ? "#dc2626" : foreignPinned ? "#15803d" : undefined;
+          // One sentence, one source (§4.10) — the same text the row tooltip and hover-info use.
+          const onDevice = remoteOnlyTooltip(f);
+          return (
+            <TaskIconCell
+              kind="pin"
+              state={state}
+              doneColor={doneColor}
+              busy={busyPaths.has(f.path)}
+              disabled={ipfsDown || (blockedByNeverIpfs && !remoteOnly)}
+              title={
+                remoteOnly
+                  ? `${onDevice} Click to pull it down over IPFS.`
+                  : blockedByNeverIpfs
+                    ? "Add to IPFS is blocked by Never-IPFS"
+                    : foreignPinned
+                      ? "Pinned locally — this file is already pinned on this computer's IPFS node (by other IPFS software, which is fine). Click to have Large File Bridge sync it across your computers too."
+                      : !decided
+                        ? "Not set to sync — click to add this file to IPFS"
+                        : missingHere
+                          ? "Set to sync, but this computer doesn't have it pinned yet — it will pull it on the next pin pass. Click to stop syncing."
+                          : "Synced (pinned) on this computer — click to stop syncing this file"
+              }
+              extraHover={summary(f)}
+              // ONE axis per click (decision_toggles.mdx §2): the git-ignore axis is left as-is rather than
+              // re-asserted — except for a remote-only row, whose only meaningful action is to fetch the bytes.
+              onActivate={() =>
+                remoteOnly
+                  ? act().pullOne(f.path)
+                  : act().setAxes({ paths: [f.path], ipfs: !decided, axis: "ipfs" })
+              }
+            />
+          );
+        },
       },
-    },
-    {
-      ...iconCol("ignore"),
-      id: "gitignore",
-      kind: "text",
-      sortable: false,
-      filterable: false,
-      accessor: () => "",
-      cell: (f) => {
-        // THREE-VALUED, not boolean. `gitignore` is UNDETERMINED (undefined) in two real situations: the
-        // verdict is still on its way (it is patched in when `git check-ignore` answers — performance.mdx
-        // P-37), or git could not answer for this path at all (a stale worktree, a vanished repo — the
-        // `unknown` set in git.service). Both used to render as a plain OFF toggle, so a file git already
-        // ignores looked un-ignored and one click wrote a redundant `.gitignore` line for it. Undetermined
-        // now renders in the shared inert "na" state and refuses the click until git has actually spoken.
-        const known = f.gitignore !== undefined;
-        const on = f.gitignore === true;
-        // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so OFF is
-        // not ours to perform — show it ON but locked and name the rule (git_ignore.mdx §5.5).
-        const locked = !!f.gitignoreLocked;
-        // A remote-only row has no bytes on this computer (storage_company.mdx §8.5), so there is nothing
-        // here for git to ignore — the toggle is disabled and says why rather than writing a .gitignore line
-        // for a path this working tree does not contain.
-        const remoteOnly = f.presence === "remote-only";
-        const title = remoteOnly
-          ? "Not on this computer yet — pull it down first, then you can git-ignore it."
-          : !known
-            ? streaming
-              ? "Checking with git whether this file is ignored…"
-              : "Git could not answer whether this file is ignored, so Large File Bridge will not guess. Re-scan, or check the repo is healthy."
-            : locked && f.gitignoreRule
-              ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}. ` +
-                `That rule covers more than this file, so Large File Bridge will not rewrite it.`
-              : on
-                ? "Git-ignored — click to stop ignoring this file"
-                : "Add to git ignore";
-        return (
-          <TaskIconCell
-            kind="ignore"
-            state={!known ? "na" : on ? "done" : "could"}
-            busy={busyPaths.has(f.path)}
-            disabled={!known || locked || remoteOnly}
-            title={title}
-            extraHover={summary(f)}
-            // GIT-IGNORE ONLY. Sending `ipfs: f.decision === "sync"` alongside meant every click on an
-            // UNDECIDED file also recorded "do not add this to IPFS" — the file left the Add-to-IPFS tile
-            // (which counts undecided files) and Pin now, which pins `sync` files only, skipped it forever.
-            onActivate={() => setAxes.mutate({ paths: [f.path], gitignore: !on, axis: "gitignore" })}
-          />
-        );
+      {
+        ...iconCol("ignore"),
+        id: "gitignore",
+        kind: "text",
+        sortable: false,
+        filterable: false,
+        accessor: () => "",
+        cell: (f) => {
+          // THREE-VALUED, not boolean. `gitignore` is UNDETERMINED (undefined) in two real situations: the
+          // verdict is still on its way (it is patched in when `git check-ignore` answers — performance.mdx
+          // P-37), or git could not answer for this path at all (a stale worktree, a vanished repo — the
+          // `unknown` set in git.service). Both used to render as a plain OFF toggle, so a file git already
+          // ignores looked un-ignored and one click wrote a redundant `.gitignore` line for it. Undetermined
+          // now renders in the shared inert "na" state and refuses the click until git has actually spoken.
+          const known = f.gitignore !== undefined;
+          const on = f.gitignore === true;
+          // A rule we must not rewrite (a pattern, or a non-root-.gitignore source) owns this file, so OFF is
+          // not ours to perform — show it ON but locked and name the rule (git_ignore.mdx §5.5).
+          const locked = !!f.gitignoreLocked;
+          // A remote-only row has no bytes on this computer (storage_company.mdx §8.5), so there is nothing
+          // here for git to ignore — the toggle is disabled and says why rather than writing a .gitignore line
+          // for a path this working tree does not contain.
+          const remoteOnly = f.presence === "remote-only";
+          const title = remoteOnly
+            ? "Not on this computer yet — pull it down first, then you can git-ignore it."
+            : !known
+              ? streaming
+                ? "Checking with git whether this file is ignored…"
+                : "Git could not answer whether this file is ignored, so Large File Bridge will not guess. Re-scan, or check the repo is healthy."
+              : locked && f.gitignoreRule
+                ? `Git-ignored by ${f.gitignoreRule.source}:${f.gitignoreRule.line} — ${f.gitignoreRule.pattern}. ` +
+                  `That rule covers more than this file, so Large File Bridge will not rewrite it.`
+                : on
+                  ? "Git-ignored — click to stop ignoring this file"
+                  : "Add to git ignore";
+          return (
+            <TaskIconCell
+              kind="ignore"
+              state={!known ? "na" : on ? "done" : "could"}
+              busy={busyPaths.has(f.path)}
+              disabled={!known || locked || remoteOnly}
+              title={title}
+              extraHover={summary(f)}
+              // GIT-IGNORE ONLY. Sending `ipfs: f.decision === "sync"` alongside meant every click on an
+              // UNDECIDED file also recorded "do not add this to IPFS" — the file left the Add-to-IPFS tile
+              // (which counts undecided files) and Pin now, which pins `sync` files only, skipped it forever.
+              onActivate={() => act().setAxes({ paths: [f.path], gitignore: !on, axis: "gitignore" })}
+            />
+          );
+        },
       },
-    },
-    {
-      ...iconCol("transcribe"),
-      id: "transcribe",
-      kind: "enum",
-      accessor: (f) => f.transcribe ?? "na",
-      filterOptions: ["could", "done", "na"],
-      // A remote-only row's `na` needs its OWN reason (§4.10) — the column's generic "not audio/video" would
-      // be a lie about a file that is perfectly transcribable once its bytes are here.
-      cell: (f) => (
-        <TaskIconCell kind="transcribe" state={f.transcribe ?? "na"}
-          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          extraHover={summary(f)} onActivate={() => onTranscribeActivate(f)} />
-      ),
-    },
-    {
-      ...iconCol("describe"),
-      id: "describe",
-      kind: "enum",
-      accessor: (f) => f.describe ?? "na",
-      filterOptions: ["could", "done", "na"],
-      cell: (f) => (
-        <TaskIconCell kind="describe" state={f.describe ?? "na"}
-          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          extraHover={summary(f)} onActivate={() => onDescribeActivate(f)} />
-      ),
-    },
-    {
-      ...iconCol("ocr"),
-      id: "ocr",
-      kind: "enum",
-      accessor: (f) => f.ocr ?? "na",
-      filterOptions: ["could", "done", "na"],
-      cell: (f) => (
-        <TaskIconCell kind="ocr" state={f.ocr ?? "na"}
-          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          extraHover={summary(f)} onActivate={() => onOcrActivate(f)} />
-      ),
-    },
-    {
-      id: "path",
-      header: "File",
-      kind: "text",
-      accessor: (f) => f.path,
-      cell: (f) => {
-        const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
-        const name = f.path.slice(dir.length);
-        return (
-          <span
-            // The ROW tooltip (one_repo.mdx §4.10): a remote-only row leads with "On {device} — not on this
-            // computer yet." above its path, so hovering the row's own name says where the file actually is.
-            title={f.presence === "remote-only" ? `${remoteOnlyTooltip(f)}\n${f.path}` : f.path}
+      {
+        ...iconCol("transcribe"),
+        id: "transcribe",
+        kind: "enum",
+        accessor: (f) => f.transcribe ?? "na",
+        filterOptions: ["could", "done", "na"],
+        // A remote-only row's `na` needs its OWN reason (§4.10) — the column's generic "not audio/video" would
+        // be a lie about a file that is perfectly transcribable once its bytes are here.
+        cell: (f) => (
+          <TaskIconCell kind="transcribe" state={f.transcribe ?? "na"}
+            title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+            extraHover={summary(f)} onActivate={() => act().onTranscribeActivate(f)} />
+        ),
+      },
+      {
+        ...iconCol("describe"),
+        id: "describe",
+        kind: "enum",
+        accessor: (f) => f.describe ?? "na",
+        filterOptions: ["could", "done", "na"],
+        cell: (f) => (
+          <TaskIconCell kind="describe" state={f.describe ?? "na"}
+            title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+            extraHover={summary(f)} onActivate={() => act().onDescribeActivate(f)} />
+        ),
+      },
+      {
+        ...iconCol("ocr"),
+        id: "ocr",
+        kind: "enum",
+        accessor: (f) => f.ocr ?? "na",
+        filterOptions: ["could", "done", "na"],
+        cell: (f) => (
+          <TaskIconCell kind="ocr" state={f.ocr ?? "na"}
+            title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+            extraHover={summary(f)} onActivate={() => act().onOcrActivate(f)} />
+        ),
+      },
+      {
+        id: "path",
+        header: "File",
+        kind: "text",
+        accessor: (f) => f.path,
+        cell: (f) => {
+          const dir = f.path.includes("/") ? f.path.slice(0, f.path.lastIndexOf("/") + 1) : "";
+          const name = f.path.slice(dir.length);
+          return (
+            <span
+              // The ROW tooltip (one_repo.mdx §4.10): a remote-only row leads with "On {device} — not on this
+              // computer yet." above its path, so hovering the row's own name says where the file actually is.
+              title={f.presence === "remote-only" ? `${remoteOnlyTooltip(f)}\n${f.path}` : f.path}
+              onMouseEnter={() => setHoverInfo(summary(f))}
+              onMouseLeave={() => setHoverInfo(null)}
+            >
+              <span className="text-black/40">{middleTruncate(dir, 30)}</span>
+              <span className="font-medium">{name}</span>
+            </span>
+          );
+        },
+      },
+      { id: "size", header: "Size", kind: "bytes", align: "right", accessor: (f) => f.sizeBytes,
+        cell: (f) => formatBytes(f.sizeBytes) },
+      { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
+        cell: (f) => <span className={f.decision === "sync" && f.cid && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
+      { id: "cid", header: "CID", kind: "text", bounded: true, minWidth: 112, accessor: (f) => f.cid,
+        cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); void copyText(f.cid!, "CID", "OneRepoPage.copyCid"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
+      { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
+        cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
+      // ── Task-tab columns (task_tabs.mdx §4). Present in the union; shown only on the tabs that list them.
+      // `kind` — the File-type class (video/image/audio/pdf), for the Compress, Transcribe & OCR tabs. Uses
+      // `fileTypeForName` (not `mediaKindForName`) so a PDF reads as "pdf" on the OCR tab rather than blank.
+      {
+        id: "kind",
+        header: "Kind",
+        kind: "enum",
+        accessor: (f) => {
+          const t = fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
+          return t === "other" ? "" : t;
+        },
+        filterOptions: ["video", "image", "audio", "pdf"],
+        cell: (f) => {
+          const t = fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
+          return <span className="text-xs text-black/60">{t === "other" ? "—" : t}</span>;
+        },
+      },
+      // `compress` — the three-state Compress status icon (task_tabs.mdx §6). Not one of the five standard
+      // left icons; it is the Compress tab's own content icon, kept narrow with an icon header for parity.
+      // Sort by status ("could" < "done" < "na") puts actionable rows first; filter on the same values.
+      {
+        id: "compress",
+        header: "Compress",
+        headerCell: (
+          <span className="inline-flex text-black/55" title="Compress — reclaim space on videos and images">
+            <Archive className="h-2.5 w-2.5" strokeWidth={2.5} />
+          </span>
+        ),
+        tight: true,
+        minWidth: 30,
+        kind: "enum",
+        accessor: (f) => f.compress ?? "na",
+        filterOptions: ["could", "done", "na"],
+        cell: (f) => (
+          <CompressStatusIcon
+            state={f.compress ?? "na"}
+            // Same correction as the three analysis icons: the default `na` text ("Not a compressible media
+            // type") is wrong for a remote-only .mp4 — it IS one, its bytes just aren't here (§4.10).
+            title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
+            onActivate={() => act().onCompressActivate(f)}
             onMouseEnter={() => setHoverInfo(summary(f))}
             onMouseLeave={() => setHoverInfo(null)}
-          >
-            <span className="text-black/40">{middleTruncate(dir, 30)}</span>
-            <span className="font-medium">{name}</span>
-          </span>
-        );
+          />
+        ),
       },
-    },
-    { id: "size", header: "Size", kind: "bytes", align: "right", accessor: (f) => f.sizeBytes,
-      cell: (f) => formatBytes(f.sizeBytes) },
-    { id: "peers", header: "Peers", kind: "int", align: "right", accessor: (f) => f.peers.length,
-      cell: (f) => <span className={f.decision === "sync" && f.cid && f.peers.length === 0 ? "text-red-600" : ""}>{f.peers.length}</span> },
-    { id: "cid", header: "CID", kind: "text", bounded: true, minWidth: 112, accessor: (f) => f.cid,
-      cell: (f) => f.cid ? <code className="text-xs text-black/60" title={f.cid} onClick={(e) => { e.stopPropagation(); void copyText(f.cid!, "CID", "OneRepoPage.copyCid"); }}>{middleTruncate(f.cid, 16)}</code> : <span className="text-black/20">—</span> },
-    { id: "changed", header: "Changed", kind: "timestamp", accessor: (f) => f.changedAt,
-      cell: (f) => <span title={absoluteTime(f.changedAt)}>{relativeTime(f.changedAt)}</span> },
-    // ── Task-tab columns (task_tabs.mdx §4). Present in the union; shown only on the tabs that list them.
-    // `kind` — the File-type class (video/image/audio/pdf), for the Compress, Transcribe & OCR tabs. Uses
-    // `fileTypeForName` (not `mediaKindForName`) so a PDF reads as "pdf" on the OCR tab rather than blank.
-    {
-      id: "kind",
-      header: "Kind",
-      kind: "enum",
-      accessor: (f) => {
-        const t = fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
-        return t === "other" ? "" : t;
-      },
-      filterOptions: ["video", "image", "audio", "pdf"],
-      cell: (f) => {
-        const t = fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1));
-        return <span className="text-xs text-black/60">{t === "other" ? "—" : t}</span>;
-      },
-    },
-    // `compress` — the three-state Compress status icon (task_tabs.mdx §6). Not one of the five standard
-    // left icons; it is the Compress tab's own content icon, kept narrow with an icon header for parity.
-    // Sort by status ("could" < "done" < "na") puts actionable rows first; filter on the same values.
-    {
-      id: "compress",
-      header: "Compress",
-      headerCell: (
-        <span className="inline-flex text-black/55" title="Compress — reclaim space on videos and images">
-          <Archive className="h-2.5 w-2.5" strokeWidth={2.5} />
-        </span>
-      ),
-      tight: true,
-      minWidth: 30,
-      kind: "enum",
-      accessor: (f) => f.compress ?? "na",
-      filterOptions: ["could", "done", "na"],
-      cell: (f) => (
-        <CompressStatusIcon
-          state={f.compress ?? "na"}
-          // Same correction as the three analysis icons: the default `na` text ("Not a compressible media
-          // type") is wrong for a remote-only .mp4 — it IS one, its bytes just aren't here (§4.10).
-          title={f.presence === "remote-only" ? ABSENT_BYTES_REASON : undefined}
-          onActivate={() => onCompressActivate(f)}
-          onMouseEnter={() => setHoverInfo(summary(f))}
-          onMouseLeave={() => setHoverInfo(null)}
-        />
-      ),
-    },
-  ];
+    ];
+  }, [compressionOn, busyPaths, ipfsDown, streaming]);
 
   // The active tab's projection (task_tabs.mdx §7): pick + order the columns it lists, and filter the rows
   // to the files that belong to this task. The DataTable is keyed by tab so its default sort re-applies.
+  // All three are memoized: `tabRows` is the table's `data`, and TanStack rebuilds (re-filters, re-sorts)
+  // its whole row model whenever that array's identity changes — a fresh `.filter()` per render made every
+  // checkbox click an O(n log n) pass over the repo.
   const tab = TASK_TABS[activeTab];
   const byId = useMemo(() => new Map(columns.map((col) => [col.id, col])), [columns]);
-  const visibleColumns = tab.columnIds
-    .map((id) => byId.get(id))
-    .filter((col): col is LfbColumn<FileRow> => Boolean(col));
-  const tabRows = (detail?.files ?? []).filter(tab.rowFilter);
+  const visibleColumns = useMemo(
+    () => tab.columnIds.map((id) => byId.get(id)).filter((col): col is LfbColumn<FileRow> => Boolean(col)),
+    [tab, byId],
+  );
+  const files = detail?.files;
+  const tabRows = useMemo(() => (files ?? []).filter(tab.rowFilter), [files, tab]);
+  // The §2.11 filter prop — one identity per tab, so the table's filter state is not re-derived per render.
+  const fileFilter = useMemo(
+    () => ({ defaultExpr: tab.largeOnlyDefault ? "size = only_large" : "", fields: FILE_FILTER_FIELDS }),
+    [tab],
+  );
 
   // The metric panels for this tab (task_tabs.mdx §2): count from the RepoDetail, tint by health. When the
   // count is > 0 and the metric has an educate-and-fix popup, clicking the panel opens it (§2.4); otherwise
   // the panel re-tunes the view to the acting tab.
-  const metricViews: MetricView[] = detail
-    ? tab.metrics.filter((id) => compressionOn || !isCompressionMetric(id)).map((id) => {
-        const def = METRIC_CATALOG[id];
-        const count = metricCount(id, detail);
-        const warning = count > 0 ? buildMetricWarning(id, detail, repoId) : null;
-        return {
-          id,
-          label: def.label,
-          count,
-          hint: def.hint,
-          positive: def.positive,
-          warning: warning ?? undefined,
-          onOpen: () => openMetric(id),
-        };
-      })
-    : [];
+  // Counts only — each tile's popup (scoped to its full file list) is built lazily, on click.
+  const metricViews = useMemo<MetricView[]>(
+    () =>
+      detail
+        ? tab.metrics.filter((id) => compressionOn || !isCompressionMetric(id)).map((id) => {
+            const def = METRIC_CATALOG[id];
+            const count = metricCount(id, detail);
+            return {
+              id,
+              label: def.label,
+              count,
+              hint: def.hint,
+              positive: def.positive,
+              warning: count > 0 ? () => buildMetricWarning(id, detail, repoId) : undefined,
+              onOpen: () => openMetric(id),
+            };
+          })
+        : [],
+    [detail, tab, compressionOn, repoId, openMetric],
+  );
 
   // The header primary (one_repo.mdx §3.1). A scan that's overdue (or never run) takes precedence — you
   // can't trust the metrics until the repo is re-scanned, so the button becomes "Scan now". Otherwise it
@@ -836,7 +892,13 @@ export function OneRepoPage() {
   // The header primary is a RANKING across every metric ("what is the single most important thing here?"),
   // so it cannot be answered from subtotals — a half-composed repo could nominate a recommendation the
   // finished one would not. It waits for the walk to finish; the tiles themselves count up meanwhile.
-  const topRec = detail && !detail.partial && !scanDue ? topRecommendation(detail, repoId, { compression: compressionOn }) : null;
+  // Memoized on the detail: the ranking walks the file list once per candidate warning (their subjects lists
+  // are lazy — metricWarningDefs.ts lazyList — so only the popup that is OPENED ever builds its rows).
+  const topRec = useMemo(
+    () =>
+      detail && !detail.partial && !scanDue ? topRecommendation(detail, repoId, { compression: compressionOn }) : null,
+    [detail, scanDue, repoId, compressionOn],
+  );
   // The header primary's label is per-metric (one_repo.mdx §3.1): a content-work recommendation names its
   // verb ("Transcribe ›" / "Describe ›" / "Compress ›") so the button says exactly what it will do; the
   // triage recommendations (undecided / pull-down / ipfs-down) keep the generic "View recommendation ›".
@@ -932,38 +994,11 @@ export function OneRepoPage() {
         defaultSort={tab.defaultSort}
         // The File-type facet classifies each row by name (tables.mdx §2.10); together with the §2.11
         // filter below it lets the user reach a small JPG to OCR.
-        fileTypeFacet={{ valueOf: (f) => fileTypeForName(f.path.slice(f.path.lastIndexOf("/") + 1)) }}
-        // The §2.11 file filter (tables.mdx §2.11) — this is the full-vocabulary surface: all ten
-        // fields. `size` carries the old "Large files only" default (ON everywhere but the OCR tab —
-        // ocr.mdx §11.1.1) as its seed expression; the rail checkbox is now its shortcut. The two
-        // decision axes stay separate fields (add_to_ipfs = the ledger's intent; git_ignore = live
-        // `git check-ignore` — tables.mdx §2.4), and pull_down reads presence (§4e).
-        fileFilter={{
-          defaultExpr: tab.largeOnlyDefault ? "size = only_large" : "",
-          fields: [
-            { id: "transcribe", valueOf: (f) => taskRowValue(f.transcribe) },
-            { id: "ai_description", valueOf: (f) => taskRowValue(f.describe) },
-            { id: "ocr", valueOf: (f) => taskRowValue(f.ocr) },
-            { id: "pull_down", valueOf: (f) => (f.presence === "remote-only" ? "not_yet" : "done") },
-            { id: "add_to_ipfs", valueOf: (f) => (f.decision === "sync" ? "done" : "not_yet") },
-            // Three-valued like the column above: an UNDETERMINED axis is "na", never "not_yet" — filtering
-            // for "not git-ignored" must not sweep in files whose verdict simply has not arrived.
-            { id: "git_ignore", valueOf: (f) => (f.gitignore === undefined ? "na" : f.gitignore ? "done" : "not_yet") },
-            {
-              id: "compressible_videos",
-              valueOf: (f) => (f.compress === "could" && rowFileType(f) === "video" ? "yes" : "no"),
-            },
-            {
-              id: "compressible_images",
-              valueOf: (f) => (f.compress === "could" && rowFileType(f) === "image" ? "yes" : "no"),
-            },
-            {
-              id: "compressible_audio",
-              valueOf: (f) => (f.compress === "could" && rowFileType(f) === "audio" ? "yes" : "no"),
-            },
-            { id: "size", valueOf: (f) => (f.analysisOnly ? "small" : "large") },
-          ],
-        }}
+        fileTypeFacet={FILE_TYPE_FACET}
+        // The §2.11 file filter (tables.mdx §2.11) — the full-vocabulary surface (FILE_FILTER_FIELDS).
+        // `size` carries the old "Large files only" default (ON everywhere but the OCR tab —
+        // ocr.mdx §11.1.1) as its seed expression; the rail checkbox is now its shortcut.
+        fileFilter={fileFilter}
         // Option-key floating image preview (option_image_preview.mdx §5 / one_repo.mdx §4.12): hovering
         // an image row with Option held floats the preview. Remote-only rows are excluded — their bytes
         // aren't on this computer (§4.10), so a grant could never stream them.

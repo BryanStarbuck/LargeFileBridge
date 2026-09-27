@@ -5,6 +5,10 @@ import { isLoopback } from "../../shared/loopback.js";
 import { buildState, runningStaleCode } from "../schedule/self-update.service.js";
 import { databaseHealth } from "../../shared/persistence/boot.js";
 import { log } from "../../shared/logging.js";
+import { requireAllowListed } from "../auth/identify.js";
+import { stalePeersAcrossStorages } from "../schedule/self-update.service.js";
+import { listSyncFights } from "../storage/sync-fight.js";
+import { APP_BUILD, defectsOfBuild, type FleetCompat } from "@lfb/shared";
 
 export const healthRouter = Router();
 
@@ -63,5 +67,24 @@ healthRouter.get("/auth-config", (req, res) => {
   } catch (e) {
     log.error("health", `auth-config read failed: ${(e as Error).message}`);
     res.status(500).json({ ok: false, error: "auth-config unavailable" });
+  }
+});
+
+// FLEET COMPATIBILITY (backward_compatibility.md §6). Which of the user's computers run an older build, what
+// each one is KNOWN to do to shared data, what this build does about it, and which shared files the
+// tug-of-war breaker is currently holding. Gated: it names the user's computers.
+healthRouter.get("/fleet", requireAllowListed, async (_req, res) => {
+  try {
+    const peers = await stalePeersAcrossStorages();
+    const data: FleetCompat = {
+      build: APP_BUILD.number,
+      label: APP_BUILD.label,
+      stalePeers: peers.map((p) => ({ ...p, defects: defectsOfBuild(p.build) })),
+      fights: listSyncFights(),
+    };
+    res.json({ ok: true, data });
+  } catch (e) {
+    log.error("health", `fleet compatibility read failed: ${(e as Error).message}`);
+    res.status(500).json({ ok: false, error: "fleet compatibility unavailable" });
   }
 });

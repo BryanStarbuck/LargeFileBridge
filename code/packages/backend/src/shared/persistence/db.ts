@@ -17,8 +17,17 @@
 //
 // `dbEnabled()` is the OTHER half: "should I even try?". It answers from the last observed health, so a call
 // site can pick the Postgres path or the YAML path without paying a round trip to find out.
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { Pool, PoolClient, QueryResultRow } from "pg";
-import { getPool, probeDatabase, resolveDbMode, setPoolErrorObserver } from "./pool.js";
+import {
+  INTERACTIVE_RESERVE,
+  POOL_MAX,
+  getPool,
+  probeDatabase,
+  resolveDbMode,
+  setPoolErrorObserver,
+} from "./pool.js";
+import { Semaphore } from "./lane.js";
 import { log } from "../logging.js";
 
 /**
@@ -39,6 +48,8 @@ type Health = "unknown" | "up" | "down";
 
 let health: Health = "unknown";
 let healthAt = 0;
+/** True once the current outage has had its one unthrottled announcement (see `tryDb`). */
+let outageAnnounced = false;
 let refreshInFlight: Promise<boolean> | null = null;
 
 /** How long a `down` verdict stands before a caller's `dbEnabled()` triggers another background probe. */
@@ -52,6 +63,8 @@ const HEALTH_RECHECK_MS = 30_000;
 export function noteDbHealth(ok: boolean): void {
   health = ok ? "up" : "down";
   healthAt = Date.now();
+  // A server that answered again ends the outage episode, so the NEXT outage is announced afresh.
+  if (ok) outageAnnounced = false;
 }
 
 /**
@@ -68,6 +81,7 @@ export function resetDbHealth(): void {
   health = "unknown";
   healthAt = 0;
   refreshInFlight = null;
+  outageAnnounced = false;
 }
 
 /** The remembered verdict, for /api/health and for tests that want to assert the latch without a server. */
@@ -127,16 +141,155 @@ function poolOrNull(): Pool | null {
   return resolveDbMode() === "off" ? null : getPool();
 }
 
+// ── the background lane: how INTERACTIVE_RESERVE is actually enforced ────────────────────────────────────
+//
+// pool.ts documents a 3-connection interactive reserve "enforced by convention at the call site", and until
+// this lane existed no call site enforced it. The mirror and reconcile passes fire `syncFenceBeforeMirror`
+// and `recordSdlIngestForRepo` fire-and-forget, once per repo per pass — 100+ jobs a minute — and each took
+// a pooled connection the moment it asked. All 8 went to bookkeeping, pg-pool's 3 s acquire timeout expired
+// for everyone queued behind them, and the user-facing reads (`foreignPin.recordsUnder`,
+// `manifest.project.unit`) fell back to YAML alongside the background work that starved them (error.err
+// 2026-09-25 → 09-27: 190 lines, thousands more suppressed, Postgres up throughout).
+//
+// Work wrapped in `runInBackground` now takes a LANE SLOT per statement (per transaction for `tx`), and the
+// lane is `POOL_MAX - INTERACTIVE_RESERVE` wide. Background work therefore never holds more than 5 of the 8
+// connections, and a request always finds the reserve free. Per statement rather than per job, so a job
+// that spends most of its time hashing files on the event loop does not sit on a slot it is not using.
+//
+// AsyncLocalStorage carries the flag, so a job marks itself once at its entry point and every helper it
+// reaches — however many modules deep — is gated without being told. Unmarked work (every request handler)
+// goes straight to the pool, exactly as before.
+
+interface LaneState {
+  /** True while this async context already holds a lane slot (inside a gated statement or a `tx`). */
+  holding: boolean;
+}
+const lane = new AsyncLocalStorage<LaneState>();
+
+/** Connections background work may hold at once. The rest of the pool is the interactive reserve. */
+export const BACKGROUND_SLOTS = Math.max(1, POOL_MAX - INTERACTIVE_RESERVE);
+let bgSlots = new Semaphore(BACKGROUND_SLOTS);
+
+/**
+ * Run `fn` as BACKGROUND database work: every statement it issues waits for a lane slot instead of taking a
+ * connection outright. Nesting is free — an inner call joins the outer lane. Never use it on a request path:
+ * a request must be able to use the reserve this exists to protect.
+ */
+export function runInBackground<T>(fn: () => Promise<T>): Promise<T> {
+  if (lane.getStore()) return fn();
+  return lane.run({ holding: false }, fn);
+}
+
+/** Is the current async context background work? */
+export function inBackgroundLane(): boolean {
+  return lane.getStore() !== undefined;
+}
+
+/** Lane occupancy, for the saturation WARN and /api/health. */
+export function backgroundLaneStats(): { slots: number; active: number; waiting: number } {
+  return { slots: bgSlots.limit, active: bgSlots.active, waiting: bgSlots.waiting };
+}
+
+/** TEST-ONLY: a fresh lane of `slots` width (the pool-derived default when omitted). */
+export function resetBackgroundLane(slots = BACKGROUND_SLOTS): void {
+  bgSlots = new Semaphore(slots);
+}
+
+/** How long a background statement waits before its one retry of a connect-phase timeout. */
+const CONNECT_RETRY_MS = 250;
+
+/**
+ * Did this error happen while ACQUIRING a connection, before any SQL was sent? pg-pool's acquire timeout
+ * and pg's handshake timeout are the two spellings. Both are safe to retry: the statement never ran.
+ */
+export function isConnectTimeout(e: unknown): boolean {
+  const m = (e as Error)?.message ?? "";
+  return /timeout exceeded when trying to connect|Connection terminated due to connection timeout/i.test(m);
+}
+
+/**
+ * Gate one statement (or one transaction) through the lane when the caller is background work.
+ *
+ * A background statement whose ACQUIRE times out is retried once. 147 of the 190 starvation lines sat within
+ * ±70 s of an event-loop stall: pg-pool's 3 s timer fires the moment the loop unblocks, ahead of the socket
+ * callback that would have handed over a connection, so the "timeout" is a scheduling artefact and the
+ * second attempt finds the connection waiting. Request paths are NOT retried — a user should see the YAML
+ * answer now, not 3 s later.
+ */
+async function viaLane<T>(fn: () => Promise<T>): Promise<T> {
+  const st = lane.getStore();
+  if (!st || st.holding) return fn();
+  const release = await bgSlots.acquire();
+  try {
+    return await lane.run({ holding: true }, async () => {
+      try {
+        return await fn();
+      } catch (e) {
+        if (!isConnectTimeout(e)) throw e;
+        await new Promise((r) => setTimeout(r, CONNECT_RETRY_MS));
+        return await fn();
+      }
+    });
+  } finally {
+    release();
+  }
+}
+
+/** Every pooled connection checked out, or callers already queued for one. */
+function poolSaturated(): boolean {
+  const p = poolOrNull();
+  if (!p) return false;
+  return p.waitingCount > 0 || (p.totalCount >= POOL_MAX && p.idleCount === 0);
+}
+
+/**
+ * DOES THIS FAILURE MEAN THE SERVER IS GONE? Only then may it flip the health latch.
+ *
+ * Marking the database down on ANY error — as every helper here used to — turned pool starvation into an
+ * outage: one acquire timeout flipped `dbEnabled()` to false, every surface in the app took the YAML path for
+ * the next 30 s, and the recheck probe queued behind the same saturated pool. Two classes of error prove the
+ * server is fine and must leave the latch alone:
+ *   * a connect timeout while the pool is saturated — that is contention on OUR side of the socket;
+ *   * any SQLSTATE outside class 08 (connection exception) and 57P01-03 (shutdown / cannot connect now) —
+ *     the server parsed, planned or cancelled our statement, so it is demonstrably answering.
+ */
+export function errorMeansServerDown(e: unknown, saturated = poolSaturated()): boolean {
+  if (isConnectTimeout(e)) return !saturated;
+  const code = (e as { code?: unknown })?.code;
+  if (typeof code === "string" && /^[0-9A-Z]{5}$/.test(code)) {
+    return code.startsWith("08") || code === "57P01" || code === "57P02" || code === "57P03";
+  }
+  return true; // ECONNREFUSED, ENOTFOUND, a socket torn down mid-query — nothing proves the server answered
+}
+
+/**
+ * A failure worth ONE retry of idempotent background work: nothing about the statement was wrong, the
+ * moment was. Acquire/handshake timeouts, a statement cancelled by `statement_timeout` (57014 — on this
+ * laptop, overwhelmingly a statement that was in flight when the lid closed: the server's timer is wall
+ * clock, so a 15-minute sleep expires it on wake), and a connection lost mid-statement.
+ */
+export function isTransientDbError(e: unknown): boolean {
+  if (isConnectTimeout(e)) return true;
+  const code = (e as { code?: unknown })?.code;
+  if (code === "57014" || code === "57P01" || (typeof code === "string" && code.startsWith("08"))) return true;
+  const m = (e as Error)?.message ?? "";
+  return /canceling statement due to statement timeout|Connection terminated unexpectedly/i.test(m);
+}
+
+function noteFailure(e: unknown): void {
+  if (errorMeansServerDown(e)) noteDbHealth(false);
+}
+
 /** Rows for `sql`. Returns `[]` when there is no pool at all — see the file header. */
 export async function q<T extends QueryResultRow = QueryResultRow>(sql: string, params?: unknown[]): Promise<T[]> {
   const pool = poolOrNull();
   if (!pool) return [];
   try {
-    const r = await pool.query<T>(sql, params as never[]);
+    const r = await viaLane(() => pool.query<T>(sql, params as never[]));
     noteDbHealth(true);
     return r.rows;
   } catch (e) {
-    noteDbHealth(false);
+    noteFailure(e);
     throw e;
   }
 }
@@ -155,11 +308,11 @@ export async function exec(sql: string, params?: unknown[]): Promise<number> {
   const pool = poolOrNull();
   if (!pool) return 0;
   try {
-    const r = await pool.query(sql, params as never[]);
+    const r = await viaLane(() => pool.query(sql, params as never[]));
     noteDbHealth(true);
     return r.rowCount ?? 0;
   } catch (e) {
-    noteDbHealth(false);
+    noteFailure(e);
     throw e;
   }
 }
@@ -176,7 +329,18 @@ export async function exec(sql: string, params?: unknown[]): Promise<number> {
 export async function tx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
   const pool = poolOrNull();
   if (!pool) throw new NoDatabaseError();
-  const client = await pool.connect();
+  // One lane slot for the whole transaction: it holds ONE connection from BEGIN to COMMIT.
+  return viaLane(() => txOn(pool, fn));
+}
+
+async function txOn<T>(pool: Pool, fn: (c: PoolClient) => Promise<T>): Promise<T> {
+  let client: PoolClient;
+  try {
+    client = await pool.connect();
+  } catch (e) {
+    noteFailure(e);
+    throw e;
+  }
   try {
     await client.query("BEGIN");
     const out = await fn(client);
@@ -190,7 +354,7 @@ export async function tx<T>(fn: (c: PoolClient) => Promise<T>): Promise<T> {
       // The connection may already be unusable (that is often WHY we are here). The rethrow below is the
       // real signal; a failed rollback on a dead socket is noise that would mask it.
     }
-    noteDbHealth(false);
+    noteFailure(e);
     throw e;
   } finally {
     client.release();
@@ -261,10 +425,14 @@ export async function copyRows(
     }
     const sql = `INSERT INTO ${table} (${colList}) VALUES ${tuples.join(",")}${tail}`;
     try {
-      const r = await runner.query(sql, params as never[]);
+      // A caller-supplied client is already a held connection (usually inside `tx`, which took the lane slot);
+      // only the pool path is gated, one statement at a time.
+      const r = opts.client
+        ? await runner.query(sql, params as never[])
+        : await viaLane(() => runner.query(sql, params as never[]));
       affected += r.rowCount ?? 0;
     } catch (e) {
-      noteDbHealth(false);
+      noteFailure(e);
       throw e;
     }
   }
@@ -278,9 +446,21 @@ export async function copyRows(
  * A failing database must not also fill `error.err`. One WARN per context per window, with the count of what
  * was suppressed, so a server that is down for an hour costs a handful of lines and still says how bad it was
  * — the same posture the pool's idle-client handler takes (pool.ts).
+ *
+ * THREE KINDS OF FAILURE, THREE LINES, because they mean three different things to whoever reads the log:
+ *   * CONTENTION — a connect timeout while every pooled connection is checked out. Postgres is up; our own
+ *     callers are queued. One shared line per window for ALL contexts, naming the busiest ones, rather than
+ *     one per context: 190 per-context lines on 2026-09-25 → 09-27 all said the same thing.
+ *   * OUTAGE — the first failure that proves the server is gone gets ONE unthrottled announcement per
+ *     episode, whatever context hit it, so an outage is never hidden inside a context's suppressed count.
+ *     The episode ends when anything succeeds again (`noteDbHealth(true)`).
+ *   * everything else — per context, throttled, as before.
  */
 const WARN_WINDOW_MS = 60_000;
 const warned = new Map<string, { at: number; suppressed: number }>();
+
+/** The shared contention line's window, and which contexts it swallowed since it last spoke. */
+let contention: { at: number; byCtx: Map<string, number> } | null = null;
 
 function warnThrottled(ctx: string, message: string): void {
   const now = Date.now();
@@ -294,9 +474,39 @@ function warnThrottled(ctx: string, message: string): void {
   log.warn("db", `${ctx}: ${message}${also} — falling back to the YAML path`);
 }
 
+function warnContention(ctx: string): void {
+  const now = Date.now();
+  if (contention && now - contention.at < WARN_WINDOW_MS) {
+    contention.byCtx.set(ctx, (contention.byCtx.get(ctx) ?? 0) + 1);
+    return;
+  }
+  const prior = contention?.byCtx;
+  let also = "";
+  if (prior && prior.size > 0) {
+    const total = [...prior.values()].reduce((a, b) => a + b, 0);
+    const top = [...prior.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 4)
+      .map(([k, n]) => `${k} ${n}`)
+      .join(", ");
+    also = ` (+${total} more in the last minute: ${top})`;
+  }
+  contention = { at: now, byCtx: new Map() };
+  const p = poolOrNull();
+  const ln = backgroundLaneStats();
+  const busy = p ? `${p.totalCount - p.idleCount}/${POOL_MAX} connections busy, ${p.waitingCount} waiting` : "pool gone";
+  log.warn(
+    "db",
+    `${ctx}: connection pool saturated (${busy}; background lane ${ln.active}/${ln.slots}, ${ln.waiting} queued)` +
+      `${also} — falling back to the YAML path. Postgres is up; this is contention, not an outage.`,
+  );
+}
+
 /** Drop the throttle memory. Tests only. */
 export function resetDbWarnThrottle(): void {
   warned.clear();
+  contention = null;
+  outageAnnounced = false;
 }
 
 /**
@@ -313,7 +523,22 @@ export async function tryDb<T>(fn: () => Promise<T>, fallback: T | (() => T | Pr
   try {
     return await fn();
   } catch (e) {
-    warnThrottled(ctx, (e as Error)?.message ?? String(e));
+    const message = (e as Error)?.message ?? String(e);
+    if (isConnectTimeout(e) && !errorMeansServerDown(e)) {
+      warnContention(ctx);
+    } else if (!(e instanceof NoDatabaseError) && errorMeansServerDown(e) && !outageAnnounced) {
+      // The episode's announcement bypasses this context's window, so a context that last warned 20 s ago
+      // cannot swallow the first sign of an outage into a "(+N more suppressed)" nobody reads.
+      outageAnnounced = true;
+      warned.delete(ctx);
+      warnThrottled(
+        ctx,
+        `${message} [POSTGRES UNREACHABLE — every Postgres-backed surface is on the YAML path until it answers ` +
+          `again; further lines are throttled per surface]`,
+      );
+    } else {
+      warnThrottled(ctx, message);
+    }
     return typeof fallback === "function" ? await (fallback as () => T | Promise<T>)() : fallback;
   }
 }

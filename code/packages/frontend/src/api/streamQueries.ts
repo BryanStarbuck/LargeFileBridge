@@ -10,10 +10,12 @@
 // simply re-opens the stream.
 //
 // Three rules the code below keeps:
-//   • ONE publish per animation frame. A 5,000-row detail arrives as ~20 batches; without coalescing that
-//     is 20 cache writes and 20 re-renders of a page whose table then re-derives its row model. The build
-//     itself is deferred to flush time, so a burst of events costs ONE object construction (the P-18/P-23
-//     rAF discipline, applied to ingest).
+//   • AT MOST ONE publish per PUBLISH_INTERVAL_MS (~4 a second). A 5,000-row detail arrives as ~20
+//     batches; every publish re-renders a page whose table then re-derives (filters, sorts) its whole row
+//     model over the GROWING list, so publishing once per animation frame made a big load cost O(n log n)
+//     sixty times a second. The first publish still goes out on the next frame (the header and first rows
+//     appear at once); after that the page catches up four times a second. The build itself is deferred
+//     to flush time, so a burst of events costs ONE object construction.
 //   • A failed stream FALLS BACK to the buffered endpoint, never to a half list. Streaming is a delivery
 //     optimization; if a proxy buffers it, an older backend has no such route, or the walk faults, the page
 //     must still show the complete, correct answer rather than silently the first N rows.
@@ -32,28 +34,29 @@ import { api } from "./client.js";
 import { streamNdjson } from "../lib/streamNdjson.js";
 import { clientLog } from "../lib/clientLog.js";
 
-/** Coalesce many pushes into at most one `publish(build())` per frame. `build` runs at FLUSH time, so a
- *  burst of stream events costs one object construction, not one per event. */
+/** The minimum gap between two intermediate publishes of a streaming load (see the rules above). */
+export const PUBLISH_INTERVAL_MS = 250;
+
+/** Coalesce many pushes into at most one `publish(build())` per PUBLISH_INTERVAL_MS (the first one on the
+ *  next frame). `build` runs at FLUSH time, so a burst of stream events costs one object construction, not
+ *  one per event. */
 function framePublisher<T>(build: () => T, publish: (value: T) => void) {
-  let handle: number | null = null;
-  const schedule =
-    typeof requestAnimationFrame === "function"
-      ? requestAnimationFrame
-      : (cb: () => void) => setTimeout(cb, 16) as unknown as number;
-  const unschedule =
-    typeof cancelAnimationFrame === "function" ? cancelAnimationFrame : (h: number) => clearTimeout(h);
+  let handle: ReturnType<typeof setTimeout> | null = null;
+  let last = 0; // ms epoch of the last publish; 0 = none yet, so the first goes out on the next frame
   return {
     push(): void {
       if (handle != null) return;
-      handle = schedule(() => {
+      const wait = last === 0 ? 16 : Math.max(16, last + PUBLISH_INTERVAL_MS - Date.now());
+      handle = setTimeout(() => {
         handle = null;
+        last = Date.now();
         publish(build());
-      });
+      }, wait);
     },
     /** Drop any pending frame — used once the final value is returned, so it cannot land after it. */
     cancel(): void {
       if (handle == null) return;
-      unschedule(handle);
+      clearTimeout(handle);
       handle = null;
     },
   };
@@ -130,8 +133,8 @@ export async function streamRepoRows(qc: QueryClient, signal?: AbortSignal): Pro
 // ── The One-repo detail ───────────────────────────────────────────────────────
 
 /**
- * `queryFn` for `["repo", repoId]`. Streams `GET /api/repos/:repoId/detail/stream`, publishing after every
- * event, and resolves with the finished detail.
+ * `queryFn` for `["repo", repoId]`. Streams `GET /api/repos/:repoId/detail/stream`, publishing what it has
+ * (throttled — see framePublisher) as events arrive, and resolves with the finished detail.
  *
  * Everything published before `done` carries `partial: true` — the header and the rows so far are real, the
  * aggregates beside them are running subtotals, and the IPFS health is not yet known. The page reads that

@@ -33,25 +33,30 @@ let inFlight: Promise<void> | null = null;
 async function cycleAllStorages(reason: string): Promise<void> {
   // LAZY import: pin.service imports the storage/tracking modules, so a static import here is a cycle.
   const { syncStorageText } = await import("../pin/pin.service.js");
+  const { track } = await import("../progress/progress.registry.js");
   const ids = listStorageIds();
-  for (const id of ids) {
-    try {
-      const row = getStorageRow(id);
-      if (!row) continue;
-      const result = await syncStorageText(id);
-      // An OFFLINE cycle is postponed, not failed (bug #15) — pin.service already scheduled its own
-      // retry-on-reconnect, so this line only has to avoid writing laptop weather into `error.err`.
-      if (result.problem) {
-        const line = `${reason}: storage ${id} (${row.name}) — ${result.problem}`;
-        if (result.offline) log.info("storage", line);
-        else log.warn("storage", line);
+  // A CARD IN THE PROGRESS DOCK for the whole cycle (performance.mdx P-59): which storage, and which git
+  // phase it is in. This runs on every stale page load and at boot, and a fetch over a slow link is minutes
+  // of silence — without the card, "it is exchanging with your other computers" was indistinguishable from
+  // "it is stuck".
+  await track("sync", "your other computers", async (report) => {
+    for (const [i, id] of ids.entries()) {
+      try {
+        const row = getStorageRow(id);
+        if (!row) continue;
+        report({ done: i, total: ids.length, unit: "storages", note: row.name });
+        const result = await syncStorageText(id, (phase) => report({ note: `${row.name} — ${phase}` }));
+        // INFO, always: `syncStorageText` has already reported this exact result (pin.service
+        // `reportGitProblem` — WARN when it is a new fault, INFO when offline or when the git layer said it
+        // first). A WARN here made one push give-up three lines in error.err (error catalog #16).
+        if (result.problem) log.info("storage", `${reason}: storage ${id} (${row.name}) — ${result.problem}`);
+      } catch (e) {
+        // One bad storage must never stop the others — the whole point is that the OTHER storage's repo
+        // still gets its rows.
+        log.warn("storage", `${reason}: storage ${id} cycle failed: ${(e as Error).message}`);
       }
-    } catch (e) {
-      // One bad storage must never stop the others — the whole point is that the OTHER storage's repo
-      // still gets its rows.
-      log.warn("storage", `${reason}: storage ${id} cycle failed: ${(e as Error).message}`);
     }
-  }
+  });
 }
 
 /**

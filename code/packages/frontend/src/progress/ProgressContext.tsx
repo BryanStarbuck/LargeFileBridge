@@ -20,7 +20,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } fro
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import type { ProgressJob, ProcessingBatch, QueuedItemView, FailedItemView, SessionView } from "@lfb/shared";
-import { ProgressReactContext, verb, type ProgressCtx } from "./progress-context.js";
+import { ProgressReactContext, ProgressRunReactContext, verb, type ProgressCtx } from "./progress-context.js";
 import { mergeJobs } from "./merge-jobs.js";
 import { api } from "../api/client.js";
 import { mapLimit } from "../lib/concurrency.js";
@@ -152,5 +152,11 @@ export function ProgressProvider({ children }: { children: ReactNode }) {
     () => ({ jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, recentlyFinished, run }),
     [jobs, queued, queuedByOp, batches, queuedItems, recentFailures, workers, session, processing, recentlyFinished, run],
   );
-  return <ProgressReactContext.Provider value={value}>{children}</ProgressReactContext.Provider>;
+  // Two providers: the volatile job state, and the stable runner on its own (useProgressRun) so a
+  // launch-only consumer is not re-rendered by every poll.
+  return (
+    <ProgressRunReactContext.Provider value={run}>
+      <ProgressReactContext.Provider value={value}>{children}</ProgressReactContext.Provider>
+    </ProgressRunReactContext.Provider>
+  );
 }

@@ -11,6 +11,8 @@ import { bumpTopicThrottled, IPFS_TOPIC } from "../events/state-events.service.j
 // Leaf module (node:path only) — no cycle back into ipfs/pin from here.
 import { noteOwnWrite } from "../watcher/self-writes.js";
 import { log } from "../../shared/logging.js";
+import { canonicalCid } from "./cid-canon.js";
+import { PinsetUnavailableError, isPinsetUnavailable } from "./pinset-unavailable.js";
 
 function apiBase(): string {
   // `LFB_IPFS_API_ADDR` overrides the configured address. Two jobs: an escape hatch for a daemon on a
@@ -78,6 +80,34 @@ interface StallGuard {
   clear(): void;
   /** True when WE aborted for lack of progress (vs. any other abort). */
   readonly stalled: boolean;
+  /** Wall time the watchdog saw the PROCESS frozen (timer fired late) and did not bill to the daemon. */
+  readonly suspendedMs: number;
+}
+
+// ── A WATCHDOG THAT FIRES LATE HAS NOT OBSERVED ANY SILENCE ────────────────────────────────────────────
+// The overnight `pin ls (recursive) failed after 3040059ms … stall cap 120000ms` lines (error catalog #17)
+// were not a wedged daemon. log.log shows the pattern every time: `loop-watch PROCESS SUSPENDED for about
+// 612s`, and in the SAME millisecond `pin ls (recursive) stalled after 672233ms — retry 2/3`. macOS froze
+// the whole process at lid-close; the 120 s idle timer came due while nothing could run, and fired the
+// instant the process thawed — before the poll phase could deliver whatever the daemon had written into the
+// socket meanwhile (libuv runs overdue timers first). So the watchdog "proved" 120 s of daemon silence
+// during a span in which WE were not listening.
+//
+// The discriminator is the timer's own lateness, which needs no knowledge of how any clock behaves across
+// sleep: a timeout set for N ms that runs N + minutes later means this process did not run for those
+// minutes (a freeze, or a loop blocked by synchronous work — in both cases we could not have seen
+// progress). Such a firing RE-ARMS for a full fresh window instead of aborting, so the daemon is judged only
+// on time we were actually awake to hear it. Bounded so a process that is permanently starved still fails
+// eventually rather than hanging a limiter slot forever.
+const STALL_LATE_SLACK_MS = 10_000;
+const STALL_MAX_LATE_REARMS = 8;
+
+/** Did a timer armed at `armedAt` for `ms` fire so late that the process cannot have been listening?
+ *  Exported for test: the rule is a judgement about three numbers. */
+export function timerFiredLate(armedAt: number, ms: number, firedAt: number): boolean {
+  // Slack scales with the window (a 120 s window tolerates 10 s of ordinary scheduling jitter) but never
+  // drops below 1 s, so a busy test runner's millisecond-scale windows are not mistaken for a thaw.
+  return firedAt - armedAt - ms > Math.max(1_000, Math.min(ms, STALL_LATE_SLACK_MS));
 }
 
 /**
@@ -93,11 +123,30 @@ interface StallGuard {
  * daemon was fine; we hung up on it. Discovery gets its own, longer window; the idle deadline starts
  * counting only once bytes have actually moved.
  */
-function stallGuard(stallMs: number, discoveryMs: number = stallMs): StallGuard {
+export function stallGuard(stallMs: number, discoveryMs: number = stallMs): StallGuard {
   const ctrl = new AbortController();
   let timer: NodeJS.Timeout | undefined;
   let stalled = false;
   let armed = 0;
+  let lateRearms = 0;
+  let suspendedMs = 0;
+  const arm = (ms: number): void => {
+    // Date.now, not performance.now: lateness is measured in WALL time on purpose — it is the one clock
+    // guaranteed to advance across a lid-close on every macOS/libuv combination (see timerFiredLate).
+    const armedAt = Date.now();
+    timer = setTimeout(() => {
+      const firedAt = Date.now();
+      if (timerFiredLate(armedAt, ms, firedAt) && lateRearms < STALL_MAX_LATE_REARMS) {
+        lateRearms += 1;
+        suspendedMs += firedAt - armedAt - ms;
+        arm(ms); // the same window again, starting now that we can actually hear the daemon
+        return;
+      }
+      stalled = true;
+      ctrl.abort(); // default AbortError, so isAbortError() below still recognizes it
+    }, ms);
+    timer.unref?.(); // a watchdog must never hold the process open
+  };
   return {
     signal: ctrl.signal,
     touch() {
@@ -105,12 +154,7 @@ function stallGuard(stallMs: number, discoveryMs: number = stallMs): StallGuard 
       if (timer) clearTimeout(timer);
       // The first arm is the pre-flight one every caller does before its fetch — that window covers
       // discovery. Every later arm is evidence of real movement, so it gets the idle deadline.
-      const ms = armed++ === 0 ? discoveryMs : stallMs;
-      timer = setTimeout(() => {
-        stalled = true;
-        ctrl.abort(); // default AbortError, so isAbortError() below still recognizes it
-      }, ms);
-      timer.unref?.(); // a watchdog must never hold the process open
+      arm(armed++ === 0 ? discoveryMs : stallMs);
     },
     clear() {
       if (timer) clearTimeout(timer);
@@ -118,6 +162,9 @@ function stallGuard(stallMs: number, discoveryMs: number = stallMs): StallGuard 
     },
     get stalled() {
       return stalled;
+    },
+    get suspendedMs() {
+      return suspendedMs;
     },
   };
 }
@@ -129,6 +176,7 @@ const INERT_GUARD: StallGuard = {
   touch() {},
   clear() {},
   stalled: false,
+  suspendedMs: 0,
 };
 
 /**
@@ -518,7 +566,7 @@ async function pinAddOnce(
   // (the 2026-08-04 eternal-hang defect). The guard must reset ONLY on evidence of real progress: an
   // INCREASED Progress value (more DAG nodes fetched). ndjsonLines therefore gets an inert guard (its
   // per-chunk touch becomes a no-op); the real guard is touched here, on value increase alone.
-  const inert: StallGuard = { signal: guard.signal, touch() {}, clear() {}, stalled: false };
+  const inert: StallGuard = { signal: guard.signal, touch() {}, clear() {}, stalled: false, suspendedMs: 0 };
   // Starts at 0, NOT -1: `{"Progress":0}` is what Kubo reports throughout provider discovery, and counting
   // it as progress would swap the discovery window for the (shorter) idle deadline before a single block
   // had arrived — re-introducing the very abort the discovery grace exists to prevent.
@@ -710,64 +758,9 @@ export async function pinRm(cid: string): Promise<void> {
 // sides to ONE form (CIDv1 base32) first. This bridges the ENCODING axis (v0↔v1 of the SAME multihash). It
 // canNOT bridge the DAG-PROFILE axis (`--cid-version`/`--raw-leaves` change the multihash itself) — for that
 // the bytes must be re-hashed (see contentPinnedCid). Dependency-free so it stays fully local (charter).
-const B58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
-const B32_ALPHABET = "abcdefghijklmnopqrstuvwxyz234567"; // RFC 4648 lower, no padding (multibase 'b')
-
-function base58btcDecode(s: string): Uint8Array {
-  const bytes: number[] = [0];
-  for (const ch of s) {
-    let carry = B58_ALPHABET.indexOf(ch);
-    if (carry < 0) throw new Error(`bad base58 char: ${ch}`);
-    for (let j = 0; j < bytes.length; j++) {
-      carry += bytes[j]! * 58;
-      bytes[j] = carry & 0xff;
-      carry >>= 8;
-    }
-    while (carry) {
-      bytes.push(carry & 0xff);
-      carry >>= 8;
-    }
-  }
-  for (let k = 0; k < s.length && s[k] === "1"; k++) bytes.push(0); // leading-zero bytes
-  return Uint8Array.from(bytes.reverse());
-}
-
-function base32Encode(data: Uint8Array): string {
-  let bits = 0;
-  let value = 0;
-  let out = "";
-  for (const b of data) {
-    value = (value << 8) | b;
-    bits += 8;
-    while (bits >= 5) {
-      out += B32_ALPHABET[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) out += B32_ALPHABET[(value << (5 - bits)) & 31];
-  return out;
-}
-
-/**
- * Normalize any CID to its canonical CIDv1 base32 string so two encodings of the SAME block compare equal
- * (knowledge/ipfs.mdx §5.1). A CIDv0 is always base58btc(multihash) with an implied dag-pb (0x70) codec;
- * we re-wrap it as v1 (0x01) + dag-pb (0x70) + multihash and base32-encode with the multibase 'b' prefix.
- * Anything already CIDv1 (`bafy…`/`bafk…`) or unrecognized is returned unchanged (best-effort — never throws).
- */
-export function canonicalCid(cid: string): string {
-  try {
-    if (!cid.startsWith("Qm")) return cid; // already CIDv1 (or a form we leave as-is)
-    const mh = base58btcDecode(cid);
-    const bytes = new Uint8Array(mh.length + 2);
-    bytes[0] = 0x01; // CIDv1
-    bytes[1] = 0x70; // dag-pb (a CIDv0 is always dag-pb)
-    bytes.set(mh, 2);
-    return "b" + base32Encode(bytes);
-  } catch (e) {
-    log.debug("ipfs", `canonicalCid passthrough for ${cid}: ${(e as Error).message}`);
-    return cid;
-  }
-}
+// CID canonicalization is pure math and lives in a leaf (cid-canon.ts) so the merge worker thread can
+// share it; re-exported here for every existing caller.
+export { canonicalCid };
 
 /** The local pinset as a Set of CANONICAL (CIDv1 base32) CIDs — the base-robust membership test the raw
  *  `new Set(pins.map(p => p.cid))` was silently getting wrong (knowledge/ipfs.mdx §5.1). Best-effort. */
@@ -960,7 +953,10 @@ const PIN_LS_RETRY_MS = 2_000;
  * stall guard tell "still enumerating" from "hung". Older daemons ignore `stream` and answer with a
  * single `{"Keys":{…}}` object, which this parses too.
  */
-async function listPinsOfType(type: "recursive" | "direct"): Promise<Map<string, IpfsPinType>> {
+async function listPinsOfType(
+  type: "recursive" | "direct",
+  acc: { suspendedMs: number } = { suspendedMs: 0 },
+): Promise<Map<string, IpfsPinType>> {
   const guard = stallGuard(PIN_LS_STALL_MS);
   guard.touch();
   const out = new Map<string, IpfsPinType>();
@@ -983,9 +979,14 @@ async function listPinsOfType(type: "recursive" | "direct"): Promise<Map<string,
     }
   } finally {
     guard.clear();
+    acc.suspendedMs += guard.suspendedMs;
   }
   return out;
 }
+
+// The "already reported" pinset failure type lives in a dependency-free leaf (pinset-unavailable.ts) so the
+// pin module can recognise it without going through this module — which nearly every pin spec mocks.
+export { PinsetUnavailableError, isPinsetUnavailable };
 
 // ── ONE enumeration at a time, and not more than one every PINSET_TTL_MS ─────────────────────────────
 //
@@ -1080,28 +1081,34 @@ async function enumeratePins(): Promise<Pin[]> {
   const out = new Map<string, IpfsPinType>();
   for (const type of ["recursive", "direct"] as const) {
     const started = Date.now();
+    const acc = { suspendedMs: 0 };
     for (let attempt = 1; ; attempt++) {
       try {
-        for (const [cid, t] of await listPinsOfType(type)) if (!out.has(cid)) out.set(cid, t);
+        for (const [cid, t] of await listPinsOfType(type, acc)) if (!out.has(cid)) out.set(cid, t);
         break;
       } catch (e) {
+        // WALL time, so it still includes any lid-close the watchdog absorbed — name that part separately,
+        // or "failed after 3040059ms" reads as an hour of daemon silence when it was an hour of sleep.
         const elapsedMs = Date.now() - started;
+        const asleep =
+          acc.suspendedMs > 0 ? ` (~${Math.round(acc.suspendedMs / 1000)}s of it this process was suspended, not waiting)` : "";
         // Retry only on an abort/stall (a slow enumeration or a GC pause can clear up); any other fault
         // (daemon down, RPC error) won't improve on a retry — fail fast.
         if (isAbortError(e) && attempt < PIN_LS_ATTEMPTS) {
           log.info(
             "ipfs",
-            `pin ls (${type}) stalled after ${elapsedMs}ms (no records for ${PIN_LS_STALL_MS}ms) — retry ${attempt + 1}/${PIN_LS_ATTEMPTS}`,
+            `pin ls (${type}) stalled after ${elapsedMs}ms${asleep} (no records for ${PIN_LS_STALL_MS}ms) — retry ${attempt + 1}/${PIN_LS_ATTEMPTS}`,
           );
           await delay(retryDelayMs(PIN_LS_RETRY_MS, attempt));
           continue;
         }
         log.warn(
           "ipfs",
-          `pin ls (${type}) failed after ${elapsedMs}ms on attempt ${attempt} ` +
-            `(stall cap ${PIN_LS_STALL_MS}ms; ${out.size} pins read from earlier types): ${(e as Error).message}`,
+          `pin ls (${type}) failed after ${elapsedMs}ms${asleep} on attempt ${attempt} ` +
+            `(stall cap ${PIN_LS_STALL_MS}ms; ${out.size} pins read from earlier types): ${(e as Error).message}. ` +
+            `Every pin-state reader skips this pass (pin state UNKNOWN, not empty) and retries on its next one.`,
         );
-        throw new Error(`ipfs pin ls (${type}) failed: ${(e as Error).message}`);
+        throw new PinsetUnavailableError(`ipfs pin ls (${type}) failed: ${(e as Error).message}`);
       }
     }
   }
@@ -1537,6 +1544,48 @@ export function resetComplianceThrottle(): void {
   lastEnforceAt = 0;
   pendingComplianceRestart = false;
   unreachableProbes = 0;
+  if (complianceRetryTimer) clearTimeout(complianceRetryTimer);
+  complianceRetryTimer = null;
+  complianceRetryAttempt = 0;
+}
+
+// ── A FAILED ENFORCEMENT IS RETRIED, NOT WAITED OUT (error catalog #21) ─────────────────────────────────
+// Boot fires `enforceCompliance({ force: true })` while the daemon it just auto-started (or that just woke
+// with the laptop) is often still too busy to answer a `config` RPC inside RPC_TIMEOUT_MS — the one-off
+// `Could not enforce compliance: This operation was aborted` of 09-26. The run was then over: it had
+// already stamped `lastEnforceAt`, so the throttle swallowed the next ten minutes of unforced calls, and the
+// only other unforced caller is the pin pass — which never reaches it when pinning is off or the node's
+// health probe fails. A machine could therefore go until the NEXT BOOT without anyone checking that it is
+// not a public gateway / relay for strangers. That is the charter's security default silently skipped.
+//
+// So an enforcement that THREW schedules its own forced retry on a backoff (30 s doubling to 10 min) and
+// keeps at it until one run completes. Conservative on purpose: a retry is a re-read of four keys that
+// writes only what is still non-compliant — the same idempotent pass the user's Fix button runs — so
+// retrying too often costs RPCs, while not retrying costs the policy.
+const COMPLIANCE_RETRY_BASE_MS = 30_000;
+const COMPLIANCE_RETRY_MAX_MS = 10 * 60_000;
+let complianceRetryTimer: NodeJS.Timeout | null = null;
+let complianceRetryAttempt = 0;
+
+/** Is a compliance retry armed right now? Exposed for the status surface and for test. */
+export function complianceRetryPending(): boolean {
+  return complianceRetryTimer !== null;
+}
+
+function scheduleComplianceRetry(): number {
+  if (complianceRetryTimer) clearTimeout(complianceRetryTimer);
+  const base = Number(process.env.LFB_COMPLIANCE_RETRY_MS) || COMPLIANCE_RETRY_BASE_MS; // tests shorten it
+  const wait = Math.min(COMPLIANCE_RETRY_MAX_MS, base * 2 ** Math.min(complianceRetryAttempt, 10));
+  complianceRetryAttempt += 1;
+  complianceRetryTimer = setTimeout(() => {
+    complianceRetryTimer = null;
+    // force: the retry exists precisely because the throttle window must not decide this.
+    void enforceCompliance({ force: true }).catch(() => {
+      /* enforceCompliance never throws; belt and braces so a retry can never become an unhandled rejection */
+    });
+  }, wait);
+  complianceRetryTimer.unref?.(); // never hold the process open for it
+  return wait;
 }
 
 /**
@@ -1659,8 +1708,25 @@ export async function enforceCompliance(opts: { force?: boolean } = {}): Promise
       changed.push("Routing.Type");
       log.info("ipfs", "Set Routing.Type = autoclient (we don't serve other peers' DHT queries).");
     }
+    // Completed: whatever an earlier failure armed is now moot.
+    if (complianceRetryAttempt > 0) {
+      log.info("ipfs", `Compliance enforcement completed after ${complianceRetryAttempt} retr${complianceRetryAttempt === 1 ? "y" : "ies"}.`);
+    }
+    if (complianceRetryTimer) clearTimeout(complianceRetryTimer);
+    complianceRetryTimer = null;
+    complianceRetryAttempt = 0;
   } catch (e) {
-    log.warn("ipfs", `Could not enforce compliance: ${(e as Error).message}`);
+    const first = complianceRetryAttempt === 0;
+    const wait = scheduleComplianceRetry();
+    // WARN once per failure streak — that is the fact a reader needs ("the policy was not asserted"), and
+    // it names the retry so nobody concludes it was abandoned. The retries in the same streak say so at
+    // INFO; the IPFS card independently shows a non-compliant node in red (nodePosture reads the config),
+    // so a streak that never recovers is not hidden, it is on screen.
+    (first ? log.warn : log.info)(
+      "ipfs",
+      `Could not enforce compliance: ${(e as Error).message} — retrying in ${Math.round(wait / 1000)}s` +
+        (first ? "" : ` (retry ${complianceRetryAttempt - 1} also failed)`),
+    );
   }
   // A WRITTEN SETTING IS NOT A LIVE SETTING (see the `restartRequired` note above). Every key we touch here
   // is read by Kubo at daemon INIT, so until the daemon restarts this machine is still relaying strangers'

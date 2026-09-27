@@ -311,7 +311,19 @@ function safeStringify(v: unknown): string {
   }
 }
 
+/** Set by a worker thread (merge-worker.ts) so its log lines travel to the MAIN thread instead of opening a
+ *  second writer on the same rotating files — two writers with two byte counters would rotate under each
+ *  other. The main thread's side (merge-offload.ts) replays them through `log`. */
+let forwardToParent: ((level: Level, context: string, message: string) => void) | null = null;
+export function forwardLogsTo(fn: (level: string, context: string, message: string) => void): void {
+  forwardToParent = fn;
+}
+
 function write(level: Level, context: string, message: string): void {
+  if (forwardToParent) {
+    forwardToParent(level, context, message);
+    return;
+  }
   const header = `[${new Date().toISOString()}] [${level}] [${context}]${contextTag()}`;
   // EVERY physical line carries the header. A message with embedded newlines — a child process's
   // stderr folded into an Error message (`Command failed: git check-ignore …\nfatal: Pathspec …`),

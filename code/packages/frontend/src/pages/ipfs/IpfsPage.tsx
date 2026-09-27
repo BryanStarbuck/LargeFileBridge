@@ -23,7 +23,7 @@ import { restartIpfsAndWait } from "./ipfsShared.js";
 // AI-description / OCR icons, derived from each pin's analysis[] + resolved file kind.
 import { TaskIconCell, TaskIconHeader, analysisTaskStatuses, boolStatus, TASK_ICON, type TaskIconKind } from "../../components/table/taskIcons.js";
 // The §2.11 file filter (tables.mdx §2.11): the TaskStatus → not_yet/done/na row-value mapper.
-import { taskRowValue } from "../../components/table/fileFilter.js";
+import { taskRowValue, type FileFilterFieldId, type FileFilterRowValue } from "../../components/table/fileFilter.js";
 import { runTranscribeFile } from "../../lib/transcribe.js";
 import { runDescribeFile } from "../../lib/describe.js";
 import { runOcrFile } from "../../lib/ocr.js";
@@ -42,6 +42,19 @@ import { writeClipboard } from "@/lib/clipboard";
 
 const PIN_TYPES = ["recursive", "direct", "mfs"];
 const TRACKED = ["pinned", "import", "path-less"];
+
+// The §2.11 file filter (tables.mdx §2.11.6 — the IPFS-pins subset): the three analysis axes, derived from
+// the pin's analysis[] + resolved file name (a path-less pin reads na and so matches only All). Module-level
+// so the prop has ONE identity (an inline literal re-derived the table's filter state on every render).
+const IPFS_FILE_FILTER: {
+  fields: { id: FileFilterFieldId; valueOf: (p: IpfsPinRow) => FileFilterRowValue }[];
+} = {
+  fields: [
+    { id: "transcribe", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).transcribe) },
+    { id: "ai_description", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).describe) },
+    { id: "ocr", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).ocr) },
+  ],
+};
 
 export function IpfsPage() {
   const qc = useQueryClient();
@@ -418,16 +431,8 @@ export function IpfsPage() {
             fillHeight={false}
             data={rows}
             columns={columns}
-            // The §2.11 file filter (tables.mdx §2.11.6 — the IPFS-pins subset): the three analysis
-            // axes, derived from the pin's analysis[] + resolved file name (a path-less pin reads na
-            // and so matches only All).
-            fileFilter={{
-              fields: [
-                { id: "transcribe", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).transcribe) },
-                { id: "ai_description", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).describe) },
-                { id: "ocr", valueOf: (p) => taskRowValue(analysisTaskStatuses(p.file ?? "", p.analysis).ocr) },
-              ],
-            }}
+            // The §2.11 file filter (tables.mdx §2.11.6 — the IPFS-pins subset).
+            fileFilter={IPFS_FILE_FILTER}
             searchKeys={(p) => `${p.file ?? ""} ${p.path ?? ""} ${p.cid} ${p.unit ?? ""}`}
             getRowId={(p) => p.cid}
             onRowClick={(p) => p.path && navigate({ to: "/file", search: { path: p.path } })}

@@ -48,7 +48,17 @@ import {
   type MigrationState,
 } from "../../config/migration-state.js";
 import { log } from "../logging.js";
-import { copyRows, dbEnabled, exec, q, refreshDbHealth, tryDb, type CopyRowsOptions } from "./db.js";
+import {
+  copyRows,
+  dbEnabled,
+  exec,
+  isTransientDbError,
+  q,
+  refreshDbHealth,
+  runInBackground,
+  tryDb,
+  type CopyRowsOptions,
+} from "./db.js";
 import { readPgEpoch } from "./migrate.js";
 import { backgroundShouldDefer, DB_SCHEMA, getPool } from "./pool.js";
 
@@ -163,9 +173,32 @@ function readWatermarks(state: MigrationState, name: string): Record<string, Wat
   return out;
 }
 
+/**
+ * Attempts per scope. A scope that fails TRANSIENTLY (db.ts `isTransientDbError`) is resumed once from its
+ * own cursor before it is written off as failed.
+ *
+ * Both 2026-09-26 scope failures were the moment, not the work: `backfill_candidates/r/all` hit
+ * `statement_timeout` 20 s after a 907 s lid-close (the statement was in flight when the machine slept, and
+ * the server's timer is wall clock), and `r/charlie-kirk` hit the pool's acquire timeout 7 s after a 1,025 s
+ * one, while every repo's post-wake mirror pass was fighting for connections. Without a retry each cost a
+ * whole boot-to-boot cycle — the fingerprint is only stamped on a clean pass — for work that would have
+ * succeeded two seconds later. Safe because every insert is ON CONFLICT (mechanic b) and the cursor is exact.
+ */
+const SCOPE_ATTEMPTS = 2;
+const SCOPE_RETRY_MS = 2_000;
+
 // ── the runner ──────────────────────────────────────────────────────────────────────────────────────────
 
+/**
+ * Run one area. The whole run is BACKGROUND database work (db.ts `runInBackground`): every statement waits
+ * for a lane slot, so a backfill can never hold the connections the interactive reserve keeps for requests
+ * — `backgroundShouldDefer()` below is only a snapshot at the start, and this is what holds for the rest.
+ */
 export async function runBackfill(area: BackfillArea): Promise<BackfillOutcome> {
+  return runInBackground(() => runBackfillInLane(area));
+}
+
+async function runBackfillInLane(area: BackfillArea): Promise<BackfillOutcome> {
   const t0 = performance.now();
   const outcome: BackfillOutcome = {
     name: area.name,
@@ -332,7 +365,22 @@ export async function runBackfill(area: BackfillArea): Promise<BackfillOutcome> 
     };
 
     try {
-      const res = await area.run(scope, ctx);
+      let res: { rows: number };
+      for (let attempt = 1; ; attempt += 1) {
+        try {
+          // A retry resumes from wherever the failed attempt's last checkpoint left the cursor.
+          res = await area.run(scope, attempt === 1 ? ctx : { ...ctx, resumeFrom: scopeCursor, rowsBefore: scopeRows });
+          break;
+        } catch (e) {
+          if (attempt >= SCOPE_ATTEMPTS || !isTransientDbError(e)) throw e;
+          log.info(
+            "migrate",
+            `${area.name}/${scope.key}: transient database failure (${(e as Error).message}) — resuming from ` +
+              `${scopeCursor ?? "the start"} in ${SCOPE_RETRY_MS}ms`,
+          );
+          await new Promise((r) => setTimeout(r, SCOPE_RETRY_MS));
+        }
+      }
       scopeRows = res.rows;
       totalRows += scopeRows;
       marks[scope.key] = { fp: scopeFp, cursor: null, rows: scopeRows, done: true };

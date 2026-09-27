@@ -61,6 +61,7 @@ import {
   upsertUnitScanScalars,
   type CensusRow,
 } from "../store-model/file.repo.js";
+import { timeSlicer } from "../../shared/time-slice.js";
 
 interface Candidate {
   path: string; // relative to unit root
@@ -245,7 +246,13 @@ export async function scanAll(
         discovery,
         foreignPins: fpBatch,
       };
+      // TIME-SLICED: `reconcileExternalState` usually completes synchronously (a sidecar read, a memo hit), and
+      // awaiting an already-resolved promise never gives the loop a turn — so without this, thousands of
+      // candidates ran as one stretch.
+      const slicer = timeSlicer();
       for (const c of candidates) {
+        const y = slicer.maybeYield();
+        if (y) await y;
         await reconcileExternalState(
           repoPath,
           { path: c.path, size: c.size, modified: c.modified_at },
@@ -417,12 +424,10 @@ const UNIT_CANDIDATE_CAP = 50_000;
 const UNIT_CANDIDATE_HARD_CAP = 200_000;
 
 // Yield control back to the event loop so a long, CPU-bound synchronous walk does not FREEZE the whole
-// web app. The walk is fs.readdirSync/statSync in a tight loop; without cooperative yields it starves
-// the HTTP server for the whole scan — scan-status polls, page loads, everything hangs, which reads as
-// "the scan (and the app) stopped." Yielding every few hundred entries keeps the server responsive
-// while the scan runs truly in the background (scan.mdx §10).
-const YIELD_EVERY = 400;
-const yieldToLoop = () => new Promise<void>((r) => setImmediate(r));
+// web app. The walk is fs.readdirSync/statSync in a tight loop; without cooperative yields it starves the
+// HTTP server for the whole scan — scan-status polls, page loads, everything hangs, which reads as "the scan
+// (and the app) stopped." The loops below yield by ELAPSED TIME (shared/time-slice.ts), which keeps the
+// server responsive while the scan runs truly in the background (scan.mdx §10).
 
 /** What one unit walk found: the (capped) candidate rows, plus how many the cap dropped. */
 interface WalkResult {
@@ -458,7 +463,10 @@ async function walkUnit(
     excl.ignores(relDir) ||
     excl.ignores(relDir + "/") ||
     (!exclHasNegation && excl.ignores(relDir + "/.lfb-prune-probe"));
-  let sinceYield = 0;
+  // Yield by ELAPSED TIME, per entry processed (shared/time-slice.ts): a count of 400 entries was not a bound
+  // at all when one entry costs a stat plus glob matching — the live profile put this walk behind every
+  // remaining 1-second stall (performance.mdx P-62).
+  const slicer = timeSlicer();
 
   while (stack.length) {
     const dir = stack.pop()!;
@@ -471,18 +479,16 @@ async function walkUnit(
       continue;
     }
     for (const ent of entries) {
-      // Yield every N ENTRIES ACTUALLY PROCESSED — not once per directory. This used to add
+      // Yield per ENTRY ACTUALLY PROCESSED — not once per directory. This used to add
       // `entries.length` to the counter and yield BEFORE the loop, which meant a single big directory
       // (a media folder with 10k files) ran its ENTIRE inner loop — 10k blocking `statSync`s — without
       // ever handing the event loop back. On a cloud mount each of those stats can block for tens of
       // milliseconds, so one directory could freeze the HTTP server for a minute or more, which is what
       // surfaced as "Couldn't load actions: timeout of 10000ms exceeded" and hung page loads while a
-      // scan ran (scan.mdx §10). Counting processed entries bounds the block to YIELD_EVERY stats,
-      // matching the rollup walk in entity.service.ts and listDirectory in fs.service.ts.
-      if ((sinceYield += 1) >= YIELD_EVERY) {
-        sinceYield = 0;
-        await yieldToLoop();
-      }
+      // scan ran (scan.mdx §10). Per entry, and by TIME rather than by count: a count of entries only bounds
+      // the block if every entry costs the same, and they do not (performance.mdx P-62).
+      const y = slicer.maybeYield();
+      if (y) await y;
       const abs = path.join(dir, ent.name);
       if (opts.maskPaths.some((m) => abs === m || abs.startsWith(m + path.sep))) continue;
       if (ent.isSymbolicLink()) continue;
@@ -905,13 +911,11 @@ async function findGitRepos(root: string, followSymlinks: boolean): Promise<stri
   const found: string[] = [];
   const stack: string[] = [root];
   let budget = 20000; // bounded walk so discovery never runs away
-  let sinceYield = 0;
+  const slicer = timeSlicer(); // keep the server responsive during discovery too (scan.mdx §10)
   while (stack.length && budget-- > 0) {
     const dir = stack.pop()!;
-    if (++sinceYield >= YIELD_EVERY) {
-      sinceYield = 0;
-      await yieldToLoop(); // keep the server responsive during discovery too (scan.mdx §10)
-    }
+    const y = slicer.maybeYield();
+    if (y) await y;
     if (isGitWorkingTree(dir)) {
       found.push(dir);
       continue; // do not descend into a repo to find nested repos (keep it simple)

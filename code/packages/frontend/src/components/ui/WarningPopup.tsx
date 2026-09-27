@@ -15,7 +15,8 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, ChevronUp, CircleSlash, ExternalLink, FileText, Film, Image as ImageIcon, Music, Pin, Play, Search, Shrink } from "lucide-react";
 import { healthColor, healthIcon } from "./health.js";
 import { Disclosure } from "./Disclosure.js";
-import { useProgress } from "../../progress/progress-context.js";
+import { useProgressRun } from "../../progress/progress-context.js";
+import { useWindowedRows } from "../table/useWindowedRows.js";
 import { DecisionToggle, type ToggleState } from "../decision/DecisionToggles.js";
 import { Popover } from "../table/Popover.js";
 import {
@@ -135,6 +136,11 @@ export function composeActionLabel(checkedAxes: string[], checkedCount?: number)
   return appendCount([...leadVerbs, continueClause].join(" and "), checkedCount);
 }
 
+// Subjects-list windowing (see `windowed` below): the row count above which only the on-screen rows render,
+// and the first-paint row-height estimate (two lines of text + py-1.5) until a real row is measured.
+const TARGET_WINDOW_MIN = 150;
+const TARGET_ROW_H = 48;
+
 export function WarningPopup({
   warning,
   onClose,
@@ -186,7 +192,9 @@ export function WarningPopup({
   const [previewId, setPreviewId] = useState<string | null>(null); // §4.5.2 — the clicked/arrow-selected row
   const [playing, setPlaying] = useState(false); // §4.5.2 — the selected video left its poster and is playing
   const [explainOpen, setExplainOpen] = useState(false); // §4.2.1 — "More info ▾" expands the educate copy
-  const { run } = useProgress(); // §5.3 — async fixes hand off to the bottom Progress dock
+  // §5.3 — async fixes hand off to the bottom Progress dock. The STABLE runner only: the full progress
+  // context changes on every /progress poll, and this popup can hold thousands of subject rows.
+  const run = useProgressRun();
   const mediaRef = useRef<HTMLMediaElement | null>(null); // previewed <video>/<audio> element (§4.5.3)
   const listRef = useRef<HTMLDivElement>(null); // the subjects list — arrow moves scroll the selection into view
 
@@ -454,6 +462,14 @@ export function WarningPopup({
     return firstFieldRef;
   };
 
+  // The subjects list is WINDOWED once it is long (performance.mdx P-01, the same hook the tables use): a
+  // repo-wide popup can name thousands of files, and rendering every row cost thousands of DOM nodes and a
+  // full re-render of all of them per checkbox click. Short lists render whole — they are cheap, and their
+  // rows may mix one- and two-line layouts, which the windowing arithmetic (uniform rows) cannot model.
+  const windowed = visibleTargets.length > TARGET_WINDOW_MIN;
+  const win = useWindowedRows(windowed ? visibleTargets.length : 0, TARGET_ROW_H, listRef);
+  const renderedTargets = windowed ? visibleTargets.slice(win.start, win.end) : visibleTargets;
+
   const showSearch = targets.length > 30;
   // §4.5.4 — the File types dropdown's derived view: the options its find-a-type box leaves listed, grouped
   // under their kind, plus the one-line summary the closed button shows.
@@ -499,7 +515,10 @@ export function WarningPopup({
     const row = Array.from(listRef.current?.querySelectorAll<HTMLElement>("[data-row-id]") ?? []).find(
       (el) => el.dataset.rowId === id,
     );
-    row?.scrollIntoView({ block: "nearest" });
+    if (row) row.scrollIntoView({ block: "nearest" });
+    // Windowed: the target row may not be in the DOM yet — scroll its INDEX into view and it renders there.
+    else if (listRef.current)
+      listRef.current.scrollTop = Math.max(0, next * win.rowHeight - listRef.current.clientHeight / 2);
   };
   const onDialogKeyDown = (e: React.KeyboardEvent) => {
     if (!hasTargets) return;
@@ -824,11 +843,13 @@ export function WarningPopup({
                 )}
               </div>
               <div ref={listRef} className="min-h-0 flex-1 overflow-y-auto px-2 pb-4">
-                {visibleTargets.map((t) => {
+                {windowed && win.padTop > 0 && <div aria-hidden style={{ height: win.padTop }} />}
+                {renderedTargets.map((t, i) => {
                   const isPreview = t.id === previewId;
                   return (
                     <div
                       key={t.id}
+                      ref={windowed && i === 0 ? win.measureRow : undefined}
                       data-row-id={t.id}
                       // §4.5.2 — clicking anywhere on the row selects it for the preview (read-only).
                       onClick={() => selectPreview(t.id)}
@@ -897,6 +918,7 @@ export function WarningPopup({
                     </div>
                   );
                 })}
+                {windowed && win.padBottom > 0 && <div aria-hidden style={{ height: win.padBottom }} />}
                 {visibleTargets.length === 0 && (
                   <div className="px-3 py-4 text-center text-xs text-black/50">
                     {hiddenCount > 0 ? "Nothing matches the file types and search above." : "No matches."}

@@ -19,6 +19,10 @@ const sqlCalls: Array<{ kind: string; sql: string }> = [];
 
 vi.mock("./db.js", () => ({
   dbEnabled: () => true,
+  // The lane is db.ts's (db-lane.spec.ts); here it only has to run the work.
+  runInBackground: <T>(fn: () => Promise<T>): Promise<T> => fn(),
+  isTransientDbError: (e: unknown) =>
+    /statement timeout|timeout exceeded when trying to connect/.test((e as Error)?.message ?? ""),
   refreshDbHealth: async () => true,
   q: async (sql: string) => {
     sqlCalls.push({ kind: "q", sql });
@@ -177,6 +181,60 @@ describe("mechanic (a): resume from the cursor an interrupted run left behind", 
     expect(seen).toEqual([{ scope: "a", resumeFrom: "row-42", rowsBefore: 42 }]);
     expect(second.scopesUnchanged).toBe(1);
     expect(second.scopesResumed).toBe(1);
+  });
+});
+
+describe("a TRANSIENT database failure resumes the scope in the same pass", () => {
+  it("retries once from the failed attempt's own cursor — the 2026-09-26 post-sleep r/all failure", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const seen: Array<{ scope: string; resumeFrom: string | null; rowsBefore: number }> = [];
+      let failed = false;
+      const run = vi.fn(async (s, ctx: Ctx) => {
+        seen.push({ scope: s.key, resumeFrom: ctx.resumeFrom, rowsBefore: ctx.rowsBefore });
+        if (s.key === "a" && !failed) {
+          failed = true;
+          ctx.checkpoint("row-500", 500);
+          throw new Error("canceling statement due to statement timeout");
+        }
+        return { rows: 1000 };
+      });
+      const p = runBackfill(twoScopeArea(run));
+      await vi.advanceTimersByTimeAsync(5_000);
+      const out = await p;
+      expect(out.scopesFailed).toBe(0); // before: 1, and the whole area waited for the next boot
+      expect(out.scopesDone).toBe(2);
+      expect(seen).toEqual([
+        { scope: "a", resumeFrom: null, rowsBefore: 0 },
+        { scope: "a", resumeFrom: "row-500", rowsBefore: 500 },
+        { scope: "b", resumeFrom: null, rowsBefore: 0 },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not retry a real bug, and gives up after the one retry", async () => {
+    const bug = vi.fn(async () => {
+      throw new Error("column does not exist");
+    });
+    const out1 = await runBackfill(twoScopeArea(bug));
+    expect(out1.scopesFailed).toBe(2);
+    expect(bug).toHaveBeenCalledTimes(2); // once per scope, no retry
+
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const stuck = vi.fn(async () => {
+        throw new Error("timeout exceeded when trying to connect");
+      });
+      const p = runBackfill(twoScopeArea(stuck, 2));
+      await vi.advanceTimersByTimeAsync(10_000);
+      const out2 = await p;
+      expect(out2.scopesFailed).toBe(2);
+      expect(stuck).toHaveBeenCalledTimes(4); // two attempts per scope, then written off
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

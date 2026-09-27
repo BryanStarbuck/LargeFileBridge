@@ -299,3 +299,53 @@ describe("§4/§6 — the ledger on disk", () => {
     expect(() => readDeletions(file)).toThrow(/half-merged/);
   });
 });
+
+// ── the 2026-09-27 charlie-kirk churn loop ──────────────────────────────────
+//
+// Three defects, each harmless-looking alone, kept charlie-kirk's 3.6 MB decision ledger and its
+// deletions.yaml rewriting on every pass (373 + 218 backbone commits in a day, a 2–3.5 s event-loop stall
+// per pass, the page spinning). Each test pins one of them.
+describe("churn — a settled deletion must be SILENT on every later pass", () => {
+  it("the reaper re-tombstones NOTHING on a pass that changed nothing", async () => {
+    const root = tmpUnit();
+    const e = entry();
+    const l = ledger(tombstone());
+    const staledCalls: string[][] = [];
+    const deps = {
+      resolveAbs: (rel: string) => path.join(root, rel),
+      pinsetHasContent: () => false,
+      pinRm: async () => {},
+      canonicalCid: canon,
+      label: THIS_DEVICE,
+      byPath: new Map([[REL, e]]),
+      tombstoneDecision: async (rels: string[]) => void staledCalls.push(rels),
+    };
+    await reap(l, deps, "2026-09-27T20:00:00.000Z");
+    expect(staledCalls).toEqual([[REL]]); // the pass that REMOVED the entry tombstones its decision…
+    await reap(l, deps, "2026-09-27T20:15:00.000Z");
+    await reap(l, deps, "2026-09-27T20:30:00.000Z");
+    expect(staledCalls).toHaveLength(1); // …and no later pass re-stamps it
+  });
+
+  it("a sha256 BACKFILL folds into its null-sha twin instead of becoming a second tombstone", () => {
+    const before = tombstone({ sha256: null, enforced_by: [] });
+    const after = tombstone({
+      enforced_by: [{ device: "bryan-mac-studio", at: "2026-09-20T19:03:20.739Z", bytes: "deleted", pin: "unpinned", sidecars: 3, note: null }],
+    });
+    const merged = mergeDeletions(ledger(before), ledger(after));
+    expect(merged.deletions).toHaveLength(1);
+    expect(merged.deletions[0].sha256).toBe(SHA);
+    expect(merged.deletions[0].enforced_by).toHaveLength(1);
+  });
+
+  it("two genuinely different shas for one (path, cid) stay two records", () => {
+    const merged = mergeDeletions(ledger(tombstone({ sha256: "aa" })), ledger(tombstone({ sha256: "bb" })));
+    expect(merged.deletions).toHaveLength(2);
+  });
+
+  it("the merge is byte-identical in BOTH directions — the mirror leg and the reconcile leg agree", () => {
+    const a = ledger(tombstone({ sha256: null }), tombstone({ path: "b.jpg", cid: "c1", sha256: "x1" }));
+    const b = ledger(tombstone(), tombstone({ path: "b.jpg", cid: "c2", sha256: "x2" }));
+    expect(serializeDeletions(mergeDeletions(a, b))).toBe(serializeDeletions(mergeDeletions(b, a)));
+  });
+});

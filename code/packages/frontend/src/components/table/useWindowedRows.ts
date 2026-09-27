@@ -30,6 +30,9 @@ export interface RowWindow {
    * varied could not be windowed by this arithmetic at all.
    */
   measureRow: (el: HTMLElement | null) => void;
+  /** The row height in force (measured once a row exists, else the caller's estimate) — lets a caller
+   *  scroll an index that is NOT currently rendered into view (index × rowHeight). */
+  rowHeight: number;
 }
 
 /** Below this the measurement is noise (sub-pixel layout, a fractional zoom) and re-rendering for it costs
@@ -104,7 +107,7 @@ export function useWindowedRows(
     // Re-attach when the container node identity changes (e.g. table mounts after loading).
   }, [containerRef, count, h]);
 
-  if (count === 0) return { start: 0, end: 0, padTop: 0, padBottom: 0, measureRow };
+  if (count === 0) return { start: 0, end: 0, padTop: 0, padBottom: 0, measureRow, rowHeight: h };
 
   // Before the container is measured, render a first slice so content shows immediately.
   const effectiveViewport = viewport || h * (overscan * 3);
@@ -117,5 +120,6 @@ export function useWindowedRows(
     padTop: start * h,
     padBottom: Math.max(0, (count - end) * h),
     measureRow,
+    rowHeight: h,
   };
 }
