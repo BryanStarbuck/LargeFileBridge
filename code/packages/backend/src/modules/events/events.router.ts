@@ -40,6 +40,25 @@ let warnedAtCount = 0;
 //   {"type":"bump","topic":"repo:charlie-kirk","revision":7}
 //   {"type":"heartbeat"}                        every 25s of quiet
 eventsRouter.get("/stream", (req, res) => {
+  // WHICH tab holds this socket: the page it was opened from, plus the proxy-side port. Also keeps each
+  // line distinct, so the logger's repeat-folding cannot hide an extra stream (performance.mdx P-63).
+  // `shared=1` marks the one cross-tab leader stream; `solo=1` a browser without Web Locks that must keep
+  // its own. NEITHER means a tab still running pre-election code (it was open before the fix and never
+  // reloaded — a throttled background tab can miss Vite's reload). Each of those held one of the browser's
+  // ~6 sockets to this origin FOREVER, so it is refused with a fast answer instead: its retry backs off to
+  // one short request every 30 s, the socket is free, and the tab shows "live updates paused" until it is
+  // reloaded (performance.mdx P-63).
+  const kind = req.query.shared === "1" ? "shared" : req.query.solo === "1" ? "solo" : null;
+  const who = `[${kind ?? "stale-tab"}] from ${req.get("referer") ?? "?"} port ${req.socket.remotePort ?? "?"}`;
+  if (!kind) {
+    log.info("events", `refused a state stream from a tab running old code ${who} — reload that tab`);
+    res.status(409).json({
+      ok: false,
+      code: "stale_client",
+      error: "This tab is running an older copy of Large File Bridge. Reload the tab to get live updates.",
+    });
+    return;
+  }
   res.setHeader("Content-Type", "application/x-ndjson; charset=utf-8");
   res.setHeader("Cache-Control", "no-store");
   res.setHeader("Connection", "keep-alive");
@@ -84,7 +103,7 @@ eventsRouter.get("/stream", (req, res) => {
     } catch {
       /* socket already gone — nothing to close */
     }
-    log.debug("events", `state stream closed (${subscriberCount()} remaining)`);
+    log.debug("events", `state stream closed (${subscriberCount()} remaining) ${who}`);
   }
 
   // The client going away is the ONLY normal end of this stream — always unsubscribe, or the subscriber
@@ -122,7 +141,7 @@ eventsRouter.get("/stream", (req, res) => {
   heartbeat.unref?.();
 
   const attached = subscriberCount();
-  log.debug("events", `state stream opened (${attached} attached)`);
+  log.debug("events", `state stream opened (${attached} attached) ${who}`);
   // The browser keeps ONE stream per browser profile (liveStream.ts elects a leader tab), so several at
   // once means tabs still running pre-election code, or several browsers. Four+ is the dangerous zone:
   // Chrome's ~6-socket per-host pool is shared by every tab, and permanent streams starve every other

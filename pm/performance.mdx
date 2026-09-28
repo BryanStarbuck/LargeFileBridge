@@ -2408,6 +2408,28 @@ remaining tabs took 2–3 ms. On the user's own Chrome, the next backend restart
 (23:52:41 UTC) where every earlier restart re-attached 6, and the first `client:perf.route` report in three
 hours arrived eleven seconds later.
 
+**Tabs that were open before the fix.** Two things kept old per-tab streams alive after the fix shipped,
+and each is now closed off:
+
+* **Vite hot-swapped the module.** A hot update evaluates a second copy of `liveStream.ts` beside the old
+  one, and the old copy's reconnect loop kept running, so each edit added a stream per tab. The module
+  now stops its loop on `dispose` and forces a full reload instead of accepting a hot update.
+* **Background tabs never processed Vite's reload.** Throttled or frozen tabs stayed on the old code, and
+  their loops reconnected after every backend restart (`[PER-TAB] from /scans`, `from /repos/…`). The
+  client now declares itself (`?shared=1` for the leader, `?solo=1` for a browser without Web Locks), and
+  the server **refuses a stream request that declares neither** with a fast `409 stale_client`. The old
+  loop backs off to one short request every 30 s, the socket is free, and the tab reads "live updates
+  paused" until it is reloaded.
+Refusing stale-tab streams, and labelling each stream `[shared]`/`[solo]` with the page that opened it, is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/events/events.router.ts` — the `GET /stream` handler (`kind`, `who`)
+
+**The banner poll no longer holds a socket for 8 s.** `/api/ipfs/liveness` waited up to its full 8 s
+deadline for a busy daemon even when it already had a remembered answer to give. With a remembered answer
+it now serves that after 1.5 s (the probe keeps running for the next poll). The full 8 s wait remains only
+for the first poll after boot.
+Bounding the liveness wait by whether a remembered answer exists is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/ipfs/ipfs.router.ts` — `GET /liveness` (`LIVENESS_STALE_OK_MS`)
+
 **Diagnosis rule this leaves:** if the backend is fast and quiet while the page spins, and no client
 report is arriving, count sockets before profiling anything:
 `lsof -nP -iTCP:2222 -sTCP:ESTABLISHED` (the browser's side) and

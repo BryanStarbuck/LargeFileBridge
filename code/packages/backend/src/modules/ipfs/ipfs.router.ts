@@ -39,6 +39,10 @@ ipfsRouter.get("/node", async (_req, res) => {
 // computation keeps running in the background so the next poll gets a current one. The in-flight probe is
 // shared, so a slow daemon costs one probe however many tabs are polling.
 const LIVENESS_DEADLINE_MS = Number(process.env.LFB_LIVENESS_DEADLINE_MS) || 8_000; // env: tests only
+// Once there IS a remembered answer, waiting the full deadline for a busy daemon only holds one of the
+// browser's ~6 sockets to this origin for 8 s per poll (performance.mdx P-63) — serve the remembered answer
+// much sooner; the probe keeps running and the next poll gets the fresh one.
+const LIVENESS_STALE_OK_MS = Math.min(LIVENESS_DEADLINE_MS, 1_500);
 let lastLiveness: Awaited<ReturnType<typeof liveness>> | null = null;
 let livenessInFlight: Promise<Awaited<ReturnType<typeof liveness>>> | null = null;
 
@@ -65,7 +69,7 @@ export function resetLivenessMemo(): void {
 ipfsRouter.get("/liveness", async (_req, res) => {
   let timer: NodeJS.Timeout | undefined;
   const deadline = new Promise<"deadline">((resolve) => {
-    timer = setTimeout(() => resolve("deadline"), LIVENESS_DEADLINE_MS);
+    timer = setTimeout(() => resolve("deadline"), lastLiveness ? LIVENESS_STALE_OK_MS : LIVENESS_DEADLINE_MS);
     timer.unref?.();
   });
   try {

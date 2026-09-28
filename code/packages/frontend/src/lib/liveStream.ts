@@ -121,6 +121,14 @@ if (typeof window !== "undefined") {
   }
 }
 
+// DEV ONLY: never hot-swap this module. A hot update evaluates a SECOND copy beside the old one, and the old
+// copy's connection loop keeps running — each edit here added a permanent stream per tab, which is the very
+// socket starvation this module exists to prevent (performance.mdx P-63). Stop the old loop and reload.
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => stop());
+  import.meta.hot.accept(() => window.location.reload());
+}
+
 /** Cut any pending backoff short and retry NOW (tab visible again, network back, bfcache restore). */
 function wakeNow(): void {
   if (status === "live") return;
@@ -318,7 +326,10 @@ async function runLoop(ac: AbortController): Promise<void> {
     }, STALL_CHECK_MS);
 
     try {
-      await streamNdjson("/events/stream", {
+      // `?shared=1` = the cross-tab LEADER stream; `?solo=1` = a browser without Web Locks, which must keep
+      // its own. A request with NEITHER is a tab on pre-election code, and the server refuses it rather than
+      // let it hold a socket forever (events.router.ts, performance.mdx P-63).
+      await streamNdjson(isLeader ? "/events/stream?shared=1" : "/events/stream?solo=1", {
         signal: attemptAc.signal,
         onEvent: (raw) => {
           lastLineAt = Date.now();
