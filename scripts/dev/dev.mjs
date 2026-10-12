@@ -73,7 +73,10 @@ const err = (s) => process.stderr.write(`${s}\n`);
 // `src/main.ts` — never `src/cli.ts` — is what keeps the background pin/scan/device worker out of it.
 const DEV_TREE = [
   ["@lfb/", "--parallel dev"],
-  [codeDir, "packages/frontend"],
+  // The Vite dev server, by its entry script — NOT merely "anything under packages/frontend". That is what
+  // this said before, and it also matched a `vitest run`, a `tsc --noEmit` and an editor's language server
+  // for that package: every `just run` SIGTERMed, then SIGKILLed, whichever of those was open.
+  [codeDir, "vite/bin/vite.js"],
   [codeDir, "src/main.ts"],
   // The heap-ceiling wrapper the backend's `dev`/`start` scripts go through. Its own argv is relative
   // (`node ../../../scripts/node-heap-run.mjs tsx watch src/main.ts`), so the code-path matcher above
@@ -420,7 +423,10 @@ async function cmdStop({ quiet = false } = {}) {
   const recorded = readPidFile();
   if (recorded.length) {
     terminate(recorded, { hard: false });
-    await sleep(300);
+    // Up to 7s, not a flat 300ms: the launcher reaps its whole process group before it exits (TERM, up to
+    // 5s of grace, then KILL — launch.mjs `reapThenFinish`). SIGKILLing it 300ms in cut that sweep short,
+    // which is how a watcher or a backend child came to outlive a stop. Returns as soon as they are gone.
+    await waitUntil(() => !recorded.some(isAlive), { timeoutMs: 7000, everyMs: 150 });
     terminate(recorded.filter(isAlive), { hard: true });
   }
   try {

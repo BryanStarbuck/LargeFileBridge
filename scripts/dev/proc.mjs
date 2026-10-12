@@ -225,11 +225,26 @@ export function listProcesses() {
 }
 
 /**
+ * A shell that was handed a command line, rather than a program that IS one.
+ *
+ * `pidsMatchingAll` looks for substrings inside an argv, and the argv of `zsh -c "… LargeFileBridge/code …
+ * src/main.ts …"` contains every needle the matcher for our own backend uses. On a machine where several
+ * agents drive long `zsh -c` one-liners, `just stop` — and therefore every `just run` — would SIGTERM and
+ * then SIGKILL a developer's shell that merely mentioned those paths. The sister app hit exactly that on
+ * 2026-Sep-07 (all/scripts/dev/proc.mjs); this copy never got the guard.
+ *
+ * A wrapper is never the app: whatever it launched is its own process and matches on its own merits.
+ * Judged on the FIRST token only, so a node process whose ARGUMENTS mention a shell still counts.
+ */
+const SHELL_WRAPPER =
+  /^(?:\S*\/)?(?:sh|bash|zsh|dash|ksh|fish|csh|tcsh|cmd(?:\.exe)?|powershell(?:\.exe)?|pwsh(?:\.exe)?)(?:\s|$)/;
+
+/**
  * PIDs whose command line contains EVERY substring of ANY one group (OR of ANDs).
  *
  * The AND is what keeps a matcher repo-scoped without a regex: "our `code/` path AND `src/main.ts`" hits
  * this repo's backend watcher and nothing else — not a sister app's, and not our own background worker,
- * which runs `src/cli.ts`. Never returns this process.
+ * which runs `src/cli.ts`. Never returns this process, and never a shell wrapper (see above).
  */
 export function pidsMatchingAll(groups) {
   const wanted = groups
@@ -239,6 +254,7 @@ export function pidsMatchingAll(groups) {
   const out = [];
   for (const { pid, cmd } of listProcesses()) {
     if (pid === process.pid) continue;
+    if (SHELL_WRAPPER.test(cmd)) continue;
     if (wanted.some((group) => group.every((needle) => cmd.includes(needle)))) out.push(pid);
   }
   return [...new Set(out)];
@@ -278,6 +294,44 @@ export function terminate(pids, { hard = false } = {}) {
     } catch {
       // already gone, or not ours — nothing to do either way
     }
+  }
+}
+
+/**
+ * Signal a whole process GROUP — every descendant of a tree that was spawned `detached`.
+ *
+ * `terminate` reaches exactly the pids it is handed. The dev tree is `pnpm → pnpm --parallel → { vite,
+ * node-heap-run → tsx watch → node main.ts → sidecars }`, and a SIGTERM to the top `pnpm` is not promised
+ * to reach the rungs below it; name matching (`pidsMatchingAll`) only reaps the rungs somebody listed.
+ *
+ * launch.mjs spawns the dev tree `detached`, which on POSIX makes it the LEADER of a new process group
+ * that every descendant inherits — except the ones that detach themselves on purpose (the shared IPFS
+ * daemon, an "open in Finder"), which is exactly the set that must survive a restart. So `kill(-pgid)` is
+ * the one call that reaches the rest, listed or not. Windows has no groups; `taskkill /T` walks the tree
+ * there, which `terminate` already does.
+ *
+ * ONLY pass a pgid you are the parent of and still hold the handle for — a number read back from a
+ * pidfile may have been recycled, and a recycled group is somebody else's whole process tree.
+ */
+export function terminateGroup(pgid, { hard = false } = {}) {
+  if (!Number.isInteger(pgid) || pgid <= 1 || pgid === process.pid) return;
+  if (isWindows) return terminate([pgid], { hard });
+  try {
+    process.kill(-pgid, hard ? "SIGKILL" : "SIGTERM");
+  } catch {
+    // ESRCH: the group is already empty. EPERM: not ours. Fall back to the one pid either way.
+    terminate([pgid], { hard });
+  }
+}
+
+/** Is anything left in this process group? Always false on Windows, which has no groups to ask about. */
+export function groupAlive(pgid) {
+  if (isWindows || !Number.isInteger(pgid) || pgid <= 1) return false;
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (e) {
+    return e?.code === "EPERM";
   }
 }
 

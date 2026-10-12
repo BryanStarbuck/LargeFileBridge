@@ -14,7 +14,7 @@
 import fs from "node:fs";
 import { spawn } from "node:child_process";
 import { codeDir, ensureDir, launcherLog, logPipe, pidFile, stateDir } from "./paths.mjs";
-import { isWindows, spawnTool, terminate } from "./proc.mjs";
+import { groupAlive, isWindows, spawnTool, terminate, terminateGroup } from "./proc.mjs";
 
 ensureDir(stateDir());
 
@@ -72,18 +72,57 @@ app.on("error", (e) => {
 
 app.on("exit", (code, signal) => {
   say("INFO", `pnpm dev exited (code=${code ?? "null"} signal=${signal ?? "none"})`);
-  finish(typeof code === "number" ? code : 1);
+  reapThenFinish(typeof code === "number" ? code : 1);
 });
 
 // A signal aimed at the launcher is aimed at the app — take the tree down rather than orphan it.
 for (const sig of ["SIGTERM", "SIGINT", "SIGHUP"]) {
-  process.on(sig, () => {
-    if (app.pid) terminate([app.pid], { hard: false });
-    setTimeout(() => finish(0), 1500).unref?.();
-  });
+  process.on(sig, () => reapThenFinish(0));
+}
+
+/**
+ * Do not exit while anything we started is still running.
+ *
+ * This used to SIGTERM `app.pid` alone and exit 1.5s later. `app.pid` is the top `pnpm`; the processes
+ * that matter are three rungs below it, and a signal to pnpm is not a signal to them. Whatever outlived
+ * that — the `tsx watch` parent, an ffmpeg or transcription child of the backend — was left parented to
+ * init with nothing recording its pid. A surviving watcher respawns the backend on the next source edit,
+ * and this repo is auto-committed continuously, so every restart could leave one more behind.
+ *
+ * The dev tree is its own process GROUP (spawned `detached` above), so the whole of it can be signalled
+ * at once: TERM the group, wait for it to empty, KILL what is left. The grace is long enough for the
+ * backend's own SIGTERM handler to write the ledger's SHUTDOWN marker (main.ts `shutdown`). The same sweep
+ * runs when `pnpm dev` exits on its own, so "the launcher is gone" always means "the tree is gone".
+ */
+const REAP_GRACE_MS = 5000;
+let reaping = false;
+function reapThenFinish(code) {
+  if (reaping) return;
+  reaping = true;
+  const pgid = app.pid;
+  if (!pgid || !groupAlive(pgid)) {
+    // Windows (no groups): taskkill /T walks the tree. POSIX with an empty group: nothing to do.
+    if (isWindows && pgid) terminate([pgid], { hard: false });
+    return finish(code);
+  }
+  terminateGroup(pgid, { hard: false });
+  const deadline = Date.now() + REAP_GRACE_MS;
+  const timer = setInterval(() => {
+    const alive = groupAlive(pgid);
+    if (alive && Date.now() < deadline) return;
+    clearInterval(timer);
+    if (alive) {
+      say("WARN", `dev tree (group ${pgid}) ignored SIGTERM for ${REAP_GRACE_MS}ms — sending SIGKILL`);
+      terminateGroup(pgid, { hard: true });
+    }
+    finish(code);
+  }, 100);
 }
 
 function finish(code) {
+  // Set the code BEFORE the timer: the timer is unref'd, so once the sink's pipe closes nothing holds the
+  // event loop open and node can exit on its own first — with 0, whatever the app's real exit code was.
+  process.exitCode = code;
   try {
     sink.stdin.end();
   } catch {
