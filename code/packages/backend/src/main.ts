@@ -53,6 +53,7 @@ import { startAutoSyncIn } from "./modules/pin/auto-sync-in.service.js";
 import { startReconciler } from "./modules/pin/reconciler.service.js";
 import { acquireSingleInstanceLock } from "./shared/single-instance.js";
 import { startWatcher, stopWatcher } from "./modules/watcher/watcher.service.js";
+import path from "node:path";
 import { resolveStateDir } from "./config/state-dir.js";
 import { migrateSyncToPin } from "./config/migrate-sync-to-pin.js";
 import { migrateDecisionsToLedger } from "./config/migrate-decisions-to-ledger.js";
@@ -63,7 +64,7 @@ import { migratePosixPaths } from "./config/migrate-posix-paths.js";
 import { migrateRepoDirNames } from "./config/migrate-repo-dir-names.js";
 import { bootDatabase } from "./shared/persistence/boot.js";
 import { closePool } from "./shared/persistence/pool.js";
-import { log, flushLogs, logError } from "./shared/logging.js";
+import { log, flushLogs, logError, startExternalLogGuard } from "./shared/logging.js";
 import { txnBoot, txnShutdown, startHeartbeat, stopHeartbeat, txnBegin, txnEnd, readPreviousSessionEnd } from "./shared/transactions.js";
 import { recordSessionStart } from "./shared/session.js";
 import { startHeapWatch, stopHeapWatch } from "./shared/heap-watch.js";
@@ -83,6 +84,20 @@ import { restoreQueueOnBoot } from "./modules/jobqueue/queue-restore.js";
 import { admitRestored, recordQuarantined } from "./modules/jobqueue/jobqueue.service.js";
 import { readDescription } from "./modules/describe/describe.service.js";
 import { readTranscript } from "./modules/transcribe/transcribe.service.js";
+
+// THE HEAP CEILING IS FOR THIS PROCESS ONLY (memory incident 2026-10-15). scripts/node-heap-run.mjs hands the
+// backend `--max-old-space-size=6144 --heapsnapshot-near-heap-limit=1` through NODE_OPTIONS, and NODE_OPTIONS is
+// inherited by EVERY node process we start, directly or through git: the `lfb` git merge driver, the
+// scan/pin/device CLI runs, anything a tool spawns. Each of those then carried a 6 GB ceiling it never asked
+// for (a runaway child grows to 6 GB instead of dying at V8's default) plus a near-limit heap-snapshot hook
+// that writes a multi-GB file on the way down. Remove exactly our two flags from the env children see; this
+// process already applied them at startup, and a user-supplied flag is left alone.
+{
+  const OURS = new Set(["--max-old-space-size=6144", "--heapsnapshot-near-heap-limit=1"]);
+  const kept = (process.env.NODE_OPTIONS ?? "").split(/\s+/).filter((t) => t && !OURS.has(t));
+  if (kept.length) process.env.NODE_OPTIONS = kept.join(" ");
+  else delete process.env.NODE_OPTIONS;
+}
 
 async function bootstrapState(): Promise<void> {
   // Auto-create the CLI shared API secret if missing (cli.mdx §3.1 — both sides create it; the user
@@ -354,6 +369,17 @@ async function main(): Promise<void> {
   // …and watch the REQUESTS, which is where the loop stall becomes a spinning page. Armed here, next to
   // its two siblings; the middleware itself is mounted first in the express chain below.
   startRequestWatch();
+
+  // …and cap the logs OTHER processes hold open for append (the detached ipfs daemon, launchd's
+  // StandardOut/ErrorPath for the IPFS auto-start and login jobs). Their writers never reopen the file while
+  // they stay up, so the reopen-time rotateIfOversized() alone left them uncapped for weeks (logging.ts
+  // capExternalLog). Unref'd, best-effort, never throws.
+  startExternalLogGuard(() => {
+    const st = resolveStateDir();
+    return ["ipfs-daemon.log", "ipfs-autostart.log", "ipfs-autostart.err", "boot.out.log", "boot.err.log"].map(
+      (f) => path.join(st, f),
+    );
+  });
 
   // One-time, idempotent compat migration (sync → pin): rewrite legacy on-disk state (the `sync/` unit
   // dirs, `sync_process`/`synced`/`sync:`/`last_sync_at` keys, and the old `com.largefilebridge.sync`

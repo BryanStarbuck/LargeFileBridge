@@ -53,7 +53,13 @@ function failAll(reason: string): void {
 
 function getWorker(): Worker {
   if (worker) return worker;
-  const w = new Worker(new URL("./merge-worker.ts", import.meta.url), { execArgv: workerExecArgv() });
+  // A worker thread gets its OWN V8 heap, and without resourceLimits it inherits the backend's 6 GB ceiling
+  // (memory incident 2026-10-15). The largest real merge is a ~3.6 MB YAML ledger; 1 GB is generous. A merge
+  // that blows through it fails as an `error` result (retried next pass) instead of growing the process.
+  const w = new Worker(new URL("./merge-worker.ts", import.meta.url), {
+    execArgv: workerExecArgv().filter((a) => !/^--(max-old-space-size|heapsnapshot-near-heap-limit)=/.test(a)),
+    resourceLimits: { maxOldGenerationSizeMb: Math.max(256, Number(process.env.LFB_MERGE_WORKER_HEAP_MB) || 1024) },
+  });
   w.unref(); // an idle merge thread must never hold the process open
   w.on("message", (msg: { id?: number; result?: MergeResult; log?: [string, string, string] }) => {
     if (msg.log) {

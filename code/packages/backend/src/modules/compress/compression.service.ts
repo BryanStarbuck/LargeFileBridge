@@ -243,7 +243,9 @@ export function sweepCompressTemp(maxAgeHours = 24): { files: number; bytes: num
   try {
     const cutoff = Date.now() - maxAgeHours * 3600_000;
     for (const name of fs.readdirSync(dir)) {
-      if (!name.startsWith("compress-")) continue;
+      // `describe-fit-` is describe/fit-media.ts's scratch (fit-to-limit mp4/jpg candidates and the ffmpeg
+      // two-pass stats files) — same lifecycle, same orphaning on a killed process, so the same sweep.
+      if (!name.startsWith("compress-") && !name.startsWith("describe-fit-")) continue;
       const p = path.join(dir, name);
       try {
         const st = fs.statSync(p);

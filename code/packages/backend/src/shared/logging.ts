@@ -32,8 +32,12 @@ function envInt(name: string, fallback: number): number {
 
 // Policy mirrors scripts/log_rotate_pipe.mjs (same env vars, same defaults) so every LFB log file obeys
 // one rule. Defaults: 5 MiB per file, 5 rotated generations kept.
-const MAX_BYTES = envInt("LFB_LOG_MAX_BYTES", 5 * 1024 * 1024);
-const BACKUPS = envInt("LFB_LOG_GENERATIONS", 5);
+//
+// HARD CEILING (2026-10-15): no env override may raise a file past 30 MiB or keep more than 10 backups. Logs on
+// this machine had grown to ~4 GB elsewhere in the family; the env vars tune DOWN, never past the ceiling.
+export const LOG_HARD_MAX_BYTES = 30 * 1024 * 1024;
+const MAX_BYTES = Math.min(envInt("LFB_LOG_MAX_BYTES", 5 * 1024 * 1024), LOG_HARD_MAX_BYTES);
+const BACKUPS = Math.min(envInt("LFB_LOG_GENERATIONS", 5), 10);
 
 // Collapse policy (to_fix.mdx §4.5). The window bounds how long a repeat can sit un-summarized; the
 // key cap bounds how much memory the dedupe table can hold before it force-flushes.
@@ -116,6 +120,47 @@ export function rotateIfOversized(filePath: string, maxBytes = MAX_BYTES, maxBac
   } catch {
     // best-effort — never block a daemon start/install on log rotation
   }
+}
+
+// Cap a log that a LONG-LIVED external process holds open for append — the detached `ipfs daemon`
+// (ipfs-daemon.log), launchd's StandardOut/ErrorPath for the IPFS auto-start job (ipfs-autostart.log/.err)
+// and the login job (boot.out.log/.err.log). rotateIfOversized() only runs at the moment the writer reopens
+// the file, and a daemon that stays up for weeks never reopens it, so between restarts those files had no
+// cap at all. Renaming does not help a held fd (the writer keeps writing to the renamed inode), so this is
+// logrotate's COPYTRUNCATE: shift the .N chain, copy the live file to .1 (fs.copyFileSync — a kernel copy,
+// clonefile on APFS; nothing is read into this process's memory), then truncate the live file to 0. Every one
+// of these writers opened its file O_APPEND (launchd, systemd `append:`, the .vbs `>>`, our "a" fd), so its
+// next write lands at the new end rather than leaving a sparse hole. Lines written between the copy and the
+// truncate can be lost — acceptable for a catch-all stdout log, never used for our own log.log/error.err.
+// Never throws.
+export function capExternalLog(filePath: string, maxBytes = MAX_BYTES, maxBackups = BACKUPS): boolean {
+  try {
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).size < maxBytes) return false;
+    const oldest = `${filePath}.${maxBackups}`;
+    if (fs.existsSync(oldest)) fs.rmSync(oldest, { force: true });
+    for (let i = maxBackups - 1; i >= 1; i--) {
+      const from = `${filePath}.${i}`;
+      if (fs.existsSync(from)) fs.renameSync(from, `${filePath}.${i + 1}`);
+    }
+    fs.copyFileSync(filePath, `${filePath}.1`);
+    fs.truncateSync(filePath, 0);
+    return true;
+  } catch {
+    return false; // best-effort — a log we could not cap must never take the app down
+  }
+}
+
+// Run capExternalLog over `files` now and then every `intervalMs` (default 60 s) for the life of the process.
+// At the 5 MiB default a writer would have to emit 25 MiB inside one interval to pass the 30 MiB ceiling.
+// Unref'd: it never holds the process open. Returns a stop function.
+export function startExternalLogGuard(files: () => string[], intervalMs = 60_000): () => void {
+  const tick = (): void => {
+    for (const f of files()) capExternalLog(f);
+  };
+  tick();
+  const t = setInterval(tick, intervalMs);
+  t.unref?.();
+  return () => clearInterval(t);
 }
 
 // Fold a fault line down to what makes it "the same fact repeated" (to_fix.mdx §4.5): drop the leading

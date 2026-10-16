@@ -4,6 +4,17 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+// WORKER CAP (memory incident 2026-10-15). Vitest's default pool is `forks` with cores-1 workers: on a
+// 24-core Mac that is 23 full node processes, and a worker that has imported sharp + the YAML/zod graph sits
+// at ~1.2 GB — a 23 × 1.2 GB ≈ 28 GB burst for one `just test`. The jetsam report that morning showed exactly
+// that shape (23 consecutive-PID node processes at 1.1-1.25 GB each). Cap by cores AND by RAM, never more
+// than 6; `LFB_TEST_WORKERS` overrides.
+const TEST_WORKERS = Math.max(
+  1,
+  Number(process.env.LFB_TEST_WORKERS) ||
+    Math.min(6, Math.floor((os.availableParallelism?.() ?? os.cpus().length) / 4), Math.floor(os.totalmem() / 2 ** 30 / 16)),
+);
+
 // Lean vitest setup (charter: low dependency surface — vitest only, no extra plugins).
 //
 // The one non-default thing here is `resolve.extensions`: this package is TypeScript ESM and its
@@ -60,5 +71,6 @@ export default defineConfig({
     // Fingerprint tests decode real images with sharp; the import-graph walk reads the tree.
     // Both are CPU-bound and short — the default pool is fine, just give them room.
     testTimeout: 30_000,
+    maxWorkers: TEST_WORKERS,
   },
 });

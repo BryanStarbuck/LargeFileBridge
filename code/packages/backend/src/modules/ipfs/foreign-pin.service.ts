@@ -148,13 +148,22 @@ export function parseFpKey(key: string): { absPath: string; size: number; mtimeM
 // explicitly at its end, and a process exit flushes synchronously, so the common paths never rely on
 // these at all — they only bound the window for an abrupt kill.
 /** Flush this long after the last mutation. Unref'd — a pending flush must never hold the process open. */
-const FLUSH_DEBOUNCE_MS = Math.max(250, Number(process.env.LFB_FOREIGN_PIN_FLUSH_MS) || 10_000);
+// 10 s → 30 s (2026-10-15): a scan that adds a few entries a second kept the debounce permanently armed, so
+// the whole file (now up to ~19 MB at the 100k cap) was rebuilt and rewritten every 10 s for the entire scan.
+const FLUSH_DEBOUNCE_MS = Math.max(250, Number(process.env.LFB_FOREIGN_PIN_FLUSH_MS) || 30_000);
 /** …and never let more than this many mutations sit unwritten, whatever the timer is doing. */
 const FLUSH_MAX_PENDING = 5000;
 /** Hard ceiling on the fingerprint cache. Without one it grew forever (a changed file's old (size,mtime)
  *  key is never revisited, so every re-encode/edit leaves a permanent orphan). Over the cap we keep the
  *  most recently written entries — an evicted entry costs one re-hash, never correctness. */
-const CACHE_MAX_ENTRIES = Math.max(1000, Number(process.env.LFB_FOREIGN_PIN_CACHE_MAX) || 40_000);
+//
+// 40,000 → 100,000 on 2026-10-15: at 40k the cache THRASHED. On the reference machine every one of its 40,000
+// entries had been written within the previous three hours (14:00–16:59Z) — the whole-computer candidate set
+// is larger than the cap, so each pass evicted entries the same pass would need again and re-hashed those
+// files (a full-file `ipfs add --only-hash` stream per profile). The negative cache only saves work if it
+// holds the working set. ~400 B/entry parsed, so 100k ≈ 40 MB of heap, against re-reading tens of
+// thousands of files every pass.
+const CACHE_MAX_ENTRIES = Math.max(1000, Number(process.env.LFB_FOREIGN_PIN_CACHE_MAX) || 100_000);
 
 interface FileIdentity {
   ino: number;
@@ -259,10 +268,17 @@ const cacheStore = new WriteBackStore<Record<string, CacheEntry>>(
     const keys = Object.keys(data);
     if (keys.length <= CACHE_MAX_ENTRIES) return data;
     // Keep the newest by discovery time; an evicted entry simply gets re-derived on a later scan.
+    //
+    // HYSTERESIS (2026-10-15): prune DOWN TO 90% of the cap, not to the cap. Pruning to exactly the cap meant
+    // that once the cache was full, EVERY debounced flush (every 10 s for the whole scan — log.log showed
+    // "pruned 54 / 101 / 302 oldest entries" every ten seconds for 45+ minutes) re-sorted ~40k keys and
+    // rebuilt + rewrote the whole ~7.6 MB file. Leaving 10% headroom turns that into one prune per ~4,000 new
+    // entries.
+    const target = Math.floor(CACHE_MAX_ENTRIES * 0.9);
     keys.sort((a, b) => (data[b]?.at ?? "").localeCompare(data[a]?.at ?? ""));
     const kept: Record<string, CacheEntry> = {};
-    for (const k of keys.slice(0, CACHE_MAX_ENTRIES)) kept[k] = data[k]!;
-    log.debug("ipfs", `foreign-pin cache pruned ${keys.length - CACHE_MAX_ENTRIES} oldest entr(ies)`);
+    for (const k of keys.slice(0, target)) kept[k] = data[k]!;
+    log.debug("ipfs", `foreign-pin cache pruned ${keys.length - target} oldest entr(ies)`);
     return kept;
   },
 );

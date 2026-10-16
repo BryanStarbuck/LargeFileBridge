@@ -25,6 +25,7 @@
 //
 // RULE: on any per-file or per-directory path, use these instead of a bare `statSync` in a `try/catch`,
 // and prefer them over `existsSync(p) && statSync(p)` (which pays two syscalls for one question).
+import crypto from "node:crypto";
 import fs from "node:fs";
 
 /** `fs.Stats` for `path`, or null if it does not exist or cannot be stat'd. Never throws. */
@@ -73,4 +74,25 @@ export function sizeOrZero(p: string): number {
 /** Modified-time in epoch ms, or null when the path is missing/unreadable. Never throws. */
 export function mtimeMsOrNull(p: string): number | null {
   return statOrNull(p)?.mtimeMs ?? null;
+}
+
+/**
+ * sha256 hex of a file, read in fixed 1 MiB chunks — synchronous, constant memory, THROWS like readFileSync.
+ *
+ * `crypto.createHash("sha256").update(fs.readFileSync(abs))` puts the WHOLE file in a Buffer first. On a
+ * large-file product that is a multi-GB external allocation per call (a 4 GB video = 4 GB of RSS until the
+ * next GC), which is exactly the "external=3176MB with nothing running" shape heap-watch logged on
+ * 2026-10-15. Use this wherever a sync caller needs a whole-file digest.
+ */
+export function sha256FileSync(abs: string): string {
+  const h = crypto.createHash("sha256");
+  const buf = Buffer.allocUnsafe(1 << 20);
+  const fd = fs.openSync(abs, "r");
+  try {
+    let n: number;
+    while ((n = fs.readSync(fd, buf, 0, buf.length, null)) > 0) h.update(buf.subarray(0, n));
+  } finally {
+    fs.closeSync(fd);
+  }
+  return h.digest("hex");
 }

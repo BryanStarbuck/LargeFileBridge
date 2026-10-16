@@ -43,6 +43,16 @@ async function main(argv: string[]): Promise<void> {
   process.on("SIGTERM", () => void shutdown("SIGTERM"));
   process.stdin.on("end", () => void shutdown("stdin closed"));
   process.stdin.on("close", () => void shutdown("stdin closed"));
+  // ORPHAN WATCHDOG (memory incident 2026-10-15). stdin EOF is the normal signal that the Claude Code session
+  // that spawned us is gone — but if the session dies hard while some other process still holds the write end
+  // of our stdin pipe, EOF never comes and this server would live forever. Re-parenting is the tell: when the
+  // spawning process exits, POSIX hands us to init/launchd (a new ppid). Unref'd: it never keeps us alive.
+  const parentAtStart = process.ppid;
+  if (process.platform !== "win32" && parentAtStart !== 1) {
+    setInterval(() => {
+      if (process.ppid !== parentAtStart) void shutdown(`parent ${parentAtStart} exited`);
+    }, 15_000).unref();
+  }
   process.on("uncaughtException", (e) => logError({ file: "index.ts", operation: "uncaughtException", error: e }));
   process.on("unhandledRejection", (e) => logError({ file: "index.ts", operation: "unhandledRejection", error: e }));
 

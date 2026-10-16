@@ -99,13 +99,14 @@ export async function ensureServerUp(): Promise<boolean> {
     }
     fs.mkdirSync(stateDir(), { recursive: true });
     const logPath = path.join(stateDir(), "launcher.log");
-    const out = fs.openSync(logPath, "a");
-    const pnpmDev = toolCommand("pnpm", ["dev"]);
-    const child = spawn(pnpmDev.bin, pnpmDev.argv, {
+    // Through scripts/dev/launch.mjs — the same detached supervisor `just run` uses — so the dev tree's
+    // output goes through the ROTATING sink (scripts/log_rotate_pipe.mjs, 5 MiB × 5, hard 30 MiB ceiling).
+    // This used to hand `pnpm dev` a raw append fd on launcher.log, which nothing could ever rotate for the
+    // whole life of the app.
+    const child = spawn(process.execPath, [path.join(root, "scripts", "dev", "launch.mjs")], {
       cwd: code,
       detached: true,
-      stdio: ["ignore", out, out],
-      windowsVerbatimArguments: pnpmDev.verbatim,
+      stdio: "ignore",
       windowsHide: true,
     });
     child.unref();
@@ -122,7 +123,17 @@ function failWithLogTail(): false {
   // its cause (cli.mdx §2 step 3).
   const logPath = path.join(stateDir(), "launcher.log");
   try {
-    const lines = fs.readFileSync(logPath, "utf8").split("\n");
+    // Read only the last 64 KiB — never the whole log into memory just to print 30 lines.
+    const size = fs.statSync(logPath).size;
+    const start = Math.max(0, size - 64 * 1024);
+    const buf = Buffer.alloc(size - start);
+    const fd = fs.openSync(logPath, "r");
+    try {
+      fs.readSync(fd, buf, 0, buf.length, start);
+    } finally {
+      fs.closeSync(fd);
+    }
+    const lines = buf.toString("utf8").split("\n");
     process.stderr.write(`--- tail of ${logPath} ---\n${lines.slice(-30).join("\n")}\n`);
   } catch {
     process.stderr.write(`(no launcher log at ${logPath})\n`);

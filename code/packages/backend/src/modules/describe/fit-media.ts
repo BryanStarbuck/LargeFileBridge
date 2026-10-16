@@ -256,20 +256,21 @@ async function encodeTwoPass(
   const rate = fps ? ["-r", String(fps)] : [];
   const logbase = tmpPath("").replace(/\.$/, "") + "-2pass";
   const common = [...scale, ...rate, "-c:v", "libx264", "-preset", "medium", "-b:v", `${videoKbps}k`, "-passlogfile", logbase];
-  const p1 = await runAsync("ffmpeg", ["-y", "-i", src, ...common, "-pass", "1", "-an", "-f", "mp4", "/dev/null"]);
-  if (p1.code !== 0) {
-    tryUnlink(`${logbase}-0.log`);
-    tryUnlink(`${logbase}-0.log.mbtree`);
-    return p1;
+  // x264 writes pass-1 stats to `<base>-0.log.temp` / `<base>-0.log.mbtree.temp` and only renames them to
+  // `-0.log` / `-0.log.mbtree` when pass 1 COMPLETES. A pass 1 killed by the timeout (SIGKILL) therefore
+  // left the .temp pair behind — 90 MB + 24 MB orphans in <state>/tmp — because only the final names were
+  // unlinked. Remove all four, in a finally, on success and on every failure path.
+  try {
+    const p1 = await runAsync("ffmpeg", ["-y", "-i", src, ...common, "-pass", "1", "-an", "-f", "mp4", "/dev/null"]);
+    if (p1.code !== 0) return p1;
+    const audio = audioKbps > 0 ? ["-c:a", "aac", "-b:a", `${audioKbps}k`] : ["-an"];
+    return await runAsync("ffmpeg", [
+      "-y", "-i", src, ...common, "-pass", "2",
+      "-pix_fmt", "yuv420p", ...audio, "-movflags", "+faststart", out,
+    ]);
+  } finally {
+    for (const suffix of ["-0.log", "-0.log.mbtree", "-0.log.temp", "-0.log.mbtree.temp"]) tryUnlink(`${logbase}${suffix}`);
   }
-  const audio = audioKbps > 0 ? ["-c:a", "aac", "-b:a", `${audioKbps}k`] : ["-an"];
-  const p2 = await runAsync("ffmpeg", [
-    "-y", "-i", src, ...common, "-pass", "2",
-    "-pix_fmt", "yuv420p", ...audio, "-movflags", "+faststart", out,
-  ]);
-  tryUnlink(`${logbase}-0.log`);
-  tryUnlink(`${logbase}-0.log.mbtree`);
-  return p2;
 }
 
 // ── the byte budget for the deterministic two-pass fit ────────────────────────────

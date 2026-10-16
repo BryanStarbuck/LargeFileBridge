@@ -21,7 +21,6 @@
 //     that merely competes with the re-fetch engines loses to them.
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import { type Deletions, type DeletionRecord, type ManifestFile } from "@lfb/shared";
 import { resolveTrackingRoot, resolveStateSyncRepo } from "../storage/tracking-root.service.js";
 import { joinRelConfined } from "../../shared/rel-path.js";
@@ -34,6 +33,7 @@ import {
   deletionsMeaning,
 } from "./deletions-merge.js";
 import { writerStamp } from "../../shared/writer-stamp.js";
+import { sha256FileSync } from "../../shared/fs-probe.js";
 
 // The pure half lives in deletions-merge.ts (a leaf the worker thread and the git merge driver can load);
 // re-exported so every existing caller keeps importing from here.
@@ -247,7 +247,7 @@ export async function reap(d: Deletions, deps: ReapDeps, nowIso: string): Promis
           // it names stays path-and-CID only, which is weaker.
           if (!r.sha256) {
             try {
-              r.sha256 = crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex");
+              r.sha256 = sha256FileSync(abs); // chunked — never the whole file in memory
               if (!out.touched.includes(r.path)) out.touched.push(r.path);
             } catch {
               /* identity backfill is best-effort; the delete is not */

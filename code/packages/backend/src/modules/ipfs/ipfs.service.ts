@@ -1,6 +1,7 @@
 // Local Kubo/IPFS client over the HTTP RPC (knowledge/ipfs.mdx). Uses fetch, never `curl`.
 // Enforces the only-our-content rule: Provide.Strategy = pinned (the modern key; NEVER re-add the
 // deprecated Reprovider block — it FATAL-s Kubo 0.42+ on start), no public/recursive gateway.
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
@@ -32,12 +33,49 @@ function apiBase(): string {
 // pass `timeoutMs: 0` to disable the wall-clock cap entirely (see addFile).
 const RPC_TIMEOUT_MS = 15000;
 
+/**
+ * A one-file multipart body for Kubo's `add`, STREAMED from disk in bounded chunks.
+ *
+ * MEMORY (2026-10-15 jetsam incident: backend RSS 4.26 GB, external up to 3.2 GB with queued=0 running=0
+ * children=0, spiking on every 2-hourly pin pass). This used to be `form.append("file", await
+ * fs.openAsBlob(abs))` handed to fetch. Measured on Node 26: for a 158 MB file that path left ~160–190 MB of
+ * ArrayBuffers alive per upload (peak external 219–233 MB) even with a forced gc() after the response was
+ * read — i.e. the WHOLE FILE ends up resident as external memory, not streamed. Foreign-pin discovery
+ * re-hashes files with `add --only-hash` under three profiles each, so a pass over large videos stacked
+ * file-sized buffers into gigabytes of `external`. A plain fs.createReadStream body measured 29–68 MB peak
+ * for the same file and returns the identical CID. Do not "simplify" this back to openAsBlob + FormData.
+ */
+class FileUpload {
+  private readonly boundary = `----lfb${crypto.randomUUID().replace(/-/g, "")}`;
+  constructor(private readonly absPath: string) {}
+  get headers(): Record<string, string> {
+    return { "content-type": `multipart/form-data; boundary=${this.boundary}` };
+  }
+  stream(): ReadableStream<Uint8Array> {
+    // Basename only, quoted — see addFile for why a slashed filename must never reach Kubo.
+    const name = path.basename(this.absPath).replace(/["\r\n]/g, "_");
+    const head = Buffer.from(
+      `--${this.boundary}\r\nContent-Disposition: form-data; name="file"; filename="${name}"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`,
+    );
+    const tail = Buffer.from(`\r\n--${this.boundary}--\r\n`);
+    const abs = this.absPath;
+    async function* parts(): AsyncGenerator<Uint8Array> {
+      yield head;
+      // 1 MiB reads: backpressure from the socket bounds how many are ever in flight.
+      for await (const chunk of fs.createReadStream(abs, { highWaterMark: 1024 * 1024 })) yield chunk as Buffer;
+      yield tail;
+    }
+    return Readable.toWeb(Readable.from(parts())) as unknown as ReadableStream<Uint8Array>;
+  }
+}
+
 async function rpc(
   cmd: string,
   opts: {
     query?: Record<string, string>;
     args?: string[];
-    body?: FormData;
+    body?: FormData | FileUpload;
     // Per-call wall-clock timeout in ms. Defaults to the short RPC_TIMEOUT_MS. Use 0 to disable the
     // cap for large data transfers (an aborted `add` of a multi-GB video is the bug this fixes).
     timeoutMs?: number;
@@ -52,7 +90,11 @@ async function rpc(
   // timeoutMs <= 0 means "no timeout": don't arm the aborter at all (used by size-scaled ops like add).
   const t = timeoutMs > 0 ? setTimeout(() => ctrl.abort(), timeoutMs) : undefined;
   try {
-    const res = await fetch(url, { method: "POST", body: opts.body, signal: ctrl.signal });
+    const init: RequestInit & { duplex?: "half" } =
+      opts.body instanceof FileUpload
+        ? { method: "POST", body: opts.body.stream(), headers: opts.body.headers, duplex: "half", signal: ctrl.signal }
+        : { method: "POST", body: opts.body, signal: ctrl.signal };
+    const res = await fetch(url, init);
     if (!res.ok) throw new Error(`ipfs ${cmd} -> ${res.status} ${await res.text()}`);
     return res;
   } finally {
@@ -304,15 +346,15 @@ export async function peerId(): Promise<string | null> {
  */
 export async function addFile(absPath: string, opts: { onBytes?: (bytes: number) => void } = {}): Promise<string> {
   try {
-    // fs.openAsBlob streams the file rather than buffering it whole into memory.
-    const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
-    const form = new FormData();
+    // Streamed from disk by FileUpload — NOT fs.openAsBlob + FormData, which measurably kept the whole file
+    // resident as external ArrayBuffers (see FileUpload).
+    if (!fs.statSync(absPath).isFile()) throw new Error(`not a regular file: ${absPath}`);
+    const form = new FileUpload(absPath);
     // Use the BASENAME, never the absolute path. Kubo's HTTP `add` treats a slashed multipart filename as a
     // directory tree and WRAPS the file in one node per path segment, returning the WRAPPER-dir CID (which
     // also embeds this machine's home path — non-portable across computers, and not `cat`-able as a file).
     // A bare basename adds the single file and returns the FILE's own CID, exactly like the CLI
     // (knowledge/ipfs.mdx §5.1). This is the CID that must be pinned, recorded, and fetched.
-    form.append("file", blob, path.basename(absPath));
     // `add` uploads the whole file; its duration scales with file size (a 1.4 GB video far exceeds the
     // 15s control-call cap). Disable the wall-clock timeout (timeoutMs: 0) so large media can finish —
     // the pin limiter bounds concurrency, so this can't stampede the daemon.
@@ -802,11 +844,11 @@ export async function isPinned(cid: string): Promise<boolean> {
  *  bytes to the daemon over loopback so it can hash them; nothing is written to the blockstore, nothing is
  *  pinned, no network. `query` selects the profile (e.g. { "cid-version": "1" }). */
 async function addOnlyHash(absPath: string, query: Record<string, string>): Promise<string> {
-  const blob = await (fs as unknown as { openAsBlob(p: string): Promise<Blob> }).openAsBlob(absPath);
-  const form = new FormData();
-  // Basename, NOT the absolute path — a slashed filename makes Kubo wrap the file in a directory tree and
-  // return the wrapper CID instead of the file's own CID (see addFile / knowledge/ipfs.mdx §5.1).
-  form.append("file", blob, path.basename(absPath));
+  // Streamed from disk (FileUpload), never buffered whole — this runs once per ADD_PROFILES entry per file.
+  // FileUpload sends the basename, NOT the absolute path — a slashed filename makes Kubo wrap the file in a
+  // directory tree and return the wrapper CID instead of the file's own CID (see addFile / knowledge/ipfs.mdx §5.1).
+  if (!fs.statSync(absPath).isFile()) throw new Error(`not a regular file: ${absPath}`);
+  const form = new FileUpload(absPath);
   const res = await rpc("add", { query: { "only-hash": "true", ...query }, body: form, timeoutMs: 0 });
   const lines = (await res.text()).trim().split("\n").filter(Boolean);
   const last = JSON.parse(lines[lines.length - 1]!) as { Hash?: string };

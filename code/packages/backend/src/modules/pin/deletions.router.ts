@@ -8,7 +8,6 @@
 import { Router } from "express";
 import fs from "node:fs";
 import path from "node:path";
-import crypto from "node:crypto";
 import os from "node:os";
 import { z } from "zod";
 import { requireAllowListed } from "../auth/identify.js";
@@ -29,6 +28,7 @@ import {
 import { enforceNow } from "./deletions-apply.service.js";
 import type { DeletionRecord } from "@lfb/shared";
 import { writerStamp } from "../../shared/writer-stamp.js";
+import { sha256FileSync } from "../../shared/fs-probe.js";
 
 export const deletionsRouter = Router();
 deletionsRouter.use(requireAllowListed);
@@ -91,7 +91,7 @@ function actorFor(req: unknown): string {
 
 function sha256OfFile(abs: string): string | null {
   try {
-    return crypto.createHash("sha256").update(fs.readFileSync(abs)).digest("hex");
+    return sha256FileSync(abs); // chunked — never the whole file in memory
   } catch {
     return null;
   }
