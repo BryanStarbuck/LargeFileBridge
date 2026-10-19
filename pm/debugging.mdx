@@ -76,6 +76,10 @@ override with `LFB_LOG_DIR`). **Never `/tmp`.** Six files, six jobs.
 
 **The rotation contract.** All our logs: **5 MiB × 5 generations** (`LFB_LOG_MAX_BYTES` default
 `5242880`, `LFB_LOG_GENERATIONS` default `5`). `log.log` → `log.log.1` … `log.log.5`, oldest dropped.
+**Hard ceiling: no log file, live or rotated, over 10 MiB** (env tunes down, never past it; since 2026-10-19,
+when `error.err` reached 175 GB). A file that is already over the cap when it rolls keeps only its newest
+10 MiB, starting at a whole line. The writer re-reads the real size at most once a second, because other
+processes (the MCP server, the CLI) append to `error.err` too.
 **This is a forensic deadline:** under load, 5 generations is *hours*, not days. A 25 MiB budget at a
 busy 300-file batch's line rate can wrap in an afternoon. **Copy the state root before you investigate**
 — an investigation that takes an hour can destroy the evidence it is looking for.

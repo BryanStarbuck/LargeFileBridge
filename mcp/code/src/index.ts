@@ -7,7 +7,7 @@
 // the backend first would look "failed to start" whenever the web app is simply stopped.
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { apiBase, SERVER_NAME, SERVER_VERSION } from "./config.js";
-import { log, logError } from "./logger.js";
+import { log, logError, markStderrBroken } from "./logger.js";
 import { McpServerHost } from "./server.js";
 import { TOOLS } from "./tools/registry.js";
 
@@ -30,6 +30,8 @@ async function main(argv: string[]): Promise<void> {
   const shutdown = async (why: string): Promise<void> => {
     if (shuttingDown) return;
     shuttingDown = true;
+    // Hard deadline: drain is bounded at 8 s, but nothing past this point may keep a dying server alive.
+    setTimeout(() => process.exit(0), 10_000).unref();
     log.info("main", `shutting down (${why})`);
     await host.drain(8_000);
     try {
@@ -53,8 +55,31 @@ async function main(argv: string[]): Promise<void> {
       if (process.ppid !== parentAtStart) void shutdown(`parent ${parentAtStart} exited`);
     }, 15_000).unref();
   }
-  process.on("uncaughtException", (e) => logError({ file: "index.ts", operation: "uncaughtException", error: e }));
-  process.on("unhandledRejection", (e) => logError({ file: "index.ts", operation: "unhandledRejection", error: e }));
+  // CLIENT GONE = EXIT NOW (the EPIPE loop, 2026-10-19 — logger.ts). A failed write to stdout or stderr means the
+  // session on the other end of the pipe is gone: no reply can ever be delivered, so there is nothing to drain.
+  // Exit at once, without logging to stderr (that is the pipe that just failed).
+  const clientGone = (stream: string) => (e: Error) => {
+    markStderrBroken();
+    logError({ file: "index.ts", operation: `${stream} pipe failed, client gone, exiting`, error: e });
+    process.exit(0);
+  };
+  process.stdout.on("error", clientGone("stdout"));
+  process.stderr.on("error", clientGone("stderr"));
+  // A storm of uncaught exceptions is a loop, not a series of faults; past this many in a minute, exit rather
+  // than let one keep a parentless process at full CPU writing the same line to error.err for hours.
+  let uncaught = { count: 0, since: Date.now() };
+  const onUncaught = (kind: string) => (e: unknown) => {
+    const now = Date.now();
+    if (now - uncaught.since > 60_000) uncaught = { count: 0, since: now };
+    if ((e as NodeJS.ErrnoException | null)?.code === "EPIPE") markStderrBroken();
+    logError({ file: "index.ts", operation: kind, error: e });
+    if (++uncaught.count > 50) {
+      logError({ file: "index.ts", operation: `${kind} storm (>50 in a minute), exiting`, error: e });
+      process.exit(1);
+    }
+  };
+  process.on("uncaughtException", onUncaught("uncaughtException"));
+  process.on("unhandledRejection", onUncaught("unhandledRejection"));
 
   try {
     await host.server.connect(transport);

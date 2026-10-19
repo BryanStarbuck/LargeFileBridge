@@ -764,8 +764,8 @@ function grepTail(file, pattern, limit) {
 
 /** Roll a log written by a descriptor we don't own, at the moment before it is reopened. */
 function rotateIfOversized(file) {
-  // Same policy and hard ceiling as logging.ts / log_rotate_pipe.mjs: env tunes down, never past 30 MiB × 10.
-  const max = Math.min(Number(process.env.LFB_LOG_MAX_BYTES) || 5 * 1024 * 1024, 30 * 1024 * 1024);
+  // Same policy and hard ceiling as logging.ts / log_rotate_pipe.mjs: env tunes down, never past 10 MiB × 10.
+  const max = Math.min(Number(process.env.LFB_LOG_MAX_BYTES) || 5 * 1024 * 1024, 10 * 1024 * 1024);
   const generations = Math.min(Number(process.env.LFB_LOG_GENERATIONS) || 5, 10);
   if (sizeOf(file) < max) return;
   try {

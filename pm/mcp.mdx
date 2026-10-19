@@ -277,15 +277,26 @@ The byte cap and the summaries, in code:
 
 * **WARN and ERROR** go to stderr, which Claude Code keeps in its MCP log, **and** are appended to the app's
   fault trail `~/T/_large_files_bridge/error.err`, in the backend's line format, tagged `[mcp:<context>]`.
-  There is **one place** to look for every Large File Bridge failure. Rotation stays the backend's job; the
-  MCP server only appends whole lines.
-* **Uncaught exceptions and unhandled rejections** are logged to `error.err` as well; neither takes the
-  server down.
+  There is **one place** to look for every Large File Bridge failure.
+* **The MCP server rolls `error.err` itself.** Before each append it checks the file's real size and, when the
+  line would pass the cap, rolls the chain under the backend's rule (5 MiB default, **never past 10 MiB**,
+  5 generations; a file already over the cap keeps only its newest 10 MiB). It never relies on the backend to
+  rotate: the backend only rotates when it writes, and on 2026-10-19 that let `error.err` reach 175 GB.
+* **At most 120 lines a minute** from one MCP process reach `error.err`; the rest of that minute is counted and
+  summarized in one `suppressed` line. A loop is one fault, not millions.
+* **Uncaught exceptions and unhandled rejections** are logged to `error.err` as well; one of them does not
+  take the server down, but **more than 50 in a minute does** — that is a loop, not a series of faults.
+* **A broken stdout or stderr pipe means the client is gone: exit at once.** On a pipe, the failure is an
+  `'error'` event, not a throw; unhandled, it became an uncaught exception whose log line wrote to stderr
+  again, forever (the 2026-10-19 orphans: 35% CPU each for hours, ignoring SIGTERM). Shutdown also has a hard
+  10 s deadline.
 * **Values are sanitized.** Control characters are stripped from logged values (file names, server
   messages), so nothing can forge a log line.
 
 The logger, in code:
-`~/repos/LargeFileBridge/mcp/code/src/logger.ts` — `log`, `logError()`.
+`~/repos/LargeFileBridge/mcp/code/src/logger.ts` — `log`, `logError()`, `appendRolling()`, `admitErrLine()`.
+When stdout/stderr fails, or uncaught exceptions storm, the server exits — implemented in:
+`~/repos/LargeFileBridge/mcp/code/src/index.ts` — `main()`, `clientGone()`, `onUncaught()`.
 
 ---
 

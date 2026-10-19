@@ -43,8 +43,8 @@ function envInt(name, fallback) {
   return Number.isFinite(n) && n > 0 ? Math.floor(n) : fallback
 }
 
-// Hard ceiling: an env override tunes DOWN, never past 30 MiB per file / 10 generations (same as logging.ts).
-const MAX_BYTES = Math.min(envInt('LFB_LOG_MAX_BYTES', 5 * 1024 * 1024), 30 * 1024 * 1024)
+// Hard ceiling: an env override tunes DOWN, never past 10 MiB per file / 10 generations (same as logging.ts).
+const MAX_BYTES = Math.min(envInt('LFB_LOG_MAX_BYTES', 5 * 1024 * 1024), 10 * 1024 * 1024)
 const GENERATIONS = Math.min(envInt('LFB_LOG_GENERATIONS', 5), 10)
 
 function fileSize(f) {

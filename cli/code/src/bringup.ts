@@ -100,7 +100,7 @@ export async function ensureServerUp(): Promise<boolean> {
     fs.mkdirSync(stateDir(), { recursive: true });
     const logPath = path.join(stateDir(), "launcher.log");
     // Through scripts/dev/launch.mjs — the same detached supervisor `just run` uses — so the dev tree's
-    // output goes through the ROTATING sink (scripts/log_rotate_pipe.mjs, 5 MiB × 5, hard 30 MiB ceiling).
+    // output goes through the ROTATING sink (scripts/log_rotate_pipe.mjs, 5 MiB × 5, hard 10 MiB ceiling).
     // This used to hand `pnpm dev` a raw append fd on launcher.log, which nothing could ever rotate for the
     // whole life of the app.
     const child = spawn(process.execPath, [path.join(root, "scripts", "dev", "launch.mjs")], {

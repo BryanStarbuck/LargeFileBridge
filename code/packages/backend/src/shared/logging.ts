@@ -33,9 +33,11 @@ function envInt(name: string, fallback: number): number {
 // Policy mirrors scripts/log_rotate_pipe.mjs (same env vars, same defaults) so every LFB log file obeys
 // one rule. Defaults: 5 MiB per file, 5 rotated generations kept.
 //
-// HARD CEILING (2026-10-15): no env override may raise a file past 30 MiB or keep more than 10 backups. Logs on
-// this machine had grown to ~4 GB elsewhere in the family; the env vars tune DOWN, never past the ceiling.
-export const LOG_HARD_MAX_BYTES = 30 * 1024 * 1024;
+// HARD CEILING: no env override may raise a file past 10 MiB or keep more than 10 backups. Logs on this machine
+// had grown to ~4 GB elsewhere in the family (2026-10-15, ceiling 30 MiB then), and on 2026-10-19 error.err itself
+// reached 175 GB — orphaned MCP servers appended to it with no cap at all. Bryan's rule since then: NO log file,
+// live or rotated, over 10 MiB. The env vars tune DOWN, never past the ceiling.
+export const LOG_HARD_MAX_BYTES = 10 * 1024 * 1024;
 const MAX_BYTES = Math.min(envInt("LFB_LOG_MAX_BYTES", 5 * 1024 * 1024), LOG_HARD_MAX_BYTES);
 const BACKUPS = Math.min(envInt("LFB_LOG_GENERATIONS", 5), 10);
 
@@ -43,6 +45,22 @@ const BACKUPS = Math.min(envInt("LFB_LOG_GENERATIONS", 5), 10);
 // key cap bounds how much memory the dedupe table can hold before it force-flushes.
 const COLLAPSE_WINDOW_MS = envInt("LFB_LOG_COLLAPSE_MS", 60_000);
 const COLLAPSE_MAX_KEYS = envInt("LFB_LOG_COLLAPSE_KEYS", 500);
+
+// How stale the RollingFileWriter byte counter may get before it is re-read from disk (one stat per second at most).
+const RESTAT_MS = 1_000;
+
+// THE CONSOLE CAN DIE UNDER US. When the pipe behind stdout/stderr closes (the log sink or the launching
+// terminal is gone), Node reports the EPIPE as an 'error' EVENT on the stream — not as a throw the try/catch
+// in write() could catch — and with no listener that event becomes an uncaughtException. main.ts's fatal() logs it
+// at ERROR, which writes to stderr again, which fails again: the loop that kept four Large File Bridge MCP
+// servers at 35% CPU for hours on 2026-10-19. A listener turns the failure into "stop using the console";
+// log.log and error.err keep every line.
+const brokenConsole = new Set<NodeJS.WriteStream>();
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on?.("error", () => {
+    brokenConsole.add(stream);
+  });
+}
 
 const logDir = resolveLogDir();
 const LOG_FILE = path.join(logDir, "log.log");
@@ -95,17 +113,46 @@ function contextTag(): string {
   return parts.length ? ` [${parts.join(" ")}]` : "";
 }
 
-// Roll filePath's .N chain in place: drop .maxBackups, shift .n → .(n+1) … .1 → .2, live file → .1.
-// Best-effort — a failed rename/remove is swallowed so a rotation never throws. Shared by
-// RollingFileWriter (below) and rotateIfOversized() (for logs written by external processes).
-function rollChain(filePath: string, maxBackups: number): void {
+// Write the LAST maxBytes of `from` to `to`, starting at a line boundary. Used whenever a file is already over
+// the cap when it is rolled — some writer overshot (another process appending, a held fd between guard ticks) —
+// so the overshoot is cut off instead of being renamed into a backup that is just as huge. Reads at most
+// maxBytes (≤ 10 MiB) into memory however big the source is: the 175 GB error.err costs one positional read.
+export function copyTail(from: string, to: string, maxBytes: number): void {
+  const size = fs.statSync(from).size;
+  const take = Math.min(size, maxBytes);
+  const buf = Buffer.alloc(take);
+  const fd = fs.openSync(from, "r");
+  try {
+    fs.readSync(fd, buf, 0, take, size - take);
+  } finally {
+    fs.closeSync(fd);
+  }
+  // A cut mid-line would leave a headless fragment at the top of the backup; start at the next full line.
+  const nl = take < size ? buf.indexOf(0x0a) : -1;
+  fs.writeFileSync(to, nl >= 0 ? buf.subarray(nl + 1) : buf);
+}
+
+// Move `from` to `to`, keeping only its last maxBytes when it is over the cap (rename when it is not).
+function moveCapped(from: string, to: string, maxBytes: number): void {
+  if (fs.statSync(from).size > maxBytes) {
+    copyTail(from, to, maxBytes);
+    fs.rmSync(from, { force: true });
+  } else {
+    fs.renameSync(from, to);
+  }
+}
+
+// Roll filePath's .N chain in place: drop .maxBackups, shift .n → .(n+1) … .1 → .2, live file → .1. No file
+// in the chain ever ends up over maxBytes, even one that arrived oversized. Shared by RollingFileWriter (below)
+// and rotateIfOversized() (for logs written by external processes); callers swallow its errors.
+function rollChain(filePath: string, maxBackups: number, maxBytes = MAX_BYTES): void {
   const oldest = `${filePath}.${maxBackups}`;
   if (fs.existsSync(oldest)) fs.rmSync(oldest, { force: true });
   for (let i = maxBackups - 1; i >= 1; i--) {
     const from = `${filePath}.${i}`;
-    if (fs.existsSync(from)) fs.renameSync(from, `${filePath}.${i + 1}`);
+    if (fs.existsSync(from)) moveCapped(from, `${filePath}.${i + 1}`, maxBytes);
   }
-  fs.renameSync(filePath, `${filePath}.1`);
+  moveCapped(filePath, `${filePath}.1`, maxBytes);
 }
 
 // Rotate a log file we do NOT write ourselves — one whose fd is held by an external process (a launchd
@@ -116,7 +163,7 @@ function rollChain(filePath: string, maxBackups: number): void {
 export function rotateIfOversized(filePath: string, maxBytes = MAX_BYTES, maxBackups = BACKUPS): void {
   try {
     const size = fs.existsSync(filePath) ? fs.statSync(filePath).size : 0;
-    if (size >= maxBytes) rollChain(filePath, maxBackups);
+    if (size >= maxBytes) rollChain(filePath, maxBackups, maxBytes);
   } catch {
     // best-effort — never block a daemon start/install on log rotation
   }
@@ -140,9 +187,11 @@ export function capExternalLog(filePath: string, maxBytes = MAX_BYTES, maxBackup
     if (fs.existsSync(oldest)) fs.rmSync(oldest, { force: true });
     for (let i = maxBackups - 1; i >= 1; i--) {
       const from = `${filePath}.${i}`;
-      if (fs.existsSync(from)) fs.renameSync(from, `${filePath}.${i + 1}`);
+      if (fs.existsSync(from)) moveCapped(from, `${filePath}.${i + 1}`, maxBytes);
     }
-    fs.copyFileSync(filePath, `${filePath}.1`);
+    // Over the cap by more than a rounding error → keep only the tail in .1 (copyTail), else a kernel copy.
+    if (fs.statSync(filePath).size > maxBytes) copyTail(filePath, `${filePath}.1`, maxBytes);
+    else fs.copyFileSync(filePath, `${filePath}.1`);
     fs.truncateSync(filePath, 0);
     return true;
   } catch {
@@ -150,10 +199,11 @@ export function capExternalLog(filePath: string, maxBytes = MAX_BYTES, maxBackup
   }
 }
 
-// Run capExternalLog over `files` now and then every `intervalMs` (default 60 s) for the life of the process.
-// At the 5 MiB default a writer would have to emit 25 MiB inside one interval to pass the 30 MiB ceiling.
+// Run capExternalLog over `files` now and then every `intervalMs` (default 10 s) for the life of the process.
+// At the 5 MiB default a writer would have to emit 5 MiB inside one interval to pass the 10 MiB ceiling, and
+// even then the overshoot is cut off at the next tick (copyTail). One stat per file per tick — negligible.
 // Unref'd: it never holds the process open. Returns a stop function.
-export function startExternalLogGuard(files: () => string[], intervalMs = 60_000): () => void {
+export function startExternalLogGuard(files: () => string[], intervalMs = 10_000): () => void {
   const tick = (): void => {
     for (const f of files()) capExternalLog(f);
   };
@@ -190,13 +240,15 @@ interface CollapseEntry {
   lastLine: string;
 }
 
-// A size-capped, rotating, append-only writer with a CACHED byte counter (no statSync per write).
+// A size-capped, rotating, append-only writer with a CACHED byte counter (no statSync per write) that is
+// re-read from disk at most once a second — see RESTAT_MS.
 // Never throws: a failed write falls back to process.stderr.
 // Exported so the TRANSACTION LEDGER (shared/transactions.ts — transactions_log.mdx) writes transactions.log
 // under the exact same 5 MiB × 5 rotation policy as log.log / error.err. One rotation rule, one implementation.
 export class RollingFileWriter {
   private size = 0;
   private ready = false;
+  private statAtMs = 0;
   private queue: string[] = [];
   private scheduled = false;
   // Collapse state (to_fix.mdx §4.5) — only populated when constructed with { collapseRepeats: true }.
@@ -210,21 +262,25 @@ export class RollingFileWriter {
     private readonly collapseRepeats = false,
   ) {}
 
-  // Seed the in-memory byte counter once from the file's current size (or 0 if absent).
+  // Seed the byte counter from the file's real size — once, and again at most every RESTAT_MS. A counter that is
+  // only ever SEEDED counts this process's bytes alone: error.err also takes appends from the MCP server and the
+  // CLI, and a counter blind to them let the file grow to 175 GB while this writer still believed it was small.
   private ensureReady(): void {
-    if (this.ready) return;
+    const now = Date.now();
+    if (this.ready && now - this.statAtMs < RESTAT_MS) return;
     try {
       this.size = fs.existsSync(this.filePath) ? fs.statSync(this.filePath).size : 0;
     } catch {
-      this.size = 0;
+      if (!this.ready) this.size = 0;
     }
     this.ready = true;
+    this.statAtMs = now;
   }
 
   // Rotate: roll the .N chain (drop .maxBackups, shift up, live → .1), then reset the byte counter.
   private roll(): void {
     try {
-      rollChain(this.filePath, this.maxBackups);
+      rollChain(this.filePath, this.maxBackups, this.maxBytes);
       this.size = 0;
     } catch {
       // best-effort — keep appending to the over-cap file rather than throw
@@ -239,11 +295,13 @@ export class RollingFileWriter {
       fs.appendFileSync(this.filePath, data);
       this.size += n;
     } catch {
-      // logging must never throw — fall back to stderr and continue
-      try {
-        process.stderr.write(data);
-      } catch {
-        /* last resort — give up silently */
+      // logging must never throw — fall back to stderr (unless that pipe is gone too) and continue
+      if (!brokenConsole.has(process.stderr)) {
+        try {
+          process.stderr.write(data);
+        } catch {
+          /* last resort — give up silently */
+        }
       }
     }
   }
@@ -387,10 +445,12 @@ function write(level: Level, context: string, message: string): void {
   }
   if (process.env.LFB_LOG_CONSOLE === "1" || level === "ERROR" || level === "FATAL") {
     const out = level === "DEBUG" || level === "INFO" ? process.stdout : process.stderr;
-    try {
-      out.write(line);
-    } catch {
-      /* ignore */
+    if (!brokenConsole.has(out)) {
+      try {
+        out.write(line);
+      } catch {
+        brokenConsole.add(out);
+      }
     }
   }
 }
