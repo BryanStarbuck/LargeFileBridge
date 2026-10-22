@@ -291,7 +291,7 @@ to build and organize this app.
   `cli/`, `justfile`; pnpm workspace with `packages/`).
 * **`~/BGit/Bryan_git/EmailDeliveryHero/`** — sister webapp (has its own
   `CLAUDE.md`, `code/`, `pm/`, `justfile`, `fix_log/`).
-* **`~/BGit/Bryan_git/we_the_citizens/`** — sister webapp, **We The Citizens** (has its
+* **`~/BGit/act3/we_citizens/`** — sister webapp, **We The Citizens** (has its
   own `CLAUDE.md`, `code/`, `pm/`, `data/`, `justfile`; pnpm workspace). Local-first,
   citizen-powered decision-making platform — citizens record positions on societal
   issues, compare them against the social contract, have AI verify the reasoning from
