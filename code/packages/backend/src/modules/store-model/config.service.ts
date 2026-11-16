@@ -10,6 +10,9 @@ import { RETIRED_GEMINI_MODELS, DEFAULT_GEMINI_MODEL } from "../describe/models.
 import { mtimeMsOrNull } from "../../shared/fs-probe.js";
 import { homeDir } from "../../shared/home-path.js";
 
+/** The pin and device workers run at most once an hour (why_slow.txt, 2026-11-16). */
+export const MIN_WORKER_INTERVAL_MINUTES = 60;
+
 // ── config.yaml read cache (mtime-keyed) ─────────────────────────────────────────────────────────────
 // getAppConfig() was UNMEMOIZED, and effectiveFlags() calls it PER FILE — so GET /api/repos (repos ×
 // files) and every composeFileRows build paid an fs.readFileSync + YAML.parse + full Zod safeParse per
@@ -89,6 +92,16 @@ export function getAppConfig(): AppConfig {
   if (cfg.scan_process.interval_hours === 4) {
     cfg.scan_process.interval_hours = 2;
     dirty = true;
+  }
+  // At most once per hour (Bryan, 2026-11-16 — ~/BGit/all/film/bryan/why_slow.txt). The pin pass (was 15
+  // min) and the device pass (was 10 min) each pull every backbone repo and fold every mirrored repo; on the
+  // ACT3 monorepo one fold took 857 s, so a 10-15 min cadence kept the tower's disk saturated. Any stored
+  // value under 60 is raised to 60; reconcileWorkerSchedules() re-renders the launchd plist at boot.
+  for (const block of [cfg.pin_process, cfg.device_process]) {
+    if (block.interval_minutes < MIN_WORKER_INTERVAL_MINUTES) {
+      block.interval_minutes = MIN_WORKER_INTERVAL_MINUTES;
+      dirty = true;
+    }
   }
   if (dirty) {
     try {
