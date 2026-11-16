@@ -59,6 +59,8 @@ import { log } from "../../shared/logging.js";
 // ~29,000 tracked files, which is what `loop-watch` used to report as an anonymous multi-second freeze
 // (performance.mdx P-45/P-46).
 import { blocking, recordCooperative } from "../../shared/blocking.js";
+// The incremental reconcile (P-64): which paths of the mirror subtree could have moved since the last pass.
+import { planReconcileDelta } from "./reconcile-delta.js";
 
 // Machine-local files under `repos/<repoKey>/` that must NOT travel to the sync repo.
 //
@@ -310,6 +312,7 @@ function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<s
       if ((err as NodeJS.ErrnoException).code === "ENOENT" && !fs.existsSync(s)) {
         log.debug("storage", `copyTree: source vanished mid-walk (deleted concurrently): ${s}`);
       } else {
+        leafFailures += 1;
         log.warn("storage", `copyTree: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
       }
     }
@@ -323,6 +326,73 @@ function* copyTreeGen(src: string, dst: string, rel: string, skip: ReadonlySet<s
 }
 
 const NO_SKIP: ReadonlySet<string> = new Set<string>();
+
+/** Leaf copies that failed for a reason other than "the source vanished" — the incremental reconcile refuses
+ *  to advance its memo past a pass that lost one, so the same paths are looked at again next time. */
+let leafFailures = 0;
+
+/**
+ * The INCREMENTAL twin of {@link copyTreeGen} (performance.mdx P-64): the same per-entry rules — top-level
+ * `skip` / `LOCAL_ONLY`, the `\` path heal, the Category-A artifact skip, the destination's established
+ * casing, and `copyTrackedFile`'s merge — applied to an explicit list of paths (POSIX, relative to `src`)
+ * instead of to everything under `src`. A path that no longer exists in `src` is skipped: the reconcile never
+ * deletes, so a removal has nothing to carry.
+ */
+function* copyPathsGen(
+  src: string,
+  dst: string,
+  relPaths: readonly string[],
+  skip: ReadonlySet<string>,
+): Generator<void, boolean, unknown> {
+  let changed = false;
+  // One case index per destination directory for the whole pass, as copyTreeGen keeps one per directory.
+  const casing = new Map<string, Map<string, string>>();
+  const indexOf = (dir: string): Map<string, string> => {
+    let idx = casing.get(dir);
+    if (!idx) casing.set(dir, (idx = caseIndex(dir)));
+    return idx;
+  };
+  for (const rel of relPaths) {
+    const segs = rel.split("/").filter((x) => x.length > 0);
+    if (segs.length === 0) continue;
+    if (LOCAL_ONLY.has(segs[0]!) || skip.has(segs[0]!)) continue;
+    const s = path.join(src, ...segs);
+    let isFile = false;
+    try {
+      isFile = fs.statSync(s).isFile();
+    } catch {
+      isFile = false; // deleted upstream — nothing to carry
+    }
+    if (!isFile) continue;
+    const name = segs[segs.length - 1]!;
+    let d = dst;
+    let dRel = "";
+    for (const seg of segs.slice(0, -1)) {
+      const resolved = resolveCasing(indexOf(d), seg);
+      d = path.join(d, resolved);
+      dRel = dRel === "" ? resolved : `${dRel}/${resolved}`;
+    }
+    try {
+      fs.mkdirSync(d, { recursive: true });
+      if (isStrayPathName(name)) changed = copyHealed(s, d, name) || changed;
+      else if (isContentArtifactName(name)) {
+        // Category-A artifact — never copied down into Local Storage (see copyTreeGen).
+      } else {
+        const fileName = resolveCasing(indexOf(d), name);
+        changed = copyTrackedFile(s, path.join(d, fileName), dRel === "" ? fileName : `${dRel}/${fileName}`) || changed;
+      }
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === "ENOENT" && !fs.existsSync(s)) {
+        log.debug("storage", `copyPaths: source vanished mid-pass (deleted concurrently): ${s}`);
+      } else {
+        leafFailures += 1;
+        log.warn("storage", `copyPaths: failed to copy ${s} -> ${d}: ${(err as Error).message}`);
+      }
+    }
+    yield;
+  }
+  return changed;
+}
 
 // ── a pass is a generator of STEPS: a slice boundary, or a heavy merge to run off the loop ─────────────
 //
@@ -1306,7 +1376,17 @@ function* reconcileGen(repoRoot: string): PassGen<boolean> {
     }
     // 3. everything else — the per-file sidecars and per-device history logs are MERGED inside
     //    `copyTrackedFile`; only shapes with nothing shared to lose are still copied outright.
-    changed = (yield* copyTreeGen(src, dst, "", RECONCILE_MERGED_NEVER_COPIED)) || changed;
+    //    INCREMENTAL (performance.mdx P-64): git says which files of the subtree changed since the last
+    //    completed pass, and only those are looked at. Any doubt (no git tree, no memo, the daily full walk)
+    //    falls back to the whole-subtree walk this always was.
+    const delta = planReconcileDelta(src, dst);
+    const failuresBefore = leafFailures;
+    if (delta.plan.kind === "full") {
+      changed = (yield* copyTreeGen(src, dst, "", RECONCILE_MERGED_NEVER_COPIED)) || changed;
+    } else if (delta.plan.kind === "paths") {
+      changed = (yield* copyPathsGen(src, dst, delta.plan.paths, RECONCILE_MERGED_NEVER_COPIED)) || changed;
+    }
+    if (leafFailures === failuresBefore) delta.commit();
     // 4. RECORD THE INGEST (migration 0012). `doc_render.ingested_sha256` is the bytes of each arriving
     //    document, and `sdl_ingest` is the per-(SDL, unit) watermark plus the running tally of events and
     //    pin claims that have reached us. Neither is read by anything on this path: they are the evidence

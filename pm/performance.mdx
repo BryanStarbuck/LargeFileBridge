@@ -2434,3 +2434,41 @@ Bounding the liveness wait by whether a remembered answer exists is implemented 
 report is arriving, count sockets before profiling anything:
 `lsof -nP -iTCP:2222 -sTCP:ESTABLISHED` (the browser's side) and
 `grep -a "state stream opened" ~/T/_large_files_bridge/log.log | tail`. Six of either means the browser pool is exhausted.
+
+## Fourteenth pass (P-64) — the reconcile looks only at what git says changed · T3
+
+### 🔴 P-64 — Every reconcile re-walked the whole mirror subtree, even when nothing had arrived · T3
+
+**Measured 2026-11-16 on the tower.** `loop-watch` named `storage.reconcile.yielding` on `~/BGit/all` at
+**857,237 ms** of on-thread time in one call, and **224** reconcile calls in a single minute (worst 101,514 ms,
+again `~/BGit/all`). That repo's mirror subtree (`act3_large_files_bridge/repos/all-eb94a756b52e/`) holds
+**32,753 files in 12,564 directories**. The reconcile runs on every backbone pull (all ~105 repos), every pin
+pass and every device pass, and its last leg (`copyTreeGen`) walked the entire subtree each time: a readdir per
+directory, a case-index readdir per destination directory, an `existsSync` and two stats per file. The P-45
+memos made each file cheap; nothing made the walk proportional to what had changed, so on a loaded machine one
+pass took minutes of disk and CPU while nothing new had arrived at all.
+
+**The fix.** The mirror subtree is inside the sync repo's git working copy, and git already knows what moved:
+`git rev-parse HEAD:./` (in the subtree) is its committed tree id, and `git diff-tree -r --name-only <last> <now>`
+lists exactly the files that changed since the last completed pass. Both read only the object database (no
+working-tree stats, no `index.lock`), so they cost milliseconds however big the subtree. Unchanged tree = the
+walk is skipped entirely; changed tree = only the listed paths go through the same `copyTrackedFile` merge, with
+the same top-level skips, `\` heal, Category-A skip and casing rules. A burst of N commits between two passes is
+one pass over the union of their paths. What ends up in Local Storage is unchanged.
+
+**Safety nets.** A full walk (the old behaviour) whenever the answer is in doubt: the subtree is not a committed
+git tree, there is no memo yet for this repo, the old tree object is unreadable, this repo's Local Storage dir is
+missing, or the last full walk is older than `LFB_RECONCILE_FULL_WALK_MS` (default 24 h). A pass in which any
+leaf copy failed does not advance the memo, so the same diff is retried. `LFB_RECONCILE_DELTA=0` turns the
+whole thing off. `git status` was tried for uncommitted edits and rejected: it lstat()s every file under the
+pathspec (1 min 54 s on this subtree under load), which is the walk again; peers' state only ever arrives as a
+tree change, and the daily full walk is the backstop for this computer's own uncommitted writes.
+
+Choosing full / none / changed-paths from the sync repo's git tree is implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/reconcile-delta.ts` — `planReconcileDelta` (memo persisted to `reconcile-delta.json` in the state dir)
+Applying it inside the reconcile, and the per-path twin of the tree walk, are implemented in code:
+`~/BGit/Bryan_git/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-sync.service.ts` — `reconcileGen` (step 3) and `copyPathsGen`
+
+**Not covered here.** The OUTBOUND leg (`mirrorToSyncRepo`, Local Storage → mirror) still walks the whole
+local subtree; Local Storage is not a git tree, so it needs a different change source (a dirty-path set fed by
+the writers).
