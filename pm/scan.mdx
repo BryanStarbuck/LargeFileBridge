@@ -520,6 +520,28 @@ The scan **never descends** into `scanner.ignore_globs` (e.g. `**/node_modules/*
 `**/.Trash/**`), a unit's own `exclude_globs`, or the **hard-skip directory set** (§4.3) — this is
 both correctness (don't bridge build junk) and the main performance lever.
 
+> **`scanner.ignore_globs` — one reading, three consumers (2026-11-16).** The globs are gitignore
+> patterns matched **relative to each scanner root**, but an **absolute or `~/` glob means the tree it
+> names**: `/Users/bryan/BGit/all/**` under root `/Users/bryan/BGit` becomes the root-anchored `/all/**`,
+> and an absolute glob outside a root is dropped for that root. Short root-anchored patterns (`/build/`)
+> keep their gitignore meaning. Before this, an absolute glob silently matched nothing, and only the live
+> watcher read the list at all. Now the **live watcher** (§2.2), **repo discovery** (an ignored tree is
+> never found or registered) and the **scheduled per-unit scan** (an already-registered repo inside an
+> ignored tree is not walked; its registration and status are left as they were) all honour it.
+> Rewriting absolute globs and the per-root ignore predicate are implemented in:
+> `~/repos/LargeFileBridge/code/packages/backend/src/shared/scan-ignore.ts` — `rootRelativeGlobs()`, `makeScanIgnore()`, `isScanIgnored()`
+> Discovery pruning and skipping an ignored unit are implemented in:
+> `~/repos/LargeFileBridge/code/packages/backend/src/modules/scanner/scanner.service.ts` — `findGitRepos()`, `scanAll()`
+
+> **A registered repo that is gone from disk is skipped by the heavy passes (2026-11-16).** Deleting
+> `~/BGit/2all` left its unit registered; it shares the monorepo's remote, so every pin pass and backbone
+> pull re-walked the same 32,947-file mirror subtree into Local Storage for a directory that no longer
+> existed (339 s in one pass). The reconcile and the pin pass now skip a repo whose working tree is not a
+> directory, logging once per path. It is **not** unregistered: an unmounted drive looks the same, and the
+> pass resumes as soon as the directory is back.
+> Checking whether the repo is on disk (and logging once) is implemented in:
+> `~/repos/LargeFileBridge/code/packages/backend/src/modules/storage/tracking-root.service.ts` — `repoRootGone()`, called from `tracking-sync.service.ts` `reconcileFromSyncRepo()` / `reconcileFromSyncRepoYielding()` / `reconcileMirroredRepos()` and `pin/pin.service.ts` `pinRepoFolderInner()`
+
 > **The hard-skip set is one source of truth.** The directories the scan refuses to descend into are
 > defined once in `code/.../shared/scan-filters.ts` (`HARD_SKIP`) and imported by **both** the scan
 > worker and the File System browser's badge pass, so the two can never drift (the invariant

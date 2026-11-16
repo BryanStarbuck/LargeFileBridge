@@ -19,14 +19,13 @@
 // one NON-recursive watch per surviving directory — a skipped subtree then costs exactly zero.
 import fs from "node:fs";
 import path from "node:path";
-import ignore from "ignore";
 import { HARD_SKIP, isMacPackageDir } from "../../shared/scan-filters.js";
 import { lstatOrNull } from "../../shared/fs-probe.js";
 import { relPosix } from "../../shared/rel-path.js";
+import { makeScanIgnore } from "../../shared/scan-ignore.js";
 
 const YIELD_EVERY = 500; // hand the event loop back every N directories bound — boot must not block
 const yieldToLoop = (): Promise<void> => new Promise((r) => setImmediate(r));
-const IGNORE_PROBE_RESET = 200_000; // rebuild the glob matcher this often — its path cache never evicts
 
 // ── What may be watched ─────────────────────────────────────────────────────
 
@@ -49,36 +48,18 @@ export interface WatchFilter {
  * `ignore` speaks gitignore, so paths are made root-relative and POSIX-separated first.
  */
 export function makeWatchFilter(root: string, globs: string[]): WatchFilter {
-  const active = globs.length > 0;
-  let ig = ignore().add(globs);
-  let probes = 0;
-  // `ignore` memoizes EVERY path it is asked about — plus each of that path's parents — in a cache it
-  // never evicts. The scanner gets away with that because its instance dies with the walk; ours lives as
-  // long as the process, and is asked about every event path for weeks. Rebuilding from the same handful
-  // of globs costs microseconds, so drop the cache on a schedule instead of growing it forever.
-  const ignores = (p: string): boolean => {
-    if (!active) return false;
-    if ((probes += 1) > IGNORE_PROBE_RESET) {
-      ig = ignore().add(globs);
-      probes = 0;
-    }
-    return ig.ignores(p);
-  };
-  // Can an ignored directory be PRUNED whole? Only when no pattern is a NEGATION — a `!keep/big.mp4`
-  // re-includes something under an otherwise-ignored tree, and pruning the tree would stop watching it.
-  // Same reasoning, same three probes as `dirIsExcluded` in scanner.service.ts: the gitignore grammar
-  // spells "this whole directory" as `foo`, `foo/`, or `foo/**`, and `ignores()` is literal about each.
-  const hasNegation = globs.some((g) => g.trimStart().startsWith("!"));
+  // ONE reading of `scanner.ignore_globs` (shared/scan-ignore.ts) — the same matcher discovery and the
+  // scheduled scan use, including the rewrite that makes an absolute glob (`/Users/bryan/BGit/all/**`)
+  // mean that tree instead of silently matching nothing (2026-11-16).
+  const ig = makeScanIgnore(root, globs);
   const rel = (abs: string): string => relPosix(root, abs);
   const outsideRoot = (r: string): boolean => r === "" || r === ".." || r.startsWith("../");
-  const dirIgnored = (r: string): boolean =>
-    ignores(r) || ignores(`${r}/`) || (!hasNegation && ignores(`${r}/.lfb-prune-probe`));
 
   return {
     dirOk: (abs, name) => {
       if (HARD_SKIP.has(name) || isMacPackageDir(name)) return false;
       const r = rel(abs);
-      return !outsideRoot(r) && !dirIgnored(r);
+      return !outsideRoot(r) && !ig.dirIgnored(abs);
     },
     pathOk: (abs) => {
       const r = rel(abs);
@@ -87,7 +68,7 @@ export function makeWatchFilter(root: string, globs: string[]): WatchFilter {
       // Every segment but the last is a directory we would never have walked into.
       if (segs.some((s) => HARD_SKIP.has(s))) return false;
       if (segs.slice(0, -1).some((s) => isMacPackageDir(s))) return false;
-      return !ignores(r);
+      return !ig.pathIgnored(abs);
     },
   };
 }
