@@ -53,6 +53,7 @@ import { expandHome } from "../../shared/home-path.js";
 import { dbEnabled, tryDb } from "../../shared/persistence/db.js";
 import { insertDecisionEvents, unitIdForAbsPath } from "./decision.repo.js";
 import { writerStamp } from "../../shared/writer-stamp.js";
+import { hourlyGateAllows } from "../../shared/hourly-gate.js";
 
 /** The two axes the user decides on, per file (decisions.mdx §1). Either may be undefined = "leave as-is". */
 export interface DecisionAxes {
@@ -719,7 +720,16 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
   // engine drops everything already covered. Best-effort — a repo whose `.gitignore` cannot be written must
   // not fail the reconcile that projected the IPFS axis.
   const toIgnore = [...folded.values()].filter((r) => r.asked && r.gitignore).map((r) => r.path);
-  if (toIgnore.length > 0) {
+  // Re-asserting the SAME set costs a blocking `git check-ignore` + `git ls-files` over the whole repo, and
+  // this runs on every scan and every backbone fold: loop-watch logged 774 `git.ls-files (sync)` and 1,028
+  // `git.check-ignore (sync)` stalls, mostly charlie-kirk and ~/BGit/all (why_slow.txt, 2026-11-16). So a
+  // set that has not changed since the last assert is re-asserted at most once an hour; a NEW decision
+  // (the set changed) is still applied at once.
+  const ignoreKey = [...toIgnore].sort().join("\n");
+  const unchanged = lastIgnoreAssert.get(repoRoot) === ignoreKey;
+  if (toIgnore.length > 0 && (!unchanged || hourlyGateAllows("decisions.ignore-assert", repoRoot))) {
+    if (!unchanged) hourlyGateAllows("decisions.ignore-assert", repoRoot); // start the window now
+    lastIgnoreAssert.set(repoRoot, ignoreKey);
     try {
       const r = ensureFilesIgnored(repoRoot, toIgnore);
       if (r.written > 0) {
@@ -737,6 +747,9 @@ export async function reconcile(folder: string): Promise<{ changed: string[] }> 
   if (changed.length > 0) bumpTopicsThrottled(repoBumpTopics(folder));
   return { changed };
 }
+
+/** Per repo: the git-ignore set last asserted by `reconcile` (see the hourly re-assert rule there). */
+const lastIgnoreAssert = new Map<string, string>();
 
 /**
  * The SAME assert, scoped to the paths a caller is ABOUT TO MATERIALIZE (pin_process.mdx §3 fetch-missing,

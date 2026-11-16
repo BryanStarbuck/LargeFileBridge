@@ -305,7 +305,7 @@ export const AppConfigSchema = z.object({
     .object({
       installed: z.boolean().default(false),
       enabled: z.boolean().default(false),
-      interval_minutes: z.number().default(15),
+      interval_minutes: z.number().default(60),
       label: z.string().default("com.largefilebridge.pin"),
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
@@ -323,7 +323,7 @@ export const AppConfigSchema = z.object({
     .object({
       installed: z.boolean().default(false),
       enabled: z.boolean().default(false),
-      interval_minutes: z.number().default(10), // check every 10 min (devices.mdx §11)
+      interval_minutes: z.number().default(60), // hourly (why_slow.txt 2026-11-16; was 10 min, devices.mdx §11)
       label: z.string().default("com.largefilebridge.device"),
       last_run_at: iso.nullable().default(null),
       last_run_ok: z.boolean().nullable().default(null),
