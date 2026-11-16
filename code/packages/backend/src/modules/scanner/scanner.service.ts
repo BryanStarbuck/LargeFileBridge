@@ -62,6 +62,7 @@ import {
   type CensusRow,
 } from "../store-model/file.repo.js";
 import { timeSlicer } from "../../shared/time-slice.js";
+import { isScanIgnored, makeScanIgnore } from "../../shared/scan-ignore.js";
 
 interface Candidate {
   path: string; // relative to unit root
@@ -108,7 +109,7 @@ export async function scanAll(
   progress.setPhase("discovering");
   const discovered = new Set<string>();
   const perRoot = await mapLimit(roots, responsiveBudget(), (root) =>
-    findGitRepos(root, cfg.scanner.follow_symlinks),
+    findGitRepos(root, cfg.scanner.follow_symlinks, cfg.scanner.ignore_globs),
   );
   for (const list of perRoot) for (const repoPath of list) discovered.add(repoPath);
   for (const repoPath of discovered) {
@@ -169,6 +170,14 @@ export async function scanAll(
     const rc = getRepoConfig(folder);
     progress.unitStart(rc.repo.name || folder);
     const repoPath = rc.repo.path ? path.resolve(expandHome(rc.repo.path)) : "";
+    // `scanner.ignore_globs` covers this repo's whole tree (shared/scan-ignore.ts): the user asked us to
+    // stay out of it, so do not walk it. Registration and recorded status are left as they were — this is
+    // an exclusion, not a deletion (2026-11-16: ~/BGit/all, 259k files, was still walked every scan).
+    if (repoPath && isScanIgnored(repoPath, roots, cfg.scanner.ignore_globs)) {
+      log.debug("scan", `Skip ${folder}: ${repoPath} is excluded by scanner.ignore_globs.`);
+      progress.unitDone(0);
+      return;
+    }
     if (!repoPath || !isGitWorkingTree(repoPath)) {
       const st = getRepoStatus(folder);
       writeRepoStatus(folder, { ...st, repo_state: "missing" });
@@ -907,8 +916,11 @@ function buildRepoIgnore(repoPath: string): Ignore | null {
   }
 }
 
-async function findGitRepos(root: string, followSymlinks: boolean): Promise<string[]> {
+async function findGitRepos(root: string, followSymlinks: boolean, ignoreGlobs: readonly string[] = []): Promise<string[]> {
   const found: string[] = [];
+  // `scanner.ignore_globs` prunes discovery too — an ignored tree must not be found, registered and then
+  // walked (shared/scan-ignore.ts, 2026-11-16).
+  const ig = makeScanIgnore(root, ignoreGlobs);
   const stack: string[] = [root];
   let budget = 20000; // bounded walk so discovery never runs away
   const slicer = timeSlicer(); // keep the server responsive during discovery too (scan.mdx §10)
@@ -932,7 +944,9 @@ async function findGitRepos(root: string, followSymlinks: boolean): Promise<stri
       if (!ent.isDirectory()) continue;
       if (HARD_SKIP.has(ent.name) || isMacPackageDir(ent.name)) continue; // bundles are opaque
       if (ent.isSymbolicLink() && !followSymlinks) continue;
-      stack.push(path.join(dir, ent.name));
+      const child = path.join(dir, ent.name);
+      if (ig.dirIgnored(child)) continue;
+      stack.push(child);
     }
   }
   return found;

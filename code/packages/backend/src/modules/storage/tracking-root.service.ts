@@ -97,6 +97,42 @@ export function resolveTrackingRoot(
  *  name a shared subtree, so it resolves to null and the next `ensureSyncRepoMarker()` pass rewrites it). */
 const SYNC_REPO_MARKER = ".sync-repo";
 
+// ── a registered repo whose working tree is GONE ─────────────────────────────────────────────────────
+//
+// 2026-11-16 (tower slowdown, ~/BGit/all/film/bryan/why_slow.txt): the user deleted ~/BGit/2all, a second
+// clone of the ACT3 monorepo. Its unit stayed registered, and because it shares the monorepo's git remote
+// it resolved to the SAME 32,947-file mirror subtree as ~/BGit/all — so every pin pass and every backbone
+// pull went on re-walking that subtree into Local Storage for a directory that no longer existed. One such
+// reconcile took 339 s. 50 of the 276 registered units on that machine pointed at missing directories.
+//
+// The heavy per-repo passes (reconcile, the pin pass) now ask this first and skip a repo that is not on
+// disk. Deliberately NOT an unregister: an unmounted drive or a repo mid-move looks exactly the same, and
+// the reconciler already treats a missing root as "not drift" (pin/reconciler.service.ts). The unit, its
+// Local Storage and its sync-repo subtree are all left as they were; the passes resume the moment the
+// directory is back.
+const goneLogged = new Set<string>();
+
+/** True when `root` is not a directory on this computer (deleted, moved, or on an unmounted volume).
+ *  Logs once per root per process so a skipped repo is visible without repeating every pass. */
+export function repoRootGone(root: string, log?: (msg: string) => void): boolean {
+  const abs = path.resolve(root);
+  let present = false;
+  try {
+    present = fs.statSync(abs).isDirectory();
+  } catch {
+    present = false;
+  }
+  if (present) {
+    goneLogged.delete(abs);
+    return false;
+  }
+  if (log && !goneLogged.has(abs)) {
+    goneLogged.add(abs);
+    log(`${abs} is not on disk (deleted, moved or unmounted) — skipping its heavy passes until it returns.`);
+  }
+  return true;
+}
+
 /** Read the three-line sync-repo marker → `{ syncRepo, repoUid, repoSlug }`, or null when absent/blank. */
 export function readSyncRepoMarker(
   root: string,

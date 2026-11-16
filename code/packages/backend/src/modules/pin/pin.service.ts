@@ -98,6 +98,7 @@ import { log } from "../../shared/logging.js";
 import { whenOnline, hostFromRemote } from "../../shared/net-transient.js";
 import { statOrNull } from "../../shared/fs-probe.js";
 import { expandHome } from "../../shared/home-path.js";
+import { repoRootGone } from "../storage/tracking-root.service.js";
 
 // The UNIT budget — CPU-bound pass work, the canonical RESPONSIVE budget (pin_process.mdx §4).
 const PIN_CONCURRENCY = responsiveBudget();
@@ -884,6 +885,12 @@ async function pinRepoFolderInner(
   opts: { manual?: boolean; report?: PinReport } = {},
 ): Promise<PinCounts> {
   const cfg = getRepoConfig(folder);
+  // The repo's working tree is not on this computer (deleted, moved, unmounted). Nothing to pin, nothing
+  // to receive into — and the reconcile/mirror prelude below would otherwise re-walk its whole mirror
+  // subtree every pass (deleted ~/BGit/2all, 2026-11-16: 339 s per pass). The unit is left registered.
+  if (cfg.repo.path && repoRootGone(expandHome(cfg.repo.path), (m) => log.info("pin", `Skip ${folder}: ${m}`))) {
+    return zeroCounts();
+  }
   if (!cfg.pinned) {
     if (!opts.manual) {
       // The SEND opt-in (`pinned`) must not gate the RECEIVE half (storage_company.mdx §8.4.3): a peer's

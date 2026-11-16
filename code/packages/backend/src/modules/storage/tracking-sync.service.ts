@@ -18,7 +18,7 @@ import {
   type DecisionPolicyDoc,
   type Manifest,
 } from "@lfb/shared";
-import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker } from "./tracking-root.service.js";
+import { repoStateDir, resolveStateSyncRepo, syncRepoMarkerPath, readSyncRepoMarker, repoRootGone } from "./tracking-root.service.js";
 // The fleet-deletion ledger merge (deletion.mdx §6). Imported from the pin module because the ledger's
 // semantics — append-only, widest scope wins, absence never lifts — belong with the feature, not with the
 // transport that happens to carry it.
@@ -56,6 +56,7 @@ import { copyTrackedFile } from "./tracked-file-merge.js";
 import { deferWhileBusy, busyRootFor } from "../git/worktree-gate.js";
 import { bumpTopics } from "../events/state-events.service.js";
 import { log } from "../../shared/logging.js";
+import { expandHome } from "../../shared/home-path.js";
 // Name this section in the event-loop stall report. Both legs of the mirror are SYNCHRONOUS walks over
 // ~29,000 tracked files, which is what `loop-watch` used to report as an anonymous multi-second freeze
 // (performance.mdx P-45/P-46).
@@ -1288,6 +1289,7 @@ export function resetLedgerSyncMemo(): void {
 }
 
 export function reconcileFromSyncRepo(repoRoot: string): boolean {
+  if (repoRootGone(repoRoot, (m) => log.info("storage", `reconcile: ${m}`))) return false;
   return blocking("storage.reconcile", () => drainSync(reconcileGen(repoRoot)), repoRoot);
 }
 
@@ -1300,6 +1302,9 @@ export async function reconcileFromSyncRepoYielding(repoRoot: string): Promise<b
   // At most once per hour per repo (shared/hourly-gate.ts — why_slow.txt 2026-11-16: one reconcile of
   // ~/BGit/all took 857 s, and it ran on every pin pass, every device pass and every backbone pull). No
   // catch-up is queued: the next pass after the window opens runs it. `false` = "nothing folded in".
+  // A repo whose working tree is gone (deleted ~/BGit/2all, 2026-11-16) has nothing to receive into:
+  // checked BEFORE the gate so a missing repo never even claims an hourly slot.
+  if (repoRootGone(repoRoot, (m) => log.info("storage", `reconcile: ${m}`))) return false;
   if (!hourlyGateAllows("storage.reconcile", repoRoot)) return false;
   return drainYielding("storage.reconcile.yielding", repoRoot, reconcileGen(repoRoot));
 }
@@ -1546,6 +1551,8 @@ export async function reconcileMirroredRepos(sdlRoot: string): Promise<number> {
         const repoPath = cfg.repo.path;
         const uid = repoUidFor(cfg.repo.remote ?? null);
         if (!repoPath || !uid || !hasSubtreeFor(uid)) continue;
+        // Gone from disk (deleted / moved / unmounted): nothing to fold into, and no marker to (re)write.
+        if (repoRootGone(expandHome(repoPath), (m) => log.info("storage", `reconcile: ${m}`))) continue;
         // Make sure this repo points at THIS sync repo before folding, so a repo whose marker was never
         // written (the default-ON case on a fresh computer) still receives its peer's state. `mirrorDir` is
         // passed as the observed sync repo BECAUSE that is what we are standing in: `hasSubtreeFor(uid)`
