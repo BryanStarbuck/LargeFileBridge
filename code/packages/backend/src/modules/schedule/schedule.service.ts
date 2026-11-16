@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { WorkerKind, WorkerState, JobsPageData, AppConfig } from "@lfb/shared";
-import { getAppConfig, updateAppConfig } from "../store-model/config.service.js";
+import { getAppConfig, updateAppConfig, MIN_WORKER_INTERVAL_MINUTES } from "../store-model/config.service.js";
 import { peerRows } from "../store-model/peers.service.js";
 import { launchdInstaller } from "./os/launchd.js";
 import { schtasksInstaller } from "./os/schtasks.js";
@@ -102,8 +102,9 @@ function processBlock(c: AppConfig, kind: WorkerKind) {
 function intervalFor(kind: WorkerKind): number {
   const c = getAppConfig();
   if (kind === "scan") return c.scan_process.interval_hours * 3600;
-  if (kind === "device") return c.device_process.interval_minutes * 60;
-  return c.pin_process.interval_minutes * 60;
+  // Never more often than once an hour (why_slow.txt, 2026-11-16) — even if a stored value says otherwise.
+  if (kind === "device") return Math.max(MIN_WORKER_INTERVAL_MINUTES, c.device_process.interval_minutes) * 60;
+  return Math.max(MIN_WORKER_INTERVAL_MINUTES, c.pin_process.interval_minutes) * 60;
 }
 
 // A worker is OVERDUE when its last successful run is older than TWICE its interval (plus a slack), or it

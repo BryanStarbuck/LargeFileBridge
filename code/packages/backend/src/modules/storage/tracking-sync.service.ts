@@ -48,6 +48,7 @@ import { isStrayPathName, copyHealed, caseIndex, resolveCasing } from "./sidecar
 import { recordSdlIngestForRepo, syncFenceBeforeMirror } from "./doc-render.service.js";
 
 import { resolveStateDir } from "../../config/state-dir.js";
+import { hourlyGateAllows } from "../../shared/hourly-gate.js";
 // The additive copy for the two shapes that had no merge: the per-file sidecars and the per-device history
 // logs. Both directions route through it, so neither leg can stamp over the other side's events.
 import { copyTrackedFile } from "./tracked-file-merge.js";
@@ -417,6 +418,15 @@ function copyTreeExcept(src: string, dst: string, skip: ReadonlySet<string>): bo
  * Category-B write (e.g. from `writeRepoStorage`) and on demand.
  */
 export function mirrorToSyncRepo(repoRoot: string): boolean {
+  // At most once per hour per repo (shared/hourly-gate.ts — why_slow.txt 2026-11-16: the mirror of
+  // ~/BGit/all ran on every pin pass and every decision write). A write inside the window queues ONE
+  // catch-up pass for when the window opens, so nothing written here is lost — only batched.
+  if (!hourlyGateAllows("storage.mirror", repoRoot, () => void mirrorToSyncRepoUngated(repoRoot))) return false;
+  return mirrorToSyncRepoUngated(repoRoot);
+}
+
+/** The mirror without the hourly gate — for the internal re-arms of a pass the gate already admitted. */
+function mirrorToSyncRepoUngated(repoRoot: string): boolean {
   const key = path.resolve(repoRoot);
   // A pass is already draining for this repo. Mark it dirty and return: the drain re-runs once when it
   // finishes, which is the same coalescing `deferWhileBusy` does and for the same reason — the mirror is a
@@ -523,7 +533,7 @@ async function finishMirrorCooperatively(key: string, gen: PassGen<boolean>, pen
   // The destination went busy while we were away — abandon the pass and re-arm it whole (see above).
   const abandonIfBusy = (): boolean => {
     if (!(dst && busyRootFor(dst))) return false;
-    deferWhileBusy(dst, `mirror:${key}`, () => void mirrorToSyncRepo(key));
+    deferWhileBusy(dst, `mirror:${key}`, () => void mirrorToSyncRepoUngated(key));
     log.info("storage", `mirrorToSyncRepo(${key}): ${dst} entered a git cycle mid-pass — re-armed for when it releases`);
     return true;
   };
@@ -564,7 +574,7 @@ async function finishMirrorCooperatively(key: string, gen: PassGen<boolean>, pen
     recordCooperative("storage.mirror", synchronousMs, key);
     const state = mirrorInFlight.get(key);
     mirrorInFlight.delete(key);
-    if (state?.again) void mirrorToSyncRepo(key);
+    if (state?.again) void mirrorToSyncRepoUngated(key);
   }
 }
 
@@ -595,7 +605,7 @@ function* mirrorGen(repoRoot: string): PassGen<boolean> {
   // the whole storage sync. Defer instead: the cycle runs this exact mirror the moment it releases the tree.
   // Keyed by repo, so N scans during one cycle collapse into ONE mirror at the end (the mirror is a
   // reconciliation to current state, never a queue of work items).
-  if (deferWhileBusy(dst, `mirror:${path.resolve(repoRoot)}`, () => void mirrorToSyncRepo(repoRoot))) {
+  if (deferWhileBusy(dst, `mirror:${path.resolve(repoRoot)}`, () => void mirrorToSyncRepoUngated(repoRoot))) {
     log.info("storage", `mirrorToSyncRepo(${repoRoot}): ${dst} is mid-git-cycle — deferred until it releases`);
     return false;
   }
@@ -1217,6 +1227,10 @@ export function reconcileFromSyncRepo(repoRoot: string): boolean {
  * `storage.reconcile 3776ms/105 calls, worst 1466ms on charlie-kirk` (performance.mdx P-47).
  */
 export async function reconcileFromSyncRepoYielding(repoRoot: string): Promise<boolean> {
+  // At most once per hour per repo (shared/hourly-gate.ts — why_slow.txt 2026-11-16: one reconcile of
+  // ~/BGit/all took 857 s, and it ran on every pin pass, every device pass and every backbone pull). No
+  // catch-up is queued: the next pass after the window opens runs it. `false` = "nothing folded in".
+  if (!hourlyGateAllows("storage.reconcile", repoRoot)) return false;
   return drainYielding("storage.reconcile.yielding", repoRoot, reconcileGen(repoRoot));
 }
 
